@@ -1,0 +1,4 @@
+counter: & + 10,
+counter: 100,
+list: & + [2],
+replaced: { a: 1 },

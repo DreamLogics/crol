@@ -1,0 +1,178 @@
+//! The composer (`SPEC.md` 7.1, 10.7).
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use crol::{CrolComposer, CrolConfig, CrolLayer};
+use serde_derive::Deserialize;
+
+#[derive(Debug, PartialEq, Deserialize)]
+struct Service {
+    image: String,
+    port: u16,
+    depends_on: Vec<crol::Id>,
+}
+
+#[derive(Debug, PartialEq, Deserialize)]
+enum Definition {
+    Service(Service),
+}
+
+/// A fresh directory with `files`.
+fn tree(name: &str, files: &[(&str, &str)]) -> PathBuf {
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let _ = std::fs::remove_dir_all(&root);
+    for (path, text) in files {
+        let path = root.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    root
+}
+
+fn config(root: &Path) -> CrolConfig {
+    CrolConfig {
+        root_path: root.to_path_buf(),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn layers_from_module_paths_and_directories() {
+    let root = tree(
+        "compose-layers",
+        &[
+            (
+                "data/base/web.crol",
+                "+web: Service { image: \"web\", port: 80, depends_on: [@db] },",
+            ),
+            (
+                "data/base/nested/db.crol",
+                "+db: Service { image: \"pg\", port: 5432, depends_on: [] },",
+            ),
+            ("data/base/.hidden.crol", "this is not read"),
+            ("data/base/notes.txt", "neither is this"),
+            ("data/local.crol", "web.port: 8080,"),
+        ],
+    );
+    let all: BTreeMap<String, Definition> = CrolComposer::with_cfg(config(&root))
+        .load("::data::base")
+        .unwrap()
+        .load(root.join("data/local.crol"))
+        .unwrap()
+        .compose()
+        .unwrap();
+    let Definition::Service(web) = &all["web"];
+    assert_eq!(web.port, 8080);
+    assert_eq!(all.len(), 2);
+}
+
+#[test]
+fn loading_fails_only_for_sources_that_name_nothing() {
+    let root = tree("compose-missing", &[("a.crol", "+a: 1 +")]);
+    let error = CrolComposer::with_cfg(config(&root))
+        .load("::nope")
+        .unwrap_err();
+    assert!(error.to_string().contains("names nothing"), "{error}");
+    // A syntax error is reported by compose, not by load.
+    let composer = CrolComposer::with_cfg(config(&root)).load("::a").unwrap();
+    let error = composer.compose_data().unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("a.crol:1:8: expected an expression"),
+        "{error}"
+    );
+}
+
+#[test]
+fn extends_loads_the_layers_below() {
+    let root = tree(
+        "compose-extends",
+        &[
+            (
+                "defaults/services.crol",
+                "+web: { port: 80, name: \"web\" },",
+            ),
+            (
+                "prod/web.crol",
+                "#![extends(super::defaults::services)]\n\nweb.port: 443,",
+            ),
+            ("cycle/a.crol", "#![extends(super::cycle::b)]\n+a: 1,"),
+            ("cycle/b.crol", "#![extends(super::cycle::a)]\n+b: 1,"),
+        ],
+    );
+    // Without `load_extends`, `extends` is ignored by the loader.
+    let error = CrolComposer::with_cfg(config(&root))
+        .load("::prod")
+        .unwrap()
+        .compose_data()
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("`web` does not exist"),
+        "{error}"
+    );
+
+    let config = CrolConfig {
+        load_extends: true,
+        ..config(&root)
+    };
+    let data = CrolComposer::with_cfg(config.clone())
+        .load("::prod")
+        .unwrap()
+        .compose_data()
+        .unwrap();
+    #[derive(Debug, Deserialize)]
+    struct Web {
+        port: u16,
+        name: String,
+    }
+    let web: Web = data.get("web").unwrap();
+    assert_eq!((web.port, web.name.as_str()), (443, "web"));
+
+    let error = CrolComposer::with_cfg(config)
+        .load("::cycle::a")
+        .unwrap_err();
+    assert!(error.to_string().contains("cycle"), "{error}");
+}
+
+#[test]
+fn data_gives_values_warnings_and_ids() {
+    let data = CrolComposer::new()
+        .load_layer(CrolLayer::from_sources("base", [("a.crol", "+web: Service { image: \"w\", port: 1, depends_on: [@db] },\n+db: Service { image: \"d\", port: 2, depends_on: [] },")]))
+        .load_layer(CrolLayer::from_sources("local", [("x.crol", "web.port: 10,"), ("y.crol", "web.image: \"w2\",")]))
+        .compose_data()
+        .unwrap();
+    assert_eq!(data.keys().collect::<Vec<_>>(), ["web", "db"]);
+    assert!(data.contains("db"));
+    assert_eq!(data.type_name("web"), Some("Service"));
+    let warnings = data.warnings();
+    assert_eq!(warnings.len(), 1);
+    assert!(
+        warnings[0].starts_with("warning: local/x.crol:1:1: `web` is patched from 2 documents"),
+        "{}",
+        warnings[0]
+    );
+    let (web, ids): (Service, _) = data.get_with_ids("web").unwrap();
+    assert_eq!((web.port, web.image.as_str()), (10, "w2"));
+    assert_eq!(ids[0].rust_path, "web.depends_on[0]");
+}
+
+#[test]
+fn deserialization_errors_name_the_root_key() {
+    let data = CrolComposer::new()
+        .load_layer(CrolLayer::from_sources(
+            "base",
+            [(
+                "a.crol",
+                "+web: Service { image: \"w\", port: -1, depends_on: [] },",
+            )],
+        ))
+        .compose_data()
+        .unwrap();
+    let error = data.get::<Service>("web").unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "expected u16, found -1 (base/a.crol:1:35, while deserializing web.port)"
+    );
+}

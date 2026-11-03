@@ -36,16 +36,22 @@
 
 #![forbid(unsafe_code)]
 
+mod compose;
 mod de;
 mod error;
 mod id;
+mod module_path;
 mod ser;
 
 use crol_eval::evaluate_value;
 use serde::{Deserialize, Serialize};
 
+pub use compose::{CrolComposer, CrolConfig, CrolData, CrolLayer, LayerSource};
 pub use crol_eval::{Key, Keyed, Sources, Span, Value, ValueKind};
 pub use error::Error;
+
+/// The error type of `crol`, as the specification names it.
+pub type CrolError = Error;
 pub use id::{Id, IdUse};
 pub use ser::PrettyConfig;
 
@@ -72,24 +78,34 @@ pub fn from_str_with_ids<T: for<'de> Deserialize<'de>>(text: &str) -> Result<(T,
 /// Deserializes an evaluated value as `T`. `sources` are the files the
 /// value was read from, for the locations in errors.
 pub fn from_value<T: for<'de> Deserialize<'de>>(value: &Value, sources: &Sources) -> Result<T> {
-    let context = de::Context {
-        sources,
-        options: de::Options::default(),
-        ids: Default::default(),
-    };
-    T::deserialize(de::ValueDeserializer::new(value, &context))
+    deserialize(value, sources, de::Options::default(), None).map(|(value, _)| value)
 }
 
 fn from_value_with_ids<T: for<'de> Deserialize<'de>>(
     value: &Value,
     sources: &Sources,
 ) -> Result<(T, Vec<IdUse>)> {
+    deserialize(value, sources, de::Options::default(), None)
+}
+
+/// Deserializes `value`, which is at the root key `key` if given, for the
+/// paths in errors.
+pub(crate) fn deserialize<T: for<'de> Deserialize<'de>>(
+    value: &Value,
+    sources: &Sources,
+    options: de::Options,
+    key: Option<&str>,
+) -> Result<(T, Vec<IdUse>)> {
     let context = de::Context {
         sources,
-        options: de::Options::default(),
+        options,
         ids: Default::default(),
     };
-    let result = T::deserialize(de::ValueDeserializer::new(value, &context))?;
+    let deserializer = match key {
+        Some(key) => de::ValueDeserializer::at_key(value, &context, key),
+        None => de::ValueDeserializer::new(value, &context),
+    };
+    let result = T::deserialize(deserializer)?;
     Ok((result, context.ids.into_inner()))
 }
 

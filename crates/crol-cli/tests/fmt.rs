@@ -78,3 +78,36 @@ fn from_ron_converts_to_crol() {
         "Config { name: \"app\", ports: [80, 443], mode: Fast, .. }\n"
     );
 }
+
+#[test]
+fn check_and_eval_read_layers() {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("layers");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("base")).unwrap();
+    std::fs::create_dir_all(dir.join("local")).unwrap();
+    std::fs::write(
+        dir.join("base/a.crol"),
+        "+web: { port: 80, url: \"x:\" + &self.port },",
+    )
+    .unwrap();
+    std::fs::write(dir.join("local/a.crol"), "web.port: 81,").unwrap();
+    let base = dir.join("base");
+    let local = dir.join("local");
+    let (base, local) = (base.to_str().unwrap(), local.to_str().unwrap());
+
+    let output = crol(&["check", base, local]);
+    assert!(output.status.success(), "{output:?}");
+
+    let output = crol(&["eval", base, local]);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "web: { port: 81, url: \"x:81\" },\n"
+    );
+    let output = crol(&["eval", base, local, "web.url"]);
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "\"x:81\"\n");
+
+    std::fs::write(dir.join("local/b.crol"), "+web: 1,").unwrap();
+    let output = crol(&["check", "--color", "never", base, local]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("+: `web` already exists"));
+}
