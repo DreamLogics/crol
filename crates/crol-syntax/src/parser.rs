@@ -13,6 +13,12 @@ use crate::lexer::{Token, tokenize};
 /// Stands for the end of the input; it is never put in a tree.
 const EOF: SyntaxKind = SyntaxKind::__LAST;
 
+/// The deepest nesting the parser accepts, counting brackets, prefix
+/// operators and chains of binary operators. Everything that walks the tree
+/// recursively (the formatter, the evaluator) relies on this bound, so that
+/// no input can overflow the stack.
+pub const MAX_NESTING: usize = 256;
+
 pub(crate) fn parse(text: &str) -> (GreenNode, Vec<SyntaxError>) {
     let (tokens, mut errors) = tokenize(text);
     let mut starts = Vec::with_capacity(tokens.len() + 1);
@@ -23,14 +29,21 @@ pub(crate) fn parse(text: &str) -> (GreenNode, Vec<SyntaxError>) {
     }
     starts.push(offset);
 
+    let significant = (0..tokens.len())
+        .filter(|&i| !tokens[i].kind.is_trivia())
+        .collect();
     let mut p = Parser {
         text,
+        significant,
+        next_significant: 0,
         tokens,
         starts,
         pos: 0,
         last_end: TextSize::new(0),
         builder: GreenNodeBuilder::new(),
         errors: Vec::new(),
+        depth: 0,
+        reported_depth: false,
     };
     p.document();
     errors.append(&mut p.errors);
@@ -45,10 +58,19 @@ struct Parser<'t> {
     starts: Vec<TextSize>,
     /// The index of the next token, trivia included.
     pos: usize,
+    /// The indices of the tokens that are not trivia, for constant-time
+    /// lookahead.
+    significant: Vec<usize>,
+    /// The index in `significant` of the first token at or after `pos`.
+    next_significant: usize,
     /// The end of the last token that was not trivia.
     last_end: TextSize,
     builder: GreenNodeBuilder<'static>,
     errors: Vec<SyntaxError>,
+    /// The current nesting, against [`MAX_NESTING`].
+    depth: usize,
+    /// Whether "nested too deeply" has been reported; it is reported once.
+    reported_depth: bool,
 }
 
 /// Tokens that may start an expression.
@@ -81,9 +103,7 @@ impl Parser<'_> {
 
     /// The index of the `n`-th token from `pos` that is not trivia.
     fn nth_index(&self, n: usize) -> Option<usize> {
-        (self.pos..self.tokens.len())
-            .filter(|&i| !self.tokens[i].kind.is_trivia())
-            .nth(n)
+        self.significant.get(self.next_significant + n).copied()
     }
 
     fn nth(&self, n: usize) -> SyntaxKind {
@@ -136,8 +156,9 @@ impl Parser<'_> {
     fn emit(&mut self, kind: SyntaxKind) {
         let range = self.token_range(self.pos);
         self.builder.token(kind.into(), &self.text[range]);
-        if !kind.is_trivia() {
+        if !self.tokens[self.pos].kind.is_trivia() {
             self.last_end = range.end();
+            self.next_significant += 1;
         }
         self.pos += 1;
     }
@@ -241,6 +262,53 @@ impl Parser<'_> {
             }
             self.bump();
             first = false;
+        }
+        self.finish();
+    }
+
+    // ---- Nesting ----
+
+    /// Enters one level of nesting. Beyond [`MAX_NESTING`], reports an error
+    /// once, skips the construct at the current token and returns `false`.
+    fn enter(&mut self) -> bool {
+        if self.depth < MAX_NESTING {
+            self.depth += 1;
+            return true;
+        }
+        if !self.reported_depth {
+            self.reported_depth = true;
+            self.error(format!(
+                "nested too deeply; the limit is {MAX_NESTING} levels"
+            ));
+        }
+        self.skip_construct();
+        false
+    }
+
+    fn leave(&mut self) {
+        self.depth -= 1;
+    }
+
+    /// Puts the current token in an `ERROR` node, with everything up to its
+    /// matching bracket if it opens one. Iterative, so that it works at any
+    /// depth.
+    fn skip_construct(&mut self) {
+        if self.at(EOF) {
+            return;
+        }
+        self.start(ERROR);
+        let mut depth = 0usize;
+        loop {
+            match self.current() {
+                EOF => break,
+                L_BRACE | L_BRACK | L_PAREN | L_ANGLE => depth += 1,
+                R_BRACE | R_BRACK | R_PAREN | R_ANGLE => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+            self.bump();
+            if depth == 0 {
+                break;
+            }
         }
         self.finish();
     }
@@ -436,6 +504,14 @@ impl Parser<'_> {
     }
 
     fn type_expr(&mut self) {
+        if !self.enter() {
+            return;
+        }
+        self.type_expr_inner();
+        self.leave();
+    }
+
+    fn type_expr_inner(&mut self) {
         self.start(TYPE_EXPR);
         self.path_segments();
         if self.at(L_ANGLE) {
@@ -770,6 +846,14 @@ impl Parser<'_> {
     }
 
     fn cond_not(&mut self) {
+        if !self.enter() {
+            return;
+        }
+        self.cond_not_inner();
+        self.leave();
+    }
+
+    fn cond_not_inner(&mut self) {
         match self.current() {
             BANG => {
                 self.start(COND_NOT);
@@ -817,7 +901,20 @@ impl Parser<'_> {
         };
         let checkpoint = self.checkpoint();
         self.binary(level + 1);
+        // Each operator in a chain nests the tree one level deeper.
+        let mut chain = 0;
         while ops.contains(&self.current()) {
+            if self.depth + chain >= MAX_NESTING {
+                if !self.reported_depth {
+                    self.reported_depth = true;
+                    self.error(format!(
+                        "this expression is nested too deeply; the limit is {MAX_NESTING} levels"
+                    ));
+                }
+                // Leave the rest of the chain to the caller's recovery.
+                break;
+            }
+            chain += 1;
             self.start_at(checkpoint, BINARY_EXPR);
             self.bump();
             self.binary(level + 1);
@@ -827,10 +924,14 @@ impl Parser<'_> {
 
     fn unary(&mut self) {
         if self.at(MINUS) {
+            if !self.enter() {
+                return;
+            }
             self.start(PREFIX_EXPR);
             self.bump();
             self.unary();
             self.finish();
+            self.leave();
         } else {
             self.postfix_expr();
         }
@@ -847,6 +948,14 @@ impl Parser<'_> {
     }
 
     fn primary(&mut self) {
+        if !self.enter() {
+            return;
+        }
+        self.primary_inner();
+        self.leave();
+    }
+
+    fn primary_inner(&mut self) {
         match self.current() {
             INT | FLOAT | STRING | RAW_STRING | CHAR | TRUE_KW | FALSE_KW => {
                 self.start(LITERAL);

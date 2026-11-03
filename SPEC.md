@@ -1055,6 +1055,22 @@ independent error once. Each diagnostic has:
   with, every reference in a cycle, both definitions in a layer);
 - the evaluation context: `while evaluating web<prod>.limits.memory_mb`.
 
+**Limits.** So that no input can crash or stall a loader or editor,
+reading and evaluation have fixed limits, each an error when exceeded:
+
+- nesting in a document (brackets, prefix operators, chains of binary
+  operators): 256 levels;
+- references being evaluated inside one another (a chain of late
+  references, each needing the next): 128;
+- an evaluated value nesting deeper than 256 levels, or containing a
+  copy of itself, as `x: { ..&root }` does: the copy holds `x`, which
+  holds another copy, without end. It is reported as a cycle; removing
+  the entry stops it (`x: { ..&root, -x }` is fine);
+- 2 000 000 values computed in one evaluation.
+
+The limits are part of the format: a later version may raise them, but
+never lower them.
+
 ---
 
 ## 8. Variants

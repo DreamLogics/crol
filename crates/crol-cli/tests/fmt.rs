@@ -64,3 +64,17 @@ fn invalid_utf8_is_an_error() {
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stderr).contains("not valid UTF-8"));
 }
+
+#[test]
+fn from_ron_converts_to_crol() {
+    let path = file(
+        "config.ron",
+        "Config(name: \"app\", ports: [80, 443], mode: Fast)",
+    );
+    let output = crol(&["from-ron", path.to_str().unwrap()]);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Config { name: \"app\", ports: [80, 443], mode: Fast, .. }\n"
+    );
+}

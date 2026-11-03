@@ -4,6 +4,8 @@
 
 mod diagnostics;
 mod fmt;
+mod from_ron;
+mod ron;
 
 use std::process::ExitCode;
 
@@ -33,6 +35,8 @@ enum ColorWhen {
 enum Command {
     /// Format files in place, or check that they are formatted.
     Fmt(fmt::Args),
+    /// Convert a RON value file to a CROL value document, on standard output.
+    FromRon(from_ron::Args),
 }
 
 fn main() -> ExitCode {
@@ -40,6 +44,7 @@ fn main() -> ExitCode {
     let mut reporter = diagnostics::Reporter::new(cli.color);
     let ok = match cli.command {
         Command::Fmt(args) => fmt::run(&args, &mut reporter),
+        Command::FromRon(args) => from_ron::run(&args, &mut reporter),
     };
     if ok {
         ExitCode::SUCCESS

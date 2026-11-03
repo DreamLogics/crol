@@ -23,4 +23,9 @@ workspace = true
 [dependencies]
 clap.workspace = true
 codespan-reporting.workspace = true
+crol-eval.workspace = true
 crol-syntax.workspace = true
+indexmap.workspace = true
+
+[dev-dependencies]
+expect-test.workspace = true
