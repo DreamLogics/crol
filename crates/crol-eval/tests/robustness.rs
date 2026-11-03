@@ -287,9 +287,10 @@ fn random_layers_with_variants_round_trip_through_all_contexts() {
             context()
         );
         assert_eq!(again.contexts.len(), evaluation.contexts.len());
-        for ((c1, v1), (c2, v2)) in evaluation.contexts.iter().zip(&again.contexts) {
-            assert_eq!(c1, c2);
-            assert!(same_keys(v1, v2), "a context differs:\n{}", context());
+        for (first, second) in evaluation.contexts.iter().zip(&again.contexts) {
+            assert_eq!(first.context, second.context);
+            let (v1, v2) = (first.root(value), second.root(again_value));
+            assert!(same_keys(&v1, &v2), "a context differs:\n{}", context());
         }
     }
     assert!(

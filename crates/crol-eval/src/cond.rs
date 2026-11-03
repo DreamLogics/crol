@@ -58,6 +58,32 @@ impl Cond {
     }
 }
 
+impl std::fmt::Display for Cond {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let operand = |c: &Cond, f: &mut std::fmt::Formatter<'_>| match c {
+            Cond::Name(..) | Cond::Not(_) => write!(f, "{c}"),
+            _ => write!(f, "({c})"),
+        };
+        match self {
+            Cond::Name(name, _) => f.write_str(name),
+            Cond::Not(c) => {
+                f.write_str("!")?;
+                operand(c, f)
+            }
+            Cond::And(a, b) | Cond::Or(a, b) | Cond::Xor(a, b) => {
+                let op = match self {
+                    Cond::And(..) => "&",
+                    Cond::Or(..) => "|",
+                    _ => "^",
+                };
+                operand(a, f)?;
+                write!(f, " {op} ")?;
+                operand(b, f)
+            }
+        }
+    }
+}
+
 /// A condition with names resolved to variants.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Resolved {

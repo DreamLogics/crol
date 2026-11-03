@@ -5,7 +5,6 @@ use std::io::Write;
 
 use crol::CrolConfig;
 use crol_eval::{Key, Value, ValueKind, print};
-use crol_syntax::ast;
 use crol_syntax::format::FormatConfig;
 
 use crate::diagnostics::Reporter;
@@ -79,7 +78,7 @@ pub(crate) fn run(args: &Args, reporter: &mut Reporter) -> bool {
     }
     // With `--context`, the one context evaluated besides the base.
     let root = match (&args.context, evaluation.contexts.first()) {
-        (Some(_), Some((_, value))) => value.clone(),
+        (Some(_), Some(data)) => data.root(&base),
         _ => base,
     };
     let output = match &path {
@@ -105,64 +104,11 @@ fn write(output: &str, reporter: &mut Reporter) -> bool {
 
 /// The value at `path` (`web.limits.cpu`, `web.tags[0]`) in the root.
 fn select<'v>(root: &'v Value, path: &str) -> Result<&'v Value, String> {
-    let parse = crol_syntax::parse(&format!("{path}: ()"));
-    let target = match parse.document().entries().next() {
-        Some(ast::AnyEntry::Entry(entry)) if parse.errors().is_empty() => entry.target(),
-        _ => None,
-    };
-    let Some(target) = target else {
-        return Err(format!("`{path}` is not a key or a path"));
-    };
+    let (key, steps) = crol_eval::parse_path(path)?;
     let missing = || format!("there is no value at `{path}`");
-    let key = target.key().and_then(|k| k.token()).ok_or_else(missing)?;
-    let key = match key.kind() {
-        crol_syntax::SyntaxKind::IDENT => key.text().to_owned(),
-        _ => key.text().trim_matches('"').to_owned(),
+    let ValueKind::Keyed(keyed) = &root.kind else {
+        return Err(missing());
     };
-    let mut value = entry(root, &Key::Str(key)).ok_or_else(missing)?;
-    for selector in target.selectors() {
-        value = match &selector {
-            ast::Selector::Field(field) => {
-                let name = field.name().ok_or_else(missing)?;
-                entry(value, &Key::Str(name.text().to_owned()))
-            }
-            ast::Selector::Index(index) => {
-                let i: usize = index
-                    .index()
-                    .ok_or_else(missing)?
-                    .text()
-                    .parse()
-                    .map_err(|_| missing())?;
-                element(value, i)
-            }
-            ast::Selector::Accessor(accessor) => {
-                let token = accessor.key().ok_or_else(missing)?;
-                match token.text().parse::<i128>() {
-                    Ok(i) => {
-                        let i = if accessor.is_negative() { -i } else { i };
-                        entry(value, &Key::Int(i))
-                            .or_else(|| element(value, usize::try_from(i).ok()?))
-                    }
-                    Err(_) => entry(value, &Key::Str(token.text().trim_matches('"').to_owned())),
-                }
-            }
-            _ => None,
-        }
-        .ok_or_else(missing)?;
-    }
-    Ok(value)
-}
-
-fn entry<'v>(value: &'v Value, key: &Key) -> Option<&'v Value> {
-    match &value.kind {
-        ValueKind::Keyed(keyed) => keyed.entries.get(key),
-        _ => None,
-    }
-}
-
-fn element(value: &Value, index: usize) -> Option<&Value> {
-    match &value.kind {
-        ValueKind::List(e) | ValueKind::Tuple(e) | ValueKind::NamedTuple(_, e) => e.get(index),
-        _ => None,
-    }
+    let value = keyed.entries.get(&Key::Str(key)).ok_or_else(missing)?;
+    crol_eval::value_at_path(value, &steps).ok_or_else(missing)
 }

@@ -80,6 +80,20 @@ pub(crate) fn evaluate(
             .error("no layers given; name them as arguments (project files are not supported yet)");
         return None;
     }
+    let (sources, layers) = loaded_layers(arguments, reporter)?;
+    let options = DataOptions::default()
+        .with_variants(declared)
+        .with_contexts(contexts);
+    let evaluation = crol_eval::evaluate_data(&sources, &layers, &options);
+    Some((sources, evaluation))
+}
+
+/// Loads the layers named by `arguments`, following `extends`, as sources
+/// and layers ready to evaluate. Returns `None` after reporting an error.
+pub(crate) fn loaded_layers(
+    arguments: &[String],
+    reporter: &mut Reporter,
+) -> Option<(Sources, Vec<Layer>)> {
     // Tools always follow `extends` (`SPEC.md` 4.1).
     let config = CrolConfig {
         load_extends: true,
@@ -124,9 +138,5 @@ pub(crate) fn evaluate(
                 .collect(),
         })
         .collect();
-    let options = DataOptions::default()
-        .with_variants(declared)
-        .with_contexts(contexts);
-    let evaluation = crol_eval::evaluate_data(&sources, &layers, &options);
-    Some((sources, evaluation))
+    Some((sources, layers))
 }

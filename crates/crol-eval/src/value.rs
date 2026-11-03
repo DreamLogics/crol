@@ -17,6 +17,24 @@ pub enum Key {
     Str(String),
 }
 
+/// A borrowed [`Key`], for looking up entries without allocating. It hashes
+/// as the `Key` it stands for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum KeyRef<'a> {
+    Int(i128),
+    Str(&'a str),
+}
+
+impl indexmap::Equivalent<Key> for KeyRef<'_> {
+    fn equivalent(&self, key: &Key) -> bool {
+        match (self, key) {
+            (KeyRef::Int(a), Key::Int(b)) => a == b,
+            (KeyRef::Str(a), Key::Str(b)) => *a == b,
+            _ => false,
+        }
+    }
+}
+
 impl Key {
     /// Whether the key can be written bare: a string that is an identifier
     /// and not reserved.
@@ -230,6 +248,16 @@ impl ValueKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn borrowed_keys_find_entries() {
+        let mut map = IndexMap::new();
+        map.insert(Key::Str("port".into()), 1);
+        map.insert(Key::Int(3), 2);
+        assert_eq!(map.get(&KeyRef::Str("port")), Some(&1));
+        assert_eq!(map.get(&KeyRef::Int(3)), Some(&2));
+        assert_eq!(map.get(&KeyRef::Str("3")), None);
+    }
 
     #[test]
     fn floats_format_as_spec_6_6() {

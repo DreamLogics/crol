@@ -40,3 +40,7 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   contexts in `CrolData`.
 - `crol-cli`: `crol fingerprint`, `crol eval --context` and
   `--all-contexts`, and `--discrete`, `--group` and `--parent`.
+- Provenance (`SPEC.md` 12.3): `CrolData::explain` and `crol explain` list
+  the operations behind a value, with the value after each.
+- Contexts evaluate only the keys that can differ from the base, and store
+  only their differences.

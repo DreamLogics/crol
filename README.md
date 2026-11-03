@@ -32,11 +32,11 @@ web.tags: & + ["local"],
 The full design is in [`SPEC.md`](SPEC.md).
 
 > **Status:** early development. The format and the APIs will change before
-> 1.0. Milestones 1 to 4 are done: the parser and formatter, single
+> 1.0. Milestones 1 to 5 are done: the parser and formatter, single
 > documents with `crol::from_str` and `crol::to_string`, layers and
-> variants with `CrolComposer`, and `crol check`, `eval` and `fingerprint`.
-> Next is provenance (`crol explain`). See the
-> [milestones](SPEC.md#143-milestones).
+> variants with `CrolComposer`, provenance, and `crol check`, `eval`,
+> `explain` and `fingerprint`. Next are the tree-sitter grammar and the
+> Zed extension. See the [milestones](SPEC.md#143-milestones).
 
 ## Crates
 
@@ -47,7 +47,7 @@ The full design is in [`SPEC.md`](SPEC.md).
 | [`crol-eval`](crates/crol-eval) | layers, chains, the evaluator, variants, fingerprints | done |
 | [`crol-derive`](crates/crol-derive) | `#[derive(Schema)]` and `#[derive(VariantName)]` | planned |
 | [`crol-lsp`](crates/crol-lsp) | the language server, as a library | planned |
-| [`crol-cli`](crates/crol-cli) | the `crol` command-line tool | `check`, `eval`, `fingerprint`, `fmt`, `from-ron` |
+| [`crol-cli`](crates/crol-cli) | the `crol` command-line tool | `check`, `eval`, `explain`, `fingerprint`, `fmt`, `from-ron` |
 
 ## Development
 

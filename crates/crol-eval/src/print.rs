@@ -4,8 +4,9 @@ use std::fmt::Write as _;
 
 use crol_syntax::format::{FormatConfig, format};
 
+use crate::eval::ContextData;
 use crate::value::{Key, Value, ValueKind, format_float, is_identifier, quote, quote_char};
-use crate::variants::{Context, Variants};
+use crate::variants::Variants;
 
 /// Writes a value as a value-mode document, formatted. A keyed value without
 /// a type name is written as entries, without outer braces.
@@ -27,58 +28,43 @@ pub fn to_document(value: &Value, config: &FormatConfig) -> String {
 /// The output evaluates back to the same data.
 pub fn to_all_contexts(
     base: &Value,
-    contexts: &[(Context, Value)],
+    contexts: &[ContextData],
     variants: &Variants,
     config: &FormatConfig,
 ) -> String {
-    let entries = |value: &Value| match &value.kind {
-        ValueKind::Keyed(keyed) => keyed.entries.clone(),
-        _ => Default::default(),
-    };
-    let base_entries = entries(base);
     let mut text = String::new();
-    for (key, value) in &base_entries {
-        write_key(&mut text, key);
-        text.push_str(": ");
-        write_value(&mut text, value);
-        text.push_str(",\n");
+    if let ValueKind::Keyed(keyed) = &base.kind {
+        for (key, value) in &keyed.entries {
+            write_key(&mut text, key);
+            text.push_str(": ");
+            write_value(&mut text, value);
+            text.push_str(",\n");
+        }
     }
-    for (context, value) in contexts {
-        let context_entries = entries(value);
+    for data in contexts {
+        if data.changes.is_empty() {
+            continue;
+        }
         let mut body = String::new();
-        for (key, base_value) in &base_entries {
-            match context_entries.get(key) {
+        for (key, change) in &data.changes {
+            match change {
                 None => {
                     body.push('-');
                     write_key(&mut body, key);
-                    body.push_str(",\n");
                 }
-                Some(value) if !value.identical(base_value) => {
+                Some(value) => {
                     write_key(&mut body, key);
                     body.push_str(": ");
                     write_value(&mut body, value);
-                    body.push_str(",\n");
                 }
-                Some(_) => {}
             }
-        }
-        for (key, value) in context_entries
-            .iter()
-            .filter(|(k, _)| !base_entries.contains_key(*k))
-        {
-            write_key(&mut body, key);
-            body.push_str(": ");
-            write_value(&mut body, value);
             body.push_str(",\n");
-        }
-        if body.is_empty() {
-            continue;
         }
         let condition: Vec<String> = variants
             .ids()
             .map(|id| {
                 let name = variants.name(id);
-                if context.is_active(id) {
+                if data.context.is_active(id) {
                     name.to_owned()
                 } else {
                     format!("!{name}")
