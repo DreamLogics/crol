@@ -32,6 +32,7 @@ use std::fmt;
 
 pub use lexer::{Token, tokenize};
 pub use line_index::{LineCol, LineIndex};
+pub use parser::MAX_NESTING;
 pub use rowan::{TextRange, TextSize};
 pub use syntax_kind::{CrolLanguage, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
 

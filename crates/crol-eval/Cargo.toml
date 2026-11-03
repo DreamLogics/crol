@@ -13,5 +13,12 @@ readme = "README.md"
 # Not published until it has content (SPEC.md 14.3).
 publish = false
 
+[dependencies]
+crol-syntax.workspace = true
+indexmap.workspace = true
+
+[dev-dependencies]
+expect-test.workspace = true
+
 [lints]
 workspace = true

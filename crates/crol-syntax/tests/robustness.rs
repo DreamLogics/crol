@@ -112,3 +112,24 @@ fn every_prefix_of_an_example_parses_losslessly() {
         assert_eq!(crol_syntax::parse(prefix).syntax().to_string(), prefix);
     }
 }
+
+#[test]
+fn deep_nesting_is_an_error_not_a_crash() {
+    for text in [
+        format!("a: {}{}", "[".repeat(20_000), "]".repeat(20_000)),
+        format!("a: {}1", "-".repeat(20_000)),
+        format!("a: 1{}", " + 1".repeat(20_000)),
+        format!("a: {}", "{ x: ".repeat(20_000)),
+        format!("a<{}b>: 1", "!".repeat(20_000)),
+        format!("a: {}", "..{".repeat(20_000)),
+    ] {
+        let parse = crol_syntax::parse(&text);
+        assert_eq!(parse.syntax().to_string(), text);
+        assert!(
+            parse
+                .errors()
+                .iter()
+                .any(|e| e.message().contains("too deeply"))
+        );
+    }
+}
