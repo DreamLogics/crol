@@ -5,8 +5,14 @@
 //!
 //! - `layers/<n>-<name>/`: the layers, in the order of `<n>`, each holding
 //!   `.crol` files at any depth;
-//! - `options.crol` (optional): options, as a value-mode document;
-//! - `expected.crol`: the evaluated data, if evaluation succeeds;
+//! - `options.crol` (optional): options, as a value-mode document:
+//!   `variants: [Grouped(["dev", "prod"]), Discrete("cache")]`, `parents: {
+//!   prod_eu: "prod" }`, `contexts: [["prod", "cache"]]`, `variant_keys:
+//!   NoNewKeys`, `max_contexts: 16`, `warn_cross_file_patches: false`;
+//! - `expected.crol`: the evaluated data as `crol eval --all-contexts`
+//!   prints it, if evaluation succeeds;
+//! - `expected.fingerprint`: the data's fingerprint in hex, so that CI
+//!   checks that every platform evaluates the same (`SPEC.md` 7.6, 14.2);
 //! - `expected.errors`: the diagnostics, one per line, as
 //!   `<layer dir>/<path>:line:col: message`, if there are any.
 //!
@@ -17,7 +23,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crol_eval::{
-    DataOptions, Key, Layer, Severity, Sources, ValueKind, evaluate_data, evaluate_value, print,
+    DataOptions, Key, Layer, Severity, Sources, Value, ValueKind, VariantKeys, Variants,
+    evaluate_data, evaluate_value, print,
 };
 
 fn cases_dir() -> PathBuf {
@@ -44,6 +51,19 @@ fn crol_files(dir: &Path, base: &Path, out: &mut Vec<(String, PathBuf)>) {
     }
 }
 
+fn strings(value: &Value) -> Vec<String> {
+    match &value.kind {
+        ValueKind::List(items) => items
+            .iter()
+            .map(|item| match &item.kind {
+                ValueKind::String(s) => s.clone(),
+                _ => panic!("expected a string"),
+            })
+            .collect(),
+        _ => panic!("expected a list of strings"),
+    }
+}
+
 fn options(case: &Path) -> DataOptions {
     let mut options = DataOptions::default();
     let path = case.join("options.crol");
@@ -52,26 +72,70 @@ fn options(case: &Path) -> DataOptions {
     };
     let mut sources = Sources::new();
     let file = sources.add("options.crol", text);
-    let value = evaluate_value(&sources, file)
+    let evaluation = evaluate_value(&sources, file);
+    let value = evaluation
         .value
-        .expect("options.crol evaluates");
+        .unwrap_or_else(|| panic!("options.crol: {:?}", evaluation.diagnostics));
     let ValueKind::Keyed(keyed) = value.kind else {
         panic!("options.crol is not a keyed value")
     };
+    let mut variants = Variants::new();
+    let mut parents = Vec::new();
     for (key, value) in keyed.entries {
-        match (key, value.kind) {
-            (Key::Str(k), ValueKind::Bool(b)) if k == "warn_cross_file_patches" => {
-                options.warn_cross_file_patches = b;
+        let Key::Str(key) = key else {
+            panic!("integer key in options.crol")
+        };
+        match (key.as_str(), &value.kind) {
+            ("warn_cross_file_patches", ValueKind::Bool(b)) => options.warn_cross_file_patches = *b,
+            ("max_contexts", ValueKind::Int(i)) => options.max_contexts = *i as usize,
+            ("variant_keys", ValueKind::UnitName(rule)) => {
+                options.variant_keys = match rule.as_str() {
+                    "Any" => VariantKeys::Any,
+                    "NoNewKeys" => VariantKeys::NoNewKeys,
+                    "SameKeys" => VariantKeys::SameKeys,
+                    other => panic!("unknown variant_keys {other}"),
+                }
+            }
+            ("variants", ValueKind::List(items)) => {
+                for item in items {
+                    match &item.kind {
+                        ValueKind::NamedTuple(kind, args) if kind == "Grouped" => {
+                            variants.add_grouped(strings(&args[0])).unwrap();
+                        }
+                        ValueKind::NamedTuple(kind, args) if kind == "Discrete" => {
+                            let ValueKind::String(name) = &args[0].kind else {
+                                panic!()
+                            };
+                            variants.add_discrete(name).unwrap();
+                        }
+                        _ => panic!("variants are `Grouped([...])` or `Discrete(\"...\")`"),
+                    }
+                }
+            }
+            ("parents", ValueKind::Keyed(map)) => {
+                for (child, parent) in &map.entries {
+                    let (Key::Str(child), ValueKind::String(parent)) = (child, &parent.kind) else {
+                        panic!("parents map names to names")
+                    };
+                    parents.push((child.clone(), parent.clone()));
+                }
+            }
+            ("contexts", ValueKind::List(items)) => {
+                options.contexts = Some(items.iter().map(strings).collect());
             }
             (key, _) => panic!("unknown option {key} in {}", path.display()),
         }
     }
+    for (child, parent) in parents {
+        variants.add_parent(&child, &parent).unwrap();
+    }
+    options.variants = variants;
     options
 }
 
-/// Runs one case and returns what it produced: the data, and the
-/// diagnostics.
-fn run(case: &Path) -> (Option<String>, String) {
+/// Runs one case and returns what it produced: the data, its fingerprint,
+/// and the diagnostics.
+fn run(case: &Path) -> (Option<String>, Option<String>, String) {
     let mut sources = Sources::new();
     let mut layers = Vec::new();
     let mut layer_dirs: Vec<PathBuf> = fs::read_dir(case.join("layers"))
@@ -99,10 +163,19 @@ fn run(case: &Path) -> (Option<String>, String) {
         layers.push(Layer { name, documents });
     }
     let evaluation = evaluate_data(&sources, &layers, &options(case));
-    let data = evaluation
-        .value
-        .as_ref()
-        .map(|value| print::to_document(value, &Default::default()));
+    let data = evaluation.value.as_ref().map(|value| {
+        print::to_all_contexts(
+            value,
+            &evaluation.contexts,
+            &evaluation.variants,
+            &Default::default(),
+        )
+    });
+    let fingerprint = evaluation.value.as_ref().map(|value| {
+        let hash =
+            crol_eval::fingerprint::fingerprint(value, &evaluation.contexts, &evaluation.variants);
+        hash.iter().map(|b| format!("{b:02x}")).collect::<String>() + "\n"
+    });
     let mut errors = String::new();
     for diagnostic in &evaluation.diagnostics {
         let prefix = match diagnostic.severity {
@@ -116,7 +189,7 @@ fn run(case: &Path) -> (Option<String>, String) {
             diagnostic.message
         );
     }
-    (data, errors)
+    (data, fingerprint, errors)
 }
 
 #[test]
@@ -132,12 +205,17 @@ fn conformance() {
     let mut failures = Vec::new();
     for case in &cases {
         let name = case.file_name().unwrap().to_string_lossy().into_owned();
-        let (data, errors) = run(case);
+        let (data, fingerprint, errors) = run(case);
         let expected_data = fs::read_to_string(case.join("expected.crol")).ok();
+        let expected_fingerprint = fs::read_to_string(case.join("expected.fingerprint")).ok();
         let expected_errors = fs::read_to_string(case.join("expected.errors")).ok();
         let errors = (!errors.is_empty()).then_some(errors);
         if update {
-            for (file, content) in [("expected.crol", &data), ("expected.errors", &errors)] {
+            for (file, content) in [
+                ("expected.crol", &data),
+                ("expected.fingerprint", &fingerprint),
+                ("expected.errors", &errors),
+            ] {
                 let path = case.join(file);
                 match content {
                     Some(content) => fs::write(&path, content).unwrap(),
@@ -152,6 +230,13 @@ fn conformance() {
                 "{name}: data differs\n--- expected\n{}\n--- actual\n{}",
                 expected_data.unwrap_or_default(),
                 data.unwrap_or_default()
+            ));
+        }
+        if fingerprint != expected_fingerprint {
+            failures.push(format!(
+                "{name}: the fingerprint differs: expected {}, found {}",
+                expected_fingerprint.unwrap_or_default().trim(),
+                fingerprint.unwrap_or_default().trim()
             ));
         }
         if errors != expected_errors {

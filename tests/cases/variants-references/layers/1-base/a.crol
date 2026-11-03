@@ -1,0 +1,10 @@
+t := { port: 1 },
++db: { host: "db" },
+db<dev>.host: "db.dev",
+db<cache>.host: "db.cached",
++mirror: {
+    dev_host: &root.db<dev>.host,
+    base_host: &root.db<!prod>.host,
+    uncached: &root.db<!cache>.host,
+    here: &root.db.host,
+},

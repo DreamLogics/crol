@@ -21,6 +21,7 @@ crol-syntax = { path = "crates/crol-syntax", version = "0.1.0" }
 # External dependencies are kept small (SPEC.md 14.1).
 rowan = "0.17"
 indexmap = "2.14"
+blake3 = "1.8"
 serde = "1.0.228"
 
 # crol-cli only.

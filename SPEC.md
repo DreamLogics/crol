@@ -1121,7 +1121,7 @@ compiler:
 #[derive(Clone, PartialEq, Eq, crol::VariantName)]
 enum Env { Dev, Prod, ProdEu, Cache }
 
-let variants: CrolVariants<Env> = CrolVariants::new()
+let variants: CrolVariants<Env> = CrolVariants::default()
     .add_grouped([Env::Dev, Env::Prod, Env::ProdEu])
     .add_discrete(Env::Cache)
     .add_parent(Env::ProdEu, Env::Prod);

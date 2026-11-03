@@ -14,6 +14,7 @@ readme = "README.md"
 publish = false
 
 [dependencies]
+blake3.workspace = true
 crol-syntax.workspace = true
 indexmap.workspace = true
 

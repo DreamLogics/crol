@@ -1,0 +1,2 @@
+variants: [Discrete("a"), Discrete("b"), Discrete("c")],
+max_contexts: 4,

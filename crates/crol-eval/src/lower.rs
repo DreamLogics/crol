@@ -8,6 +8,7 @@ use std::rc::Rc;
 use crol_syntax::SyntaxKind;
 use crol_syntax::ast::{self, AstNode};
 
+use crate::cond::Cond;
 use crate::diagnostic::Diagnostic;
 use crate::ir::*;
 use crate::literal;
@@ -67,6 +68,10 @@ pub(crate) fn lower_data(documents: &[DataDocument<'_>]) -> (LoweredData, Vec<Di
         reach: Reach::default(),
         used_below: false,
         data_mode: true,
+        fixed: None,
+        lifted: Vec::new(),
+        lift_floor: None,
+        position: (0, 0),
     };
 
     // Templates are visible in every document of every layer, so they are
@@ -111,6 +116,7 @@ pub(crate) fn lower_data(documents: &[DataDocument<'_>]) -> (LoweredData, Vec<Di
     let mut ops = Vec::new();
     for (document, entries) in documents.iter().zip(&entries_of) {
         lowerer.file = document.file;
+        lowerer.position = (document.layer, document.index);
         lowerer.aliases.clear();
         if let Some((_, span)) = lowerer.attributes(document.document) {
             lowerer.error(
@@ -119,7 +125,7 @@ pub(crate) fn lower_data(documents: &[DataDocument<'_>]) -> (LoweredData, Vec<Di
             );
         }
         for entry in entries {
-            lowerer.root_entry(entry, document, &mut ops);
+            lowerer.root_entry(entry, &[None], &mut ops);
         }
     }
 
@@ -161,6 +167,112 @@ struct Lowerer {
     used_below: bool,
     /// Lowering data-mode documents rather than a value-mode one.
     data_mode: bool,
+    /// The fixed location of the block about to be lowered, if it has one:
+    /// variant entries in it are lifted to root operations (`SPEC.md` 8.2).
+    fixed: Option<FixedBlock>,
+    /// Operations lifted out of the root entry being lowered.
+    lifted: Vec<RootOp>,
+    /// While lowering a lifted entry: the scope depth of its block. Value
+    /// binds of that block and those around it, other than templates, do
+    /// not exist where the lifted operation is evaluated.
+    lift_floor: Option<usize>,
+    /// The layer and document position of the document being lowered.
+    position: (usize, usize),
+}
+
+/// A block whose location is fixed: an entry's value, the right side of
+/// `~` there, or a field value nested in such a block (`SPEC.md` 6.1).
+#[derive(Debug, Clone)]
+struct FixedBlock {
+    key: Rc<str>,
+    /// The block's path from the root key.
+    path: Vec<Selector>,
+    /// The paths of the blocks around it, innermost first.
+    outer: Vec<Vec<Selector>>,
+    /// The conditions it is under, as alternatives; `None` is the base.
+    conditions: Vec<Option<Cond>>,
+}
+
+impl FixedBlock {
+    /// The block that is the value of the entry `key` + `path` in this one.
+    fn child(
+        &self,
+        key: &Key,
+        path: &[Selector],
+        span: Span,
+        conditions: Vec<Option<Cond>>,
+    ) -> FixedBlock {
+        let mut child_path = self.path.clone();
+        child_path.push(key_selector(key, span));
+        child_path.extend(path.iter().cloned());
+        let mut outer = vec![self.path.clone()];
+        outer.extend(self.outer.iter().cloned());
+        FixedBlock {
+            key: self.key.clone(),
+            path: child_path,
+            outer,
+            conditions,
+        }
+    }
+}
+
+fn key_selector(key: &Key, span: Span) -> Selector {
+    let kind = match key {
+        Key::Str(s) => SelectorKind::Field(Rc::from(s.as_str())),
+        Key::Int(i) => SelectorKind::Accessor(*i),
+    };
+    Selector { kind, span }
+}
+
+/// Each alternative of `alternatives` with each condition of `list`: the
+/// conjunction that nesting means, distributed over `+` lists (`SPEC.md`
+/// 8.2).
+fn distribute(alternatives: &[Option<Cond>], list: &[Cond]) -> Vec<Option<Cond>> {
+    let mut out = Vec::with_capacity(alternatives.len() * list.len());
+    for alternative in alternatives {
+        for condition in list {
+            out.push(Cond::and(alternative.as_ref(), Some(condition)));
+        }
+    }
+    out
+}
+
+/// Whether a target has a variant selector, which makes its entry a variant
+/// entry.
+fn has_variant(target: ast::Target) -> bool {
+    target
+        .selectors()
+        .any(|s| matches!(s, ast::Selector::Variant(_)))
+}
+
+/// The changes a reference's variant selector makes to the context: names
+/// made active, and with `!` inactive. Lowering has checked that it uses
+/// only names, `!` and `&` (`SPEC.md` 8.4).
+fn context_changes(condition: &Cond) -> Vec<(Rc<str>, bool, Span)> {
+    fn walk(c: &Cond, active: bool, out: &mut Vec<(Rc<str>, bool, Span)>) {
+        match c {
+            Cond::Name(name, span) => out.push((name.clone(), active, *span)),
+            Cond::Not(inner) => walk(inner, !active, out),
+            Cond::And(a, b) | Cond::Or(a, b) | Cond::Xor(a, b) => {
+                walk(a, active, out);
+                walk(b, active, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(condition, true, &mut out);
+    out
+}
+
+/// Where selectors are written, which decides what a variant selector means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectorUse {
+    /// In a target: a condition.
+    Target,
+    /// After a late reference: a change of context.
+    Reference,
+    /// After anything else: an error.
+    Other,
 }
 
 /// Mirrors the evaluator's `below` and `outer_below` (`SPEC.md` 6.1).
@@ -184,6 +296,10 @@ pub(crate) fn lower_value_document(
         reach: Reach::default(),
         used_below: false,
         data_mode: false,
+        fixed: None,
+        lifted: Vec::new(),
+        lift_floor: None,
+        position: (0, 0),
     };
     let type_name = lowerer.attributes(document);
     let root = match document.expr() {
@@ -214,12 +330,15 @@ pub(crate) fn lower_value_document(
 
 impl Lowerer {
     /// Lowers one root entry of a data-mode document to an operation.
+    /// Lowers one root entry of a data-mode document to operations, one
+    /// for each of the `conditions` it is under (`SPEC.md` 7.2, 8.2).
     fn root_entry(
         &mut self,
         entry: &ast::AnyEntry,
-        document: &DataDocument<'_>,
+        conditions: &[Option<Cond>],
         ops: &mut Vec<RootOp>,
     ) {
+        let conditional = conditions.iter().any(Option::is_some);
         let (target, op, value) = match entry {
             ast::AnyEntry::Entry(entry) => {
                 if let Some(bind) = entry.bind() {
@@ -238,6 +357,14 @@ impl Lowerer {
             }
             ast::AnyEntry::Remove(entry) => (entry.target(), None, None),
             ast::AnyEntry::ValueBind(bind) => {
+                if conditional {
+                    let span = self.span(bind.syntax());
+                    self.error(
+                        span,
+                        "a value bind cannot be inside a variant block; vary the keys that use it instead",
+                    );
+                    return;
+                }
                 // A template: its id was assigned when templates were collected.
                 let Some(name) = bind.name() else { return };
                 let Some(&(id, span)) = self.scopes[0].value_binds.get(name.text()) else {
@@ -263,17 +390,27 @@ impl Lowerer {
                 return;
             }
             ast::AnyEntry::VariantBlock(block) => {
-                let span = self.span(block.syntax());
-                self.error(span, "variants are not implemented yet");
+                if let Some(bind) = block.bind() {
+                    let span = self.span(bind.syntax());
+                    self.error(span, "a bind cannot name a variant block");
+                }
+                let Some(list) = block.variant().and_then(|v| self.variant_list(&v)) else {
+                    return;
+                };
+                let inner = distribute(conditions, &list);
+                for entry in block.entries() {
+                    self.root_entry(&entry, &inner, ops);
+                }
                 return;
             }
         };
         let Some(target) = target else { return };
         let span = self.span(target.syntax());
-        let Some((key, path)) = self.target(&target) else {
+        let mut lists = Vec::new();
+        let Some((key, path)) = self.target_with_conditions(&target, &mut lists) else {
             return;
         };
-        let key = match key {
+        let key: Rc<str> = match key {
             Key::Str(key) => Rc::from(key),
             Key::Int(i) => {
                 self.error(
@@ -285,23 +422,176 @@ impl Lowerer {
                 return;
             }
         };
+        let mut alternatives = conditions.to_vec();
+        for list in &lists {
+            alternatives = distribute(&alternatives, list);
+        }
+        if let Some(bind) = match entry {
+            ast::AnyEntry::Entry(e) => e.bind(),
+            _ => None,
+        } && alternatives.iter().any(Option::is_some)
+        {
+            let span = self.span(bind.syntax());
+            self.error(span, "a bind cannot name a variant entry");
+        }
         self.reach = Reach {
             below: true,
             outer: true,
         };
         self.used_below = false;
-        let value = value.map(|value| self.expr(&value));
-        self.reach = Reach::default();
-        ops.push(RootOp {
-            key,
-            op,
-            path,
-            value,
-            span,
-            uses_below: self.used_below,
-            layer: document.layer,
-            document: document.index,
+        self.fixed = Some(FixedBlock {
+            key: key.clone(),
+            path: path.clone(),
+            outer: Vec::new(),
+            conditions: alternatives.clone(),
         });
+        let value = value.map(|value| self.expr(&value));
+        self.fixed = None;
+        self.reach = Reach::default();
+        for condition in alternatives {
+            ops.push(RootOp {
+                key: key.clone(),
+                op,
+                path: path.clone(),
+                value,
+                span,
+                uses_below: self.used_below,
+                layer: self.position.0,
+                document: self.position.1,
+                condition,
+                blocks: Vec::new(),
+            });
+        }
+        // Variant entries in the value apply after the entry (`SPEC.md` 8.2).
+        ops.append(&mut self.lifted);
+    }
+
+    /// Lifts a variant entry in a fixed block to root operations: `field<c>:
+    /// e` in the block at `web` is `web<c>.field: e` (`SPEC.md` 8.2).
+    fn lift(&mut self, entry: &ast::AnyEntry, fixed: &FixedBlock, conditions: &[Option<Cond>]) {
+        let (target, op, value) = match entry {
+            ast::AnyEntry::Entry(e) => {
+                if let Some(bind) = e.bind() {
+                    let span = self.span(bind.syntax());
+                    self.error(span, "a bind cannot name a variant entry");
+                }
+                let op = match e.op() {
+                    ast::EntryOp::Set => SetOp::Set,
+                    ast::EntryOp::Declare => SetOp::Declare,
+                    ast::EntryOp::Ensure => SetOp::Ensure,
+                };
+                (e.target(), Some(op), e.value())
+            }
+            ast::AnyEntry::Remove(e) => (e.target(), None, None),
+            ast::AnyEntry::VariantBlock(block) => {
+                let Some(list) = block.variant().and_then(|v| self.variant_list(&v)) else {
+                    return;
+                };
+                let inner = distribute(conditions, &list);
+                for entry in block.entries() {
+                    self.lift(&entry, fixed, &inner);
+                }
+                return;
+            }
+            ast::AnyEntry::ValueBind(_) => {
+                let span = self.span(entry.syntax());
+                self.error(
+                    span,
+                    "a value bind cannot be inside a variant block; vary the keys that use it instead",
+                );
+                return;
+            }
+            ast::AnyEntry::Spread(_) | ast::AnyEntry::Defaults(_) => {
+                let span = self.span(entry.syntax());
+                self.error(
+                    span,
+                    "a spread or `..` cannot be conditional; write the fields it would set",
+                );
+                return;
+            }
+        };
+        let Some(target) = target else { return };
+        let span = self.span(target.syntax());
+        let mut lists = Vec::new();
+        let Some((key, path)) = self.target_with_conditions(&target, &mut lists) else {
+            return;
+        };
+        let mut alternatives = conditions.to_vec();
+        for list in &lists {
+            alternatives = distribute(&alternatives, list);
+        }
+        let mut full_path = fixed.path.clone();
+        full_path.push(key_selector(&key, span));
+        full_path.extend(path.iter().cloned());
+        let mut blocks = vec![fixed.path.clone()];
+        blocks.extend(fixed.outer.iter().cloned());
+
+        let saved_floor = self.lift_floor.replace(self.scopes.len());
+        let saved_reach = std::mem::take(&mut self.reach);
+        self.fixed = Some(fixed.child(&key, &path, span, alternatives.clone()));
+        let value = value.map(|value| self.expr(&value));
+        self.fixed = None;
+        self.reach = saved_reach;
+        self.lift_floor = saved_floor;
+        for condition in alternatives {
+            self.lifted.push(RootOp {
+                key: fixed.key.clone(),
+                op,
+                path: full_path.clone(),
+                value,
+                span,
+                uses_below: true,
+                layer: self.position.0,
+                document: self.position.1,
+                condition,
+                blocks: blocks.clone(),
+            });
+        }
+    }
+
+    /// A variant selector's `+` list of conditions.
+    fn variant_list(&mut self, variant: &ast::Variant) -> Option<Vec<Cond>> {
+        if !self.data_mode {
+            let span = self.span(variant.syntax());
+            self.error(
+                span,
+                "variants need layered data: a value-mode document is evaluated in no context",
+            );
+            return None;
+        }
+        variant.conditions().map(|c| self.condition(&c)).collect()
+    }
+
+    fn condition(&mut self, condition: &ast::Condition) -> Option<Cond> {
+        Some(match condition {
+            ast::Condition::Name(name) => {
+                let token = name.name()?;
+                Cond::Name(Rc::from(token.text()), self.token_span(&token))
+            }
+            ast::Condition::Not(not) => Cond::Not(Box::new(self.condition(&not.operand()?)?)),
+            ast::Condition::Paren(paren) => self.condition(&paren.inner()?)?,
+            ast::Condition::Binary(binary) => {
+                let lhs = Box::new(self.condition(&binary.lhs()?)?);
+                let rhs = Box::new(self.condition(&binary.rhs()?)?);
+                match binary.op()? {
+                    ast::CondOp::And => Cond::And(lhs, rhs),
+                    ast::CondOp::Or => Cond::Or(lhs, rhs),
+                    ast::CondOp::Xor => Cond::Xor(lhs, rhs),
+                }
+            }
+        })
+    }
+
+    /// A target's key and selectors, with its variant selectors taken out
+    /// as conditions (`SPEC.md` 8.2: they apply to the whole root key).
+    fn target_with_conditions(
+        &mut self,
+        target: &ast::Target,
+        conditions: &mut Vec<Vec<Cond>>,
+    ) -> Option<(Key, Vec<Selector>)> {
+        let key = self.target_key(target)?;
+        let path = self.selectors(target.selectors(), SelectorUse::Target, conditions)?;
+        Some((key, path))
     }
 
     fn span(&self, node: &crol_syntax::SyntaxNode) -> Span {
@@ -432,6 +722,7 @@ impl Lowerer {
         name: Option<Rc<str>>,
         entries: impl Iterator<Item = ast::AnyEntry>,
     ) -> BlockId {
+        let fixed = self.fixed.take();
         let entries: Vec<_> = entries.collect();
         let id = self.ir.blocks.len();
         self.ir.blocks.push(Block {
@@ -496,6 +787,35 @@ impl Lowerer {
         let mut defaults = false;
         for entry in &entries {
             self.reach = entry_reach;
+            let is_variant = match entry {
+                ast::AnyEntry::VariantBlock(_) => true,
+                ast::AnyEntry::Entry(e) => e.target().is_some_and(has_variant),
+                ast::AnyEntry::Remove(e) => e.target().is_some_and(has_variant),
+                _ => false,
+            };
+            if is_variant {
+                match &fixed {
+                    Some(fixed) => {
+                        let conditions = fixed.conditions.clone();
+                        self.lift(entry, fixed, &conditions);
+                    }
+                    None if !self.data_mode => {
+                        let span = self.span(entry.syntax());
+                        self.error(
+                            span,
+                            "variants need layered data: a value-mode document is evaluated in no context",
+                        );
+                    }
+                    None => {
+                        let span = self.span(entry.syntax());
+                        self.error(
+                            span,
+                            "a variant entry is only allowed in a block whose location is fixed: an entry's value, the right side of `~` there, or a field value in such a block",
+                        );
+                    }
+                }
+                continue;
+            }
             match entry {
                 ast::AnyEntry::Entry(entry) => {
                     let Some(target) = entry.target() else {
@@ -504,6 +824,11 @@ impl Lowerer {
                     let Some((key, path)) = self.target(&target) else {
                         continue;
                     };
+                    let target_span = self.span(target.syntax());
+                    self.fixed = fixed.as_ref().map(|f| {
+                        let conditions = f.conditions.clone();
+                        f.child(&key, &path, target_span, conditions)
+                    });
                     let op = match entry.op() {
                         ast::EntryOp::Set => SetOp::Set,
                         ast::EntryOp::Declare => SetOp::Declare,
@@ -542,12 +867,9 @@ impl Lowerer {
                     }
                 }
                 ast::AnyEntry::Defaults(_) => defaults = true,
-                ast::AnyEntry::ValueBind(_) => {}
-                ast::AnyEntry::VariantBlock(block) => {
-                    let span = self.span(block.syntax());
-                    self.error(span, "variants are not implemented yet");
-                }
+                ast::AnyEntry::ValueBind(_) | ast::AnyEntry::VariantBlock(_) => {}
             }
+            self.fixed = None;
         }
         let bind_ids = value_binds.iter().map(|(id, _)| *id).collect();
         self.reach = Reach::default();
@@ -593,8 +915,15 @@ impl Lowerer {
         true
     }
 
-    /// A target's key and selectors.
+    /// A target's key and selectors, for an entry without variants.
     fn target(&mut self, target: &ast::Target) -> Option<(Key, Vec<Selector>)> {
+        let key = self.target_key(target)?;
+        let mut conditions = Vec::new();
+        let path = self.selectors(target.selectors(), SelectorUse::Target, &mut conditions)?;
+        Some((key, path))
+    }
+
+    fn target_key(&mut self, target: &ast::Target) -> Option<Key> {
         let key_node = target.key()?;
         let key = if let Some(accessor) = key_node.accessor() {
             self.accessor_key(&accessor)?
@@ -615,8 +944,7 @@ impl Lowerer {
                 _ => return None,
             }
         };
-        let path = self.selectors(target.selectors())?;
-        Some((key, path))
+        Some(key)
     }
 
     fn accessor_key(&mut self, accessor: &ast::Accessor) -> Option<Key> {
@@ -633,9 +961,13 @@ impl Lowerer {
         }
     }
 
+    /// Lowers selectors. In a target, variant selectors are taken out into
+    /// `conditions`; after a reference, they change the context.
     fn selectors(
         &mut self,
         selectors: impl Iterator<Item = ast::Selector>,
+        usage: SelectorUse,
+        conditions: &mut Vec<Vec<Cond>>,
     ) -> Option<Vec<Selector>> {
         let mut out = Vec::new();
         for selector in selectors {
@@ -656,10 +988,23 @@ impl Lowerer {
                     Key::Str(s) => SelectorKind::Field(Rc::from(s)),
                     Key::Int(i) => SelectorKind::Accessor(i),
                 },
-                ast::Selector::Variant(_) => {
-                    self.error(span, "variants are not implemented yet");
-                    return None;
-                }
+                ast::Selector::Variant(variant) => match usage {
+                    SelectorUse::Target => {
+                        conditions.push(self.variant_list(variant)?);
+                        continue;
+                    }
+                    SelectorUse::Reference => {
+                        let list = self.variant_list(variant)?;
+                        SelectorKind::Context(context_changes(list.first()?))
+                    }
+                    SelectorUse::Other => {
+                        self.error(
+                            span,
+                            "a variant selector reads a value in another context, so it must follow a late reference (`&root`, `&self`, `&parent` or a bind)",
+                        );
+                        return None;
+                    }
+                },
                 // The parser has reported it.
                 ast::Selector::Parent(_) => return None,
             };
@@ -672,6 +1017,8 @@ impl Lowerer {
 
     fn expr(&mut self, expr: &ast::Expr) -> ExprId {
         let span = self.span(expr.syntax());
+        // Only a block here, or on the right of `~`, keeps a fixed location.
+        let fixed = self.fixed.take();
         match expr {
             ast::Expr::Literal(literal) => self.literal(literal, false, span),
             ast::Expr::Prefix(prefix) => match prefix.operand() {
@@ -704,6 +1051,7 @@ impl Lowerer {
                 let name = block
                     .type_name()
                     .map(|name| self.resolve_type_name(name.text()));
+                self.fixed = fixed;
                 let id = self.block(name, block.entries());
                 self.ir.add_expr(ExprKind::Block(id), span)
             }
@@ -737,7 +1085,10 @@ impl Lowerer {
                 self.ir.add_expr(ExprKind::UnitName(name), span)
             }
             ast::Expr::Paren(paren) => match paren.inner() {
-                Some(inner) => self.expr(&inner),
+                Some(inner) => {
+                    self.fixed = fixed;
+                    self.expr(&inner)
+                }
                 None => self.ir.add_expr(ExprKind::Error, span),
             },
             ast::Expr::Path(path) => {
@@ -747,8 +1098,19 @@ impl Lowerer {
                 if let Some(error) = self.check_reference_variants(&base, path) {
                     return self.error_expr(span, error);
                 }
+                let usage = match &base {
+                    ast::Expr::Reference(r)
+                        if !matches!(
+                            r.kind(),
+                            ast::ReferenceKind::Below | ast::ReferenceKind::Default
+                        ) =>
+                    {
+                        SelectorUse::Reference
+                    }
+                    _ => SelectorUse::Other,
+                };
                 let base = self.detached(|this| this.expr(&base));
-                match self.selectors(path.selectors()) {
+                match self.selectors(path.selectors(), usage, &mut Vec::new()) {
                     Some(selectors) => self.ir.add_expr(ExprKind::Path(base, selectors), span),
                     None => self.ir.add_expr(ExprKind::Error, span),
                 }
@@ -774,6 +1136,7 @@ impl Lowerer {
                     // the left operand, not the value below.
                     BinOp::Merge => {
                         let lhs = self.expr(&lhs);
+                        self.fixed = fixed;
                         let rhs = if matches!(rhs, ast::Expr::Block(_)) {
                             let saved = self.reach;
                             self.reach.outer = false;
@@ -906,19 +1269,32 @@ impl Lowerer {
                                 span,
                             }];
                             path.extend(target.iter().cloned());
-                            Some(RefKind::Bind {
-                                up: innermost - 1 - depth,
-                                target: path,
-                            })
+                            Some((
+                                depth,
+                                RefKind::Bind {
+                                    up: innermost - 1 - depth,
+                                    target: path,
+                                },
+                            ))
                         } else {
                             scope
                                 .value_binds
                                 .get(name)
-                                .map(|(id, _)| RefKind::ValueBind(*id))
+                                .map(|(id, _)| (depth, RefKind::ValueBind(*id)))
                         }
                     });
                 match found {
-                    Some(kind) => kind,
+                    // A value bind of a block around a lifted variant entry
+                    // is not where the entry is evaluated; templates are.
+                    Some((depth, RefKind::ValueBind(_)))
+                        if depth > 0 && self.lift_floor.is_some_and(|floor| depth < floor) =>
+                    {
+                        return self.error_expr(
+                            span,
+                            format!("a variant entry cannot use `&{name}`, a value bind of a block around it; make it a template"),
+                        );
+                    }
+                    Some((_, kind)) => kind,
                     None => {
                         return self.error_expr(
                             span,

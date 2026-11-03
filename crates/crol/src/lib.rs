@@ -46,7 +46,11 @@ mod ser;
 use crol_eval::evaluate_value;
 use serde::{Deserialize, Serialize};
 
-pub use compose::{CrolComposer, CrolConfig, CrolData, CrolLayer, LayerSource};
+pub use compose::{
+    CrolComposer, CrolConfig, CrolContext, CrolData, CrolLayer, CrolVariants, LayerSource, Variant,
+    VariantName,
+};
+pub use crol_eval::VariantKeys;
 pub use crol_eval::{Key, Keyed, Sources, Span, Value, ValueKind};
 pub use error::Error;
 

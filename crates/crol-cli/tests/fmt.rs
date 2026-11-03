@@ -111,3 +111,36 @@ fn check_and_eval_read_layers() {
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stderr).contains("+: `web` already exists"));
 }
+
+#[test]
+fn variants_contexts_and_fingerprints() {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("variants");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("a.crol"),
+        "+web: { replicas: 1 },\n<prod> { web.replicas: 4 },",
+    )
+    .unwrap();
+    let layer = dir.join("a.crol");
+    let layer = layer.to_str().unwrap();
+    let declared = ["--group", "dev,prod"];
+
+    let mut args = vec!["eval", layer, "--context", "prod", "web.replicas"];
+    args.extend(declared);
+    assert_eq!(String::from_utf8_lossy(&crol(&args).stdout), "4\n");
+
+    let mut args = vec!["eval", layer, "--all-contexts"];
+    args.extend(declared);
+    assert_eq!(
+        String::from_utf8_lossy(&crol(&args).stdout),
+        "web: { replicas: 1 },\n\n<!dev & prod> {\n    web: { replicas: 4 },\n},\n"
+    );
+
+    let mut args = vec!["fingerprint", layer];
+    args.extend(declared);
+    let first = crol(&args);
+    assert!(first.status.success(), "{first:?}");
+    assert_eq!(first.stdout.len(), 65);
+    assert_eq!(crol(&args).stdout, first.stdout);
+}

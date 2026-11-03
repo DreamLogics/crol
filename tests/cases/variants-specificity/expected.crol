@@ -1,0 +1,21 @@
+database: Service { host: "db.internal", replicas: 1, .. },
+web: Service { replicas: 2, database_url: "postgres://db.internal", cache_url: None, .. },
+
+<!dev & prod & !prod_eu & !cache> {
+    web: Service { replicas: 9, database_url: "postgres://db.internal", cache_url: None, .. },
+},
+
+<!dev & prod & prod_eu & !cache> {
+    database: Service { host: "db.eu.internal", replicas: 1, .. },
+    web: Service { replicas: 11, database_url: "postgres://db.eu.internal", cache_url: None, .. },
+},
+
+<!dev & prod & prod_eu & cache> {
+    database: Service { host: "db.eu.internal", replicas: 1, .. },
+    web: Service {
+        replicas: 10,
+        database_url: "postgres://db.eu.internal",
+        cache_url: Some("redis://cache:6379"),
+        ..,
+    },
+},

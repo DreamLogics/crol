@@ -75,7 +75,7 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build -p crol-syntax --target wasm32-unknown-unknown
+      - run: cargo build -p crol-syntax -p crol-eval -p crol --target wasm32-unknown-unknown
 
   docs:
     name: Docs
