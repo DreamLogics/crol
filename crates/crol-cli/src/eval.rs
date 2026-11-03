@@ -20,6 +20,24 @@ pub(crate) struct Args {
     /// The maximum line width of the output.
     #[arg(long, default_value_t = FormatConfig::default().max_width)]
     max_width: usize,
+
+    /// The context to print, by its variants: `--context prod_eu,cache`.
+    /// Default: the base.
+    #[arg(
+        long,
+        value_delimiter = ',',
+        value_name = "VARIANTS",
+        conflicts_with = "all_contexts"
+    )]
+    context: Option<Vec<String>>,
+
+    /// Print the base, then each other context's differences as a variant
+    /// block.
+    #[arg(long)]
+    all_contexts: bool,
+
+    #[command(flatten)]
+    variants: crate::layers::VariantArgs,
 }
 
 /// Returns whether it succeeded.
@@ -28,20 +46,42 @@ pub(crate) fn run(args: &Args, reporter: &mut Reporter) -> bool {
     // The last argument is a key path if it names no layer.
     let path = match layers.last() {
         Some(last)
-            if layers.len() > 1 && !crate::layers::names_a_layer(last, &CrolConfig::default()) =>
+            if layers.len() > 1
+                && !crate::layers::names_a_layer(last, &CrolConfig::<String>::default()) =>
         {
             layers.pop()
         }
         _ => None,
     };
-    let Some((sources, evaluation)) = crate::layers::evaluate(&layers, reporter) else {
+    let contexts = match (&args.context, args.all_contexts) {
+        (_, true) => None,
+        (Some(context), false) => Some(vec![context.clone()]),
+        (None, false) => Some(Vec::new()),
+    };
+    let Some((sources, evaluation)) =
+        crate::layers::evaluate(&layers, &args.variants, contexts, reporter)
+    else {
         return false;
     };
     reporter.diagnostics(&sources, &evaluation.diagnostics);
-    let Some(root) = evaluation.value else {
+    let Some(base) = evaluation.value else {
         return false;
     };
     let config = FormatConfig::default().with_max_width(args.max_width);
+    if args.all_contexts {
+        if path.is_some() {
+            reporter.error("`--all-contexts` prints all the data; it takes no key");
+            return false;
+        }
+        let output =
+            print::to_all_contexts(&base, &evaluation.contexts, &evaluation.variants, &config);
+        return write(&output, reporter);
+    }
+    // With `--context`, the one context evaluated besides the base.
+    let root = match (&args.context, evaluation.contexts.first()) {
+        (Some(_), Some((_, value))) => value.clone(),
+        _ => base,
+    };
     let output = match &path {
         None => print::to_document(&root, &config),
         Some(path) => match select(&root, path) {
@@ -52,6 +92,10 @@ pub(crate) fn run(args: &Args, reporter: &mut Reporter) -> bool {
             }
         },
     };
+    write(&output, reporter)
+}
+
+fn write(output: &str, reporter: &mut Reporter) -> bool {
     if let Err(error) = std::io::stdout().lock().write_all(output.as_bytes()) {
         reporter.error(&format!("cannot write the output: {error}"));
         return false;

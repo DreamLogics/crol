@@ -1,0 +1,8 @@
++x: { n: 0, m: 0 },
+x.n<a | b>: & + 1,
+x<a + b>.m: & + 1,
+<a> {
+    <b> { x.both: true },
+},
++only_in_c<c>: 1,
+-x<a & b & c>,

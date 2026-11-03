@@ -176,3 +176,122 @@ fn deserialization_errors_name_the_root_key() {
         "expected u16, found -1 (base/a.crol:1:35, while deserializing web.port)"
     );
 }
+
+const SERVICES: &str = r#"
++database: Service { image: "pg", port: 5432, depends_on: [] },
++web: Service { image: "web", port: 80, depends_on: [@database] },
+<prod> { web.port: 443 },
+<prod_eu> { web.image: "web-eu" },
+<cache> { web.depends_on: & + [@cache] },
+"#;
+
+fn spec_variants() -> crol::CrolVariants {
+    crol::CrolVariants::new()
+        .add_grouped(["dev", "prod", "prod_eu"])
+        .add_discrete("cache")
+        .add_parent("prod_eu", "prod")
+}
+
+#[test]
+fn variants_and_contexts() {
+    // The API sketch of SPEC.md 10.7.
+    let config = CrolConfig {
+        variants: spec_variants(),
+        ..Default::default()
+    };
+    let web: BTreeMap<String, Definition> = CrolComposer::with_cfg(config.clone())
+        .load_layer(CrolLayer::from_sources("base", [("a.crol", SERVICES)]))
+        .with_variant("prod_eu")
+        .unwrap()
+        .with_variant("cache")
+        .unwrap()
+        .compose()
+        .unwrap();
+    let Definition::Service(web) = &web["web"];
+    assert_eq!((web.port, web.image.as_str()), (443, "web-eu"));
+    assert_eq!(web.depends_on.len(), 2);
+
+    let data = CrolComposer::with_cfg(config.clone())
+        .load_layer(CrolLayer::from_sources("base", [("a.crol", SERVICES)]))
+        .compose_data()
+        .unwrap();
+    assert_eq!(data.contexts().count(), 8);
+    let prod = data.context(["prod"]).unwrap();
+    let in_prod: Service = data.get_in("web", &prod).unwrap();
+    assert_eq!(in_prod.port, 443);
+    let base: Service = data.get("web").unwrap();
+    assert_eq!(base.port, 80);
+    assert!(data.context(["dev", "prod"]).is_err());
+    let fingerprint = data.fingerprint();
+    // Evaluating again gives the same fingerprint.
+    let again = CrolComposer::with_cfg(config.clone())
+        .load_layer(CrolLayer::from_sources("base", [("a.crol", SERVICES)]))
+        .compose_data()
+        .unwrap();
+    assert_eq!(again.fingerprint(), fingerprint);
+
+    // `with_variant` checks what it is given.
+    let error = CrolComposer::with_cfg(config.clone())
+        .with_variant("staging")
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("not a declared variant"),
+        "{error}"
+    );
+    let error = CrolComposer::with_cfg(config)
+        .with_variant("dev")
+        .unwrap()
+        .with_variant("prod")
+        .unwrap_err();
+    assert!(error.to_string().contains("at most one"), "{error}");
+}
+
+#[test]
+fn typed_variants() {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum Env {
+        Dev,
+        Prod,
+        ProdEu,
+        Cache,
+    }
+
+    impl crol::VariantName for Env {
+        fn name(&self) -> &str {
+            match self {
+                Env::Dev => "dev",
+                Env::Prod => "prod",
+                Env::ProdEu => "prod_eu",
+                Env::Cache => "cache",
+            }
+        }
+
+        fn from_name(name: &str) -> Option<Self> {
+            Some(match name {
+                "dev" => Env::Dev,
+                "prod" => Env::Prod,
+                "prod_eu" => Env::ProdEu,
+                "cache" => Env::Cache,
+                _ => return None,
+            })
+        }
+    }
+
+    let variants = crol::CrolVariants::<Env>::default()
+        .add_grouped([Env::Dev, Env::Prod, Env::ProdEu])
+        .add_discrete(Env::Cache)
+        .add_parent(Env::ProdEu, Env::Prod);
+    let data = CrolComposer::with_cfg(CrolConfig {
+        variants,
+        ..Default::default()
+    })
+    .load_layer(CrolLayer::from_sources("base", [("a.crol", SERVICES)]))
+    .with_variant(Env::ProdEu)
+    .unwrap()
+    .compose_data()
+    .unwrap();
+    let web: Service = data.get("web").unwrap();
+    assert_eq!(web.image, "web-eu");
+    let context = data.context([Env::Dev, Env::Cache]).unwrap();
+    assert_eq!(data.context_names(&context), ["cache", "dev"]);
+}

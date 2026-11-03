@@ -1,0 +1,9 @@
++web: Service {
+    replicas<prod>: 4,
+    replicas: 1,
+    port: 80,
+    url<prod>: "https://web:" + &self.port,
+    url: "http://web:" + &self.port,
+    limits: { cpu: 1.0, <prod> { cpu: 2.0 } },
+    ..
+},

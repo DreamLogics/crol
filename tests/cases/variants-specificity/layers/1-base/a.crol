@@ -1,0 +1,21 @@
++database: Service { host: "db.internal", replicas: 1, .. },
++web: Service {
+    replicas: 2,
+    database_url: "postgres://" + &root.database.host,
+    cache_url: None,
+    ..
+},
+
+<prod> {
+    web.replicas: & * 4,
+},
+<prod_eu> {
+    database.host: "db.eu.internal",
+    web.replicas: & + 2,
+},
+<cache> {
+    web.cache_url: Some("redis://cache:6379"),
+},
+<prod & !cache> {
+    web.replicas: & + 1,    // one more web replica when there is no cache
+},

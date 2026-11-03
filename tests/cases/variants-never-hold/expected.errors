@@ -1,0 +1,3 @@
+1-base/a.crol:1:2: this condition cannot hold in any context
+1-base/a.crol:3:1: `c` is defined twice under one condition in the layer `base`; a layer may define a key once
+1-base/a.crol:5:1: `c` is defined twice under one condition in the layer `base`; a layer may define a key once

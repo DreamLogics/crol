@@ -16,10 +16,12 @@ use std::rc::{Rc, Weak};
 
 use indexmap::IndexMap;
 
+use crate::cond::Resolved;
 use crate::diagnostic::Diagnostic;
 use crate::ir::*;
 use crate::source::Span;
 use crate::value::{Key, Keyed, Value, ValueKind, format_float};
+use crate::variants::{Context, Variants};
 
 /// The most cells being computed at once, so that deeply nested references
 /// fail with an error instead of overflowing the stack. A debug build uses
@@ -49,7 +51,8 @@ struct Cell {
 }
 
 enum State {
-    Pending(Job),
+    /// Boxed, so that computed cells, the most common, stay small.
+    Pending(Box<Job>),
     Running,
     Done(Result<Rc<Shaped>, Poisoned>),
 }
@@ -85,6 +88,7 @@ enum Job {
         recipe: Rc<PathRecipe>,
         chain: Chain,
         here: Option<Location>,
+        context: usize,
     },
 }
 
@@ -95,7 +99,7 @@ impl Cell {
             Job::Path { .. } => None,
         };
         Rc::new(Cell {
-            state: RefCell::new(State::Pending(job)),
+            state: RefCell::new(State::Pending(Box::new(job))),
             expr,
             location,
         })
@@ -204,6 +208,9 @@ struct Env {
     /// The value below that a whole-value block here sees through to.
     outer_below: Below,
     vbinds: VBinds,
+    /// The context the expression is evaluated in, as an index into the
+    /// evaluator's contexts.
+    context: usize,
 }
 
 type Chain = Option<Rc<ChainLink>>;
@@ -230,10 +237,21 @@ struct VBindLink {
     next: VBinds,
 }
 
+/// What a location starts from, so that it can be found again in another
+/// context (`SPEC.md` 8.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Anchor {
+    Root,
+    Template(BindId),
+    /// A value bind inside a block, which has no other contexts.
+    Local,
+}
+
 /// A path from the document's value, or from a value bind's.
 #[derive(Clone)]
 struct Location {
     base: Weak<Cell>,
+    anchor: Anchor,
     /// The bind's name, or empty for the root.
     name: Rc<str>,
     /// The steps from the base, as a shared list from the last step back,
@@ -250,12 +268,25 @@ struct PathLink {
 enum Step {
     Key(Key),
     Index(usize),
+    /// `[i]`: an integer key, or a list index, depending on the value.
+    Accessor(i128),
+}
+
+/// The step a selector takes; `None` for a context selector.
+fn selector_step(selector: &Selector) -> Option<Step> {
+    match &selector.kind {
+        SelectorKind::Field(name) => Some(Step::Key(Key::Str(name.to_string()))),
+        SelectorKind::Element(i) => Some(Step::Index(*i)),
+        SelectorKind::Accessor(i) => Some(Step::Accessor(*i)),
+        SelectorKind::Context(_) => None,
+    }
 }
 
 impl Location {
     fn child(&self, step: Step) -> Location {
         Location {
             base: self.base.clone(),
+            anchor: self.anchor,
             name: self.name.clone(),
             path: Some(Rc::new(PathLink {
                 step,
@@ -291,6 +322,9 @@ impl Location {
                     let _ = write!(out, "[{i}]");
                 }
                 Step::Index(i) => {
+                    let _ = write!(out, "[{i}]");
+                }
+                Step::Accessor(i) => {
                     let _ = write!(out, "[{i}]");
                 }
             }
@@ -332,6 +366,7 @@ fn describe_selector(selector: &Selector) -> String {
         SelectorKind::Field(name) => format!("[{}]", crate::value::quote(name)),
         SelectorKind::Element(i) => format!(".{i}"),
         SelectorKind::Accessor(i) => format!("[{i}]"),
+        SelectorKind::Context(_) => "<...>".to_owned(),
     }
 }
 
@@ -341,9 +376,39 @@ pub(crate) struct Evaluator<'ir> {
     /// The cells being computed, with the span of what forced each and
     /// where each value ends up.
     stack: Vec<(*const Cell, Span, Option<Location>)>,
-    root: Option<Location>,
     /// Cells computed so far, against [`MAX_STEPS`].
     steps: u64,
+    /// The contexts evaluated so far, each with its own root.
+    contexts: Vec<ContextState>,
+    /// For data mode: the operations, by key, and the variants.
+    plan: Option<&'ir DataPlan<'ir>>,
+}
+
+/// What the entries of a block are evaluated in.
+struct BlockScope {
+    chain: Chain,
+    location: Option<Location>,
+    outer_below: Below,
+    vbinds: VBinds,
+    context: usize,
+}
+
+/// The root and templates of one context.
+struct ContextState {
+    context: Context,
+    /// Kept alive here; locations refer to it weakly.
+    root_cell: Lazy,
+    root: Location,
+    templates: VBinds,
+}
+
+fn root_location(cell: &Lazy) -> Location {
+    Location {
+        base: Rc::downgrade(cell),
+        anchor: Anchor::Root,
+        name: Rc::from(""),
+        path: None,
+    }
 }
 
 /// Evaluates a lowered value-mode document.
@@ -352,20 +417,17 @@ pub(crate) fn evaluate(ir: &Ir, root: ExprId) -> (Option<Value>, Vec<Diagnostic>
         ir,
         diagnostics: Vec::new(),
         stack: Vec::new(),
-        root: None,
         steps: 0,
+        contexts: Vec::new(),
+        plan: None,
     };
     let root_cell = Rc::new(Cell {
         state: RefCell::new(State::Running),
         expr: Some(root),
         location: None,
     });
-    let location = Location {
-        base: Rc::downgrade(&root_cell),
-        name: Rc::from(""),
-        path: None,
-    };
-    *root_cell.state.borrow_mut() = State::Pending(Job::Expr {
+    let location = root_location(&root_cell);
+    *root_cell.state.borrow_mut() = State::Pending(Box::new(Job::Expr {
         expr: root,
         env: Env {
             chain: None,
@@ -373,12 +435,30 @@ pub(crate) fn evaluate(ir: &Ir, root: ExprId) -> (Option<Value>, Vec<Diagnostic>
             below: Below::Missing,
             outer_below: Below::Missing,
             vbinds: None,
+            context: 0,
         },
+    }));
+    evaluator.contexts.push(ContextState {
+        context: Context::base(),
+        root_cell: root_cell.clone(),
+        root: location,
+        templates: None,
     });
-    evaluator.root = Some(location);
     let span = ir.exprs[root].span;
     let value = evaluator.full_value(&root_cell, span, &mut Vec::new()).ok();
     (value, evaluator.diagnostics)
+}
+
+/// Which keys a context may have, compared with the base (`SPEC.md` 8.5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VariantKeys {
+    /// Any: contexts may add and remove keys.
+    #[default]
+    Any,
+    /// Every key in a context must exist in the base.
+    NoNewKeys,
+    /// Every context has exactly the base's keys.
+    SameKeys,
 }
 
 /// What data evaluation needs besides the IR.
@@ -387,128 +467,472 @@ pub(crate) struct DataInput<'a> {
     pub(crate) templates: &'a [BindId],
     pub(crate) layer_names: &'a [String],
     pub(crate) warn_cross_file_patches: bool,
+    pub(crate) variants: &'a Variants,
+    /// The contexts to evaluate, by chosen variant names; `None` for every
+    /// valid context.
+    pub(crate) contexts: Option<&'a [Vec<String>]>,
+    pub(crate) max_contexts: usize,
+    pub(crate) variant_keys: VariantKeys,
+}
+
+/// The evaluated data: the variants (declared, or found in the data), and
+/// the root of every evaluated context, the base first.
+pub(crate) struct DataResult {
+    pub(crate) variants: Variants,
+    pub(crate) contexts: Vec<(Context, Option<Value>)>,
+}
+
+/// The operations of every key, ready to be applied in any context.
+pub(crate) struct DataPlan<'a> {
+    ops: &'a [RootOp],
+    templates: &'a [BindId],
+    variants: Variants,
+    /// Each operation's condition, resolved; `None` for a base operation.
+    conditions: Vec<Option<Resolved>>,
+    keys: IndexMap<Rc<str>, KeyPlan>,
+}
+
+struct KeyPlan {
+    /// Every operation on the key, in document order.
+    all: Vec<usize>,
+    /// The base operations, in order (`SPEC.md` 7.2).
+    base: Vec<usize>,
+    /// The conditional operations, in the order of `SPEC.md` 7.2: layer by
+    /// layer, definitions first, then document and source order.
+    conditional: Vec<usize>,
 }
 
 /// Evaluates lowered data-mode documents: one chain of operations per root
-/// key (`SPEC.md` 7.2 to 7.4).
-pub(crate) fn evaluate_data(ir: &Ir, input: &DataInput<'_>) -> (Option<Value>, Vec<Diagnostic>) {
+/// key, in every evaluated context (`SPEC.md` 7, 8).
+pub(crate) fn evaluate_data(
+    ir: &Ir,
+    input: &DataInput<'_>,
+) -> (Option<DataResult>, Vec<Diagnostic>) {
+    let mut diagnostics = Vec::new();
+    let Some(plan) = DataPlan::new(ir, input, &mut diagnostics) else {
+        return (None, diagnostics);
+    };
+    let contexts = match plan.evaluated_contexts(input) {
+        Ok(contexts) => contexts,
+        Err(message) => {
+            let span = input.ops.first().map_or(Span::detached(), |op| op.span);
+            diagnostics.push(Diagnostic::error(span, message));
+            return (None, diagnostics);
+        }
+    };
     let mut evaluator = Evaluator {
         ir,
         diagnostics: Vec::new(),
         stack: Vec::new(),
-        root: None,
         steps: 0,
+        contexts: Vec::new(),
+        plan: Some(&plan),
     };
-    let root_cell = Rc::new(Cell {
-        state: RefCell::new(State::Running),
-        expr: None,
-        location: None,
-    });
-    let root = Location {
-        base: Rc::downgrade(&root_cell),
-        name: Rc::from(""),
-        path: None,
-    };
-    evaluator.root = Some(root.clone());
-    // Root entries are in the root, so `&self` there is the root.
-    let chain = Some(Rc::new(ChainLink {
-        location: Some(root.clone()),
-        bind_root: false,
-        next: None,
-    }));
-    let vbinds = evaluator.bind_cells(input.templates, &chain, None);
+    // Errors in the static structure of the chains are reported once.
+    evaluator.check_chains(input);
+    diagnostics.append(&mut evaluator.diagnostics);
+    if diagnostics.iter().any(Diagnostic::is_error) {
+        diagnostics.sort_by_key(|d| (d.span.file, d.span.range.start()));
+        return (None, diagnostics);
+    }
 
-    let mut chains: IndexMap<Rc<str>, Vec<usize>> = IndexMap::new();
-    for (i, op) in input.ops.iter().enumerate() {
-        chains.entry(op.key.clone()).or_default().push(i);
-    }
-    let mut slots = Vec::new();
-    for (key, indices) in &chains {
-        let order = evaluator.chain_order(key, indices, input);
-        if let Some((created, slot)) =
-            evaluator.apply_chain(key, &order, input.ops, &chain, &root, &vbinds)
-        {
-            slots.push((created, Key::Str(key.to_string()), slot));
+    let mut per_context = Vec::with_capacity(contexts.len());
+    let mut found: Vec<(Diagnostic, Vec<usize>)> = Vec::new();
+    for (index, context) in contexts.iter().enumerate() {
+        evaluator.steps = 0;
+        let id = evaluator.context_state(context);
+        let cell = evaluator.contexts[id].root_cell.clone();
+        let value = evaluator
+            .full_value(&cell, Span::detached(), &mut Vec::new())
+            .ok();
+        for diagnostic in evaluator.diagnostics.drain(..) {
+            match found.iter_mut().find(|(d, _)| *d == diagnostic) {
+                Some((_, in_contexts)) => in_contexts.push(index),
+                None => found.push((diagnostic, vec![index])),
+            }
         }
+        per_context.push((context.clone(), value));
     }
-    // Keys are in the order they were created, by layer and position.
-    slots.sort_by_key(|(created, _, _)| *created);
-    let keyed = KeyedShape {
-        slots: slots
-            .into_iter()
-            .map(|(_, key, slot)| (key, slot))
-            .collect(),
-        ..KeyedShape::default()
-    };
-    *root_cell.state.borrow_mut() = State::Done(Ok(Rc::new(Shaped {
-        shape: Shape::Keyed(keyed),
-        span: Span::detached(),
-    })));
-    let value = evaluator
-        .full_value(&root_cell, Span::detached(), &mut Vec::new())
-        .ok();
-    let mut diagnostics = evaluator.diagnostics;
+    evaluator.check_variant_keys(&per_context, input.variant_keys, &mut diagnostics);
+    // An error in only some contexts says in which (`SPEC.md` 12.5).
+    for (mut diagnostic, in_contexts) in found {
+        if in_contexts.len() < contexts.len() {
+            let mut names: Vec<String> = in_contexts
+                .iter()
+                .take(3)
+                .map(|&i| plan.variants.display(&contexts[i]).to_string())
+                .collect();
+            if in_contexts.len() > 3 {
+                names.push(format!("and {} more", in_contexts.len() - 3));
+            }
+            diagnostic.message = format!("in {}: {}", names.join(", "), diagnostic.message);
+        }
+        diagnostics.push(diagnostic);
+    }
     diagnostics.sort_by_key(|d| (d.span.file, d.span.range.start()));
-    (value, diagnostics)
+    let variants = plan.variants.clone();
+    (
+        Some(DataResult {
+            variants,
+            contexts: per_context,
+        }),
+        diagnostics,
+    )
+}
+
+impl<'a> DataPlan<'a> {
+    /// Resolves conditions against the variants, declaring the names the
+    /// data uses if the application declared none (`SPEC.md` 8.1), and
+    /// groups operations by key.
+    fn new(ir: &Ir, input: &DataInput<'a>, diagnostics: &mut Vec<Diagnostic>) -> Option<Self> {
+        let mut names = Vec::new();
+        for op in input.ops {
+            if let Some(condition) = &op.condition {
+                condition.names(&mut names);
+            }
+        }
+        for expr in &ir.exprs {
+            if let ExprKind::Path(_, selectors) = &expr.kind {
+                for selector in selectors {
+                    if let SelectorKind::Context(changes) = &selector.kind {
+                        names.extend(changes.iter().map(|(name, _, span)| (name.clone(), *span)));
+                    }
+                }
+            }
+        }
+        let mut variants = input.variants.clone();
+        if variants.is_empty() {
+            for (name, _) in &names {
+                if variants.id(name).is_none() {
+                    let _ = variants.add_discrete(name);
+                }
+            }
+        }
+        for (name, span) in &names {
+            if variants.id(name).is_none() {
+                diagnostics.push(Diagnostic::error(
+                    *span,
+                    format!("unknown variant `{name}`"),
+                ));
+            }
+        }
+        if diagnostics.iter().any(Diagnostic::is_error) {
+            return None;
+        }
+        let conditions: Vec<Option<Resolved>> = input
+            .ops
+            .iter()
+            .map(|op| op.condition.as_ref().and_then(|c| c.resolve(&variants)))
+            .collect();
+        // A condition that cannot hold is a mistake (`SPEC.md` 8.2); checked
+        // where the contexts are few enough to try.
+        if variants.context_count() <= 1 << 16 {
+            let all = variants.all_contexts();
+            let mut reported = std::collections::HashSet::new();
+            for (op, condition) in input.ops.iter().zip(&conditions) {
+                if let Some(condition) = condition
+                    && !all.iter().any(|c| condition.holds(c))
+                    && reported.insert(condition.normalized())
+                {
+                    diagnostics.push(Diagnostic::error(
+                        op.span,
+                        "this condition cannot hold in any context",
+                    ));
+                }
+            }
+        }
+        let mut keys: IndexMap<Rc<str>, KeyPlan> = IndexMap::new();
+        let mut indices: IndexMap<Rc<str>, Vec<usize>> = IndexMap::new();
+        for (i, op) in input.ops.iter().enumerate() {
+            indices.entry(op.key.clone()).or_default().push(i);
+        }
+        // A layer's second definition under one condition is an error, which
+        // `check_chains` reports; the chain keeps the first.
+        let ordered = |list: Vec<usize>| -> Vec<usize> {
+            let mut list = list;
+            list.sort_by_key(|&i| (input.ops[i].layer, !input.ops[i].is_definition(), i));
+            let mut seen = std::collections::HashSet::new();
+            list.retain(|&i| {
+                let op = &input.ops[i];
+                !op.is_definition()
+                    || seen.insert((op.layer, conditions[i].as_ref().map(Resolved::normalized)))
+            });
+            list
+        };
+        for (key, list) in indices {
+            let (base, conditional): (Vec<usize>, Vec<usize>) =
+                list.iter().partition(|&&i| conditions[i].is_none());
+            keys.insert(
+                key,
+                KeyPlan {
+                    all: list,
+                    base: ordered(base),
+                    conditional: ordered(conditional),
+                },
+            );
+        }
+        Some(Self {
+            ops: input.ops,
+            templates: input.templates,
+            variants,
+            conditions,
+            keys,
+        })
+    }
+
+    /// The contexts to evaluate: the base, then the requested ones or every
+    /// valid one (`SPEC.md` 8.1).
+    fn evaluated_contexts(&self, input: &DataInput<'_>) -> Result<Vec<Context>, String> {
+        let mut contexts = vec![Context::base()];
+        match input.contexts {
+            Some(requested) => {
+                for names in requested {
+                    let mut ids = Vec::new();
+                    for name in names {
+                        ids.push(
+                            self.variants
+                                .id(name)
+                                .ok_or_else(|| format!("unknown variant `{name}` in a context"))?,
+                        );
+                    }
+                    let context = self.variants.context(&ids)?;
+                    if !contexts.contains(&context) {
+                        contexts.push(context);
+                    }
+                }
+            }
+            None => {
+                let count = self.variants.context_count();
+                if count > input.max_contexts as u128 {
+                    return Err(format!(
+                        "the variants make {count} contexts, more than the {} allowed; list the contexts to evaluate",
+                        input.max_contexts
+                    ));
+                }
+                contexts.extend(
+                    self.variants
+                        .all_contexts()
+                        .into_iter()
+                        .filter(|c| !c.is_base()),
+                );
+            }
+        }
+        Ok(contexts)
+    }
+
+    /// A key's operations in a context: the base ones, then those whose
+    /// condition holds, by specificity (`SPEC.md` 8.3).
+    fn chain(&self, key: &KeyPlan, context: &Context) -> Vec<usize> {
+        let mut conditional: Vec<(usize, usize)> = key
+            .conditional
+            .iter()
+            .filter_map(|&i| {
+                let condition = self.conditions[i].as_ref()?;
+                condition
+                    .holds(context)
+                    .then(|| (condition.specificity(&self.variants), i))
+            })
+            .collect();
+        // Stable, so equal specificities keep the order of `SPEC.md` 7.2.
+        conditional.sort_by_key(|(specificity, _)| *specificity);
+        let mut chain = key.base.clone();
+        chain.extend(conditional.into_iter().map(|(_, i)| i));
+        chain
+    }
 }
 
 impl Evaluator<'_> {
-    /// The order of a key's operations: layer by layer, the layer's
-    /// definition first, then its patches in document order (`SPEC.md` 7.2).
-    fn chain_order(&mut self, key: &str, indices: &[usize], input: &DataInput<'_>) -> Vec<usize> {
-        let ops = input.ops;
-        let mut order = Vec::with_capacity(indices.len());
-        let mut start = 0;
-        while start < indices.len() {
-            let layer = ops[indices[start]].layer;
-            let end = start
-                + indices[start..]
+    /// Reports the errors in the chains that do not depend on the context:
+    /// two definitions under one condition in one layer, and patches from
+    /// several documents of one layer (`SPEC.md` 7.2, 8.3).
+    fn check_chains(&mut self, input: &DataInput<'_>) {
+        let plan = self.plan.expect("data mode");
+        let ops = plan.ops;
+        for (key, key_plan) in &plan.keys {
+            let all = &key_plan.all;
+            let mut layers: Vec<usize> = all.iter().map(|&i| ops[i].layer).collect();
+            layers.sort_unstable();
+            layers.dedup();
+            for layer in layers {
+                let layer_name = input.layer_names.get(layer).map_or("", String::as_str);
+                let in_layer: Vec<usize> = all
                     .iter()
-                    .take_while(|&&i| ops[i].layer == layer)
-                    .count();
-            let in_layer = &indices[start..end];
-            let layer_name = input.layer_names.get(layer).map_or("", String::as_str);
-            let mut definition = None;
-            for &i in in_layer.iter().filter(|&&i| ops[i].is_definition()) {
-                match definition {
-                    None => definition = Some(i),
-                    Some(first) => {
-                        let diagnostic = Diagnostic::error(
-                            ops[i].span,
-                            format!("`{key}` is defined twice in the layer `{layer_name}`; a layer may define a key once"),
-                        )
-                        .with_related(ops[first].span, "the other definition");
+                    .copied()
+                    .filter(|&i| ops[i].layer == layer)
+                    .collect();
+                let mut definitions: Vec<(String, usize)> = Vec::new();
+                for &i in in_layer.iter().filter(|&&i| ops[i].is_definition()) {
+                    let condition = plan.conditions[i]
+                        .as_ref()
+                        .map(Resolved::normalized)
+                        .unwrap_or_default();
+                    match definitions.iter().find(|(c, _)| *c == condition) {
+                        None => definitions.push((condition, i)),
+                        Some(&(_, first)) => {
+                            let under = if condition.is_empty() {
+                                ""
+                            } else {
+                                " under one condition"
+                            };
+                            let diagnostic = Diagnostic::error(
+                                ops[i].span,
+                                format!("`{key}` is defined twice{under} in the layer `{layer_name}`; a layer may define a key once"),
+                            )
+                            .with_related(ops[first].span, "the other definition");
+                            self.report(diagnostic);
+                        }
+                    }
+                }
+                if input.warn_cross_file_patches {
+                    let patches: Vec<usize> = in_layer
+                        .iter()
+                        .copied()
+                        .filter(|&i| !ops[i].is_definition())
+                        .collect();
+                    let mut documents: Vec<usize> =
+                        patches.iter().map(|&i| ops[i].document).collect();
+                    documents.sort_unstable();
+                    documents.dedup();
+                    if documents.len() > 1 {
+                        let mut diagnostic = Diagnostic::warning(
+                            ops[patches[0]].span,
+                            format!(
+                                "`{key}` is patched from {} documents of the layer `{layer_name}`, so the order of the patches depends on the file names",
+                                documents.len()
+                            ),
+                        );
+                        for &i in &patches[1..] {
+                            diagnostic = diagnostic.with_related(ops[i].span, "another patch");
+                        }
                         self.report(diagnostic);
                     }
                 }
             }
-            order.extend(definition);
-            let patches: Vec<usize> = in_layer
-                .iter()
-                .copied()
-                .filter(|&i| !ops[i].is_definition())
-                .collect();
-            if input.warn_cross_file_patches {
-                let mut documents: Vec<usize> = patches.iter().map(|&i| ops[i].document).collect();
-                documents.dedup();
-                if documents.len() > 1 {
-                    let mut diagnostic = Diagnostic::warning(
-                        ops[patches[0]].span,
+        }
+    }
+
+    /// Checks the keys of each context against the base (`SPEC.md` 8.5).
+    fn check_variant_keys(
+        &self,
+        contexts: &[(Context, Option<Value>)],
+        rule: VariantKeys,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        if rule == VariantKeys::Any {
+            return;
+        }
+        let keyed = |value: &Option<Value>| match value.as_ref().map(|v| &v.kind) {
+            Some(ValueKind::Keyed(k)) => Some(k.clone()),
+            _ => None,
+        };
+        let Some(base) = contexts.first().and_then(|(_, v)| keyed(v)) else {
+            return;
+        };
+        let variants = &self.plan.expect("data mode").variants;
+        for (context, value) in &contexts[1..] {
+            let Some(keys) = keyed(value) else { continue };
+            for (key, value) in &keys.entries {
+                if !base.entries.contains_key(key) {
+                    diagnostics.push(Diagnostic::error(
+                        value.span,
                         format!(
-                            "`{key}` is patched from {} documents of the layer `{layer_name}`, so the order of the patches depends on the file names",
-                            documents.len()
+                            "in {}: `{key}` does not exist in the base, and the variant keys rule is `{rule:?}`",
+                            variants.display(context)
                         ),
-                    );
-                    for &i in &patches[1..] {
-                        diagnostic = diagnostic.with_related(ops[i].span, "another patch");
-                    }
-                    self.report(diagnostic);
+                    ));
                 }
             }
-            order.extend(patches);
-            start = end;
+            if rule == VariantKeys::SameKeys {
+                for (key, value) in &base.entries {
+                    if !keys.entries.contains_key(key) {
+                        diagnostics.push(Diagnostic::error(
+                            value.span,
+                            format!(
+                                "`{key}` does not exist in {}, and the variant keys rule is `SameKeys`",
+                                variants.display(context)
+                            ),
+                        ));
+                    }
+                }
+            }
         }
-        order
+    }
+
+    /// The index of a context's state, evaluating its root if it is new.
+    fn context_state(&mut self, context: &Context) -> usize {
+        if let Some(i) = self.contexts.iter().position(|c| c.context == *context) {
+            return i;
+        }
+        let id = self.contexts.len();
+        let root_cell = Rc::new(Cell {
+            state: RefCell::new(State::Running),
+            expr: None,
+            location: None,
+        });
+        let root = root_location(&root_cell);
+        // Root entries are in the root, so `&self` there is the root.
+        let chain = Some(Rc::new(ChainLink {
+            location: Some(root.clone()),
+            bind_root: false,
+            next: None,
+        }));
+        self.contexts.push(ContextState {
+            context: context.clone(),
+            root_cell: root_cell.clone(),
+            root: root.clone(),
+            templates: None,
+        });
+        let plan = self.plan.expect("only data mode has more than one context");
+        let templates = self.bind_cells(plan.templates, &chain, None, id, true);
+        self.contexts[id].templates = templates.clone();
+
+        let mut slots = Vec::new();
+        for (key, key_plan) in &plan.keys {
+            let order = plan.chain(key_plan, context);
+            if let Some((created, slot)) =
+                self.apply_chain(key, &order, &chain, &root, &templates, id)
+            {
+                slots.push((created, Key::Str(key.to_string()), slot));
+            }
+        }
+        // Keys are in the order they were created, by layer and position.
+        slots.sort_by_key(|(created, _, _)| *created);
+        let keyed = KeyedShape {
+            slots: slots
+                .into_iter()
+                .map(|(_, key, slot)| (key, slot))
+                .collect(),
+            ..KeyedShape::default()
+        };
+        *root_cell.state.borrow_mut() = State::Done(Ok(Rc::new(Shaped {
+            shape: Shape::Keyed(keyed),
+            span: Span::detached(),
+        })));
+        id
+    }
+
+    /// The chain of blocks an operation is evaluated in: the root, and for an
+    /// operation lifted out of blocks, those blocks' locations.
+    fn op_chain(
+        &self,
+        root: &Location,
+        root_chain: &Chain,
+        key: &str,
+        blocks: &[Vec<Selector>],
+    ) -> Chain {
+        let mut chain = root_chain.clone();
+        for path in blocks.iter().rev() {
+            let mut location = root.child(Step::Key(Key::Str(key.to_owned())));
+            for step in path.iter().filter_map(selector_step) {
+                location = location.child(step);
+            }
+            chain = Some(Rc::new(ChainLink {
+                location: Some(location),
+                bind_root: false,
+                next: chain,
+            }));
+        }
+        chain
     }
 
     /// Applies a key's operations in order (`SPEC.md` 7.4). Returns the
@@ -517,15 +941,17 @@ impl Evaluator<'_> {
         &mut self,
         key: &str,
         order: &[usize],
-        ops: &[RootOp],
-        chain: &Chain,
+        root_chain: &Chain,
         root: &Location,
         vbinds: &VBinds,
+        context: usize,
     ) -> Option<(usize, Slot)> {
+        let ops = self.plan.expect("data mode").ops;
         let here = root.child(Step::Key(Key::Str(key.to_owned())));
         let mut value: Option<(usize, Lazy)> = None;
         for &i in order {
             let op = &ops[i];
+            let chain = self.op_chain(root, root_chain, key, &op.blocks);
             if !op.path.is_empty() {
                 let Some((created, base)) = value.clone() else {
                     let mut target = match op.op {
@@ -565,8 +991,9 @@ impl Evaluator<'_> {
                     Job::Path {
                         base,
                         recipe,
-                        chain: chain.clone(),
+                        chain,
                         here: Some(here.clone()),
+                        context,
                     },
                     Some(here.clone()),
                 );
@@ -603,11 +1030,12 @@ impl Evaluator<'_> {
                         Job::Expr {
                             expr: op.value.expect("a set has a value"),
                             env: Env {
-                                chain: chain.clone(),
+                                chain,
                                 here: Some(here.clone()),
                                 below: below.clone(),
                                 outer_below: below,
                                 vbinds: vbinds.clone(),
+                                context,
                             },
                         },
                         Some(here.clone()),
@@ -629,8 +1057,17 @@ impl Evaluator<'_> {
     }
 
     /// Cells for value binds, each at a location of its own, visible to
-    /// each other and to `vbinds`'s binds (`SPEC.md` 6.1.2).
-    fn bind_cells(&self, binds: &[BindId], chain: &Chain, mut vbinds: VBinds) -> VBinds {
+    /// each other and to `vbinds`'s binds (`SPEC.md` 6.1.2). `templates`
+    /// says whether these are the data's templates, which exist in every
+    /// context.
+    fn bind_cells(
+        &self,
+        binds: &[BindId],
+        chain: &Chain,
+        mut vbinds: VBinds,
+        context: usize,
+        templates: bool,
+    ) -> VBinds {
         let ir = self.ir;
         let mut cells = Vec::with_capacity(binds.len());
         for &bind in binds {
@@ -649,10 +1086,15 @@ impl Evaluator<'_> {
         for (bind, cell) in cells {
             let here = Location {
                 base: Rc::downgrade(&cell),
+                anchor: if templates {
+                    Anchor::Template(bind)
+                } else {
+                    Anchor::Local
+                },
                 name: ir.value_binds[bind].name.clone(),
                 path: None,
             };
-            *cell.state.borrow_mut() = State::Pending(Job::Expr {
+            *cell.state.borrow_mut() = State::Pending(Box::new(Job::Expr {
                 expr: ir.value_binds[bind].expr,
                 env: Env {
                     chain: chain.clone(),
@@ -660,10 +1102,124 @@ impl Evaluator<'_> {
                     below: Below::Missing,
                     outer_below: Below::Missing,
                     vbinds: vbinds.clone(),
+                    context,
                 },
-            });
+            }));
         }
         vbinds
+    }
+
+    // ---- Contexts in references (`SPEC.md` 8.4) ----
+
+    /// The location a late reference names, without evaluating it.
+    fn reference_location(&mut self, expr: ExprId, env: &Env) -> Eval<Location> {
+        let ir = self.ir;
+        let span = ir.exprs[expr].span;
+        match &ir.exprs[expr].kind {
+            ExprKind::Ref(RefKind::SelfValue) => self.chain_location(&env.chain, 0, span, "&self"),
+            ExprKind::Ref(RefKind::Parent(n)) => {
+                self.chain_location(&env.chain, *n, span, "&parent")
+            }
+            ExprKind::Ref(RefKind::Root) => Ok(self.contexts[env.context].root.clone()),
+            ExprKind::Ref(RefKind::Bind { up, target }) => {
+                let mut location = self.chain_location(&env.chain, *up, span, "bind")?;
+                for step in target.iter().filter_map(selector_step) {
+                    location = location.child(step);
+                }
+                Ok(location)
+            }
+            ExprKind::Ref(RefKind::ValueBind(id)) => {
+                let mut link = env.vbinds.as_ref();
+                while let Some(l) = link {
+                    if l.id == *id {
+                        let template = self.plan.is_some_and(|p| p.templates.contains(id));
+                        return Ok(Location {
+                            base: Rc::downgrade(&l.cell),
+                            anchor: if template {
+                                Anchor::Template(*id)
+                            } else {
+                                Anchor::Local
+                            },
+                            name: self.ir.value_binds[*id].name.clone(),
+                            path: None,
+                        });
+                    }
+                    link = l.next.as_ref();
+                }
+                Err(self.fail(span, "internal error: a value bind is not in scope"))
+            }
+            _ => Err(self.fail(span, "a variant selector must follow a late reference")),
+        }
+    }
+
+    /// Reads a reference in another context: `&root.db<dev>`.
+    fn in_context(
+        &mut self,
+        base: ExprId,
+        selectors: &[Selector],
+        env: &Env,
+        span: Span,
+    ) -> Eval<Rc<Shaped>> {
+        let Some(plan) = self.plan else {
+            return Err(self.fail(span, "variants need layered data"));
+        };
+        let mut location = self.reference_location(base, env)?;
+        let mut changes = Vec::new();
+        for selector in selectors {
+            match (&selector.kind, selector_step(selector)) {
+                (SelectorKind::Context(names), _) => {
+                    for (name, active, name_span) in names {
+                        match plan.variants.id(name) {
+                            Some(id) => changes.push((id, *active)),
+                            None => {
+                                return Err(
+                                    self.fail(*name_span, format!("unknown variant `{name}`"))
+                                );
+                            }
+                        }
+                    }
+                }
+                (_, Some(step)) => location = location.child(step),
+                (_, None) => {}
+            }
+        }
+        let current = self.contexts[env.context].context.clone();
+        let target = plan.variants.switch(&current, &changes);
+        let target = self.context_state(&target);
+        let mapped = match location.anchor {
+            Anchor::Root => self.contexts[target].root.clone(),
+            Anchor::Template(id) => {
+                let mut link = self.contexts[target].templates.as_ref();
+                let mut found = None;
+                while let Some(l) = link {
+                    if l.id == id {
+                        found = Some(Location {
+                            base: Rc::downgrade(&l.cell),
+                            anchor: Anchor::Template(id),
+                            name: location.name.clone(),
+                            path: None,
+                        });
+                        break;
+                    }
+                    link = l.next.as_ref();
+                }
+                match found {
+                    Some(found) => found,
+                    None => return Err(self.fail(span, "internal error: a template is missing")),
+                }
+            }
+            Anchor::Local => {
+                return Err(self.fail(
+                    span,
+                    "a value bind inside a block has no other contexts; use `&root` or a template",
+                ));
+            }
+        };
+        let mut mapped = mapped;
+        for step in location.steps() {
+            mapped = mapped.child(step);
+        }
+        self.value_at(&mapped, span)
     }
 
     // ---- Errors ----
@@ -697,7 +1253,7 @@ impl Evaluator<'_> {
                     return Err(self.cycle(cell, span));
                 }
                 State::Pending(_) => match std::mem::replace(&mut *state, State::Running) {
-                    State::Pending(job) => job,
+                    State::Pending(job) => *job,
                     _ => unreachable!(),
                 },
             }
@@ -765,9 +1321,10 @@ impl Evaluator<'_> {
                 recipe,
                 chain,
                 here,
+                context,
             } => {
                 let shaped = self.force(&base, recipe.span)?;
-                self.apply_path(&shaped, &recipe.path, &recipe, &chain, here)
+                self.apply_path(&shaped, &recipe.path, &recipe, &chain, here, context)
             }
         }
     }
@@ -778,6 +1335,7 @@ impl Evaluator<'_> {
         value: &Lazy,
         chain: &Chain,
         here: Option<Location>,
+        context: usize,
     ) -> Lazy {
         match recipe {
             Recipe::Fixed => value.clone(),
@@ -790,18 +1348,21 @@ impl Evaluator<'_> {
                         below: entry.below.clone(),
                         outer_below: entry.below.clone(),
                         vbinds: entry.vbinds.clone(),
+                        context,
                     },
                 },
                 here,
             ),
             Recipe::Path(path) => {
-                let base = self.instantiate(&path.base, &path.base_value, chain, here.clone());
+                let base =
+                    self.instantiate(&path.base, &path.base_value, chain, here.clone(), context);
                 Cell::new(
                     Job::Path {
                         base,
                         recipe: path.clone(),
                         chain: chain.clone(),
                         here: here.clone(),
+                        context,
                     },
                     here,
                 )
@@ -840,6 +1401,13 @@ impl Evaluator<'_> {
             ExprKind::Named(name, elements) => {
                 let cells = self.elements(elements, env);
                 Self::shaped(Shape::Named(name.clone(), cells), span)
+            }
+            ExprKind::Path(base, selectors)
+                if selectors
+                    .iter()
+                    .any(|s| matches!(s.kind, SelectorKind::Context(_))) =>
+            {
+                self.in_context(*base, selectors, env, span)
             }
             ExprKind::Path(base, selectors) => {
                 let mut value = self.eval(*base, &Self::detached(env))?;
@@ -911,10 +1479,7 @@ impl Evaluator<'_> {
                 self.value_at(&location, span)
             }
             RefKind::Root => {
-                let root = self
-                    .root
-                    .clone()
-                    .expect("the root is set before evaluating");
+                let root = self.contexts[env.context].root.clone();
                 self.value_at(&root, span)
             }
             RefKind::Default => Err(self.fail(
@@ -992,6 +1557,12 @@ impl Evaluator<'_> {
                 }
                 (Shape::List(v) | Shape::Tuple(v) | Shape::Named(_, v), Step::Index(i)) => {
                     v.get(*i).cloned()
+                }
+                (Shape::Keyed(keyed), Step::Accessor(i)) => {
+                    keyed.slots.get(&Key::Int(*i)).map(|s| s.value.clone())
+                }
+                (Shape::List(v), Step::Accessor(i)) => {
+                    usize::try_from(*i).ok().and_then(|i| v.get(i).cloned())
                 }
                 _ => None,
             };
@@ -1118,7 +1689,13 @@ impl Evaluator<'_> {
         };
 
         // Value binds are visible anywhere in the block, and in each other.
-        let vbinds = self.bind_cells(&block.value_binds, &chain, env.vbinds.clone());
+        let vbinds = self.bind_cells(
+            &block.value_binds,
+            &chain,
+            env.vbinds.clone(),
+            env.context,
+            false,
+        );
 
         for &spread in &block.spreads {
             let spread_env = Env {
@@ -1127,6 +1704,7 @@ impl Evaluator<'_> {
                 below: env.below.clone(),
                 outer_below: Below::Missing,
                 vbinds: vbinds.clone(),
+                context: env.context,
             };
             let spread_span = ir.exprs[spread].span;
             let source = self.eval(spread, &spread_env)?;
@@ -1137,11 +1715,18 @@ impl Evaluator<'_> {
                     format!("..: cannot spread {kind}; only keyed values can be spread"),
                 ));
             };
-            self.copy_entries(source, &mut keyed, &chain, &location);
+            self.copy_entries(source, &mut keyed, &chain, &location, env.context);
         }
 
+        let scope = BlockScope {
+            chain,
+            location,
+            outer_below,
+            vbinds,
+            context: env.context,
+        };
         for entry in &block.entries {
-            self.entry(entry, &mut keyed, &chain, &location, &outer_below, &vbinds);
+            self.entry(entry, &mut keyed, &scope);
         }
         if block.defaults {
             keyed.defaults = true;
@@ -1157,10 +1742,11 @@ impl Evaluator<'_> {
         target: &mut KeyedShape,
         chain: &Chain,
         location: &Option<Location>,
+        context: usize,
     ) {
         for (key, slot) in &source.slots {
             let here = child_location(location, Step::Key(key.clone()));
-            let value = self.instantiate(&slot.recipe, &slot.value, chain, here);
+            let value = self.instantiate(&slot.recipe, &slot.value, chain, here, context);
             target.slots.insert(
                 key.clone(),
                 Slot {
@@ -1174,15 +1760,15 @@ impl Evaluator<'_> {
         target.defaulted.extend(source.defaulted.iter().cloned());
     }
 
-    fn entry(
-        &mut self,
-        entry: &Entry,
-        keyed: &mut KeyedShape,
-        chain: &Chain,
-        location: &Option<Location>,
-        outer_below: &Below,
-        vbinds: &VBinds,
-    ) {
+    fn entry(&mut self, entry: &Entry, keyed: &mut KeyedShape, scope: &BlockScope) {
+        let BlockScope {
+            chain,
+            location,
+            outer_below,
+            vbinds,
+            context,
+        } = scope;
+        let context = *context;
         let key = &entry.key;
         let existing = keyed.slots.get(key).cloned();
         let here = child_location(location, Step::Key(key.clone()));
@@ -1214,7 +1800,7 @@ impl Evaluator<'_> {
                 value,
                 span: entry.span,
             }));
-            let value = self.instantiate(&recipe, &slot.value, chain, here);
+            let value = self.instantiate(&recipe, &slot.value, chain, here, context);
             keyed.slots.insert(key.clone(), Slot { value, recipe });
             return;
         }
@@ -1264,7 +1850,7 @@ impl Evaluator<'_> {
                     shape: Shape::Unit,
                     span: entry.span,
                 }));
-                let value = self.instantiate(&recipe, &placeholder, chain, here);
+                let value = self.instantiate(&recipe, &placeholder, chain, here, context);
                 keyed.slots.insert(key.clone(), Slot { value, recipe });
                 keyed.defaulted.remove(key);
             }
@@ -1275,7 +1861,10 @@ impl Evaluator<'_> {
     fn span_of(&self, cell: &Lazy) -> Option<Span> {
         match &*cell.state.borrow() {
             State::Done(Ok(shaped)) => Some(shaped.span),
-            State::Pending(Job::Expr { expr, .. }) => Some(self.ir.exprs[*expr].span),
+            State::Pending(job) => match &**job {
+                Job::Expr { expr, .. } => Some(self.ir.exprs[*expr].span),
+                Job::Path { .. } => None,
+            },
             _ => None,
         }
     }
@@ -1289,6 +1878,7 @@ impl Evaluator<'_> {
         recipe: &PathRecipe,
         chain: &Chain,
         here: Option<Location>,
+        context: usize,
     ) -> Eval<Rc<Shaped>> {
         let (selector, rest) = path.split_first().expect("a path entry has a path");
         let step = match (&value.shape, &selector.kind) {
@@ -1299,11 +1889,14 @@ impl Evaluator<'_> {
             }
             (_, SelectorKind::Element(i)) => Step::Index(*i),
             (_, SelectorKind::Field(name)) => Step::Key(Key::Str(name.to_string())),
+            (_, SelectorKind::Context(_)) => {
+                return Err(self.fail(selector.span, "internal error: a condition in a path"));
+            }
         };
         let here = child_location(&here, step);
         let symbol = recipe.op.map_or("-", SetOp::symbol);
         if rest.is_empty() {
-            return self.apply_last(value, selector, recipe, chain, here);
+            return self.apply_last(value, selector, recipe, chain, here, context);
         }
         let child = match self.select(value, selector) {
             Ok(child) => child,
@@ -1314,7 +1907,7 @@ impl Evaluator<'_> {
             Err(fail) => return Err(fail),
         };
         let child = self.force(&child, selector.span)?;
-        let new_child = self.apply_path(&child, rest, recipe, chain, here)?;
+        let new_child = self.apply_path(&child, rest, recipe, chain, here, context)?;
         Ok(self.with_child(value, selector, Cell::done(new_child)))
     }
 
@@ -1325,6 +1918,7 @@ impl Evaluator<'_> {
         recipe: &PathRecipe,
         chain: &Chain,
         here: Option<Location>,
+        context: usize,
     ) -> Eval<Rc<Shaped>> {
         let span = selector.span;
         let new_value = |this: &Self| {
@@ -1332,7 +1926,7 @@ impl Evaluator<'_> {
                 let recipe = Recipe::Entry(entry.clone());
                 let placeholder = Cell::done(value.clone());
                 (
-                    this.instantiate(&recipe, &placeholder, chain, here.clone()),
+                    this.instantiate(&recipe, &placeholder, chain, here.clone(), context),
                     recipe,
                 )
             })
@@ -1342,7 +1936,7 @@ impl Evaluator<'_> {
                 let key = match &selector.kind {
                     SelectorKind::Field(name) => Key::Str(name.to_string()),
                     SelectorKind::Accessor(i) => Key::Int(*i),
-                    SelectorKind::Element(_) => unreachable!(),
+                    SelectorKind::Element(_) | SelectorKind::Context(_) => unreachable!(),
                 };
                 let mut keyed = keyed.clone();
                 let exists = keyed.slots.contains_key(&key);
@@ -1441,6 +2035,9 @@ impl Evaluator<'_> {
                     SelectorKind::Field(name) => Key::Str(name.to_string()),
                     SelectorKind::Accessor(i) => Key::Int(*i),
                     SelectorKind::Element(i) => Key::Int(*i as i128),
+                    SelectorKind::Context(_) => {
+                        unreachable!("with_child follows a successful select")
+                    }
                 };
                 let mut keyed = keyed.clone();
                 keyed.slots.insert(
@@ -1526,7 +2123,7 @@ impl Evaluator<'_> {
                     bind_root: false,
                     next: env.chain.clone(),
                 }));
-                self.copy_entries(b, &mut keyed, &chain, &env.here);
+                self.copy_entries(b, &mut keyed, &chain, &env.here, env.context);
                 Self::shaped(Shape::Keyed(keyed), span)
             }
             (Shape::Named(x, _), Shape::Named(y, _)) | (Shape::UnitName(x), Shape::UnitName(y)) => {

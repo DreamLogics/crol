@@ -110,6 +110,9 @@ pub(crate) enum SelectorKind {
     Element(usize),
     /// `[3]`, `[-3]`: an integer key, or on a list an index.
     Accessor(i128),
+    /// `<a & !b>` in a reference: the context to read it in (`SPEC.md`
+    /// 8.4), as variants made active or inactive.
+    Context(Vec<(Rc<str>, bool, Span)>),
 }
 
 #[derive(Debug)]
@@ -174,6 +177,12 @@ pub(crate) struct RootOp {
     pub(crate) uses_below: bool,
     pub(crate) layer: usize,
     pub(crate) document: usize,
+    /// The condition, for a variant operation (`SPEC.md` 8.2).
+    pub(crate) condition: Option<crate::cond::Cond>,
+    /// For an operation lifted out of a block, the paths from the root key
+    /// of the blocks around it, innermost first, so that `&self`, `&parent`
+    /// and binds see them. Empty for a root entry.
+    pub(crate) blocks: Vec<Vec<Selector>>,
 }
 
 impl RootOp {

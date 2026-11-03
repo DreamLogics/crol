@@ -1,0 +1,2 @@
+// Variant entries need a fixed location: a list element has none.
++d: [{ x<dev>: 1 }],

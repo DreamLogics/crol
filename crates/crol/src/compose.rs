@@ -3,7 +3,10 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use crol_eval::{DataOptions, Diagnostic, Key, Layer, Sources, Value, ValueKind, evaluate_data};
+use crol_eval::{
+    Context, DataOptions, Diagnostic, Key, Layer, Sources, Value, ValueKind, VariantKeys, Variants,
+    evaluate_data,
+};
 use crol_syntax::ast::{self, AstNode};
 use serde::Deserialize;
 
@@ -12,17 +15,139 @@ use crate::error::Error;
 use crate::id::IdUse;
 use crate::module_path;
 
-/// How a [`CrolComposer`] loads and composes (`SPEC.md` 10.7).
-///
-/// Fields for variants and contexts come with variant support.
+/// A variant name type: maps values to the names data writes in selectors,
+/// and back (`SPEC.md` 8.1). Implemented for `String`, which accepts every
+/// identifier; an application may use its own enum, so that the compiler
+/// checks the variants it passes.
+pub trait VariantName: Clone + Eq {
+    /// The name data writes: `prod_eu`.
+    fn name(&self) -> &str;
+    /// The value for a name, if the name is one; a name it rejects is an
+    /// unknown variant.
+    fn from_name(name: &str) -> Option<Self>;
+}
+
+impl VariantName for String {
+    fn name(&self) -> &str {
+        self
+    }
+
+    fn from_name(name: &str) -> Option<Self> {
+        Some(name.to_owned())
+    }
+}
+
+/// A variant declaration (`SPEC.md` 8.1).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CrolConfig {
+pub enum Variant<T = String> {
+    /// A flag: on or off, independent of the rest.
+    Discrete(T),
+    /// Alternatives: at most one of them is active.
+    Grouped(Vec<T>),
+}
+
+/// The variants an application declares (`SPEC.md` 8.1). Data cannot add
+/// or change them.
+///
+/// ```
+/// let variants = crol::CrolVariants::new()
+///     .add_grouped(["dev", "prod", "prod_eu"])
+///     .add_discrete("cache")
+///     .add_parent("prod_eu", "prod");
+/// ```
+///
+/// With a typed variant name, start from `CrolVariants::<Env>::default()`.
+/// Declaration errors (a name declared twice, a parent cycle) are reported
+/// when composing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CrolVariants<T = String> {
+    declarations: Vec<Variant<T>>,
+    parents: Vec<(T, T)>,
+}
+
+impl<T> Default for CrolVariants<T> {
+    fn default() -> Self {
+        Self {
+            declarations: Vec::new(),
+            parents: Vec::new(),
+        }
+    }
+}
+
+impl CrolVariants<String> {
+    /// No variants, named by strings.
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl<T: VariantName> CrolVariants<T> {
+    /// Declares a flag.
+    pub fn add_discrete(mut self, variant: impl Into<T>) -> Self {
+        self.declarations.push(Variant::Discrete(variant.into()));
+        self
+    }
+
+    /// Declares alternatives, of which at most one is active.
+    pub fn add_grouped<V: Into<T>>(mut self, variants: impl IntoIterator<Item = V>) -> Self {
+        self.declarations.push(Variant::Grouped(
+            variants.into_iter().map(Into::into).collect(),
+        ));
+        self
+    }
+
+    /// Gives a variant a parent: the child being active makes the parent
+    /// active too.
+    pub fn add_parent(mut self, child: impl Into<T>, parent: impl Into<T>) -> Self {
+        self.parents.push((child.into(), parent.into()));
+        self
+    }
+
+    /// Whether no variant is declared.
+    pub fn is_empty(&self) -> bool {
+        self.declarations.is_empty()
+    }
+
+    pub(crate) fn build(&self) -> Result<Variants, Error> {
+        let mut variants = Variants::new();
+        let composer = |message: String| Error::new(format!("composer: {message}"));
+        for declaration in &self.declarations {
+            match declaration {
+                Variant::Discrete(v) => variants.add_discrete(v.name()).map_err(composer)?,
+                Variant::Grouped(vs) => variants
+                    .add_grouped(vs.iter().map(VariantName::name))
+                    .map_err(composer)?,
+            }
+        }
+        for (child, parent) in &self.parents {
+            variants
+                .add_parent(child.name(), parent.name())
+                .map_err(composer)?;
+        }
+        Ok(variants)
+    }
+}
+
+/// How a [`CrolComposer`] loads and composes (`SPEC.md` 10.7).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CrolConfig<T = String> {
+    /// The variants (`SPEC.md` 8.1). Default: none declared, so every name
+    /// the data uses is a `Discrete` variant.
+    pub variants: CrolVariants<T>,
     /// Where `::` module paths start (`SPEC.md` 4.2). Default: the working
     /// directory.
     pub root_path: PathBuf,
     /// Follow `#![extends(...)]`: load the extended documents as layers
     /// below the one that extends them (`SPEC.md` 4.1). Default: `false`.
     pub load_extends: bool,
+    /// The contexts `compose_data` evaluates, each by its chosen variants.
+    /// Default: `None`, every valid context.
+    pub contexts: Option<Vec<Vec<T>>>,
+    /// The most contexts evaluated without `contexts`. Default: 4096.
+    pub max_contexts: usize,
+    /// Which keys a context may have, compared with the base (`SPEC.md`
+    /// 8.5). Default: `Any`.
+    pub variant_keys: VariantKeys,
     /// Accept any value where an `Option` is expected, as `Some`.
     /// Default: `true`.
     pub implicit_some: bool,
@@ -37,11 +162,15 @@ pub struct CrolConfig {
     pub warn_cross_file_patches: bool,
 }
 
-impl Default for CrolConfig {
+impl<T> Default for CrolConfig<T> {
     fn default() -> Self {
         Self {
+            variants: CrolVariants::default(),
             root_path: std::env::current_dir().unwrap_or_default(),
             load_extends: false,
+            contexts: None,
+            max_contexts: 4096,
+            variant_keys: VariantKeys::Any,
             implicit_some: true,
             allow_unknown_fields: false,
             require_complete: true,
@@ -50,7 +179,7 @@ impl Default for CrolConfig {
     }
 }
 
-impl CrolConfig {
+impl<T> CrolConfig<T> {
     fn deserialize_options(&self) -> de::Options {
         de::Options {
             implicit_some: self.implicit_some,
@@ -189,24 +318,24 @@ fn read_directory(base: &Path, dir: &Path, documents: &mut Vec<Document>) -> Res
 pub trait LayerSource {
     /// Loads the layer.
     #[doc(hidden)]
-    fn load(self, config: &CrolConfig) -> Result<CrolLayer, Error>;
+    fn load<T>(self, config: &CrolConfig<T>) -> Result<CrolLayer, Error>;
 }
 
 impl LayerSource for &str {
-    fn load(self, config: &CrolConfig) -> Result<CrolLayer, Error> {
+    fn load<T>(self, config: &CrolConfig<T>) -> Result<CrolLayer, Error> {
         let path = module_path::resolve(self, &config.root_path, None)?;
         CrolLayer::from_path(self, &path)
     }
 }
 
 impl LayerSource for String {
-    fn load(self, config: &CrolConfig) -> Result<CrolLayer, Error> {
+    fn load<T>(self, config: &CrolConfig<T>) -> Result<CrolLayer, Error> {
         self.as_str().load(config)
     }
 }
 
 impl LayerSource for &Path {
-    fn load(self, _: &CrolConfig) -> Result<CrolLayer, Error> {
+    fn load<T>(self, _: &CrolConfig<T>) -> Result<CrolLayer, Error> {
         if !self.exists() {
             return Err(Error::new(format!("{} does not exist", self.display())));
         }
@@ -215,19 +344,19 @@ impl LayerSource for &Path {
 }
 
 impl LayerSource for PathBuf {
-    fn load(self, config: &CrolConfig) -> Result<CrolLayer, Error> {
+    fn load<T>(self, config: &CrolConfig<T>) -> Result<CrolLayer, Error> {
         self.as_path().load(config)
     }
 }
 
 impl LayerSource for &PathBuf {
-    fn load(self, config: &CrolConfig) -> Result<CrolLayer, Error> {
+    fn load<T>(self, config: &CrolConfig<T>) -> Result<CrolLayer, Error> {
         self.as_path().load(config)
     }
 }
 
 impl LayerSource for CrolLayer {
-    fn load(self, _: &CrolConfig) -> Result<CrolLayer, Error> {
+    fn load<T>(self, _: &CrolConfig<T>) -> Result<CrolLayer, Error> {
         Ok(self)
     }
 }
@@ -248,34 +377,39 @@ impl LayerSource for CrolLayer {
 /// assert_eq!(url, "http://web:81");
 /// ```
 #[derive(Debug, Clone)]
-pub struct CrolComposer {
-    config: CrolConfig,
+pub struct CrolComposer<T = String> {
+    config: CrolConfig<T>,
     layers: Vec<CrolLayer>,
     /// Canonical paths of documents loaded, for `load_extends`.
     loaded: HashSet<PathBuf>,
-    /// An error from `load_layer`, reported by `compose`.
+    /// An error from `load_layer` or `with_variant`, reported by `compose`.
     error: Option<Error>,
+    /// The variants made active with `with_variant`.
+    chosen: Vec<T>,
 }
 
-impl Default for CrolComposer {
+impl Default for CrolComposer<String> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl CrolComposer {
+impl CrolComposer<String> {
     /// A composer with the default configuration.
     pub fn new() -> Self {
         Self::with_cfg(CrolConfig::default())
     }
+}
 
+impl<T: VariantName> CrolComposer<T> {
     /// A composer with `config`.
-    pub fn with_cfg(config: CrolConfig) -> Self {
+    pub fn with_cfg(config: CrolConfig<T>) -> Self {
         Self {
             config,
             layers: Vec::new(),
             loaded: HashSet::new(),
             error: None,
+            chosen: Vec::new(),
         }
     }
 
@@ -295,6 +429,34 @@ impl CrolComposer {
             self.error.get_or_insert(error);
         }
         self
+    }
+
+    /// Makes a variant active in the context to compose (`SPEC.md` 8.1).
+    /// Fails for a variant that is not declared (when variants are
+    /// declared), or a second choice in a group that is not an ancestor or
+    /// descendant of the first.
+    pub fn with_variant(mut self, variant: impl Into<T>) -> Result<Self, Error> {
+        let variant = variant.into();
+        let declared = self.config.variants.build()?;
+        if !self.config.variants.is_empty() {
+            if declared.id(variant.name()).is_none() {
+                return Err(Error::new(format!(
+                    "composer: `{}` is not a declared variant",
+                    variant.name()
+                )));
+            }
+            let mut ids: Vec<_> = self
+                .chosen
+                .iter()
+                .filter_map(|v| declared.id(v.name()))
+                .collect();
+            ids.extend(declared.id(variant.name()));
+            declared
+                .context(&ids)
+                .map_err(|message| Error::new(format!("composer: {message}")))?;
+        }
+        self.chosen.push(variant);
+        Ok(self)
     }
 
     /// Adds `layer`, after the layers it extends if `load_extends` is set.
@@ -347,20 +509,36 @@ impl CrolComposer {
         &self.layers
     }
 
-    /// Evaluates every key and deserializes the root as `T`: a struct whose
+    /// Evaluates every key in the composed context (the variants given to
+    /// `with_variant`) and deserializes the root as `T`: a struct whose
     /// fields are the root keys, or a map such as `BTreeMap<String,
     /// Definition>`. The error carries every diagnostic; warnings are
     /// dropped (`compose_data` keeps them).
-    pub fn compose<T: for<'de> Deserialize<'de>>(self) -> Result<T, Error> {
-        self.compose_data()?.deserialize_root()
+    pub fn compose<R: for<'de> Deserialize<'de>>(self) -> Result<R, Error> {
+        let chosen: Vec<String> = self.chosen.iter().map(|v| v.name().to_owned()).collect();
+        self.evaluate(Some(vec![chosen]))?.deserialize_root(None)
     }
 
-    /// Evaluates every key and returns the data, for reading several
-    /// values and the warnings.
-    pub fn compose_data(self) -> Result<CrolData, Error> {
+    /// Evaluates every key in every evaluated context (`SPEC.md` 8.1) and
+    /// returns the data, for reading several values, other contexts, the
+    /// warnings and the fingerprint.
+    pub fn compose_data(self) -> Result<CrolData<T>, Error> {
+        let contexts = self.config.contexts.as_ref().map(|contexts| {
+            let mut names: Vec<Vec<String>> = contexts
+                .iter()
+                .map(|c| c.iter().map(|v| v.name().to_owned()).collect())
+                .collect();
+            names.push(self.chosen.iter().map(|v| v.name().to_owned()).collect());
+            names
+        });
+        self.evaluate(contexts)
+    }
+
+    fn evaluate(self, contexts: Option<Vec<Vec<String>>>) -> Result<CrolData<T>, Error> {
         if let Some(error) = self.error {
             return Err(error);
         }
+        let variants = self.config.variants.build()?;
         let mut sources = Sources::new();
         let mut layers = Vec::with_capacity(self.layers.len());
         for layer in &self.layers {
@@ -380,17 +558,38 @@ impl CrolComposer {
             });
         }
         let options = DataOptions::default()
-            .with_warn_cross_file_patches(self.config.warn_cross_file_patches);
+            .with_warn_cross_file_patches(self.config.warn_cross_file_patches)
+            .with_variants(variants)
+            .with_contexts(contexts)
+            .with_max_contexts(self.config.max_contexts)
+            .with_variant_keys(self.config.variant_keys);
         let evaluation = evaluate_data(&sources, &layers, &options);
-        match evaluation.value {
-            Some(root) => Ok(CrolData {
-                sources,
-                root,
-                diagnostics: evaluation.diagnostics,
-                options: self.config.deserialize_options(),
-            }),
-            None => Err(Error::from_diagnostics(&sources, &evaluation.diagnostics)),
-        }
+        let Some(base) = evaluation.value else {
+            return Err(Error::from_diagnostics(&sources, &evaluation.diagnostics));
+        };
+        let chosen: Vec<_> = self
+            .chosen
+            .iter()
+            .map(|v| {
+                evaluation.variants.id(v.name()).ok_or_else(|| {
+                    Error::new(format!("composer: the data uses no variant `{}`", v.name()))
+                })
+            })
+            .collect::<Result<_, _>>()?;
+        let composed = evaluation
+            .variants
+            .context(&chosen)
+            .map_err(|message| Error::new(format!("composer: {message}")))?;
+        Ok(CrolData {
+            sources,
+            base,
+            contexts: evaluation.contexts,
+            variants: evaluation.variants,
+            composed,
+            diagnostics: evaluation.diagnostics,
+            options: self.config.deserialize_options(),
+            names: std::marker::PhantomData,
+        })
     }
 }
 
@@ -414,19 +613,43 @@ fn extends_of(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// Evaluated data (`SPEC.md` 10.7): the root keys and their values, and the
-/// warnings found.
+/// A context: a set of active variants (`SPEC.md` 8.1), from
+/// [`CrolData::context`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CrolContext(Context);
+
+/// Evaluated data (`SPEC.md` 10.7): the root keys and their values in every
+/// evaluated context, and the warnings found.
 #[derive(Debug, Clone)]
-pub struct CrolData {
+pub struct CrolData<T = String> {
     sources: Sources,
-    root: Value,
+    base: Value,
+    contexts: Vec<(Context, Value)>,
+    variants: Variants,
+    /// The context `with_variant` chose, for `get` and `deserialize_root`.
+    composed: Context,
     diagnostics: Vec<Diagnostic>,
     options: de::Options,
+    names: std::marker::PhantomData<T>,
 }
 
-impl CrolData {
-    fn root(&self) -> &crol_eval::Keyed {
-        match &self.root.kind {
+impl<T: VariantName> CrolData<T> {
+    fn root_in(&self, context: &Context) -> Option<&Value> {
+        if context.is_base() {
+            return Some(&self.base);
+        }
+        self.contexts
+            .iter()
+            .find(|(c, _)| c == context)
+            .map(|(_, v)| v)
+    }
+
+    fn composed_root(&self) -> &Value {
+        self.root_in(&self.composed).unwrap_or(&self.base)
+    }
+
+    fn keyed(value: &Value) -> &crol_eval::Keyed {
+        match &value.kind {
             ValueKind::Keyed(keyed) => keyed,
             _ => unreachable!("the root is a keyed value"),
         }
@@ -451,57 +674,133 @@ impl CrolData {
         &self.sources
     }
 
-    /// The evaluated value of a root key.
-    pub fn value(&self, key: &str) -> Option<&Value> {
-        self.root().entries.get(&Key::Str(key.to_owned()))
+    /// A context, by its variants; it must be valid and evaluated.
+    pub fn context<V: Into<T>>(
+        &self,
+        variants: impl IntoIterator<Item = V>,
+    ) -> Result<CrolContext, Error> {
+        let mut ids = Vec::new();
+        for variant in variants {
+            let variant = variant.into();
+            ids.push(
+                self.variants
+                    .id(variant.name())
+                    .ok_or_else(|| Error::new(format!("`{}` is not a variant", variant.name())))?,
+            );
+        }
+        let context = self.variants.context(&ids).map_err(Error::new)?;
+        if self.root_in(&context).is_none() {
+            return Err(Error::new(format!(
+                "the context {} was not evaluated",
+                self.variants.display(&context)
+            )));
+        }
+        Ok(CrolContext(context))
     }
 
-    /// The root, as a keyed value from root keys to their values.
+    /// Every evaluated context, the base first.
+    pub fn contexts(&self) -> impl Iterator<Item = CrolContext> + '_ {
+        std::iter::once(CrolContext(Context::base()))
+            .chain(self.contexts.iter().map(|(c, _)| CrolContext(c.clone())))
+    }
+
+    /// The names of a context's chosen variants.
+    pub fn context_names(&self, context: &CrolContext) -> Vec<&str> {
+        self.variants.chosen_names(&context.0)
+    }
+
+    /// The evaluated value of a root key in a context.
+    pub fn value(&self, key: &str, context: &CrolContext) -> Option<&Value> {
+        Self::keyed(self.root_in(&context.0)?)
+            .entries
+            .get(&Key::Str(key.to_owned()))
+    }
+
+    /// The root in the composed context, as a keyed value from root keys to
+    /// their values.
     pub fn root_value(&self) -> &Value {
-        &self.root
+        self.composed_root()
     }
 
-    /// The root keys, in root order.
+    /// The root keys in the composed context, in root order.
     pub fn keys(&self) -> impl Iterator<Item = &str> {
-        self.root().entries.keys().map(|k| match k {
-            Key::Str(s) => s.as_str(),
-            Key::Int(_) => unreachable!("root keys are strings"),
-        })
+        Self::keyed(self.composed_root())
+            .entries
+            .keys()
+            .map(|k| match k {
+                Key::Str(s) => s.as_str(),
+                Key::Int(_) => unreachable!("root keys are strings"),
+            })
     }
 
-    /// Whether a root key exists, for checking ids (`SPEC.md` 10.5).
+    fn composed_value(&self, key: &str) -> Option<&Value> {
+        Self::keyed(self.composed_root())
+            .entries
+            .get(&Key::Str(key.to_owned()))
+    }
+
+    /// Whether a root key exists in the composed context, for checking ids
+    /// (`SPEC.md` 10.5).
     pub fn contains(&self, id: &str) -> bool {
-        self.value(id).is_some()
+        self.composed_value(id).is_some()
     }
 
-    /// The type name of a root key's value, for checking ids.
+    /// The type name of a root key's value in the composed context.
     pub fn type_name(&self, id: &str) -> Option<&str> {
-        match &self.value(id)?.kind {
+        match &self.composed_value(id)?.kind {
             ValueKind::Keyed(keyed) => keyed.name.as_deref(),
             ValueKind::NamedTuple(name, _) | ValueKind::UnitName(name) => Some(name),
             _ => None,
         }
     }
 
-    /// Deserializes a root key's value.
-    pub fn get<T: for<'de> Deserialize<'de>>(&self, key: &str) -> Result<T, Error> {
+    /// Deserializes a root key's value in the composed context.
+    pub fn get<R: for<'de> Deserialize<'de>>(&self, key: &str) -> Result<R, Error> {
         self.get_with_ids(key).map(|(value, _)| value)
     }
 
-    /// Deserializes a root key's value, and returns the ids it uses.
-    pub fn get_with_ids<T: for<'de> Deserialize<'de>>(
+    /// Deserializes a root key's value in a context.
+    pub fn get_in<R: for<'de> Deserialize<'de>>(
         &self,
         key: &str,
-    ) -> Result<(T, Vec<IdUse>), Error> {
+        context: &CrolContext,
+    ) -> Result<R, Error> {
         let value = self
-            .value(key)
+            .value(key, context)
+            .ok_or_else(|| Error::new(format!("there is no root key `{key}` in this context")))?;
+        crate::deserialize(value, &self.sources, self.options.clone(), Some(key)).map(|(v, _)| v)
+    }
+
+    /// Deserializes a root key's value in the composed context, and returns
+    /// the ids it uses.
+    pub fn get_with_ids<R: for<'de> Deserialize<'de>>(
+        &self,
+        key: &str,
+    ) -> Result<(R, Vec<IdUse>), Error> {
+        let value = self
+            .composed_value(key)
             .ok_or_else(|| Error::new(format!("there is no root key `{key}`")))?;
         crate::deserialize(value, &self.sources, self.options.clone(), Some(key))
     }
 
-    /// Deserializes the whole root as `T`.
-    pub fn deserialize_root<T: for<'de> Deserialize<'de>>(&self) -> Result<T, Error> {
-        crate::deserialize(&self.root, &self.sources, self.options.clone(), None)
-            .map(|(value, _)| value)
+    /// Deserializes the whole root as `R`, in a context (`None`: the
+    /// composed one).
+    pub fn deserialize_root<R: for<'de> Deserialize<'de>>(
+        &self,
+        context: Option<&CrolContext>,
+    ) -> Result<R, Error> {
+        let root = match context {
+            None => self.composed_root(),
+            Some(context) => self
+                .root_in(&context.0)
+                .ok_or_else(|| Error::new("this context was not evaluated"))?,
+        };
+        crate::deserialize(root, &self.sources, self.options.clone(), None).map(|(value, _)| value)
+    }
+
+    /// The fingerprint of all evaluated data (`SPEC.md` 7.6): BLAKE3-256 of
+    /// its canonical encoding.
+    pub fn fingerprint(&self) -> [u8; 32] {
+        crol_eval::fingerprint::fingerprint(&self.base, &self.contexts, &self.variants)
     }
 }

@@ -30,3 +30,13 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   by module path (`SPEC.md` 4.2) or file system path, and `load_extends`.
 - `crol-cli`: `crol check` and `crol eval`, and `--message-format json`.
 - The conformance suite in `tests/cases/` (`SPEC.md` 14.2).
+- Variants (`SPEC.md` 8): `Discrete` and `Grouped` variants with parents,
+  contexts, conditions with specificity, variant entries inside blocks,
+  references that read other contexts, the variant keys rules, and
+  diagnostics that say in which contexts they occur.
+- The fingerprint (`SPEC.md` 7.6, appendix B), checked in for every
+  conformance case.
+- `crol`: `CrolVariants<T>`, the `VariantName` trait, `with_variant`, and
+  contexts in `CrolData`.
+- `crol-cli`: `crol fingerprint`, `crol eval --context` and
+  `--all-contexts`, and `--discrete`, `--group` and `--parent`.

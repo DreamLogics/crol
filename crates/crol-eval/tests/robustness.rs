@@ -157,3 +157,143 @@ fn random_documents_evaluate_without_panicking() {
         "only {evaluated} documents evaluated without errors"
     );
 }
+
+impl Gen {
+    fn condition(&mut self) -> String {
+        match self.next() % 5 {
+            0 => "a".to_owned(),
+            1 => "!b".to_owned(),
+            2 => "a & b".to_owned(),
+            3 => "a | b".to_owned(),
+            _ => "a + b".to_owned(),
+        }
+    }
+
+    fn simple(&mut self) -> String {
+        self.pick(&[
+            "1",
+            "2",
+            "\"s\"",
+            "[1, 2]",
+            "{ x: 1 }",
+            "&root.c | 0",
+            "Some(1)",
+        ])
+        .to_owned()
+    }
+
+    fn data_entry(&mut self) -> String {
+        let key = self.key();
+        match self.next() % 9 {
+            0 => format!("<{}> {{ {key}: {} }}", self.condition(), self.simple()),
+            1 | 2 => format!("{key}<{}>: {}", self.condition(), self.simple()),
+            3 => format!(
+                "{key}: &root.{}<{}> | 0",
+                self.key(),
+                self.pick(&["a", "!a", "b & !a"])
+            ),
+            4 => format!("{key}: {{ x<{}>: 1, x: 2 }}", self.condition()),
+            5 => format!("{key}: & + 1 | 1"),
+            _ => format!("{key}: {}", self.simple()),
+        }
+    }
+
+    fn data_document(&mut self) -> String {
+        let mut entries = vec![format!("t := {}", self.simple())];
+        for _ in 0..1 + self.next() % 6 {
+            entries.push(self.data_entry());
+        }
+        entries.join(",\n")
+    }
+}
+
+/// Whether two roots have the same keys with identical values. The order of
+/// keys that exist only in some contexts is not kept by printing, which
+/// writes them after the base's keys.
+fn same_keys(a: &crol_eval::Value, b: &crol_eval::Value) -> bool {
+    use crol_eval::ValueKind;
+    let (ValueKind::Keyed(a), ValueKind::Keyed(b)) = (&a.kind, &b.kind) else {
+        return false;
+    };
+    a.entries.len() == b.entries.len()
+        && a.entries
+            .iter()
+            .all(|(k, v)| b.entries.get(k).is_some_and(|w| v.identical(w)))
+}
+
+#[test]
+fn random_layers_with_variants_round_trip_through_all_contexts() {
+    use crol_eval::{DataOptions, Layer, evaluate_data};
+
+    let mut generator = Gen(0x7A21_A9E5);
+    let mut evaluated = 0;
+    let rounds = std::env::var("CROL_ROUNDS")
+        .ok()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(2_000);
+    for _ in 0..rounds {
+        let base = generator.data_document();
+        let local = generator.data_document().replace("t :=", "u :=");
+        if [&base, &local]
+            .iter()
+            .any(|t| !crol_syntax::parse(t).errors().is_empty())
+        {
+            continue;
+        }
+        let mut sources = Sources::new();
+        let layers = vec![
+            Layer {
+                name: "base".into(),
+                documents: vec![("a.crol".into(), sources.add("base.crol", base.as_str()))],
+            },
+            Layer {
+                name: "local".into(),
+                documents: vec![("a.crol".into(), sources.add("local.crol", local.as_str()))],
+            },
+        ];
+        let evaluation = evaluate_data(&sources, &layers, &DataOptions::default());
+        let Some(value) = &evaluation.value else {
+            continue;
+        };
+        evaluated += 1;
+
+        let printed = print::to_all_contexts(
+            value,
+            &evaluation.contexts,
+            &evaluation.variants,
+            &Default::default(),
+        );
+        let mut sources = Sources::new();
+        let layers = vec![Layer {
+            name: "printed".into(),
+            documents: vec![(
+                "a.crol".into(),
+                sources.add("printed.crol", printed.as_str()),
+            )],
+        }];
+        let options = DataOptions::default().with_variants(evaluation.variants.clone());
+        let again = evaluate_data(&sources, &layers, &options);
+        let context = || format!("{base}\n--\n{local}\n-- printed:\n{printed}");
+        let Some(again_value) = &again.value else {
+            panic!(
+                "the printed data does not evaluate: {:?}\n{}",
+                again.diagnostics,
+                context()
+            );
+        };
+        assert!(
+            again_value.identical(value),
+            "the base differs:\n{}",
+            context()
+        );
+        assert_eq!(again.contexts.len(), evaluation.contexts.len());
+        for ((c1, v1), (c2, v2)) in evaluation.contexts.iter().zip(&again.contexts) {
+            assert_eq!(c1, c2);
+            assert!(same_keys(v1, v2), "a context differs:\n{}", context());
+        }
+    }
+    assert!(
+        evaluated > 500,
+        "only {evaluated} data sets evaluated without errors"
+    );
+}

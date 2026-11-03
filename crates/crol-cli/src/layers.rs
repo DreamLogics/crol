@@ -3,9 +3,47 @@
 use std::path::Path;
 
 use crol::{CrolComposer, CrolConfig, LayerSource};
-use crol_eval::{DataOptions, Evaluation, Layer, Sources};
+use crol_eval::{DataOptions, Evaluation, Layer, Sources, Variants};
 
 use crate::diagnostics::Reporter;
+
+/// The variant declarations, common to every command that evaluates
+/// (`SPEC.md` 11).
+#[derive(Debug, Clone, Default, clap::Args)]
+pub(crate) struct VariantArgs {
+    /// Declare discrete variants: `--discrete cache,debug`.
+    #[arg(long, value_delimiter = ',', value_name = "NAMES")]
+    discrete: Vec<String>,
+
+    /// Declare a group of alternatives: `--group dev,prod,prod_eu`.
+    /// Repeatable.
+    #[arg(long, value_name = "NAMES")]
+    group: Vec<String>,
+
+    /// Give a variant a parent: `--parent prod_eu=prod`. Repeatable.
+    #[arg(long, value_name = "CHILD=PARENT")]
+    parent: Vec<String>,
+}
+
+impl VariantArgs {
+    /// The declared variants, or an error message.
+    pub(crate) fn variants(&self) -> Result<Variants, String> {
+        let mut variants = Variants::new();
+        for group in &self.group {
+            variants.add_grouped(group.split(','))?;
+        }
+        for name in &self.discrete {
+            variants.add_discrete(name)?;
+        }
+        for pair in &self.parent {
+            let (child, parent) = pair
+                .split_once('=')
+                .ok_or_else(|| format!("`--parent {pair}` is not `child=parent`"))?;
+            variants.add_parent(child, parent)?;
+        }
+        Ok(variants)
+    }
+}
 
 /// Whether `text` has the form of a module path (`SPEC.md` 4.2).
 fn is_module_path(text: &str) -> bool {
@@ -22,11 +60,21 @@ pub(crate) fn names_a_layer(argument: &str, config: &CrolConfig) -> bool {
 }
 
 /// Loads the layers named by `arguments` (each `name=source` or a source)
-/// and evaluates them. Returns `None` after reporting a loading error.
+/// and evaluates them in `contexts` (`None`: every valid context). Returns
+/// `None` after reporting a loading error.
 pub(crate) fn evaluate(
     arguments: &[String],
+    variants: &VariantArgs,
+    contexts: Option<Vec<Vec<String>>>,
     reporter: &mut Reporter,
 ) -> Option<(Sources, Evaluation)> {
+    let declared = match variants.variants() {
+        Ok(declared) => declared,
+        Err(message) => {
+            reporter.error(&message);
+            return None;
+        }
+    };
     if arguments.is_empty() {
         reporter
             .error("no layers given; name them as arguments (project files are not supported yet)");
@@ -35,7 +83,7 @@ pub(crate) fn evaluate(
     // Tools always follow `extends` (`SPEC.md` 4.1).
     let config = CrolConfig {
         load_extends: true,
-        ..CrolConfig::default()
+        ..CrolConfig::<String>::default()
     };
     let mut composer = CrolComposer::with_cfg(config.clone());
     for argument in arguments {
@@ -76,6 +124,9 @@ pub(crate) fn evaluate(
                 .collect(),
         })
         .collect();
-    let evaluation = crol_eval::evaluate_data(&sources, &layers, &DataOptions::default());
+    let options = DataOptions::default()
+        .with_variants(declared)
+        .with_contexts(contexts);
+    let evaluation = crol_eval::evaluate_data(&sources, &layers, &options);
     Some((sources, evaluation))
 }

@@ -1,0 +1,4 @@
+<dev> { v := 2 },
++e: &<dev>,
++f: (1 + 2)<dev>,
++g: &root.d<dev | prod>,
