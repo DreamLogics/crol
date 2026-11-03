@@ -32,19 +32,20 @@ web.tags: & + ["local"],
 The full design is in [`SPEC.md`](SPEC.md).
 
 > **Status:** early development. The format and the APIs will change before
-> 1.0. Milestone 1 (lexer, parser, syntax tree, formatter) is in progress;
-> see the [milestones](SPEC.md#143-milestones).
+> 1.0. Milestone 1 (lexer, parser, syntax tree, formatter and `crol fmt`) is
+> done; next is value-mode evaluation. See the
+> [milestones](SPEC.md#143-milestones).
 
 ## Crates
 
 | Crate | Contents | Status |
 |---|---|---|
 | [`crol`](crates/crol) | the library: `CrolComposer`, serde `Deserializer` and `Serializer`, `from_str`, `to_string` | planned |
-| [`crol-syntax`](crates/crol-syntax) | lexer, error-recovering parser, lossless syntax tree, typed AST, formatter | in progress |
+| [`crol-syntax`](crates/crol-syntax) | lexer, error-recovering parser, lossless syntax tree, typed AST, formatter | usable |
 | [`crol-eval`](crates/crol-eval) | layers, chains, the evaluator, variants, fingerprints | planned |
 | [`crol-derive`](crates/crol-derive) | `#[derive(Schema)]` and `#[derive(VariantName)]` | planned |
 | [`crol-lsp`](crates/crol-lsp) | the language server, as a library | planned |
-| [`crol-cli`](crates/crol-cli) | the `crol` command-line tool | planned |
+| [`crol-cli`](crates/crol-cli) | the `crol` command-line tool | `crol fmt` |
 
 ## Development
 

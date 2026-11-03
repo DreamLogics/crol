@@ -22,6 +22,7 @@
 #![forbid(unsafe_code)]
 
 pub mod ast;
+pub mod format;
 mod lexer;
 mod line_index;
 mod parser;
