@@ -13,3 +13,5 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 - `crol-syntax`: lexer, error-recovering parser producing a lossless rowan
   syntax tree, typed AST, and line/column index.
+- `crol-syntax`: the formatter (`SPEC.md` 12.2).
+- `crol-cli`: `crol fmt [--check] [--max-width N] <file>...`.

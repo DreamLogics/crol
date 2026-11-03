@@ -1,10 +1,13 @@
-//! Every CROL example in `SPEC.md` parses without errors.
+//! Every CROL example in `SPEC.md` parses without errors, and formats
+//! idempotently.
 //!
 //! The specification lives at the root of the repository, not in the
 //! package, so this test is skipped where it is absent (in a published
 //! crate).
 
 use std::path::Path;
+
+use crol_syntax::format::{FormatConfig, format};
 
 /// Code blocks in the specification that are Rust, not CROL.
 fn is_rust(block: &str) -> bool {
@@ -40,6 +43,16 @@ fn spec_examples_parse() {
         assert_eq!(parse.syntax().to_string(), block);
         if let Some(error) = parse.errors().first() {
             failures.push(format!("SPEC.md:{}: {error}", start + 1));
+            continue;
+        }
+        // The formatter accepts it, and is idempotent on it.
+        let config = FormatConfig::default();
+        let formatted = format(&block, &config).unwrap();
+        if format(&formatted, &config).as_ref() != Ok(&formatted) {
+            failures.push(format!(
+                "SPEC.md:{}: formatting is not idempotent",
+                start + 1
+            ));
         }
     }
     assert!(
@@ -48,7 +61,7 @@ fn spec_examples_parse() {
     );
     assert!(
         failures.is_empty(),
-        "examples with syntax errors:\n{}",
+        "examples that fail:\n{}",
         failures.join("\n")
     );
 }
