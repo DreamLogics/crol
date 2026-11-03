@@ -4,7 +4,8 @@
 //!
 //! - 4-space indentation and a maximum line width (100 by default);
 //! - a block, list or tuple goes on one line if it fits and has no comments,
-//!   else one entry per line with a trailing comma;
+//!   else one entry per line with a trailing comma; a block written with a
+//!   line break after its `{` stays broken;
 //! - spaces around binary operators and after `:` and `,`, none inside
 //!   references, ids and selectors;
 //! - blank lines between entries are kept, but at most one;
@@ -178,6 +179,19 @@ fn string_as_identifier(token: &SyntaxToken) -> Option<&str> {
         && !matches!(inner, "_" | "true" | "false")
         && !inner.contains('\\');
     is_identifier.then_some(inner)
+}
+
+/// Whether `node` is a block or variant block written with a line break
+/// right after its `{`, which keeps it broken.
+fn broken_in_source(node: &SyntaxNode) -> bool {
+    if !matches!(node.kind(), BLOCK | VARIANT_BLOCK) {
+        return false;
+    }
+    node.children_with_tokens()
+        .skip_while(|it| it.kind() != L_BRACE)
+        .skip(1)
+        .take_while(|it| it.kind() == WHITESPACE)
+        .any(|it| it.as_token().is_some_and(|t| t.text().contains('\n')))
 }
 
 /// Whether `node` holds a comment outside the item positions of the
@@ -666,6 +680,9 @@ impl Formatter {
     }
 
     fn flat_container(&self, node: &SyntaxNode) -> Option<String> {
+        if broken_in_source(node) {
+            return None;
+        }
         let mut elements = Vec::new();
         for item in container_items(&Self::items_node(node)) {
             match item {

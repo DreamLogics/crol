@@ -249,3 +249,33 @@ fn a_comment_moves_with_its_defaults_marker() {
         "#]],
     );
 }
+
+#[test]
+fn broken_blocks_stay_broken() {
+    // A line break after `{` keeps a block broken, even when it would fit;
+    // the inner block, written on one line, stays on one line.
+    check(
+        "<prod> {\n    web.replicas: 4, web.env: { A: 1 } },\n+db: Service {\n port: 1, .. },",
+        expect![[r#"
+            <prod> {
+                web.replicas: 4,
+                web.env: { A: 1 },
+            },
+            +db: Service {
+                port: 1,
+                ..,
+            },
+        "#]],
+    );
+}
+
+#[test]
+fn lists_reflow_to_the_width() {
+    check(
+        "a: [\n    1,\n    2,\n], b: (\n 1, 2),",
+        expect![[r#"
+            a: [1, 2],
+            b: (1, 2),
+        "#]],
+    );
+}

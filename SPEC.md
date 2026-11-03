@@ -1851,7 +1851,10 @@ tree.
 
 - 4-space indentation; a maximum line width of 100 (configurable);
 - a block, list or tuple goes on one line if it fits and has no
-  comments, else one entry per line with a trailing comma;
+  comments, else one entry per line with a trailing comma. A block
+  written with a line break directly after its `{` stays broken, so
+  authors can keep a short block on several lines; lists and tuples
+  always reflow;
 - spaces around binary operators and after `:` and `,`; none inside
   `&name`, `@id`, selectors or `..&x`; binds have a space before and
   after `=` and `:=`;
@@ -1859,6 +1862,9 @@ tree.
 - a `..` marker is moved to the end of its block, and duplicates are
   removed;
 - the outer braces of a data-mode document are removed.
+
+Where these rules leave a choice open, the formatter follows rustfmt's
+style.
 
 ### 12.3 Provenance
 
