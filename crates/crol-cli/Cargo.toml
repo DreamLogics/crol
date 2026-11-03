@@ -10,8 +10,6 @@ homepage.workspace = true
 keywords = ["crol", "configuration", "cli"]
 categories = ["command-line-utilities", "config"]
 readme = "README.md"
-# Not published until it has content (SPEC.md 14.3).
-publish = false
 
 [[bin]]
 name = "crol"
