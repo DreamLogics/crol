@@ -2,9 +2,12 @@
 
 #![forbid(unsafe_code)]
 
+mod check;
 mod diagnostics;
+mod eval;
 mod fmt;
 mod from_ron;
+mod layers;
 mod ron;
 
 use std::process::ExitCode;
@@ -19,6 +22,11 @@ struct Cli {
     #[arg(long, value_enum, default_value_t = ColorWhen::Auto, global = true)]
     color: ColorWhen,
 
+    /// How to print diagnostics: rendered on standard error, or as JSON
+    /// lines on standard output.
+    #[arg(long, value_enum, default_value_t = MessageFormat::Human, global = true)]
+    message_format: MessageFormat,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -31,8 +39,18 @@ enum ColorWhen {
     Never,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum MessageFormat {
+    Human,
+    Json,
+}
+
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Read and evaluate layers, and print the diagnostics.
+    Check(check::Args),
+    /// Print evaluated data as a data-mode document, or one value.
+    Eval(eval::Args),
     /// Format files in place, or check that they are formatted.
     Fmt(fmt::Args),
     /// Convert a RON value file to a CROL value document, on standard output.
@@ -41,8 +59,10 @@ enum Command {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    let mut reporter = diagnostics::Reporter::new(cli.color);
+    let mut reporter = diagnostics::Reporter::new(cli.color, cli.message_format);
     let ok = match cli.command {
+        Command::Check(args) => check::run(&args, &mut reporter),
+        Command::Eval(args) => eval::run(&args, &mut reporter),
         Command::Fmt(args) => fmt::run(&args, &mut reporter),
         Command::FromRon(args) => from_ron::run(&args, &mut reporter),
     };

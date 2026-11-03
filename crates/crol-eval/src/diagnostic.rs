@@ -51,6 +51,14 @@ impl Diagnostic {
         }
     }
 
+    /// A warning at `span`.
+    pub fn warning(span: Span, message: impl Into<String>) -> Self {
+        Self {
+            severity: Severity::Warning,
+            ..Self::error(span, message)
+        }
+    }
+
     /// Adds a secondary place.
     pub fn with_related(mut self, span: Span, message: impl Into<String>) -> Self {
         self.related.push(Related {

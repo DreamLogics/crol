@@ -95,6 +95,19 @@ impl<'a> ValueDeserializer<'a> {
         }
     }
 
+    /// A deserializer for the value of the root key `key`.
+    pub(crate) fn at_key(value: &'a Value, context: &'a Context<'a>, key: &str) -> Self {
+        Self {
+            value,
+            context,
+            path: Rc::new(PathNode::Key(
+                Rc::new(PathNode::Root),
+                Key::Str(key.to_owned()),
+            )),
+            variant: None,
+        }
+    }
+
     fn child(&self, value: &'a Value, path: PathNode) -> ValueDeserializer<'a> {
         ValueDeserializer {
             value,

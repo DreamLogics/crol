@@ -1,0 +1,1 @@
+defaults := { replicas: 1, name: "x" },

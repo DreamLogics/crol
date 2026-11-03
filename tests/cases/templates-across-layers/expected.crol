@@ -1,0 +1,1 @@
+web: { replicas: 1, name: "web" },

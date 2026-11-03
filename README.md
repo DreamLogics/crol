@@ -32,21 +32,21 @@ web.tags: & + ["local"],
 The full design is in [`SPEC.md`](SPEC.md).
 
 > **Status:** early development. The format and the APIs will change before
-> 1.0. Milestones 1 and 2 are done: the parser, formatter and `crol fmt`,
-> and single documents (value mode) with `crol::from_str` and
-> `crol::to_string`. Next are layers and variants. See the
+> 1.0. Milestones 1 to 3 are done: the parser and formatter, single
+> documents with `crol::from_str` and `crol::to_string`, and layers with
+> `CrolComposer`, `crol check` and `crol eval`. Next are variants. See the
 > [milestones](SPEC.md#143-milestones).
 
 ## Crates
 
 | Crate | Contents | Status |
 |---|---|---|
-| [`crol`](crates/crol) | the library: `CrolComposer`, serde `Deserializer` and `Serializer`, `from_str`, `to_string` | value mode |
+| [`crol`](crates/crol) | the library: `CrolComposer`, serde `Deserializer` and `Serializer`, `from_str`, `to_string` | layers |
 | [`crol-syntax`](crates/crol-syntax) | lexer, error-recovering parser, lossless syntax tree, typed AST, formatter | usable |
-| [`crol-eval`](crates/crol-eval) | layers, chains, the evaluator, variants, fingerprints | value mode |
+| [`crol-eval`](crates/crol-eval) | layers, chains, the evaluator, variants, fingerprints | layers |
 | [`crol-derive`](crates/crol-derive) | `#[derive(Schema)]` and `#[derive(VariantName)]` | planned |
 | [`crol-lsp`](crates/crol-lsp) | the language server, as a library | planned |
-| [`crol-cli`](crates/crol-cli) | the `crol` command-line tool | `fmt`, `from-ron` |
+| [`crol-cli`](crates/crol-cli) | the `crol` command-line tool | `check`, `eval`, `fmt`, `from-ron` |
 
 ## Development
 

@@ -6,8 +6,15 @@ use std::sync::Arc;
 use crol_syntax::{LineCol, LineIndex, TextRange};
 
 /// Identifies a file in [`Sources`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct FileId(u32);
+
+impl FileId {
+    /// The file's position in its [`Sources`], from 0 in the order added.
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
 
 /// A range of text in a source file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -96,6 +103,14 @@ impl Sources {
     /// If `id` is not from these sources, or is a detached span's.
     pub fn file(&self, id: FileId) -> &SourceFile {
         &self.files[id.0 as usize]
+    }
+
+    /// Every file, in the order added.
+    pub fn files(&self) -> impl Iterator<Item = (FileId, &SourceFile)> {
+        self.files
+            .iter()
+            .enumerate()
+            .map(|(i, file)| (FileId(i as u32), file))
     }
 
     /// Where a span starts, for messages: `name:line:col`.

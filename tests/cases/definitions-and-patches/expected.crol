@@ -1,0 +1,3 @@
+counter: 110,
+list: [1, 2],
+replaced: { a: 1 },

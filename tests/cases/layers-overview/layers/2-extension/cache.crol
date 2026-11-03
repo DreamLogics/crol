@@ -1,0 +1,14 @@
++cache: Service {
+    ..&service_defaults,
+    image: "valkey:8",
+    port: 6379,
+    depends_on: [],
+    ..
+},
+
+web: & ~ {
+    depends_on: & + [@cache],
+    env.CACHE_URL: "redis://cache:" + &root.cache.port,
+},
+
+web.limits.memory_mb: 1024,

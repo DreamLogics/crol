@@ -1,0 +1,2 @@
++database: { host: "db", port: 5432 },
++web: { url: "postgres://" + &root.database.host + ":" + &root.database.port },

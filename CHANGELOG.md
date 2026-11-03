@@ -23,3 +23,10 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   `from_str_with_ids`, `to_string`, `to_string_pretty`, and `crol::Id`.
 - `crol-cli`: `crol from-ron <file>`.
 - Limits on nesting, reference depth and evaluation work (`SPEC.md` 7.7).
+- Layers (`SPEC.md` 7): data-mode documents, chains of definitions and
+  patches per root key, templates shared by every layer, and the warning
+  for patches from several documents of one layer.
+- `crol`: `CrolComposer`, `CrolConfig`, `CrolLayer` and `CrolData`; layers
+  by module path (`SPEC.md` 4.2) or file system path, and `load_extends`.
+- `crol-cli`: `crol check` and `crol eval`, and `--message-format json`.
+- The conformance suite in `tests/cases/` (`SPEC.md` 14.2).

@@ -158,3 +158,33 @@ pub(crate) struct ValueBind {
     pub(crate) name: Rc<str>,
     pub(crate) expr: ExprId,
 }
+
+/// An operation on a root key, from a data-mode document (`SPEC.md` 7.2).
+#[derive(Debug)]
+pub(crate) struct RootOp {
+    pub(crate) key: Rc<str>,
+    /// `None` for a remove.
+    pub(crate) op: Option<SetOp>,
+    pub(crate) path: Vec<Selector>,
+    pub(crate) value: Option<ExprId>,
+    /// The target's span.
+    pub(crate) span: Span,
+    /// Whether the value uses the value below (`&`), which makes a set a
+    /// patch rather than a definition.
+    pub(crate) uses_below: bool,
+    pub(crate) layer: usize,
+    pub(crate) document: usize,
+}
+
+impl RootOp {
+    /// Whether this is a definition (`SPEC.md` 7.2): a root entry without a
+    /// path that declares, ensures, or sets without using the value below.
+    pub(crate) fn is_definition(&self) -> bool {
+        self.path.is_empty()
+            && match self.op {
+                Some(SetOp::Declare | SetOp::Ensure) => true,
+                Some(SetOp::Set) => !self.uses_below,
+                None => false,
+            }
+    }
+}

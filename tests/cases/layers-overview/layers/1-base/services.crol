@@ -1,0 +1,23 @@
+// A template: a named value, not a root key (SPEC.md 6.1.2).
+service_defaults := {
+    replicas: 1,
+    port: 8080,
+    tags: ["managed"],
+    env: { LOG_LEVEL: "info" },
+    limits: Limits { cpu: 1.0, memory_mb: 512 },
+},
+
++web: Service {
+    ..&service_defaults,
+    image: "web:1.4",
+    depends_on: [@database],
+    url: "http://web:" + &self.port,
+},
+
++database: Service {
+    ..&service_defaults,
+    image: "postgres:17",
+    port: 5432,
+    depends_on: [],
+    ..
+},

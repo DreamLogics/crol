@@ -381,7 +381,291 @@ pub(crate) fn evaluate(ir: &Ir, root: ExprId) -> (Option<Value>, Vec<Diagnostic>
     (value, evaluator.diagnostics)
 }
 
+/// What data evaluation needs besides the IR.
+pub(crate) struct DataInput<'a> {
+    pub(crate) ops: &'a [RootOp],
+    pub(crate) templates: &'a [BindId],
+    pub(crate) layer_names: &'a [String],
+    pub(crate) warn_cross_file_patches: bool,
+}
+
+/// Evaluates lowered data-mode documents: one chain of operations per root
+/// key (`SPEC.md` 7.2 to 7.4).
+pub(crate) fn evaluate_data(ir: &Ir, input: &DataInput<'_>) -> (Option<Value>, Vec<Diagnostic>) {
+    let mut evaluator = Evaluator {
+        ir,
+        diagnostics: Vec::new(),
+        stack: Vec::new(),
+        root: None,
+        steps: 0,
+    };
+    let root_cell = Rc::new(Cell {
+        state: RefCell::new(State::Running),
+        expr: None,
+        location: None,
+    });
+    let root = Location {
+        base: Rc::downgrade(&root_cell),
+        name: Rc::from(""),
+        path: None,
+    };
+    evaluator.root = Some(root.clone());
+    // Root entries are in the root, so `&self` there is the root.
+    let chain = Some(Rc::new(ChainLink {
+        location: Some(root.clone()),
+        bind_root: false,
+        next: None,
+    }));
+    let vbinds = evaluator.bind_cells(input.templates, &chain, None);
+
+    let mut chains: IndexMap<Rc<str>, Vec<usize>> = IndexMap::new();
+    for (i, op) in input.ops.iter().enumerate() {
+        chains.entry(op.key.clone()).or_default().push(i);
+    }
+    let mut slots = Vec::new();
+    for (key, indices) in &chains {
+        let order = evaluator.chain_order(key, indices, input);
+        if let Some((created, slot)) =
+            evaluator.apply_chain(key, &order, input.ops, &chain, &root, &vbinds)
+        {
+            slots.push((created, Key::Str(key.to_string()), slot));
+        }
+    }
+    // Keys are in the order they were created, by layer and position.
+    slots.sort_by_key(|(created, _, _)| *created);
+    let keyed = KeyedShape {
+        slots: slots
+            .into_iter()
+            .map(|(_, key, slot)| (key, slot))
+            .collect(),
+        ..KeyedShape::default()
+    };
+    *root_cell.state.borrow_mut() = State::Done(Ok(Rc::new(Shaped {
+        shape: Shape::Keyed(keyed),
+        span: Span::detached(),
+    })));
+    let value = evaluator
+        .full_value(&root_cell, Span::detached(), &mut Vec::new())
+        .ok();
+    let mut diagnostics = evaluator.diagnostics;
+    diagnostics.sort_by_key(|d| (d.span.file, d.span.range.start()));
+    (value, diagnostics)
+}
+
 impl Evaluator<'_> {
+    /// The order of a key's operations: layer by layer, the layer's
+    /// definition first, then its patches in document order (`SPEC.md` 7.2).
+    fn chain_order(&mut self, key: &str, indices: &[usize], input: &DataInput<'_>) -> Vec<usize> {
+        let ops = input.ops;
+        let mut order = Vec::with_capacity(indices.len());
+        let mut start = 0;
+        while start < indices.len() {
+            let layer = ops[indices[start]].layer;
+            let end = start
+                + indices[start..]
+                    .iter()
+                    .take_while(|&&i| ops[i].layer == layer)
+                    .count();
+            let in_layer = &indices[start..end];
+            let layer_name = input.layer_names.get(layer).map_or("", String::as_str);
+            let mut definition = None;
+            for &i in in_layer.iter().filter(|&&i| ops[i].is_definition()) {
+                match definition {
+                    None => definition = Some(i),
+                    Some(first) => {
+                        let diagnostic = Diagnostic::error(
+                            ops[i].span,
+                            format!("`{key}` is defined twice in the layer `{layer_name}`; a layer may define a key once"),
+                        )
+                        .with_related(ops[first].span, "the other definition");
+                        self.report(diagnostic);
+                    }
+                }
+            }
+            order.extend(definition);
+            let patches: Vec<usize> = in_layer
+                .iter()
+                .copied()
+                .filter(|&i| !ops[i].is_definition())
+                .collect();
+            if input.warn_cross_file_patches {
+                let mut documents: Vec<usize> = patches.iter().map(|&i| ops[i].document).collect();
+                documents.dedup();
+                if documents.len() > 1 {
+                    let mut diagnostic = Diagnostic::warning(
+                        ops[patches[0]].span,
+                        format!(
+                            "`{key}` is patched from {} documents of the layer `{layer_name}`, so the order of the patches depends on the file names",
+                            documents.len()
+                        ),
+                    );
+                    for &i in &patches[1..] {
+                        diagnostic = diagnostic.with_related(ops[i].span, "another patch");
+                    }
+                    self.report(diagnostic);
+                }
+            }
+            order.extend(patches);
+            start = end;
+        }
+        order
+    }
+
+    /// Applies a key's operations in order (`SPEC.md` 7.4). Returns the
+    /// final value, if the key exists, and the operation that created it.
+    fn apply_chain(
+        &mut self,
+        key: &str,
+        order: &[usize],
+        ops: &[RootOp],
+        chain: &Chain,
+        root: &Location,
+        vbinds: &VBinds,
+    ) -> Option<(usize, Slot)> {
+        let here = root.child(Step::Key(Key::Str(key.to_owned())));
+        let mut value: Option<(usize, Lazy)> = None;
+        for &i in order {
+            let op = &ops[i];
+            if !op.path.is_empty() {
+                let Some((created, base)) = value.clone() else {
+                    let mut target = match op.op {
+                        None => format!("-{key}"),
+                        Some(SetOp::Set) => key.to_owned(),
+                        Some(set) => format!("{}{key}", set.symbol()),
+                    };
+                    for selector in &op.path {
+                        target.push_str(&describe_selector(selector));
+                    }
+                    let _ = self.fail(
+                        op.span,
+                        format!("{target}: `{key}` does not exist, so it cannot be patched"),
+                    );
+                    continue;
+                };
+                let entry = op.value.map(|expr| {
+                    let mut below = Below::Value(base.clone());
+                    for selector in &op.path {
+                        below = Below::Select(Rc::new(below), selector.clone());
+                    }
+                    Rc::new(EntryRecipe {
+                        expr,
+                        below,
+                        vbinds: vbinds.clone(),
+                    })
+                });
+                let recipe = Rc::new(PathRecipe {
+                    base: Recipe::Fixed,
+                    base_value: base.clone(),
+                    path: op.path.clone(),
+                    op: op.op,
+                    value: entry,
+                    span: op.span,
+                });
+                let cell = Cell::new(
+                    Job::Path {
+                        base,
+                        recipe,
+                        chain: chain.clone(),
+                        here: Some(here.clone()),
+                    },
+                    Some(here.clone()),
+                );
+                value = Some((created, cell));
+                continue;
+            }
+            match op.op {
+                None => {
+                    if value.take().is_none() {
+                        let _ = self.fail(op.span, format!("-: `{key}` does not exist"));
+                    }
+                }
+                Some(set) => {
+                    if let Some((created, _)) = &value {
+                        match set {
+                            SetOp::Declare => {
+                                let diagnostic = Diagnostic::error(
+                                    op.span,
+                                    format!("+: `{key}` already exists"),
+                                )
+                                .with_related(ops[*created].span, "it is created here");
+                                self.report(diagnostic);
+                                continue;
+                            }
+                            SetOp::Ensure => continue,
+                            SetOp::Set => {}
+                        }
+                    }
+                    let below = match (&value, set) {
+                        (Some((_, cell)), SetOp::Set) => Below::Value(cell.clone()),
+                        _ => Below::Missing,
+                    };
+                    let cell = Cell::new(
+                        Job::Expr {
+                            expr: op.value.expect("a set has a value"),
+                            env: Env {
+                                chain: chain.clone(),
+                                here: Some(here.clone()),
+                                below: below.clone(),
+                                outer_below: below,
+                                vbinds: vbinds.clone(),
+                            },
+                        },
+                        Some(here.clone()),
+                    );
+                    let created = value.as_ref().map_or(i, |(created, _)| *created);
+                    value = Some((created, cell));
+                }
+            }
+        }
+        value.map(|(created, cell)| {
+            (
+                created,
+                Slot {
+                    value: cell,
+                    recipe: Recipe::Fixed,
+                },
+            )
+        })
+    }
+
+    /// Cells for value binds, each at a location of its own, visible to
+    /// each other and to `vbinds`'s binds (`SPEC.md` 6.1.2).
+    fn bind_cells(&self, binds: &[BindId], chain: &Chain, mut vbinds: VBinds) -> VBinds {
+        let ir = self.ir;
+        let mut cells = Vec::with_capacity(binds.len());
+        for &bind in binds {
+            let cell = Rc::new(Cell {
+                state: RefCell::new(State::Running),
+                expr: Some(ir.value_binds[bind].expr),
+                location: None,
+            });
+            vbinds = Some(Rc::new(VBindLink {
+                id: bind,
+                cell: cell.clone(),
+                next: vbinds,
+            }));
+            cells.push((bind, cell));
+        }
+        for (bind, cell) in cells {
+            let here = Location {
+                base: Rc::downgrade(&cell),
+                name: ir.value_binds[bind].name.clone(),
+                path: None,
+            };
+            *cell.state.borrow_mut() = State::Pending(Job::Expr {
+                expr: ir.value_binds[bind].expr,
+                env: Env {
+                    chain: chain.clone(),
+                    here: Some(here),
+                    below: Below::Missing,
+                    outer_below: Below::Missing,
+                    vbinds: vbinds.clone(),
+                },
+            });
+        }
+        vbinds
+    }
+
     // ---- Errors ----
 
     /// Reports an error and returns the poison that propagates it.
@@ -834,38 +1118,7 @@ impl Evaluator<'_> {
         };
 
         // Value binds are visible anywhere in the block, and in each other.
-        let mut vbinds = env.vbinds.clone();
-        let mut bind_cells = Vec::new();
-        for &bind in &block.value_binds {
-            let cell = Rc::new(Cell {
-                state: RefCell::new(State::Running),
-                expr: Some(ir.value_binds[bind].expr),
-                location: None,
-            });
-            vbinds = Some(Rc::new(VBindLink {
-                id: bind,
-                cell: cell.clone(),
-                next: vbinds,
-            }));
-            bind_cells.push((bind, cell));
-        }
-        for (bind, cell) in bind_cells {
-            let here = Location {
-                base: Rc::downgrade(&cell),
-                name: ir.value_binds[bind].name.clone(),
-                path: None,
-            };
-            *cell.state.borrow_mut() = State::Pending(Job::Expr {
-                expr: ir.value_binds[bind].expr,
-                env: Env {
-                    chain: chain.clone(),
-                    here: Some(here),
-                    below: Below::Missing,
-                    outer_below: Below::Missing,
-                    vbinds: vbinds.clone(),
-                },
-            });
-        }
+        let vbinds = self.bind_cells(&block.value_binds, &chain, env.vbinds.clone());
 
         for &spread in &block.spreads {
             let spread_env = Env {

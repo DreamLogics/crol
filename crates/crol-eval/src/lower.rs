@@ -14,6 +14,124 @@ use crate::literal;
 use crate::source::{FileId, Span};
 use crate::value::Key;
 
+/// A data-mode document to lower, in its layer.
+pub(crate) struct DataDocument<'a> {
+    pub(crate) file: FileId,
+    pub(crate) document: &'a ast::Document,
+    pub(crate) layer: usize,
+    /// The document's position in its layer.
+    pub(crate) index: usize,
+}
+
+/// Lowered data-mode documents: every root operation, and the templates.
+pub(crate) struct LoweredData {
+    pub(crate) ir: Ir,
+    pub(crate) ops: Vec<RootOp>,
+    pub(crate) templates: Vec<BindId>,
+}
+
+/// The root entries of a data-mode document: its entries, or those of its
+/// untyped outer block (`SPEC.md` 4).
+fn root_entries(lowerer: &mut Lowerer, document: &ast::Document) -> Vec<ast::AnyEntry> {
+    match document.expr() {
+        None => document.entries().collect(),
+        Some(ast::Expr::Block(block)) => {
+            if let Some(name) = block.type_name() {
+                let span = lowerer.token_span(&name);
+                lowerer.error(
+                    span,
+                    "the outer braces of a data-mode document cannot have a type name",
+                );
+            }
+            block.entries().collect()
+        }
+        Some(expr) => {
+            let span = lowerer.span(expr.syntax());
+            lowerer.error(
+                span,
+                "a data-mode document holds entries (`key: value,`), not one value",
+            );
+            Vec::new()
+        }
+    }
+}
+
+/// Lowers the documents of every layer (`SPEC.md` 4, 7.2).
+pub(crate) fn lower_data(documents: &[DataDocument<'_>]) -> (LoweredData, Vec<Diagnostic>) {
+    let mut lowerer = Lowerer {
+        file: documents.first().map_or(FileId::default(), |d| d.file),
+        ir: Ir::default(),
+        diagnostics: Vec::new(),
+        scopes: Vec::new(),
+        aliases: HashMap::new(),
+        reach: Reach::default(),
+        used_below: false,
+        data_mode: true,
+    };
+
+    // Templates are visible in every document of every layer, so they are
+    // all collected first (`SPEC.md` 6.1.2).
+    let mut scope = Scope::default();
+    let mut templates = Vec::new();
+    let mut entries_of = Vec::with_capacity(documents.len());
+    for document in documents {
+        lowerer.file = document.file;
+        let entries = root_entries(&mut lowerer, document.document);
+        for entry in &entries {
+            let ast::AnyEntry::ValueBind(bind) = entry else {
+                continue;
+            };
+            let Some(name) = bind.name() else { continue };
+            let span = lowerer.token_span(&name);
+            if let Some((_, other)) = scope.value_binds.get(name.text()) {
+                let diagnostic = Diagnostic::error(
+                    span,
+                    format!("the template `{}` is defined twice", name.text()),
+                )
+                .with_related(*other, "the other definition");
+                lowerer.diagnostics.push(diagnostic);
+                continue;
+            }
+            if RESERVED_BIND_NAMES.contains(&name.text()) {
+                lowerer.error(span, format!("`{}` cannot be a template name", name.text()));
+                continue;
+            }
+            let id = lowerer.ir.value_binds.len();
+            lowerer.ir.value_binds.push(ValueBind {
+                name: Rc::from(name.text()),
+                expr: usize::MAX,
+            });
+            scope.value_binds.insert(name.text().to_owned(), (id, span));
+            templates.push(id);
+        }
+        entries_of.push(entries);
+    }
+    lowerer.scopes.push(scope);
+
+    let mut ops = Vec::new();
+    for (document, entries) in documents.iter().zip(&entries_of) {
+        lowerer.file = document.file;
+        lowerer.aliases.clear();
+        if let Some((_, span)) = lowerer.attributes(document.document) {
+            lowerer.error(
+                span,
+                "`type` names the type of a value-mode document; a data-mode document's root has no type",
+            );
+        }
+        for entry in entries {
+            lowerer.root_entry(entry, document, &mut ops);
+        }
+    }
+
+    let Lowerer {
+        ir,
+        mut diagnostics,
+        ..
+    } = lowerer;
+    diagnostics.sort_by_key(|d| (d.span.file, d.span.range.start()));
+    (LoweredData { ir, ops, templates }, diagnostics)
+}
+
 /// A lowered value-mode document.
 pub(crate) struct Lowered {
     pub(crate) ir: Ir,
@@ -36,6 +154,20 @@ struct Lowerer {
     scopes: Vec<Scope>,
     /// `use(path as Alias)`: alias to the type name it stands for.
     aliases: HashMap<String, String>,
+    /// Whether a `&` here, and in a whole-value block here, would reach the
+    /// value below the root entry being lowered.
+    reach: Reach,
+    /// Whether the root entry being lowered uses its value below.
+    used_below: bool,
+    /// Lowering data-mode documents rather than a value-mode one.
+    data_mode: bool,
+}
+
+/// Mirrors the evaluator's `below` and `outer_below` (`SPEC.md` 6.1).
+#[derive(Debug, Clone, Copy, Default)]
+struct Reach {
+    below: bool,
+    outer: bool,
 }
 
 /// Lowers a value-mode document (`SPEC.md` 4).
@@ -49,6 +181,9 @@ pub(crate) fn lower_value_document(
         diagnostics: Vec::new(),
         scopes: Vec::new(),
         aliases: HashMap::new(),
+        reach: Reach::default(),
+        used_below: false,
+        data_mode: false,
     };
     let type_name = lowerer.attributes(document);
     let root = match document.expr() {
@@ -78,6 +213,97 @@ pub(crate) fn lower_value_document(
 }
 
 impl Lowerer {
+    /// Lowers one root entry of a data-mode document to an operation.
+    fn root_entry(
+        &mut self,
+        entry: &ast::AnyEntry,
+        document: &DataDocument<'_>,
+        ops: &mut Vec<RootOp>,
+    ) {
+        let (target, op, value) = match entry {
+            ast::AnyEntry::Entry(entry) => {
+                if let Some(bind) = entry.bind() {
+                    let span = self.span(bind.syntax());
+                    self.error(
+                        span,
+                        "a bind at the top level of a data-mode document is not needed: write `&root.key`",
+                    );
+                }
+                let op = match entry.op() {
+                    ast::EntryOp::Set => SetOp::Set,
+                    ast::EntryOp::Declare => SetOp::Declare,
+                    ast::EntryOp::Ensure => SetOp::Ensure,
+                };
+                (entry.target(), Some(op), entry.value())
+            }
+            ast::AnyEntry::Remove(entry) => (entry.target(), None, None),
+            ast::AnyEntry::ValueBind(bind) => {
+                // A template: its id was assigned when templates were collected.
+                let Some(name) = bind.name() else { return };
+                let Some(&(id, span)) = self.scopes[0].value_binds.get(name.text()) else {
+                    return;
+                };
+                if span != self.token_span(&name) {
+                    return; // A second definition, already reported.
+                }
+                self.reach = Reach::default();
+                let expr = match bind.value() {
+                    Some(value) => self.expr(&value),
+                    None => self.ir.add_expr(ExprKind::Error, span),
+                };
+                self.ir.value_binds[id].expr = expr;
+                return;
+            }
+            ast::AnyEntry::Spread(_) | ast::AnyEntry::Defaults(_) => {
+                let span = self.span(entry.syntax());
+                self.error(
+                    span,
+                    "a spread or `..` cannot be at the root of a data-mode document; the root is not a value",
+                );
+                return;
+            }
+            ast::AnyEntry::VariantBlock(block) => {
+                let span = self.span(block.syntax());
+                self.error(span, "variants are not implemented yet");
+                return;
+            }
+        };
+        let Some(target) = target else { return };
+        let span = self.span(target.syntax());
+        let Some((key, path)) = self.target(&target) else {
+            return;
+        };
+        let key = match key {
+            Key::Str(key) => Rc::from(key),
+            Key::Int(i) => {
+                self.error(
+                    span,
+                    format!(
+                        "root keys are ids, which are strings; write `\"{i}\"` for the key {i}"
+                    ),
+                );
+                return;
+            }
+        };
+        self.reach = Reach {
+            below: true,
+            outer: true,
+        };
+        self.used_below = false;
+        let value = value.map(|value| self.expr(&value));
+        self.reach = Reach::default();
+        ops.push(RootOp {
+            key,
+            op,
+            path,
+            value,
+            span,
+            uses_below: self.used_below,
+            layer: document.layer,
+            document: document.index,
+        });
+    }
+
     fn span(&self, node: &crol_syntax::SyntaxNode) -> Span {
         Span::new(self.file, node.text_range())
     }
@@ -174,12 +400,13 @@ impl Lowerer {
                         type_name = Some((name.text().to_owned(), span));
                     }
                 }
-                Some(ast::AttributeKind::Extends(_)) => {
+                Some(ast::AttributeKind::Extends(_)) if !self.data_mode => {
                     self.error(
                         span,
                         "`extends` names layers below a document, and a value-mode document has no layers",
                     );
                 }
+                Some(ast::AttributeKind::Extends(_)) => {}
                 None => {}
             }
         }
@@ -256,10 +483,19 @@ impl Lowerer {
         }
         self.scopes.push(scope);
 
+        // In a whole-value block, an entry's `&` sees through to the value
+        // below the entry the block is the value of; in a patch block, the
+        // caller has cleared `outer`.
+        let outer = self.reach;
+        let entry_reach = Reach {
+            below: outer.outer,
+            outer: outer.outer,
+        };
         let mut spreads = Vec::new();
         let mut lowered = Vec::new();
         let mut defaults = false;
         for entry in &entries {
+            self.reach = entry_reach;
             match entry {
                 ast::AnyEntry::Entry(entry) => {
                     let Some(target) = entry.target() else {
@@ -298,6 +534,10 @@ impl Lowerer {
                 }
                 ast::AnyEntry::Spread(spread) => {
                     if let Some(operand) = spread.operand() {
+                        self.reach = Reach {
+                            below: outer.below,
+                            outer: false,
+                        };
                         spreads.push(self.expr(&operand));
                     }
                 }
@@ -310,6 +550,7 @@ impl Lowerer {
             }
         }
         let bind_ids = value_binds.iter().map(|(id, _)| *id).collect();
+        self.reach = Reach::default();
         for (bind_id, bind) in value_binds {
             let expr = match bind.value() {
                 Some(value) => self.expr(&value),
@@ -317,6 +558,7 @@ impl Lowerer {
             };
             self.ir.value_binds[bind_id].expr = expr;
         }
+        self.reach = outer;
         self.scopes.pop();
 
         let block = &mut self.ir.blocks[id];
@@ -442,7 +684,7 @@ impl Lowerer {
                     self.literal(&literal, true, span)
                 }
                 Some(operand) => {
-                    let operand = self.expr(&operand);
+                    let operand = self.detached(|this| this.expr(&operand));
                     self.ir.add_expr(ExprKind::Neg(operand), span)
                 }
                 None => self.ir.add_expr(ExprKind::Error, span),
@@ -466,11 +708,13 @@ impl Lowerer {
                 self.ir.add_expr(ExprKind::Block(id), span)
             }
             ast::Expr::List(list) => {
-                let elements = list.elements().map(|e| self.expr(&e)).collect();
+                let elements =
+                    self.detached(|this| list.elements().map(|e| this.expr(&e)).collect());
                 self.ir.add_expr(ExprKind::List(elements), span)
             }
             ast::Expr::Tuple(tuple) => {
-                let elements: Vec<_> = tuple.elements().map(|e| self.expr(&e)).collect();
+                let elements: Vec<_> =
+                    self.detached(|this| tuple.elements().map(|e| this.expr(&e)).collect());
                 let kind = if elements.is_empty() {
                     ExprKind::Unit
                 } else {
@@ -482,7 +726,8 @@ impl Lowerer {
                 let name = named
                     .name()
                     .map_or_else(|| Rc::from(""), |n| self.resolve_type_name(n.text()));
-                let elements = named.elements().map(|e| self.expr(&e)).collect();
+                let elements =
+                    self.detached(|this| named.elements().map(|e| this.expr(&e)).collect());
                 self.ir.add_expr(ExprKind::Named(name, elements), span)
             }
             ast::Expr::UnitName(unit) => {
@@ -502,7 +747,7 @@ impl Lowerer {
                 if let Some(error) = self.check_reference_variants(&base, path) {
                     return self.error_expr(span, error);
                 }
-                let base = self.expr(&base);
+                let base = self.detached(|this| this.expr(&base));
                 match self.selectors(path.selectors()) {
                     Some(selectors) => self.ir.add_expr(ExprKind::Path(base, selectors), span),
                     None => self.ir.add_expr(ExprKind::Error, span),
@@ -522,8 +767,26 @@ impl Lowerer {
                 let (Some(lhs), Some(rhs)) = (binary.lhs(), binary.rhs()) else {
                     return self.ir.add_expr(ExprKind::Error, span);
                 };
-                let lhs = self.expr(&lhs);
-                let rhs = self.expr(&rhs);
+                let (lhs, rhs) = match op {
+                    // Operands at the entry's position.
+                    BinOp::Fallback => (self.expr(&lhs), self.expr(&rhs)),
+                    // A block on the right is a patch block: its entries see
+                    // the left operand, not the value below.
+                    BinOp::Merge => {
+                        let lhs = self.expr(&lhs);
+                        let rhs = if matches!(rhs, ast::Expr::Block(_)) {
+                            let saved = self.reach;
+                            self.reach.outer = false;
+                            let rhs = self.expr(&rhs);
+                            self.reach = saved;
+                            rhs
+                        } else {
+                            self.expr(&rhs)
+                        };
+                        (lhs, rhs)
+                    }
+                    _ => self.detached(|this| (this.expr(&lhs), this.expr(&rhs))),
+                };
                 self.ir.add_expr(ExprKind::Binary(op, lhs, rhs), span)
             }
         }
@@ -603,9 +866,24 @@ impl Lowerer {
         self.ir.add_expr(kind, span)
     }
 
+    /// Lowers an operand that is not at the entry's position: a block in it
+    /// does not see through to the value below.
+    fn detached<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        let saved = self.reach;
+        self.reach.outer = false;
+        let result = f(self);
+        self.reach = saved;
+        result
+    }
+
     fn reference(&mut self, reference: &ast::Reference, span: Span) -> ExprId {
         let kind = match reference.kind() {
-            ast::ReferenceKind::Below => RefKind::Below,
+            ast::ReferenceKind::Below => {
+                if self.reach.below {
+                    self.used_below = true;
+                }
+                RefKind::Below
+            }
             ast::ReferenceKind::SelfValue => RefKind::SelfValue,
             ast::ReferenceKind::Parent(n) => RefKind::Parent(n),
             ast::ReferenceKind::Root => RefKind::Root,
