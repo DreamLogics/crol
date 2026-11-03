@@ -5,6 +5,7 @@
 mod check;
 mod diagnostics;
 mod eval;
+mod explain;
 mod fingerprint;
 mod fmt;
 mod from_ron;
@@ -52,6 +53,8 @@ enum Command {
     Check(check::Args),
     /// Print evaluated data as a data-mode document, or one value.
     Eval(eval::Args),
+    /// Print the operations that produced a value, with the value after each.
+    Explain(explain::Args),
     /// Print the fingerprint of the evaluated data in hex.
     Fingerprint(fingerprint::Args),
     /// Format files in place, or check that they are formatted.
@@ -66,6 +69,7 @@ fn main() -> ExitCode {
     let ok = match cli.command {
         Command::Check(args) => check::run(&args, &mut reporter),
         Command::Eval(args) => eval::run(&args, &mut reporter),
+        Command::Explain(args) => explain::run(&args, &mut reporter),
         Command::Fingerprint(args) => fingerprint::run(&args, &mut reporter),
         Command::Fmt(args) => fmt::run(&args, &mut reporter),
         Command::FromRon(args) => from_ron::run(&args, &mut reporter),

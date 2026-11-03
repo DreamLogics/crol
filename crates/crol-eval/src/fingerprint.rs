@@ -1,67 +1,49 @@
 //! The fingerprint: a BLAKE3-256 hash of the canonical encoding of all
 //! evaluated data (`SPEC.md` 7.6, appendix B).
 
+use crate::eval::ContextData;
 use crate::value::{Key, Value, ValueKind};
-use crate::variants::{Context, Variants};
+use crate::variants::Variants;
 
 /// The fingerprint of evaluated data: the base root, and each other
 /// evaluated context's root. Two data sets with the same values have the
 /// same fingerprint, however they were written.
-pub fn fingerprint(base: &Value, contexts: &[(Context, Value)], variants: &Variants) -> [u8; 32] {
+pub fn fingerprint(base: &Value, contexts: &[ContextData], variants: &Variants) -> [u8; 32] {
     let mut out = Vec::new();
     encode_data(&mut out, base, contexts, variants);
     *blake3::hash(&out).as_bytes()
 }
 
 /// The canonical encoding of the data (appendix B).
-pub fn encode_data(
-    out: &mut Vec<u8>,
-    base: &Value,
-    contexts: &[(Context, Value)],
-    variants: &Variants,
-) {
-    let entries = |value: &Value| match &value.kind {
-        ValueKind::Keyed(keyed) => keyed.entries.clone(),
-        _ => Default::default(),
-    };
-    let base_entries = entries(base);
+pub fn encode_data(out: &mut Vec<u8>, base: &Value, contexts: &[ContextData], variants: &Variants) {
     out.extend_from_slice(b"CROL1");
-    leb128(out, base_entries.len() as u128);
-    for (key, value) in &base_entries {
-        encode_key(out, key);
-        encode(out, value);
+    match &base.kind {
+        ValueKind::Keyed(keyed) => {
+            leb128(out, keyed.entries.len() as u128);
+            for (key, value) in &keyed.entries {
+                encode_key(out, key);
+                encode(out, value);
+            }
+        }
+        _ => leb128(out, 0),
     }
-
-    let mut others: Vec<(Vec<&str>, &Value)> = contexts
+    let mut others: Vec<(Vec<&str>, &ContextData)> = contexts
         .iter()
-        .filter(|(context, _)| !context.is_base())
-        .map(|(context, value)| (variants.chosen_names(context), value))
+        .filter(|data| !data.context.is_base())
+        .map(|data| (variants.chosen_names(&data.context), data))
         .collect();
     others.sort_by(|a, b| a.0.cmp(&b.0));
     leb128(out, others.len() as u128);
-    for (names, value) in others {
+    for (names, data) in others {
         leb128(out, names.len() as u128);
         for name in &names {
             encode_name(out, name);
         }
-        let context_entries = entries(value);
-        let mut differences: Vec<(&Key, Option<&Value>)> = Vec::new();
-        for (key, base_value) in &base_entries {
-            match context_entries.get(key) {
-                None => differences.push((key, None)),
-                Some(value) if !value.identical(base_value) => differences.push((key, Some(value))),
-                Some(_) => {}
-            }
-        }
-        for (key, value) in &context_entries {
-            if !base_entries.contains_key(key) {
-                differences.push((key, Some(value)));
-            }
-        }
-        leb128(out, differences.len() as u128);
-        for (key, value) in differences {
+        // The changes are in root order, with context-only keys after.
+        leb128(out, data.changes.len() as u128);
+        for (key, change) in &data.changes {
             encode_key(out, key);
-            match value {
+            match change {
                 None => out.push(0x00),
                 Some(value) => {
                     out.push(0x01);

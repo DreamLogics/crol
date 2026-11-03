@@ -36,7 +36,7 @@ pub use source::{FileId, Location, SourceFile, Sources, Span};
 pub use value::{Key, Keyed, Value, ValueKind, format_float, is_identifier, quote, quote_char};
 pub use variants::{Context, VariantId, Variants};
 
-pub use eval::VariantKeys;
+pub use eval::{ContextData, ExplainStep, PathStep, StepKind, VariantKeys, value_at_path};
 
 /// The result of evaluating: the value, unless an error made that
 /// impossible, and every diagnostic.
@@ -44,8 +44,9 @@ pub use eval::VariantKeys;
 pub struct Evaluation {
     /// The value, in the base context; `None` if there were errors.
     pub value: Option<Value>,
-    /// The value in every other evaluated context, for data with variants.
-    pub contexts: Vec<(Context, Value)>,
+    /// How every other evaluated context differs from the base, for data
+    /// with variants.
+    pub contexts: Vec<ContextData>,
     /// The variants: those declared, or else those the data uses.
     pub variants: Variants,
     /// Errors and warnings, in the order found.
@@ -86,6 +87,10 @@ pub struct DataOptions {
     pub max_contexts: usize,
     /// Which keys a context may have, compared with the base (`SPEC.md` 8.5).
     pub variant_keys: VariantKeys,
+    /// Evaluate every key in every context, rather than only those that can
+    /// differ from the base. For testing that the two agree.
+    #[doc(hidden)]
+    pub evaluate_every_key: bool,
 }
 
 impl Default for DataOptions {
@@ -96,6 +101,7 @@ impl Default for DataOptions {
             contexts: None,
             max_contexts: 4096,
             variant_keys: VariantKeys::Any,
+            evaluate_every_key: false,
         }
     }
 }
@@ -196,6 +202,7 @@ pub fn evaluate_data(sources: &Sources, layers: &[Layer], options: &DataOptions)
         contexts: options.contexts.as_deref(),
         max_contexts: options.max_contexts,
         variant_keys: options.variant_keys,
+        evaluate_every_key: options.evaluate_every_key,
     };
     let (result, mut errors) = eval::evaluate_data(&lowered.ir, &input);
     diagnostics.append(&mut errors);
@@ -212,14 +219,114 @@ pub fn evaluate_data(sources: &Sources, layers: &[Layer], options: &DataOptions)
             ..Evaluation::default()
         };
     }
-    let mut contexts = result.contexts.into_iter();
-    let value = contexts.next().and_then(|(_, value)| value);
     Evaluation {
-        value,
-        contexts: contexts.filter_map(|(c, v)| Some((c, v?))).collect(),
+        value: result.base,
+        contexts: result.contexts,
         variants: result.variants,
         diagnostics,
     }
+}
+
+/// Parses a path to a value: a root key, then selectors, as `web.limits.cpu`
+/// or `web.tags[0]` (`SPEC.md` 5.1).
+pub fn parse_path(text: &str) -> Result<(String, Vec<PathStep>), String> {
+    let invalid = || format!("`{text}` is not a key or a path");
+    let parse = crol_syntax::parse(&format!("{text}: ()"));
+    let entry = match parse.document().entries().next() {
+        Some(crol_syntax::ast::AnyEntry::Entry(entry)) if parse.errors().is_empty() => entry,
+        _ => return Err(invalid()),
+    };
+    let target = entry.target().ok_or_else(invalid)?;
+    let key = target.key().and_then(|k| k.token()).ok_or_else(invalid)?;
+    let key = match key.kind() {
+        crol_syntax::SyntaxKind::IDENT => key.text().to_owned(),
+        crol_syntax::SyntaxKind::STRING | crol_syntax::SyntaxKind::RAW_STRING => {
+            literal::string(key.text())
+        }
+        _ => return Err(invalid()),
+    };
+    let mut path = Vec::new();
+    for selector in target.selectors() {
+        path.push(match &selector {
+            crol_syntax::ast::Selector::Field(field) => {
+                PathStep::Field(field.name().ok_or_else(invalid)?.text().to_owned())
+            }
+            crol_syntax::ast::Selector::Index(index) => PathStep::Element(
+                index
+                    .index()
+                    .ok_or_else(invalid)?
+                    .text()
+                    .parse()
+                    .map_err(|_| invalid())?,
+            ),
+            crol_syntax::ast::Selector::Accessor(accessor) => {
+                let token = accessor.key().ok_or_else(invalid)?;
+                match token.kind() {
+                    crol_syntax::SyntaxKind::INT => PathStep::Accessor(
+                        literal::int(token.text(), accessor.is_negative())
+                            .map_err(|_| invalid())?,
+                    ),
+                    _ => PathStep::Field(literal::string(token.text())),
+                }
+            }
+            _ => return Err(invalid()),
+        });
+    }
+    Ok((key, path))
+}
+
+/// The operations that produced the value at `path` (`web.limits.cpu`) in
+/// the context of the `context` variants, in order, with the value after
+/// each (`SPEC.md` 12.3). Fails with the diagnostics if the data has errors.
+pub fn explain(
+    sources: &Sources,
+    layers: &[Layer],
+    options: &DataOptions,
+    path: &str,
+    context: &[String],
+) -> Result<Vec<ExplainStep>, Vec<Diagnostic>> {
+    let (key, steps) =
+        parse_path(path).map_err(|message| vec![Diagnostic::error(Span::detached(), message)])?;
+    let evaluation = evaluate_data(sources, layers, options);
+    if evaluation.has_errors() {
+        return Err(evaluation.diagnostics);
+    }
+    let mut parses = Vec::new();
+    for (layer_index, layer) in layers.iter().enumerate() {
+        let mut documents: Vec<&(String, FileId)> = layer.documents.iter().collect();
+        documents.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+        for (index, (_, file)) in documents.into_iter().enumerate() {
+            parses.push((
+                *file,
+                crol_syntax::parse(sources.file(*file).text()).document(),
+                layer_index,
+                index,
+            ));
+        }
+    }
+    let documents: Vec<lower::DataDocument<'_>> = parses
+        .iter()
+        .map(|(file, document, layer, index)| lower::DataDocument {
+            file: *file,
+            document,
+            layer: *layer,
+            index: *index,
+        })
+        .collect();
+    let (lowered, _) = lower::lower_data(&documents);
+    let layer_names: Vec<String> = layers.iter().map(|l| l.name.clone()).collect();
+    let input = eval::DataInput {
+        ops: &lowered.ops,
+        templates: &lowered.templates,
+        layer_names: &layer_names,
+        warn_cross_file_patches: false,
+        variants: &evaluation.variants,
+        contexts: options.contexts.as_deref(),
+        max_contexts: options.max_contexts,
+        variant_keys: options.variant_keys,
+        evaluate_every_key: false,
+    };
+    eval::explain(&lowered.ir, &input, &key, &steps, context)
 }
 
 /// Evaluates a file as a value-mode document (`SPEC.md` 4): one value, with

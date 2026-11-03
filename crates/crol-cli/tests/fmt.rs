@@ -144,3 +144,40 @@ fn variants_contexts_and_fingerprints() {
     assert_eq!(first.stdout.len(), 65);
     assert_eq!(crol(&args).stdout, first.stdout);
 }
+
+#[test]
+fn explain_prints_the_history_of_a_value() {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("explain");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("a.crol"),
+        "+web: { port: 80 },\nweb.port: & + 1,\n<prod> { web.port: 443 },",
+    )
+    .unwrap();
+    let layer = dir.join("a.crol");
+    let layer = layer.to_str().unwrap();
+    let output = crol(&[
+        "explain",
+        layer,
+        "--discrete",
+        "prod",
+        "--context",
+        "prod",
+        "web.port",
+    ]);
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<Vec<&str>> = stdout
+        .lines()
+        .map(|l| l.split_whitespace().collect())
+        .collect();
+    assert_eq!(lines[0], ["web.port", "in", "{prod}:"]);
+    assert_eq!(lines[1][1..], ["+web", "definition", "80"], "{stdout}");
+    assert_eq!(lines[2][1..], ["web.port", "patch", "81"], "{stdout}");
+    assert_eq!(
+        lines[3][1..],
+        ["web<prod>.port", "patch", "443"],
+        "{stdout}"
+    );
+}

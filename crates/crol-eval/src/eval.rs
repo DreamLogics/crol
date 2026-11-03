@@ -20,7 +20,7 @@ use crate::cond::Resolved;
 use crate::diagnostic::Diagnostic;
 use crate::ir::*;
 use crate::source::Span;
-use crate::value::{Key, Keyed, Value, ValueKind, format_float};
+use crate::value::{Key, KeyRef, Keyed, Value, ValueKind, format_float};
 use crate::variants::{Context, Variants};
 
 /// The most cells being computed at once, so that deeply nested references
@@ -295,6 +295,18 @@ impl Location {
         }
     }
 
+    /// The steps from the base, first to last, borrowed.
+    fn step_refs(&self) -> Vec<&Step> {
+        let mut steps = Vec::new();
+        let mut link = self.path.as_deref();
+        while let Some(l) = link {
+            steps.push(&l.step);
+            link = l.parent.as_deref();
+        }
+        steps.reverse();
+        steps
+    }
+
     /// The steps from the base, first to last.
     fn steps(&self) -> Vec<Step> {
         let mut steps = Vec::new();
@@ -373,15 +385,20 @@ fn describe_selector(selector: &Selector) -> String {
 pub(crate) struct Evaluator<'ir> {
     ir: &'ir Ir,
     diagnostics: Vec<Diagnostic>,
-    /// The cells being computed, with the span of what forced each and
-    /// where each value ends up.
-    stack: Vec<(*const Cell, Span, Option<Location>)>,
+    /// The cells being computed, with the span of what forced each.
+    stack: Vec<(Lazy, Span)>,
     /// Cells computed so far, against [`MAX_STEPS`].
     steps: u64,
     /// The contexts evaluated so far, each with its own root.
     contexts: Vec<ContextState>,
     /// For data mode: the operations, by key, and the variants.
     plan: Option<&'ir DataPlan<'ir>>,
+    /// Whether contexts share the base's cells for keys that cannot differ
+    /// from it; off when the base failed, so that every context reports its
+    /// own errors.
+    share: bool,
+    /// For each base root key, in root order, the operation that created it.
+    base_created: Vec<usize>,
 }
 
 /// What the entries of a block are evaluated in.
@@ -420,6 +437,8 @@ pub(crate) fn evaluate(ir: &Ir, root: ExprId) -> (Option<Value>, Vec<Diagnostic>
         steps: 0,
         contexts: Vec::new(),
         plan: None,
+        share: false,
+        base_created: Vec::new(),
     };
     let root_cell = Rc::new(Cell {
         state: RefCell::new(State::Running),
@@ -473,13 +492,59 @@ pub(crate) struct DataInput<'a> {
     pub(crate) contexts: Option<&'a [Vec<String>]>,
     pub(crate) max_contexts: usize,
     pub(crate) variant_keys: VariantKeys,
+    pub(crate) evaluate_every_key: bool,
 }
 
-/// The evaluated data: the variants (declared, or found in the data), and
-/// the root of every evaluated context, the base first.
+/// The evaluated data: the variants (declared, or found in the data), the
+/// base root, and how every other evaluated context differs from it.
 pub(crate) struct DataResult {
     pub(crate) variants: Variants,
-    pub(crate) contexts: Vec<(Context, Option<Value>)>,
+    pub(crate) base: Option<Value>,
+    pub(crate) contexts: Vec<ContextData>,
+}
+
+/// How one context's data differs from the base: the keys whose value is
+/// not identical to the base's, those that exist only in the context, and
+/// with `None` those the context removes (`SPEC.md` 7.6). Keys are in root
+/// order, with context-only keys after.
+#[derive(Debug, Clone)]
+pub struct ContextData {
+    /// The context.
+    pub context: Context,
+    /// The differences from the base.
+    pub changes: IndexMap<Key, Option<Value>>,
+}
+
+impl ContextData {
+    /// The context's whole root: the base with the changes applied.
+    pub fn root(&self, base: &Value) -> Value {
+        let ValueKind::Keyed(keyed) = &base.kind else {
+            return base.clone();
+        };
+        let mut keyed = keyed.clone();
+        for (key, change) in &self.changes {
+            match change {
+                Some(value) => {
+                    keyed.entries.insert(key.clone(), value.clone());
+                }
+                None => {
+                    keyed.entries.shift_remove(key);
+                }
+            }
+        }
+        Value::new(ValueKind::Keyed(keyed), base.span)
+    }
+
+    /// A root key's value in the context, given the base root.
+    pub fn get<'v>(&'v self, base: &'v Value, key: &Key) -> Option<&'v Value> {
+        match self.changes.get(key) {
+            Some(change) => change.as_ref(),
+            None => match &base.kind {
+                ValueKind::Keyed(keyed) => keyed.entries.get(key),
+                _ => None,
+            },
+        }
+    }
 }
 
 /// The operations of every key, ready to be applied in any context.
@@ -490,11 +555,129 @@ pub(crate) struct DataPlan<'a> {
     /// Each operation's condition, resolved; `None` for a base operation.
     conditions: Vec<Option<Resolved>>,
     keys: IndexMap<Rc<str>, KeyPlan>,
+    /// For each root key, the keys whose value it reads late.
+    dependents: std::collections::HashMap<Rc<str>, Vec<Rc<str>>>,
+}
+
+/// What a key's operations read, found from their expressions.
+#[derive(Debug, Default, Clone)]
+struct Reads {
+    /// Root keys read through `&root.key`, or `&self` and the like at the
+    /// top level.
+    keys: Vec<Rc<str>>,
+    /// The whole root, or a root key that cannot be told statically.
+    whole: bool,
+    /// A reference into another context.
+    switch: bool,
+}
+
+/// Collects what an expression reads (`depth`: the number of blocks around
+/// it below the root), for deciding which keys can differ between contexts.
+fn collect_reads(
+    ir: &Ir,
+    expr: ExprId,
+    depth: usize,
+    templates: &mut TemplateReads,
+    out: &mut Reads,
+) {
+    // Whether a reference `up` blocks out reaches the root.
+    let at_root = |up: usize| up == depth;
+    match &ir.exprs[expr].kind {
+        ExprKind::Ref(kind) => match kind {
+            RefKind::SelfValue if at_root(0) => out.whole = true,
+            RefKind::Parent(n) if at_root(*n) => out.whole = true,
+            RefKind::Root => out.whole = true,
+            RefKind::Bind { up, target } if at_root(*up) => match target.first().map(|s| &s.kind) {
+                Some(SelectorKind::Field(name)) => out.keys.push(name.clone()),
+                _ => out.whole = true,
+            },
+            RefKind::ValueBind(id) => templates.add(ir, *id, out),
+            _ => {}
+        },
+        ExprKind::Path(base, selectors) => {
+            if selectors
+                .iter()
+                .any(|s| matches!(s.kind, SelectorKind::Context(_)))
+            {
+                out.switch = true;
+            }
+            let root_reference = match &ir.exprs[*base].kind {
+                ExprKind::Ref(RefKind::Root) => Some(None),
+                ExprKind::Ref(RefKind::SelfValue) if at_root(0) => Some(None),
+                ExprKind::Ref(RefKind::Parent(n)) if at_root(*n) => Some(None),
+                ExprKind::Ref(RefKind::Bind { up, target }) if at_root(*up) => Some(target.first()),
+                _ => None,
+            };
+            match root_reference {
+                Some(target) => match target.or_else(|| selectors.first()).map(|s| &s.kind) {
+                    Some(SelectorKind::Field(name)) => out.keys.push(name.clone()),
+                    _ => out.whole = true,
+                },
+                None => collect_reads(ir, *base, depth, templates, out),
+            }
+        }
+        ExprKind::Block(block) => {
+            let block = &ir.blocks[*block];
+            for &spread in &block.spreads {
+                collect_reads(ir, spread, depth + 1, templates, out);
+            }
+            for entry in &block.entries {
+                if let Some(value) = entry.value {
+                    collect_reads(ir, value, depth + 1, templates, out);
+                }
+            }
+            for &bind in &block.value_binds {
+                collect_reads(ir, ir.value_binds[bind].expr, depth + 1, templates, out);
+            }
+        }
+        ExprKind::List(items) | ExprKind::Tuple(items) | ExprKind::Named(_, items) => {
+            for &item in items {
+                collect_reads(ir, item, depth, templates, out);
+            }
+        }
+        ExprKind::Neg(operand) => collect_reads(ir, *operand, depth, templates, out),
+        ExprKind::Binary(_, lhs, rhs) => {
+            collect_reads(ir, *lhs, depth, templates, out);
+            collect_reads(ir, *rhs, depth, templates, out);
+        }
+        _ => {}
+    }
+}
+
+/// What each template reads, computed once.
+#[derive(Default)]
+struct TemplateReads {
+    done: std::collections::HashMap<BindId, Reads>,
+    in_progress: std::collections::HashSet<BindId>,
+    /// The templates; other value binds are inside blocks, whose
+    /// expressions are walked with the block.
+    templates: std::collections::HashSet<BindId>,
+}
+
+impl TemplateReads {
+    fn add(&mut self, ir: &Ir, id: BindId, out: &mut Reads) {
+        if !self.templates.contains(&id) || !self.in_progress.insert(id) {
+            return;
+        }
+        if !self.done.contains_key(&id) {
+            let mut reads = Reads::default();
+            // A template's expression is evaluated in the root's chain.
+            collect_reads(ir, ir.value_binds[id].expr, 0, self, &mut reads);
+            self.done.insert(id, reads);
+        }
+        self.in_progress.remove(&id);
+        let reads = &self.done[&id];
+        out.keys.extend(reads.keys.iter().cloned());
+        out.whole |= reads.whole;
+        out.switch |= reads.switch;
+    }
 }
 
 struct KeyPlan {
     /// Every operation on the key, in document order.
     all: Vec<usize>,
+    /// What the key's operations read late.
+    reads: Reads,
     /// The base operations, in order (`SPEC.md` 7.2).
     base: Vec<usize>,
     /// The conditional operations, in the order of `SPEC.md` 7.2: layer by
@@ -527,6 +710,8 @@ pub(crate) fn evaluate_data(
         steps: 0,
         contexts: Vec::new(),
         plan: Some(&plan),
+        share: false,
+        base_created: Vec::new(),
     };
     // Errors in the static structure of the chains are reported once.
     evaluator.check_chains(input);
@@ -536,24 +721,101 @@ pub(crate) fn evaluate_data(
         return (None, diagnostics);
     }
 
-    let mut per_context = Vec::with_capacity(contexts.len());
     let mut found: Vec<(Diagnostic, Vec<usize>)> = Vec::new();
-    for (index, context) in contexts.iter().enumerate() {
-        evaluator.steps = 0;
-        let id = evaluator.context_state(context);
-        let cell = evaluator.contexts[id].root_cell.clone();
-        let value = evaluator
-            .full_value(&cell, Span::detached(), &mut Vec::new())
-            .ok();
+    let mut record = |evaluator: &mut Evaluator<'_>, index: usize| {
         for diagnostic in evaluator.diagnostics.drain(..) {
             match found.iter_mut().find(|(d, _)| *d == diagnostic) {
                 Some((_, in_contexts)) => in_contexts.push(index),
                 None => found.push((diagnostic, vec![index])),
             }
         }
-        per_context.push((context.clone(), value));
+    };
+
+    // The base, in full.
+    let base_id = evaluator.context_state(&contexts[0]);
+    let base_cell = evaluator.contexts[base_id].root_cell.clone();
+    let base = evaluator
+        .full_value(&base_cell, Span::detached(), &mut Vec::new())
+        .ok();
+    let base_failed = base.is_none() || !evaluator.diagnostics.is_empty();
+    evaluator.share = !base_failed && !input.evaluate_every_key;
+    record(&mut evaluator, 0);
+    let base_keyed = match base.as_ref().map(|v| &v.kind) {
+        Some(ValueKind::Keyed(keyed)) => keyed.clone(),
+        _ => Keyed::default(),
+    };
+
+    let mut per_context = Vec::with_capacity(contexts.len() - 1);
+    for (index, context) in contexts.iter().enumerate().skip(1) {
+        evaluator.steps = 0;
+        let id = evaluator.context_state(context);
+        let root_cell = evaluator.contexts[id].root_cell.clone();
+        // Only keys that can differ are evaluated again, unless the base
+        // failed: then every context's own errors are wanted.
+        let varying = evaluator.share.then(|| plan.varying(context));
+        let slots = match &*root_cell.state.borrow() {
+            State::Done(Ok(shaped)) => match &shaped.shape {
+                Shape::Keyed(keyed) => keyed.slots.clone(),
+                _ => IndexMap::new(),
+            },
+            _ => IndexMap::new(),
+        };
+        let mut changes = IndexMap::new();
+        let mut failed = false;
+        for (key, slot) in &slots {
+            let base_value = base_keyed.entries.get(key);
+            let name = match key {
+                Key::Str(name) => name.as_str(),
+                Key::Int(_) => "",
+            };
+            if let (Some(varying), Some(_)) = (&varying, base_value)
+                && !varying.contains(name)
+            {
+                continue;
+            }
+            match evaluator.full_value(
+                &slot.value,
+                Span::detached(),
+                &mut vec![(Rc::as_ptr(&root_cell), None)],
+            ) {
+                Ok(value) => {
+                    if !base_value.is_some_and(|b| b.identical(&value)) {
+                        changes.insert(key.clone(), Some(value));
+                    }
+                }
+                Err(_) => failed = true,
+            }
+        }
+        // Base keys the context removes, in root order before its own keys.
+        let removed: Vec<Key> = base_keyed
+            .entries
+            .keys()
+            .filter(|k| !slots.contains_key(*k))
+            .cloned()
+            .collect();
+        let mut ordered = IndexMap::with_capacity(changes.len() + removed.len());
+        for key in base_keyed.entries.keys() {
+            if let Some(change) = changes.shift_remove(key) {
+                ordered.insert(key.clone(), change);
+            } else if removed.contains(key) {
+                ordered.insert(key.clone(), None);
+            }
+        }
+        ordered.extend(changes);
+        record(&mut evaluator, index);
+        if !failed {
+            per_context.push(ContextData {
+                context: context.clone(),
+                changes: ordered,
+            });
+        }
     }
-    evaluator.check_variant_keys(&per_context, input.variant_keys, &mut diagnostics);
+    evaluator.check_variant_keys(
+        &base_keyed,
+        &per_context,
+        input.variant_keys,
+        &mut diagnostics,
+    );
     // An error in only some contexts says in which (`SPEC.md` 12.5).
     for (mut diagnostic, in_contexts) in found {
         if in_contexts.len() < contexts.len() {
@@ -574,10 +836,190 @@ pub(crate) fn evaluate_data(
     (
         Some(DataResult {
             variants,
+            base,
             contexts: per_context,
         }),
         diagnostics,
     )
+}
+
+/// One operation in the history of a value (`SPEC.md` 12.3).
+#[derive(Debug, Clone)]
+pub struct ExplainStep {
+    /// The operation's target.
+    pub span: Span,
+    /// The layer it is in.
+    pub layer: String,
+    /// The entry as written, condition included: `+web`, `web<prod>.replicas`.
+    pub entry: String,
+    /// What the operation is.
+    pub kind: StepKind,
+    /// The value at the explained path after the operation; `None` where it
+    /// does not exist.
+    pub value: Option<Value>,
+}
+
+/// The kind of an [`ExplainStep`] (`SPEC.md` 7.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepKind {
+    /// A definition: a declare, ensure, or set that does not use `&`.
+    Definition,
+    /// A patch: a path entry, or a set that uses `&`.
+    Patch,
+    /// A remove.
+    Remove,
+}
+
+/// A path into data: a root key, then fields, elements and accessors, as
+/// `crol explain` and `crol eval` take it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PathStep {
+    /// `.name`
+    Field(String),
+    /// `.0`
+    Element(usize),
+    /// `[3]`: an integer key, or a list index.
+    Accessor(i128),
+}
+
+impl PathStep {
+    fn from_selector(selector: &Selector) -> Option<PathStep> {
+        match &selector.kind {
+            SelectorKind::Field(name) => Some(PathStep::Field(name.to_string())),
+            SelectorKind::Element(i) => Some(PathStep::Element(*i)),
+            SelectorKind::Accessor(i) => Some(PathStep::Accessor(*i)),
+            SelectorKind::Context(_) => None,
+        }
+    }
+}
+
+/// The value at `path` in `value`.
+pub fn value_at_path<'v>(value: &'v Value, path: &[PathStep]) -> Option<&'v Value> {
+    let mut value = value;
+    for step in path {
+        value = match (&value.kind, step) {
+            (ValueKind::Keyed(keyed), PathStep::Field(name)) => {
+                keyed.entries.get(&KeyRef::Str(name))?
+            }
+            (ValueKind::Keyed(keyed), PathStep::Accessor(i)) => {
+                keyed.entries.get(&KeyRef::Int(*i))?
+            }
+            (ValueKind::List(items), PathStep::Accessor(i)) => {
+                items.get(usize::try_from(*i).ok()?)?
+            }
+            (ValueKind::Tuple(items) | ValueKind::NamedTuple(_, items), PathStep::Element(i)) => {
+                items.get(*i)?
+            }
+            _ => return None,
+        };
+    }
+    Some(value)
+}
+
+/// The operations that produced the value at `key` + `path` in `context`,
+/// in order, with the value after each (`SPEC.md` 12.3). Each step's value
+/// is the chain up to that operation, with late references reading the
+/// final data, as they do.
+pub(crate) fn explain(
+    ir: &Ir,
+    input: &DataInput<'_>,
+    key: &str,
+    path: &[PathStep],
+    context: &[String],
+) -> Result<Vec<ExplainStep>, Vec<Diagnostic>> {
+    let mut diagnostics = Vec::new();
+    let Some(plan) = DataPlan::new(ir, input, &mut diagnostics) else {
+        return Err(diagnostics);
+    };
+    let mut ids = Vec::new();
+    for name in context {
+        match plan.variants.id(name) {
+            Some(id) => ids.push(id),
+            None => {
+                let span = input.ops.first().map_or(Span::detached(), |op| op.span);
+                return Err(vec![Diagnostic::error(
+                    span,
+                    format!("unknown variant `{name}`"),
+                )]);
+            }
+        }
+    }
+    let context = match plan.variants.context(&ids) {
+        Ok(context) => context,
+        Err(message) => {
+            let span = input.ops.first().map_or(Span::detached(), |op| op.span);
+            return Err(vec![Diagnostic::error(span, message)]);
+        }
+    };
+    let mut evaluator = Evaluator {
+        ir,
+        diagnostics: Vec::new(),
+        stack: Vec::new(),
+        steps: 0,
+        contexts: Vec::new(),
+        plan: Some(&plan),
+        share: false,
+        base_created: Vec::new(),
+    };
+    let id = evaluator.context_state(&context);
+    let Some(key_plan) = plan.keys.get(key) else {
+        return Ok(Vec::new());
+    };
+    let order = plan.chain(key_plan, &context);
+    let root = evaluator.contexts[id].root.clone();
+    let templates = evaluator.contexts[id].templates.clone();
+    let chain = Some(Rc::new(ChainLink {
+        location: Some(root.clone()),
+        bind_root: false,
+        next: None,
+    }));
+    let relevant = |op: &RootOp| {
+        let op_path: Vec<PathStep> = op.path.iter().filter_map(PathStep::from_selector).collect();
+        op_path.iter().zip(path).all(|(a, b)| a == b)
+    };
+    let mut steps = Vec::new();
+    for (n, &i) in order.iter().enumerate() {
+        let op = &input.ops[i];
+        if !relevant(op) {
+            continue;
+        }
+        // The chain up to this operation, evaluated afresh.
+        let value = evaluator
+            .apply_chain(key, &order[..=n], &chain, &root, &templates, id)
+            .and_then(|(_, slot)| {
+                evaluator
+                    .full_value(&slot.value, op.span, &mut Vec::new())
+                    .ok()
+            });
+        evaluator.diagnostics.clear();
+        let mut entry = match op.op {
+            None => "-".to_owned(),
+            Some(SetOp::Declare) => "+".to_owned(),
+            Some(SetOp::Ensure) => "?".to_owned(),
+            Some(SetOp::Set) => String::new(),
+        };
+        entry.push_str(&Key::Str(key.to_owned()).to_string());
+        if let Some(condition) = &op.condition {
+            entry.push_str(&format!("<{condition}>"));
+        }
+        for selector in &op.path {
+            entry.push_str(&describe_selector(selector));
+        }
+        steps.push(ExplainStep {
+            span: op.span,
+            layer: input.layer_names.get(op.layer).cloned().unwrap_or_default(),
+            entry,
+            kind: if op.op.is_none() {
+                StepKind::Remove
+            } else if op.is_definition() {
+                StepKind::Definition
+            } else {
+                StepKind::Patch
+            },
+            value: value.as_ref().and_then(|v| value_at_path(v, path)).cloned(),
+        });
+    }
+    Ok(steps)
 }
 
 impl<'a> DataPlan<'a> {
@@ -659,13 +1101,39 @@ impl<'a> DataPlan<'a> {
             });
             list
         };
+        let mut template_reads = TemplateReads {
+            templates: input.templates.iter().copied().collect(),
+            ..TemplateReads::default()
+        };
+        let mut dependents: std::collections::HashMap<Rc<str>, Vec<Rc<str>>> = Default::default();
         for (key, list) in indices {
+            let mut reads = Reads::default();
+            for &i in &list {
+                if let Some(value) = input.ops[i].value {
+                    collect_reads(
+                        ir,
+                        value,
+                        input.ops[i].blocks.len(),
+                        &mut template_reads,
+                        &mut reads,
+                    );
+                }
+            }
+            reads.keys.sort();
+            reads.keys.dedup();
+            for read in &reads.keys {
+                dependents
+                    .entry(read.clone())
+                    .or_default()
+                    .push(key.clone());
+            }
             let (base, conditional): (Vec<usize>, Vec<usize>) =
                 list.iter().partition(|&&i| conditions[i].is_none());
             keys.insert(
                 key,
                 KeyPlan {
                     all: list,
+                    reads,
                     base: ordered(base),
                     conditional: ordered(conditional),
                 },
@@ -677,7 +1145,42 @@ impl<'a> DataPlan<'a> {
             variants,
             conditions,
             keys,
+            dependents,
         })
+    }
+
+    /// The keys whose value can differ from the base in `context`: those
+    /// with an operation whose condition holds there, and those that read
+    /// them, directly or not. Every other key has its base value.
+    fn varying(&self, context: &Context) -> std::collections::HashSet<Rc<str>> {
+        let mut varying = std::collections::HashSet::new();
+        let mut queue = Vec::new();
+        for (key, plan) in &self.keys {
+            let conditional = plan.conditional.iter().any(|&i| {
+                self.conditions[i]
+                    .as_ref()
+                    .is_some_and(|c| c.holds(context))
+            });
+            if conditional || plan.reads.switch {
+                varying.insert(key.clone());
+                queue.push(key.clone());
+            }
+        }
+        if !varying.is_empty() {
+            for (key, plan) in &self.keys {
+                if plan.reads.whole && varying.insert(key.clone()) {
+                    queue.push(key.clone());
+                }
+            }
+        }
+        while let Some(key) = queue.pop() {
+            for dependent in self.dependents.get(&key).into_iter().flatten() {
+                if varying.insert(dependent.clone()) {
+                    queue.push(dependent.clone());
+                }
+            }
+        }
+        varying
     }
 
     /// The contexts to evaluate: the base, then the requested ones or every
@@ -814,45 +1317,35 @@ impl Evaluator<'_> {
     /// Checks the keys of each context against the base (`SPEC.md` 8.5).
     fn check_variant_keys(
         &self,
-        contexts: &[(Context, Option<Value>)],
+        base: &Keyed,
+        contexts: &[ContextData],
         rule: VariantKeys,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         if rule == VariantKeys::Any {
             return;
         }
-        let keyed = |value: &Option<Value>| match value.as_ref().map(|v| &v.kind) {
-            Some(ValueKind::Keyed(k)) => Some(k.clone()),
-            _ => None,
-        };
-        let Some(base) = contexts.first().and_then(|(_, v)| keyed(v)) else {
-            return;
-        };
         let variants = &self.plan.expect("data mode").variants;
-        for (context, value) in &contexts[1..] {
-            let Some(keys) = keyed(value) else { continue };
-            for (key, value) in &keys.entries {
-                if !base.entries.contains_key(key) {
-                    diagnostics.push(Diagnostic::error(
+        for data in contexts {
+            for (key, change) in &data.changes {
+                match (change, base.entries.get(key)) {
+                    (Some(value), None) => diagnostics.push(Diagnostic::error(
                         value.span,
                         format!(
                             "in {}: `{key}` does not exist in the base, and the variant keys rule is `{rule:?}`",
-                            variants.display(context)
+                            variants.display(&data.context)
                         ),
-                    ));
-                }
-            }
-            if rule == VariantKeys::SameKeys {
-                for (key, value) in &base.entries {
-                    if !keys.entries.contains_key(key) {
+                    )),
+                    (None, Some(value)) if rule == VariantKeys::SameKeys => {
                         diagnostics.push(Diagnostic::error(
                             value.span,
                             format!(
                                 "`{key}` does not exist in {}, and the variant keys rule is `SameKeys`",
-                                variants.display(context)
+                                variants.display(&data.context)
                             ),
                         ));
                     }
+                    _ => {}
                 }
             }
         }
@@ -886,8 +1379,29 @@ impl Evaluator<'_> {
         let templates = self.bind_cells(plan.templates, &chain, None, id, true);
         self.contexts[id].templates = templates.clone();
 
+        // A key that cannot differ from the base shares the base's cell.
+        let shared = (self.share && id > 0).then(|| {
+            let base = &self.contexts[0];
+            let slots = match &*base.root_cell.state.borrow() {
+                State::Done(Ok(shaped)) => match &shaped.shape {
+                    Shape::Keyed(keyed) => keyed.slots.clone(),
+                    _ => IndexMap::new(),
+                },
+                _ => IndexMap::new(),
+            };
+            (plan.varying(context), slots)
+        });
         let mut slots = Vec::new();
         for (key, key_plan) in &plan.keys {
+            if let Some((varying, base_slots)) = &shared
+                && !varying.contains(key)
+            {
+                let key = Key::Str(key.to_string());
+                if let Some((position, _, slot)) = base_slots.get_full(&key) {
+                    slots.push((self.base_created[position], key, slot.clone()));
+                }
+                continue;
+            }
             let order = plan.chain(key_plan, context);
             if let Some((created, slot)) =
                 self.apply_chain(key, &order, &chain, &root, &templates, id)
@@ -897,6 +1411,9 @@ impl Evaluator<'_> {
         }
         // Keys are in the order they were created, by layer and position.
         slots.sort_by_key(|(created, _, _)| *created);
+        if id == 0 {
+            self.base_created = slots.iter().map(|(created, _, _)| *created).collect();
+        }
         let keyed = KeyedShape {
             slots: slots
                 .into_iter()
@@ -1236,7 +1753,7 @@ impl Evaluator<'_> {
                 .stack
                 .iter()
                 .rev()
-                .find_map(|(_, _, location)| location.as_ref().map(Location::describe));
+                .find_map(|(cell, _)| cell.location.as_ref().map(Location::describe));
         }
         self.diagnostics.push(diagnostic);
     }
@@ -1277,8 +1794,7 @@ impl Evaluator<'_> {
             *cell.state.borrow_mut() = State::Done(Err(Poisoned));
             return result;
         }
-        self.stack
-            .push((Rc::as_ptr(cell), span, cell.location.clone()));
+        self.stack.push((cell.clone(), span));
         let result = self.run(job);
         self.stack.pop();
         let stored = match result {
@@ -1299,13 +1815,13 @@ impl Evaluator<'_> {
         let start = self
             .stack
             .iter()
-            .position(|(c, _, _)| *c == Rc::as_ptr(cell))
+            .position(|(c, _)| Rc::ptr_eq(c, cell))
             .unwrap_or(0);
         let mut diagnostic = Diagnostic::error(span, "cycle: this value depends on itself");
-        for (_, through, _) in &self.stack[start + 1..] {
+        for (_, through) in &self.stack[start + 1..] {
             diagnostic = diagnostic.with_related(*through, "through this reference");
         }
-        if let Some((_, first, _)) = self.stack.get(start) {
+        if let Some((_, first)) = self.stack.get(start) {
             diagnostic = diagnostic.with_related(*first, "which is evaluated here");
         }
         diagnostic.context = cell.location.as_ref().map(Location::describe);
@@ -1550,7 +2066,7 @@ impl Evaluator<'_> {
             return Err(self.fail(span, "internal error: a location outlived its value"));
         };
         let mut value = self.force(&base, span)?;
-        for step in &location.steps() {
+        for step in location.step_refs() {
             let cell = match (&value.shape, step) {
                 (Shape::Keyed(keyed), Step::Key(key)) => {
                     keyed.slots.get(key).map(|s| s.value.clone())
@@ -1607,10 +2123,9 @@ impl Evaluator<'_> {
     fn select(&mut self, value: &Shaped, selector: &Selector) -> Eval<Lazy> {
         let span = selector.span;
         let found = match (&value.shape, &selector.kind) {
-            (Shape::Keyed(keyed), SelectorKind::Field(name)) => keyed
-                .slots
-                .get(&Key::Str(name.to_string()))
-                .map(|s| s.value.clone()),
+            (Shape::Keyed(keyed), SelectorKind::Field(name)) => {
+                keyed.slots.get(&KeyRef::Str(name)).map(|s| s.value.clone())
+            }
             (Shape::Keyed(keyed), SelectorKind::Accessor(i)) => {
                 keyed.slots.get(&Key::Int(*i)).map(|s| s.value.clone())
             }

@@ -1,11 +1,12 @@
 //! The composer: layers in, Rust values out (`SPEC.md` 7, 10.7).
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crol_eval::{
-    Context, DataOptions, Diagnostic, Key, Layer, Sources, Value, ValueKind, VariantKeys, Variants,
-    evaluate_data,
+    Context, ContextData, DataOptions, Diagnostic, ExplainStep, Key, Layer, Sources, Value,
+    ValueKind, VariantKeys, Variants, evaluate_data,
 };
 use crol_syntax::ast::{self, AstNode};
 use serde::Deserialize;
@@ -564,7 +565,7 @@ impl<T: VariantName> CrolComposer<T> {
             .with_max_contexts(self.config.max_contexts)
             .with_variant_keys(self.config.variant_keys);
         let evaluation = evaluate_data(&sources, &layers, &options);
-        let Some(base) = evaluation.value else {
+        let Some(base) = evaluation.value.clone() else {
             return Err(Error::from_diagnostics(&sources, &evaluation.diagnostics));
         };
         let chosen: Vec<_> = self
@@ -582,6 +583,8 @@ impl<T: VariantName> CrolComposer<T> {
             .map_err(|message| Error::new(format!("composer: {message}")))?;
         Ok(CrolData {
             sources,
+            layers,
+            data_options: options,
             base,
             contexts: evaluation.contexts,
             variants: evaluation.variants,
@@ -623,8 +626,11 @@ pub struct CrolContext(Context);
 #[derive(Debug, Clone)]
 pub struct CrolData<T = String> {
     sources: Sources,
+    /// The layers and options, for re-evaluating in `explain`.
+    layers: Vec<Layer>,
+    data_options: DataOptions,
     base: Value,
-    contexts: Vec<(Context, Value)>,
+    contexts: Vec<ContextData>,
     variants: Variants,
     /// The context `with_variant` chose, for `get` and `deserialize_root`.
     composed: Context,
@@ -634,18 +640,37 @@ pub struct CrolData<T = String> {
 }
 
 impl<T: VariantName> CrolData<T> {
-    fn root_in(&self, context: &Context) -> Option<&Value> {
-        if context.is_base() {
-            return Some(&self.base);
-        }
-        self.contexts
-            .iter()
-            .find(|(c, _)| c == context)
-            .map(|(_, v)| v)
+    /// The changes of an evaluated context other than the base.
+    fn changes_in(&self, context: &Context) -> Option<&ContextData> {
+        self.contexts.iter().find(|data| data.context == *context)
     }
 
-    fn composed_root(&self) -> &Value {
-        self.root_in(&self.composed).unwrap_or(&self.base)
+    fn is_evaluated(&self, context: &Context) -> bool {
+        context.is_base() || self.changes_in(context).is_some()
+    }
+
+    /// A context's whole root, built from the base and its changes.
+    fn root_in(&self, context: &Context) -> Option<Cow<'_, Value>> {
+        if context.is_base() {
+            return Some(Cow::Borrowed(&self.base));
+        }
+        self.changes_in(context)
+            .map(|data| Cow::Owned(data.root(&self.base)))
+    }
+
+    fn composed_root(&self) -> Cow<'_, Value> {
+        self.root_in(&self.composed)
+            .unwrap_or(Cow::Borrowed(&self.base))
+    }
+
+    /// A root key's value in a context, without building the whole root.
+    fn key_in(&self, key: &str, context: &Context) -> Option<&Value> {
+        let key = Key::Str(key.to_owned());
+        match self.changes_in(context) {
+            Some(data) => data.get(&self.base, &key),
+            None if context.is_base() => Self::keyed(&self.base).entries.get(&key),
+            None => None,
+        }
     }
 
     fn keyed(value: &Value) -> &crol_eval::Keyed {
@@ -689,7 +714,7 @@ impl<T: VariantName> CrolData<T> {
             );
         }
         let context = self.variants.context(&ids).map_err(Error::new)?;
-        if self.root_in(&context).is_none() {
+        if !self.is_evaluated(&context) {
             return Err(Error::new(format!(
                 "the context {} was not evaluated",
                 self.variants.display(&context)
@@ -700,8 +725,11 @@ impl<T: VariantName> CrolData<T> {
 
     /// Every evaluated context, the base first.
     pub fn contexts(&self) -> impl Iterator<Item = CrolContext> + '_ {
-        std::iter::once(CrolContext(Context::base()))
-            .chain(self.contexts.iter().map(|(c, _)| CrolContext(c.clone())))
+        std::iter::once(CrolContext(Context::base())).chain(
+            self.contexts
+                .iter()
+                .map(|data| CrolContext(data.context.clone())),
+        )
     }
 
     /// The names of a context's chosen variants.
@@ -711,43 +739,39 @@ impl<T: VariantName> CrolData<T> {
 
     /// The evaluated value of a root key in a context.
     pub fn value(&self, key: &str, context: &CrolContext) -> Option<&Value> {
-        Self::keyed(self.root_in(&context.0)?)
-            .entries
-            .get(&Key::Str(key.to_owned()))
+        self.key_in(key, &context.0)
     }
 
     /// The root in the composed context, as a keyed value from root keys to
     /// their values.
-    pub fn root_value(&self) -> &Value {
-        self.composed_root()
+    pub fn root_value(&self) -> Value {
+        self.composed_root().into_owned()
     }
 
     /// The root keys in the composed context, in root order.
-    pub fn keys(&self) -> impl Iterator<Item = &str> {
-        Self::keyed(self.composed_root())
-            .entries
-            .keys()
-            .map(|k| match k {
-                Key::Str(s) => s.as_str(),
-                Key::Int(_) => unreachable!("root keys are strings"),
-            })
-    }
-
-    fn composed_value(&self, key: &str) -> Option<&Value> {
-        Self::keyed(self.composed_root())
-            .entries
-            .get(&Key::Str(key.to_owned()))
+    pub fn keys(&self) -> Vec<String> {
+        match &self.composed_root().kind {
+            ValueKind::Keyed(keyed) => keyed
+                .entries
+                .keys()
+                .filter_map(|k| match k {
+                    Key::Str(s) => Some(s.clone()),
+                    Key::Int(_) => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
     }
 
     /// Whether a root key exists in the composed context, for checking ids
     /// (`SPEC.md` 10.5).
     pub fn contains(&self, id: &str) -> bool {
-        self.composed_value(id).is_some()
+        self.key_in(id, &self.composed).is_some()
     }
 
     /// The type name of a root key's value in the composed context.
     pub fn type_name(&self, id: &str) -> Option<&str> {
-        match &self.composed_value(id)?.kind {
+        match &self.key_in(id, &self.composed)?.kind {
             ValueKind::Keyed(keyed) => keyed.name.as_deref(),
             ValueKind::NamedTuple(name, _) | ValueKind::UnitName(name) => Some(name),
             _ => None,
@@ -766,7 +790,7 @@ impl<T: VariantName> CrolData<T> {
         context: &CrolContext,
     ) -> Result<R, Error> {
         let value = self
-            .value(key, context)
+            .key_in(key, &context.0)
             .ok_or_else(|| Error::new(format!("there is no root key `{key}` in this context")))?;
         crate::deserialize(value, &self.sources, self.options.clone(), Some(key)).map(|(v, _)| v)
     }
@@ -778,7 +802,7 @@ impl<T: VariantName> CrolData<T> {
         key: &str,
     ) -> Result<(R, Vec<IdUse>), Error> {
         let value = self
-            .composed_value(key)
+            .key_in(key, &self.composed)
             .ok_or_else(|| Error::new(format!("there is no root key `{key}`")))?;
         crate::deserialize(value, &self.sources, self.options.clone(), Some(key))
     }
@@ -795,12 +819,31 @@ impl<T: VariantName> CrolData<T> {
                 .root_in(&context.0)
                 .ok_or_else(|| Error::new("this context was not evaluated"))?,
         };
-        crate::deserialize(root, &self.sources, self.options.clone(), None).map(|(value, _)| value)
+        crate::deserialize(&root, &self.sources, self.options.clone(), None).map(|(value, _)| value)
     }
 
     /// The fingerprint of all evaluated data (`SPEC.md` 7.6): BLAKE3-256 of
     /// its canonical encoding.
     pub fn fingerprint(&self) -> [u8; 32] {
         crol_eval::fingerprint::fingerprint(&self.base, &self.contexts, &self.variants)
+    }
+
+    /// The operations that produced a value, in order, with the value after
+    /// each (`SPEC.md` 12.3): `data.explain("web.limits.memory_mb", &ctx)`.
+    pub fn explain(&self, path: &str, context: &CrolContext) -> Result<Vec<ExplainStep>, Error> {
+        let names: Vec<String> = self
+            .variants
+            .chosen_names(&context.0)
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        crol_eval::explain(
+            &self.sources,
+            &self.layers,
+            &self.data_options,
+            path,
+            &names,
+        )
+        .map_err(|diagnostics| Error::from_diagnostics(&self.sources, &diagnostics))
     }
 }

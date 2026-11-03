@@ -143,7 +143,7 @@ fn data_gives_values_warnings_and_ids() {
         .load_layer(CrolLayer::from_sources("local", [("x.crol", "web.port: 10,"), ("y.crol", "web.image: \"w2\",")]))
         .compose_data()
         .unwrap();
-    assert_eq!(data.keys().collect::<Vec<_>>(), ["web", "db"]);
+    assert_eq!(data.keys(), ["web", "db"]);
     assert!(data.contains("db"));
     assert_eq!(data.type_name("web"), Some("Service"));
     let warnings = data.warnings();
@@ -294,4 +294,59 @@ fn typed_variants() {
     assert_eq!(web.image, "web-eu");
     let context = data.context([Env::Dev, Env::Cache]).unwrap();
     assert_eq!(data.context_names(&context), ["cache", "dev"]);
+}
+
+#[test]
+fn explain_lists_the_operations_behind_a_value() {
+    let config = CrolConfig {
+        variants: crol::CrolVariants::new().add_grouped(["dev", "prod"]),
+        ..Default::default()
+    };
+    let base = CrolLayer::from_sources(
+        "base",
+        [(
+            "services.crol",
+            "+web: { limits: { memory_mb: 512 }, port: 80 },\n<prod> { web.limits.memory_mb: & * 4 },",
+        )],
+    );
+    let local = CrolLayer::from_sources(
+        "local",
+        [("a.crol", "web.limits.memory_mb: 1024,\nweb.port: 81,")],
+    );
+    let data = CrolComposer::with_cfg(config)
+        .load_layer(base)
+        .load_layer(local)
+        .compose_data()
+        .unwrap();
+    let prod = data.context(["prod"]).unwrap();
+    let steps = data.explain("web.limits.memory_mb", &prod).unwrap();
+    let summary: Vec<(String, String, Option<String>)> = steps
+        .iter()
+        .map(|s| {
+            (
+                s.layer.clone(),
+                s.entry.clone(),
+                s.value.as_ref().map(crol_eval::print::to_text),
+            )
+        })
+        .collect();
+    // `web.port: 81` does not touch the path, so it is not listed.
+    assert_eq!(
+        summary,
+        [
+            ("base".into(), "+web".into(), Some("512".into())),
+            (
+                "local".into(),
+                "web.limits.memory_mb".into(),
+                Some("1024".into())
+            ),
+            (
+                "base".into(),
+                "web<prod>.limits.memory_mb".into(),
+                Some("4096".into())
+            ),
+        ]
+    );
+    assert_eq!(steps[0].kind, crol::StepKind::Definition);
+    assert_eq!(steps[1].kind, crol::StepKind::Patch);
 }
