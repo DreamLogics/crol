@@ -1,0 +1,17 @@
+[package]
+name = "crol"
+description = "CROL, the Composable Rust Object Language: layered, composable configuration and data files for serde"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["crol", "configuration", "config", "serde", "ron"]
+categories = ["config", "encoding", "parser-implementations"]
+readme = "README.md"
+# Not published until it has content (SPEC.md 14.3).
+publish = false
+
+[lints]
+workspace = true

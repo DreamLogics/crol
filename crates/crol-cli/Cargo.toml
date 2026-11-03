@@ -1,0 +1,21 @@
+[package]
+name = "crol-cli"
+description = "The crol command-line tool: check, evaluate, format and explain CROL data"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["crol", "configuration", "cli"]
+categories = ["command-line-utilities", "config"]
+readme = "README.md"
+# Not published until it has content (SPEC.md 14.3).
+publish = false
+
+[[bin]]
+name = "crol"
+path = "src/main.rs"
+
+[lints]
+workspace = true

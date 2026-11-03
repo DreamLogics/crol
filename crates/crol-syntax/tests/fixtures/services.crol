@@ -1,0 +1,27 @@
+service_defaults := {
+    replicas: 1,
+    port: 8080,
+    tags: ["managed"],
+    env: { LOG_LEVEL: "info" },
+    limits: Limits { cpu: 1.0, memory_mb: 512 },
+},
+
++web: Service {
+    ..&service_defaults,              // copy the template's fields in
+    image: "web:1.4",
+    depends_on: [@database],          // an id: names another key
+    url: "http://web:" + &self.port,  // read late: the final web.port
+},
+
++database: Service {
+    ..&service_defaults,
+    image: "postgres:17",
+    port: 5432,
+    depends_on: [],
+    ..,                               // url and anything else: defaults
+},
+
+<prod> {
+    web.replicas: 4,
+    database.limits.memory_mb: & * 4,
+},
