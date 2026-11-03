@@ -1,0 +1,14 @@
+/target
+**/*.rs.bk
+*.pdb
+
+# Fuzzing artifacts
+/fuzz/target
+/fuzz/corpus
+/fuzz/artifacts
+
+# Editors
+.idea/
+.vscode/
+*.swp
+.DS_Store

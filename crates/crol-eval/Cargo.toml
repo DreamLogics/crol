@@ -1,0 +1,17 @@
+[package]
+name = "crol-eval"
+description = "Evaluator for CROL, the Composable Rust Object Language: layers, chains, variants and fingerprints"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["crol", "configuration", "config", "serde"]
+categories = ["config", "parser-implementations"]
+readme = "README.md"
+# Not published until it has content (SPEC.md 14.3).
+publish = false
+
+[lints]
+workspace = true

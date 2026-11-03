@@ -1,0 +1,3 @@
+* text=auto eol=lf
+# Snapshot tests compare exact bytes.
+*.crol text eol=lf

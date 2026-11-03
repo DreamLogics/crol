@@ -1,0 +1,21 @@
+[package]
+name = "crol-syntax"
+description = "Lexer, error-recovering parser, lossless syntax tree and formatter for CROL, the Composable Rust Object Language"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["crol", "parser", "syntax", "configuration"]
+categories = ["parser-implementations", "config"]
+readme = "README.md"
+
+[dependencies]
+rowan.workspace = true
+
+[dev-dependencies]
+expect-test.workspace = true
+
+[lints]
+workspace = true
