@@ -160,7 +160,8 @@ jobs:
         run: |
           for target in parse evaluate_value evaluate_data; do
             mkdir -p "fuzz/corpus/$target"
-            cargo fuzz run "$target" "fuzz/corpus/$target" tests/syntax/valid tests/cases \
+            cargo fuzz run --target x86_64-unknown-linux-gnu "$target" \
+              "fuzz/corpus/$target" tests/syntax/valid tests/cases \
               -- -max_total_time=60 -timeout=10 -rss_limit_mb=2048 -max_len=4096
           done
       - name: Keep what crashed
