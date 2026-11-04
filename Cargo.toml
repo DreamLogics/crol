@@ -25,7 +25,7 @@ indexmap = "2.14"
 blake3 = "1.8"
 serde = "1.0.228"
 
-# crol's `remote-schemas` feature only.
+# crol's `remote-schemas` features only.
 flate2 = "1.1"
 semver = "1.0.28"
 tar = { version = "0.4.46", default-features = false }
@@ -35,6 +35,11 @@ toml = { version = "1.2", default-features = false, features = [
   "serde",
 ] }
 ureq = { version = "3.5", default-features = false, features = ["rustls"] }
+# And `remote-schemas-async`: rustls with ring, and the platform's
+# certificates.
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "http2"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio = { version = "1.54", default-features = false, features = ["rt", "rt-multi-thread", "time"] }
 
 # crol-derive only.
 proc-macro2 = "1.0.106"

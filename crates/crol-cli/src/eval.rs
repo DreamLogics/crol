@@ -3,7 +3,7 @@
 
 use std::io::Write;
 
-use crol_eval::{Key, Value, ValueKind, print};
+use crol_eval::{Key, Span, Value, ValueKind, print};
 use crol_syntax::format::FormatConfig;
 
 use crate::diagnostics::Reporter;
@@ -34,6 +34,11 @@ pub(crate) struct Args {
     #[arg(long)]
     all_contexts: bool,
 
+    /// Print fields that take their defaults as the data leaves them out,
+    /// instead of with the defaults the schema records.
+    #[arg(long)]
+    no_defaults: bool,
+
     #[command(flatten)]
     inputs: crate::layers::InputArgs,
 }
@@ -51,7 +56,7 @@ pub(crate) fn run(args: &Args, reporter: &mut Reporter) -> bool {
         (Some(context), false) => Some(vec![context.clone()]),
         (None, false) => Some(Vec::new()),
     };
-    let Some(inputs) = crate::layers::inputs(&layers, &args.inputs, contexts, reporter) else {
+    let Some(mut inputs) = crate::layers::inputs(&layers, &args.inputs, contexts, reporter) else {
         return false;
     };
     let evaluation = crate::layers::evaluate(&inputs);
@@ -74,16 +79,30 @@ pub(crate) fn run(args: &Args, reporter: &mut Reporter) -> bool {
         (Some(_), Some(data)) => data.root(&base),
         _ => base,
     };
-    let output = match &path {
-        None => print::to_document(&root, &config),
+    // Fields that take their defaults show them, as the application sees
+    // the data, each marked with a comment.
+    let filled = Span {
+        file: inputs.sources.add("<default>", ""),
+        range: Default::default(),
+    };
+    let root = match &inputs.schema {
+        Some(schema) if !args.no_defaults => {
+            crol::fill_defaults(&root, schema, inputs.root.as_deref(), filled)
+        }
+        _ => root,
+    };
+    let note = |value: &Value| (value.span == filled).then(|| "default".to_owned());
+    let value = match &path {
+        None => &root,
         Some(path) => match select(&root, path) {
-            Ok(value) => print::to_document(value, &config),
+            Ok(value) => value,
             Err(message) => {
                 reporter.error(&message);
                 return false;
             }
         },
     };
+    let output = print::to_document_noted(value, &config, &note);
     write(&output, reporter)
 }
 

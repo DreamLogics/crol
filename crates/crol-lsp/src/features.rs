@@ -456,10 +456,13 @@ pub(crate) fn hover(
             .find_map(ast::Target::cast)
             .and_then(|t| t.syntax().parent())
             .and_then(ast::Entry::cast)
-        && let Some((ty, doc)) = crate::schema::entry_type(snapshot, &entry)
-        && let Some(schema) = &snapshot.schema
+        && let Some((ty, doc)) = crate::schema::entry_type(snapshot, Some(file), &entry)
+        && let Some(schema) = snapshot.schema_for(Some(file))
     {
-        markdown.push_str(&format!("\n\n`{}`", crate::schema::rust_type(schema, &ty)));
+        markdown.push_str(&format!(
+            "\n\n`{}`",
+            crate::schema::rust_type(schema.file, &ty)
+        ));
         if !doc.is_empty() {
             markdown.push_str(&format!(" — {doc}"));
         }
@@ -522,6 +525,9 @@ pub(crate) fn definition(
     encoding: Encoding,
 ) -> Option<Location> {
     let (_, token) = token_at(text, position, encoding)?;
+    if let Some(location) = value_below(snapshot, uri, &token, encoding) {
+        return Some(location);
+    }
     // A bind: its declaration in scope, or the template.
     if let Some(name) = crate::navigate::bind_name(&token) {
         return match crate::navigate::local_declaration(&name) {
@@ -560,6 +566,57 @@ pub(crate) fn definition(
         .find(|s| s.kind == StepKind::Definition)
         .or_else(|| steps.first())?;
     location(snapshot, step.span, encoding)
+}
+
+/// "Go to value below" (`SPEC.md` 12.5): on `&`, the operation that
+/// produced the value below, in the base context: the last one before the
+/// operation the `&` is in that changed the value at its path.
+fn value_below(
+    snapshot: &Snapshot,
+    uri: &Uri,
+    token: &SyntaxToken,
+    encoding: Encoding,
+) -> Option<Location> {
+    let reference = token
+        .parent_ancestors()
+        .find_map(ast::Reference::cast)
+        .filter(|r| r.kind() == ast::ReferenceKind::Below)?;
+    let file = snapshot.file_of(&convert::uri_to_path(uri)?)?;
+    let entry = reference.syntax().ancestors().find_map(ast::Entry::cast)?;
+    let (key, mut path) = target_path(&entry.target()?.key()?.token()?)?;
+    // `&.port`: the field `port` of the value below.
+    if let Some(selected) = reference.syntax().parent().and_then(ast::PathExpr::cast) {
+        path.extend(selector_steps(selected.selectors()));
+    }
+    let steps = crol_eval::explain(
+        &snapshot.sources,
+        &snapshot.layers,
+        &snapshot.options,
+        &describe_path(&key, &path),
+        &[],
+    )
+    .ok()?;
+    // The operation the `&` is in: the innermost entry around it whose
+    // target an operation in this file starts at.
+    let at = reference
+        .syntax()
+        .ancestors()
+        .filter_map(ast::Entry::cast)
+        .find_map(|e| {
+            let start = e.target()?.syntax().text_range().start();
+            steps
+                .iter()
+                .position(|s| s.span.file == file && s.span.range.start() == start)
+        })?;
+    let below = &steps[..at];
+    let producer = (0..below.len()).rev().find(|&i| {
+        i == 0
+            || match (&below[i].value, &below[i - 1].value) {
+                (Some(a), Some(b)) => !a.identical(b),
+                (a, b) => a.is_some() != b.is_some(),
+            }
+    })?;
+    location(snapshot, below[producer].span, encoding)
 }
 
 fn location(snapshot: &Snapshot, span: crol_eval::Span, encoding: Encoding) -> Option<Location> {

@@ -420,8 +420,13 @@ Config {
   cached copy is used. A crate's schema is downloaded once per version,
   since published versions do not change; only the version list is
   fetched again. Only the schema file is kept, never the package.
-- Fetching needs the `remote-schemas` feature of `crol`, which
-  `crol-cli` and `crol-lsp` enable by default.
+- Fetching needs a feature of `crol`: `remote-schemas` fetches with a
+  blocking client (`schema::resolve_remote`), `remote-schemas-async`
+  with Tokio and reqwest (`schema::resolve_remote_async`, and
+  `resolve_remote` on a runtime of its own). `crol-cli` and `crol-lsp`
+  enable the async one by default. The language server never waits for
+  a fetch: it evaluates with the cache, says the schema is being
+  fetched, and evaluates again when it arrives.
 - At most one `schema` attribute per document.
 
 **`type(Name)`** gives the type name of a value-mode document written as
@@ -1853,7 +1858,7 @@ defaults and ends those blocks with `..`, so it stays readable.
 | Command | Does |
 |---|---|
 | `crol check [<layer>...]` | read and evaluate the layers (each `name=source` or a source, named after it, where a source is a module path (section 4.2) or a file system path, the module path if both name something; without any, those of the project file, section 12.4); check them against the schema if one is given or configured; print diagnostics; exit 1 on errors |
-| `crol eval [<layer>...] [--context a,b] [key[.path]]` | print evaluated data as a plain data-mode document (or one value) |
+| `crol eval [<layer>...] [--context a,b] [key[.path]]` | print evaluated data as a plain data-mode document (or one value); with a schema, struct fields that take their defaults are written out with the defaults the schema records, each marked `// default` (`--no-defaults` leaves them as the data does) |
 | `crol eval [<layer>...] --all-contexts` | print the base data, then for every other evaluated context a block `<a & b & !c & ...> { ... }` whose condition holds in that context only, with the keys whose value differs (`key: value`) or that are missing (`-key`). The output is valid CROL and evaluates back to the same data |
 | `crol explain [<layer>...] [--context a,b] key.path` | print the operations that produced a value (section 12.3) |
 | `crol fmt [--check] <file>...` | format files in place (or check) |
@@ -2044,7 +2049,8 @@ context chosen with the `context` setting.
   layer below or at the cursor (with every layer's as alternatives); on
   a bind, the bound entry; on an id, the key's definition; on a
   reference path, the entry that set the final value there.
-- "Go to value below": the operation that produced `&` at the cursor.
+- "Go to value below": the operation that produced `&` at the cursor,
+  through go to definition on a bare `&`.
 - Find references: for a root key, every operation on it in every
   layer, every reference to it, and every id naming it; for a bind, its
   uses.

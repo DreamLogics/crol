@@ -324,8 +324,8 @@ impl Document<'_> {
         &indexmap::IndexMap<String, crol::schema::Field>,
     )> {
         let snapshot = self.snapshot?;
-        let schema = snapshot.schema.as_ref()?;
-        let ty = schema::block_type(snapshot, block)?;
+        let schema = snapshot.schema_for(self.file)?.file;
+        let ty = schema::block_type(snapshot, self.file, block)?;
         schema::struct_of(schema, &ty).map(|(_, fields)| (schema, fields))
     }
 

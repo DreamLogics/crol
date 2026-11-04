@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use crol::project::{FILE_NAME, Project};
 use crol::schema::SchemaFile;
 use crol::{CheckOptions, CrolComposer, CrolConfig, CrolLayer, LayerSource};
-use crol_eval::{DataOptions, Evaluation, Layer, Sources, Variants};
+use crol_eval::{DataOptions, Diagnostic, Evaluation, Layer, Sources, Span, Variants};
 
 use crate::diagnostics::Reporter;
 
@@ -73,6 +73,9 @@ pub(crate) struct Inputs {
     /// The type of root values, if the project names one.
     pub(crate) root: Option<String>,
     pub(crate) check: CheckOptions,
+    /// Warnings about the inputs, such as documents that name another
+    /// schema.
+    pub(crate) warnings: Vec<Diagnostic>,
 }
 
 /// Whether `text` has the form of a module path (`SPEC.md` 4.2).
@@ -122,14 +125,16 @@ pub(crate) fn inputs(
         .map(Path::to_path_buf)
         .unwrap_or_default();
 
+    // The root directory module paths start from (`SPEC.md` 4.2).
+    let root_dir = if project.is_some() {
+        project_dir.clone()
+    } else {
+        std::env::current_dir().unwrap_or_default()
+    };
     let mut composer = CrolComposer::with_cfg(CrolConfig {
         // Tools always follow `extends` (`SPEC.md` 4.1).
         load_extends: true,
-        root_path: if project.is_some() {
-            project_dir.clone()
-        } else {
-            std::env::current_dir().unwrap_or_default()
-        },
+        root_path: root_dir.clone(),
         ..CrolConfig::<String>::default()
     });
     let config = CrolConfig::<String>::default();
@@ -209,6 +214,7 @@ pub(crate) fn inputs(
     let mut check = CheckOptions::default();
     let mut root = None;
     let mut schema_path = args.schema.clone();
+    let mut used = "the one given with `--schema`";
     if let Some(project) = &project {
         let project_options = &project.options;
         options = options
@@ -225,7 +231,10 @@ pub(crate) fn inputs(
         root.clone_from(&project.root);
         if schema_path.is_none() {
             match project.schema_path(&project_dir, !args.offline) {
-                Ok(path) => schema_path = path,
+                Ok(path) => {
+                    schema_path = path;
+                    used = "the project's";
+                }
                 Err(error) => return fail(reporter, error.to_string()),
             }
         }
@@ -235,11 +244,17 @@ pub(crate) fn inputs(
     }
     // Else the schema the documents name with `#![schema(...)]`, if they
     // agree (`SPEC.md` 4.1).
+    let given = schema_path.clone();
     if schema_path.is_none() {
         let mut named: Vec<PathBuf> = Vec::new();
         for layer in composer.layers() {
             for (_, display, text) in layer.documents() {
-                match crol::schema::attribute_path(text, Path::new(display), !args.offline) {
+                match crol::schema::attribute_path(
+                    text,
+                    Path::new(display),
+                    &root_dir,
+                    !args.offline,
+                ) {
                     Some((_, Ok(path))) => {
                         let path = path.canonicalize().unwrap_or(path);
                         if !named.contains(&path) {
@@ -273,6 +288,7 @@ pub(crate) fn inputs(
     };
 
     let mut sources = Sources::new();
+    let mut warnings = Vec::new();
     let layers: Vec<Layer> = composer
         .layers()
         .iter()
@@ -280,7 +296,24 @@ pub(crate) fn inputs(
             name: layer.name().to_owned(),
             documents: layer
                 .documents()
-                .map(|(relative, display, text)| (relative.to_owned(), sources.add(display, text)))
+                .map(|(relative, display, text)| {
+                    let file = sources.add(display, text);
+                    // A document should agree with the schema it is
+                    // checked against.
+                    if let Some(given) = &given
+                        && let Some((range, message)) = crol::schema::attribute_disagrees(
+                            text,
+                            Path::new(display),
+                            &root_dir,
+                            given,
+                            used,
+                            !args.offline,
+                        )
+                    {
+                        warnings.push(Diagnostic::warning(Span::new(file, range), message));
+                    }
+                    (relative.to_owned(), file)
+                })
                 .collect(),
         })
         .collect();
@@ -291,6 +324,7 @@ pub(crate) fn inputs(
         schema,
         root,
         check,
+        warnings,
     })
 }
 
@@ -298,6 +332,9 @@ pub(crate) fn inputs(
 /// one. The evaluation's diagnostics include the schema's.
 pub(crate) fn evaluate(inputs: &Inputs) -> Evaluation {
     let mut evaluation = crol_eval::evaluate_data(&inputs.sources, &inputs.layers, &inputs.options);
+    evaluation
+        .diagnostics
+        .extend(inputs.warnings.iter().cloned());
     if let (Some(schema), Some(base)) = (&inputs.schema, &evaluation.value) {
         let view = crol::DataView {
             base,

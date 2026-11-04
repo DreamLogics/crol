@@ -15,7 +15,7 @@ readme = "README.md"
 [features]
 default = ["remote-schemas"]
 # Schemas from URLs and crates (`SPEC.md` 4.1).
-remote-schemas = ["crol/remote-schemas"]
+remote-schemas = ["crol/remote-schemas-async", "dep:tokio"]
 
 [dependencies]
 crol.workspace = true
@@ -27,6 +27,7 @@ lsp-server.workspace = true
 lsp-types.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json.workspace = true

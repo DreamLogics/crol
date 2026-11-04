@@ -355,3 +355,36 @@ fn default_references() {
         .unwrap_err();
     assert!(error.to_string().contains("no schema is given"), "{error}");
 }
+
+#[test]
+fn defaults_are_filled_in_as_serde_fills_them() {
+    let data = crol::CrolComposer::new()
+        .load_layer(crol::CrolLayer::from_sources(
+            "base",
+            [(
+                "a.crol",
+                "+web: Service { replicas: 2, depends_on: [], url: None, limits: { cpu: 2.0, memory_mb: 1 }, .. },\n\
+                 web: & ~ { -limits },\n\
+                 +db: Volume { size_gb: 1 },",
+            )],
+        ))
+        .compose_data()
+        .unwrap();
+    let mut sources = crol::Sources::new();
+    let filled = crol::Span {
+        file: sources.add("<default>", ""),
+        range: Default::default(),
+    };
+    let schema = schema::build::<Definition>();
+    let root = data.view().base.clone();
+    let root = crol::fill_defaults(&root, &schema, None, filled);
+    let text = crol_eval::print::to_document_noted(&root, &Default::default(), &|v| {
+        (v.span == filled).then(|| "default".to_owned())
+    });
+    assert_eq!(
+        text,
+        "web: Service {\n    replicas: 2,\n    depends_on: [],\n    url: None,\n    \
+         tags: [], // default\n    limits: Limits { cpu: 1.0, memory_mb: 512 }, // default\n},\n\
+         db: Volume { size_gb: 1 },\n"
+    );
+}

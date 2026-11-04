@@ -407,13 +407,16 @@ fn own_requirement() -> String {
 
 /// The schema file a document names with `#![schema(...)]` (`SPEC.md`
 /// 4.1), with the attribute's range: `None` without the attribute. A module
-/// path is resolved with the document's directory as the root. URLs and
+/// path is resolved from the document's directory, and `::` from `root`,
+/// the root directory (`SPEC.md` 4.2): for tools, the project file's
+/// directory, else the working directory or workspace folder. URLs and
 /// crates need the `remote-schemas` feature; with it, `fetch` allows
 /// fetching them, and without `fetch` only cached copies and local crates
 /// are used.
 pub fn attribute_path(
     text: &str,
     document: &Path,
+    root: &Path,
     fetch: bool,
 ) -> Option<(crol_syntax::TextRange, Result<PathBuf, Error>)> {
     use crol_syntax::ast::{AstNode, AttributeKind};
@@ -442,25 +445,70 @@ pub fn attribute_path(
         .collect();
     Some((
         range,
-        crate::resolve_module_path(&module_path, dir, Some(document))
+        crate::resolve_module_path(&module_path, root, Some(dir))
             .map_err(|e| Error::new(format!("schema: {e}"))),
     ))
 }
 
 /// The schema file a URL or a crate names (`SPEC.md` 4.1), for a document
-/// or project in `dir`: fetched over HTTPS if `fetch` allows, and cached.
-#[cfg(feature = "remote-schemas")]
+/// or project in `dir`, cached. With the `remote-schemas` feature it is
+/// fetched over HTTPS if `fetch` allows, blocking; without it, or without
+/// `fetch`, only cached copies and local crates are used. Without any
+/// `remote-schemas` feature, it is an error.
 pub fn resolve_remote(source: &str, dir: &Path, fetch: bool) -> Result<PathBuf, Error> {
-    crate::remote::resolve(source, dir, fetch)
+    #[cfg(feature = "_remote")]
+    return crate::remote::resolve(source, dir, fetch);
+    #[cfg(not(feature = "_remote"))]
+    {
+        let _ = (dir, fetch);
+        Err(Error::new(format!(
+            "schema: `{source}`: schemas from URLs and crates need the `remote-schemas` feature of crol"
+        )))
+    }
 }
 
-/// The schema file a URL or a crate names (`SPEC.md` 4.1); this build of
-/// crol does not have the `remote-schemas` feature, so it is an error.
-#[cfg(not(feature = "remote-schemas"))]
-pub fn resolve_remote(source: &str, _dir: &Path, _fetch: bool) -> Result<PathBuf, Error> {
-    Err(Error::new(format!(
-        "schema: `{source}`: schemas from URLs and crates need the `remote-schemas` feature of crol"
-    )))
+/// [`resolve_remote`] without blocking on the network, fetching if `fetch`
+/// allows. It must run in a Tokio runtime.
+#[cfg(feature = "remote-schemas-async")]
+pub async fn resolve_remote_async(source: &str, dir: &Path, fetch: bool) -> Result<PathBuf, Error> {
+    crate::remote::resolve_async(source, dir, fetch).await
+}
+
+/// For a document checked against the schema file `schema` (a project's,
+/// or one a tool was given): a warning at its `#![schema(...)]` when that
+/// names another file (`SPEC.md` 4.1), resolved as [`attribute_path`] does. `used` says which schema is used
+/// instead: "the project's".
+pub fn attribute_disagrees(
+    text: &str,
+    document: &Path,
+    root: &Path,
+    schema: &Path,
+    used: &str,
+    fetch: bool,
+) -> Option<(crol_syntax::TextRange, String)> {
+    let (range, named) = attribute_path(text, document, root, fetch)?;
+    let canonical = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    match named {
+        Ok(named) if canonical(&named) == canonical(schema) => None,
+        Ok(_) => Some((
+            range,
+            format!("this document names another schema than {used}, which is used instead"),
+        )),
+        Err(e) => Some((range, format!("{e}; {used} is used instead"))),
+    }
+}
+
+/// The URL or crate a document's `#![schema("...")]` names, if it names
+/// one: what [`attribute_path`] resolves, for fetching it beforehand.
+pub fn attribute_remote(text: &str) -> Option<String> {
+    use crol_syntax::ast::AttributeKind;
+    let parse = crol_syntax::parse(text);
+    parse.document().attributes().find_map(|a| match a.kind() {
+        Some(AttributeKind::Schema(attr)) => attr
+            .string()
+            .and_then(|s| crate::from_str::<String>(s.text()).ok()),
+        _ => None,
+    })
 }
 
 /// Builds the schema of `T` and every type it uses.

@@ -921,3 +921,237 @@ fn the_project_file_is_checked_against_its_schema() {
     );
     client.stop();
 }
+
+#[test]
+fn remote_schemas_are_fetched_without_blocking() {
+    let dir = workspace("lsp-remote-schema", &[("config.crol", "")]);
+    let config = uri(&dir.join("config.crol"));
+    // Nothing listens there, so fetching fails at once.
+    let text = "#![schema(\"https://127.0.0.1:9/schema.crol\")]\n\n{ replicas: 2 }";
+    let open = |client: &Client| {
+        client.notify(
+            "textDocument/didOpen",
+            json!({ "textDocument": { "uri": config, "languageId": "crol", "version": 1, "text": text } }),
+        );
+    };
+    let message = |diagnostics: &[Value]| {
+        diagnostics
+            .first()
+            .and_then(|d| d["message"].as_str())
+            .unwrap_or_default()
+            .to_owned()
+    };
+
+    let client = Client::start_with(&dir, json!({ "remote_schemas": false }));
+    open(&client);
+    let diagnostics = client.diagnostics_for(&config, |d| !d.is_empty());
+    assert!(
+        message(&diagnostics).ends_with("is not cached, and fetching schemas is off"),
+        "{diagnostics:?}"
+    );
+    client.stop();
+
+    let client = Client::start(&dir);
+    open(&client);
+    let diagnostics = client.diagnostics_for(&config, |d| !d.is_empty());
+    assert_eq!(
+        message(&diagnostics),
+        "schema: fetching `https://127.0.0.1:9/schema.crol`"
+    );
+    let diagnostics =
+        client.diagnostics_for(&config, |d| message(d).starts_with("schema: cannot fetch"));
+    assert_eq!(diagnostics[0]["range"]["start"]["line"], 0);
+    client.stop();
+}
+
+#[test]
+fn go_to_value_below() {
+    let dir = workspace(
+        "lsp-value-below",
+        &[
+            (
+                "project.crol",
+                r#"Project { layers: List([{ name: "base", dir: "base", .. }, { name: "local", dir: "local", .. }]), .. }"#,
+            ),
+            (
+                "base/a.crol",
+                "+web: { replicas: 2, limits: { cpu: 1 } },\nweb.limits: & ~ { memory: 2 },",
+            ),
+            (
+                "local/a.crol",
+                "web.replicas: & + 1,\nweb: & ~ { limits: { cpu: & * 2 } },",
+            ),
+        ],
+    );
+    let mut client = Client::start(&dir);
+    let local = uri(&dir.join("local/a.crol"));
+    let text = std::fs::read_to_string(dir.join("local/a.crol")).unwrap();
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": local, "languageId": "crol", "version": 1, "text": text } }),
+    );
+    client.diagnostics_for(&local, |d| d.is_empty());
+    let base = uri(&dir.join("base/a.crol"));
+    let mut definition = |line: u32, character: u32| {
+        let location = client.request(
+            "textDocument/definition",
+            json!({ "textDocument": { "uri": local }, "position": { "line": line, "character": character } }),
+        );
+        (location["uri"].clone(), location["range"]["start"].clone())
+    };
+    // `& + 1` adds to what `+web` defined.
+    assert_eq!(
+        definition(0, 14),
+        (json!(base), json!({ "line": 0, "character": 1 }))
+    );
+    // `&` in `cpu`: web.limits.cpu was last changed by `+web`, not by the
+    // patch that added `memory`.
+    assert_eq!(
+        definition(1, 26),
+        (json!(base), json!({ "line": 0, "character": 1 }))
+    );
+    client.stop();
+}
+
+#[test]
+fn layer_documents_that_name_another_schema_get_a_warning() {
+    let schema = r#"Schema { format: 1, root: "app::Service", types: {} }"#;
+    let dir = workspace(
+        "lsp-other-schema",
+        &[
+            (
+                "project.crol",
+                r#"Project { layers: List([{ name: "base", dir: "base", .. }]), schema: Some("schema"), .. }"#,
+            ),
+            ("schema.crol", schema),
+            ("other.crol", schema),
+            ("base/a.crol", "#![schema(super::other)]\n+a: 1,"),
+        ],
+    );
+    let client = Client::start(&dir);
+    let a = uri(&dir.join("base/a.crol"));
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": a, "languageId": "crol", "version": 1, "text": "#![schema(super::other)]\n+a: 1," } }),
+    );
+    let diagnostics = client.diagnostics_for(&a, |d| !d.is_empty());
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert_eq!(diagnostics[0]["severity"], 2);
+    assert_eq!(
+        diagnostics[0]["message"],
+        "this document names another schema than the project's, which is used instead"
+    );
+    client.stop();
+}
+
+#[test]
+fn documents_on_their_own_complete_from_their_schema() {
+    let dir = workspace(
+        "lsp-own-schema",
+        &[
+            (
+                "schema.crol",
+                r#"Schema {
+                    format: 1,
+                    root: "app::Config",
+                    types: {
+                        "app::Config": Struct {
+                            name: "Config",
+                            source: ("src/lib.rs", 1),
+                            fields: {
+                                listen: { ty: String, doc: "Where to listen.", .. },
+                                limits: { ty: Named("app::Limits"), .. },
+                            },
+                            ..
+                        },
+                        "app::Limits": Struct {
+                            name: "Limits",
+                            source: ("src/lib.rs", 5),
+                            fields: { cpu: { ty: F64, .. } },
+                            ..
+                        },
+                    },
+                }"#,
+            ),
+            ("config.crol", ""),
+            (
+                "project.crol",
+                r#"Project { layers: List([{ name: "base", dir: "base", .. }]), .. }"#,
+            ),
+            ("base/a.crol", "+a: 1,"),
+        ],
+    );
+    let mut client = Client::start(&dir);
+    let complete = |client: &mut Client, uri: &str, first: &str, text: &str| {
+        client.notify(
+            "textDocument/didOpen",
+            json!({ "textDocument": { "uri": uri, "languageId": "crol", "version": 1, "text": first } }),
+        );
+        client.diagnostics_for(uri, |d| d.is_empty());
+        client.notify(
+            "textDocument/didChange",
+            json!({
+                "textDocument": { "uri": uri, "version": 2 },
+                "contentChanges": [{ "text": text }],
+            }),
+        );
+        let line = text.lines().count() - 1;
+        let character = text.lines().last().unwrap().len();
+        let items = client.request(
+            "textDocument/completion",
+            json!({ "textDocument": { "uri": uri }, "position": { "line": line, "character": character } }),
+        );
+        items
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["label"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+
+    // The fields of the root type, and inside them.
+    let config = uri(&dir.join("config.crol"));
+    let start = "#![schema(schema)]\n\n{ listen: \"x\", limits: { cpu: 1.0 } }";
+    let labels = complete(&mut client, &config, start, "#![schema(schema)]\n\n{ lim");
+    assert_eq!(labels, ["listen", "limits"]);
+    let labels = complete(
+        &mut client,
+        &config,
+        start,
+        "#![schema(schema)]\n\n{ limits: { c",
+    );
+    assert_eq!(labels, ["cpu"]);
+    // Written as entries, without braces.
+    let entries = "#![schema(schema)]\n\nlisten: \"x\",\nlimits: { cpu: 1.0 },";
+    let labels = complete(
+        &mut client,
+        &config,
+        entries,
+        "#![schema(schema)]\n\nlisten: \"x\",\nl",
+    );
+    assert_eq!(labels, ["limits"]);
+    client.notify(
+        "textDocument/didChange",
+        json!({ "textDocument": { "uri": config, "version": 3 }, "contentChanges": [{ "text": entries }] }),
+    );
+    client.diagnostics_for(&config, |d| d.is_empty());
+    let hover = client.request(
+        "textDocument/hover",
+        json!({ "textDocument": { "uri": config }, "position": { "line": 2, "character": 2 } }),
+    );
+    let markdown = hover["contents"]["value"].as_str().unwrap_or_default();
+    assert!(markdown.contains("`String` — Where to listen."), "{hover}");
+
+    // The project file: the fields of `Project` crol provides.
+    let project = uri(&dir.join("project.crol"));
+    let text = r#"Project { layers: List([{ name: "base", dir: "base", .. }]), "#;
+    let labels = complete(
+        &mut client,
+        &project,
+        r#"Project { layers: List([{ name: "base", dir: "base", .. }]), .. }"#,
+        text,
+    );
+    assert!(labels.iter().any(|l| l == "schema"), "{labels:?}");
+    assert!(!labels.iter().any(|l| l == "layers"), "{labels:?}");
+    client.stop();
+}
