@@ -1,0 +1,27 @@
+web: Service {
+    replicas: 3,
+    image: "web:1.4",
+    limits: Limits { cpu: 1.0, memory_mb: 512 },
+    depends_on: [@db],
+    ..,
+},
+db: Volume { size_gb: 10 },
+worker: Service {
+    replicas: 1,
+    image: "worker:2",
+    tags: ["batch"],
+    limits: None,
+    mode: Slow(3),
+    depends_on: [],
+},
+
+<prod> {
+    web: Service {
+        replicas: 3,
+        image: "web:1.4",
+        limits: Limits { cpu: 1.0, memory_mb: 512 },
+        depends_on: [@db],
+        mode: Slow(2),
+        ..,
+    },
+},

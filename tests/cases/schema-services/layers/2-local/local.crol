@@ -1,0 +1,2 @@
+web.replicas: 3,
+<prod> { web.mode: Slow(2) },
