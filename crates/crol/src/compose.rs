@@ -750,7 +750,15 @@ impl<T: VariantName> CrolData<T> {
 
     /// The root keys in the composed context, in root order.
     pub fn keys(&self) -> Vec<String> {
-        match &self.composed_root().kind {
+        self.keys_in(&CrolContext(self.composed.clone()))
+    }
+
+    /// The root keys in a context, in root order.
+    pub fn keys_in(&self, context: &CrolContext) -> Vec<String> {
+        let Some(root) = self.root_in(&context.0) else {
+            return Vec::new();
+        };
+        match &root.kind {
             ValueKind::Keyed(keyed) => keyed
                 .entries
                 .keys()

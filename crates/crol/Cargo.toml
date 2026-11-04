@@ -11,13 +11,19 @@ keywords = ["crol", "configuration", "config", "serde", "ron"]
 categories = ["config", "encoding", "parser-implementations"]
 readme = "README.md"
 
+[features]
+# `#[derive(Schema)]` and `#[derive(VariantName)]`.
+derive = ["dep:crol-derive"]
+
 [dependencies]
+crol-derive = { workspace = true, optional = true }
 crol-eval.workspace = true
 crol-syntax.workspace = true
-indexmap.workspace = true
-serde.workspace = true
+indexmap = { workspace = true, features = ["serde"] }
+serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
+crol-derive.workspace = true
 expect-test.workspace = true
 proptest.workspace = true
 serde_derive.workspace = true

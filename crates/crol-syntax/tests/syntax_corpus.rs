@@ -6,7 +6,9 @@
 use std::path::Path;
 
 fn files(dir: &str) -> Vec<(String, String)> {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/syntax").join(dir);
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/syntax")
+        .join(dir);
     let Ok(entries) = std::fs::read_dir(&dir) else {
         // Not in a published crate.
         return Vec::new();

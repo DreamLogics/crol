@@ -9,6 +9,7 @@ use crol_eval::{Key, Keyed, Span, Value, ValueKind};
 
 use crate::error::Error;
 use crate::id::ID_TOKEN;
+use crate::raw::RAW_TOKEN;
 
 /// Options for [`to_string_pretty`](crate::to_string_pretty).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -198,6 +199,15 @@ impl<'c> ser::Serializer for ValueSerializer<'c> {
     ) -> Result<Value, Error> {
         let config = self.config;
         let inner = v.serialize(self)?;
+        if name == RAW_TOKEN {
+            // The value's CROL text, read back as the value itself.
+            return match &inner.kind {
+                ValueKind::String(text) => crate::raw::RawValue::from_text(text)
+                    .map(|raw| raw.0)
+                    .map_err(Error::new),
+                _ => Err(Error::new("a raw value must be CROL text")),
+            };
+        }
         if name == ID_TOKEN {
             return match inner.kind {
                 ValueKind::String(id) => Ok(value(ValueKind::Id(id))),
@@ -265,7 +275,8 @@ impl<'c> ser::Serializer for ValueSerializer<'c> {
     }
 
     fn serialize_struct(self, name: &'static str, len: usize) -> Result<MapSerializer<'c>, Error> {
-        let name = self.config.struct_names.then(|| name.to_owned());
+        // An empty name (`#[serde(rename = "")]`) writes a block without one.
+        let name = (self.config.struct_names && !name.is_empty()).then(|| name.to_owned());
         Ok(MapSerializer::new(self.config, name, Some(len)))
     }
 

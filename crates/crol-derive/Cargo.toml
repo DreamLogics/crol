@@ -10,11 +10,14 @@ homepage.workspace = true
 keywords = ["crol", "derive", "schema"]
 categories = ["config", "development-tools::procedural-macro-helpers"]
 readme = "README.md"
-# Not published until it has content (SPEC.md 14.3).
-publish = false
 
 [lib]
 proc-macro = true
+
+[dependencies]
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true
 
 [lints]
 workspace = true

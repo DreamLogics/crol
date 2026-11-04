@@ -36,16 +36,20 @@
 
 #![forbid(unsafe_code)]
 
+mod check;
 mod compose;
 mod de;
 mod error;
 mod id;
 mod module_path;
+mod raw;
+pub mod schema;
 mod ser;
 
 use crol_eval::evaluate_value;
 use serde::{Deserialize, Serialize};
 
+pub use check::{CheckOptions, check};
 pub use compose::{
     CrolComposer, CrolConfig, CrolContext, CrolData, CrolLayer, CrolVariants, LayerSource, Variant,
     VariantName,
@@ -57,6 +61,11 @@ pub use error::Error;
 /// The error type of `crol`, as the specification names it.
 pub type CrolError = Error;
 pub use id::{Id, IdUse};
+pub use raw::RawValue;
+pub use schema::Schema;
+
+#[cfg(feature = "derive")]
+pub use crol_derive::{Schema, VariantName};
 pub use ser::PrettyConfig;
 
 /// The result type of this crate.
