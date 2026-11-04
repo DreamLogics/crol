@@ -22,6 +22,17 @@ impl Ir {
         self.exprs.push(Expr { kind, span });
         self.exprs.len() - 1
     }
+
+    /// Gives back what the vectors reserved while they grew, as they stay as
+    /// they are from here on.
+    pub(crate) fn shrink(&mut self) {
+        self.exprs.shrink_to_fit();
+        self.blocks.shrink_to_fit();
+        self.value_binds.shrink_to_fit();
+        for block in &mut self.blocks {
+            block.entries.shrink_to_fit();
+        }
+    }
 }
 
 #[derive(Debug)]

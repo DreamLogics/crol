@@ -354,6 +354,8 @@ fn compile_documents(
         })
         .collect();
     let (mut lowered, mut errors) = lower::lower_data_over(&documents, ir, parts);
+    drop(documents);
+    drop(parses);
     if let Some(file) = last_file {
         lowered.root_span = Span::new(file, Default::default());
     }
@@ -361,6 +363,8 @@ fn compile_documents(
     if diagnostics.iter().any(Diagnostic::is_error) {
         return (None, diagnostics);
     }
+    lowered.ir.shrink();
+    lowered.ops.shrink_to_fit();
     let layer_names = layers.iter().map(|l| l.name.clone()).collect();
     (
         Some(Compiled {

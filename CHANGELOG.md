@@ -48,11 +48,10 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Changed
 
-- `Key::Str` holds an `Arc<str>` rather than a `String`, so that values with the same
-  field share its name. Write `Key::Str("port".into())`.
-
 - Evaluation takes about 45% less memory at its peak on large data with many
   contexts, and a context evaluated later no longer evaluates the base again.
+- **Breaking:** `Key::Str` holds an `Arc<str>` rather than a `String`, so that values
+  with the same field share its name. Write `Key::Str("port".into())`.
 - **Breaking:** `ValueKind::Keyed` holds a `Box<Keyed>`, which makes every other value
   smaller.
 - **Breaking:** `~` merges deep: a block inside a patch merges with what the key
