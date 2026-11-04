@@ -8,6 +8,7 @@ use std::sync::Arc;
 use crol_syntax::SyntaxKind;
 use crol_syntax::ast::{self, AstNode};
 
+use crate::binary::Part;
 use crate::cond::Cond;
 use crate::diagnostic::Diagnostic;
 use crate::ir::*;
@@ -65,9 +66,19 @@ fn root_entries(lowerer: &mut Lowerer, document: &ast::Document) -> Vec<ast::Any
 
 /// Lowers the documents of every layer (`SPEC.md` 4, 7.2).
 pub(crate) fn lower_data(documents: &[DataDocument<'_>]) -> (LoweredData, Vec<Diagnostic>) {
+    lower_data_over(documents, Ir::default(), Vec::new())
+}
+
+/// [`lower_data`], with layers lowered ahead of time already in `ir`: their
+/// templates are visible to the documents (`SPEC.md` 7.8).
+pub(crate) fn lower_data_over(
+    documents: &[DataDocument<'_>],
+    ir: Ir,
+    parts: Vec<Part>,
+) -> (LoweredData, Vec<Diagnostic>) {
     let mut lowerer = Lowerer {
         file: documents.first().map_or(FileId::default(), |d| d.file),
-        ir: Ir::default(),
+        ir,
         diagnostics: Vec::new(),
         scopes: Vec::new(),
         aliases: HashMap::new(),
@@ -87,6 +98,26 @@ pub(crate) fn lower_data(documents: &[DataDocument<'_>]) -> (LoweredData, Vec<Di
     // all collected first (`SPEC.md` 6.1.2).
     let mut scope = Scope::default();
     let mut templates = Vec::new();
+    let mut ops = Vec::new();
+    let mut root_defaults = Vec::new();
+    for part in parts {
+        for id in part.templates {
+            let bind = &lowerer.ir.value_binds[id];
+            let (name, span) = (bind.name.clone(), lowerer.ir.exprs[bind.expr].span);
+            if let Some((_, other)) = scope.value_binds.get(&*name) {
+                let diagnostic =
+                    Diagnostic::error(span, format!("the template `{name}` is defined twice"))
+                        .with_related(*other, "the other definition");
+                lowerer.diagnostics.push(diagnostic);
+                continue;
+            }
+            scope.value_binds.insert(name.to_string(), (id, span));
+            templates.push(id);
+        }
+        ops.extend(part.ops);
+        root_defaults.extend(part.root_defaults);
+    }
+    lowerer.root_defaults = root_defaults;
     let mut entries_of = Vec::with_capacity(documents.len());
     for document in documents {
         lowerer.file = document.file;
@@ -122,7 +153,6 @@ pub(crate) fn lower_data(documents: &[DataDocument<'_>]) -> (LoweredData, Vec<Di
     }
     lowerer.scopes.push(scope);
 
-    let mut ops = Vec::new();
     let root_span = documents.last().map_or(Span::detached(), |document| {
         Span::new(document.file, Default::default())
     });
@@ -148,6 +178,8 @@ pub(crate) fn lower_data(documents: &[DataDocument<'_>]) -> (LoweredData, Vec<Di
         ..
     } = lowerer;
     diagnostics.sort_by_key(|d| (d.span.file, d.span.range.start()));
+    // Layers lowered ahead of time come first; a chain is in layer order.
+    ops.sort_by_key(|op| op.layer);
     (
         LoweredData {
             ir,

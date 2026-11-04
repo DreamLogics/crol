@@ -1408,6 +1408,39 @@ reading and evaluation have fixed limits, each an error when exceeded:
 The limits are part of the format: a later version may raise them, but
 never lower them.
 
+
+### 7.8 Compiled layers
+
+A `.crob` file is a layer lowered ahead of time, for data that does not change
+between loads, such as generated data. Loading one skips parsing and lowering. It
+evaluates exactly as the layer's documents do, and has the same fingerprint.
+
+`crol compile <layer>` writes one, and so does `CrolLayer::to_binary`. A path
+to a `.crob` file is a layer, as a directory or a `.crod` file is, and
+`CrolLayer::from_binary` reads one from bytes. A module path names one only if
+it names no `.crod` file or directory: text comes first, so a compiled file
+beside its source cannot hide a change. A `.crob` file in a layer's directory
+is an error, like a `.crol` file there (section 4).
+
+- **It holds the documents' text** beside what they lowered to, all compressed
+  with LZ4, which costs milliseconds to read and makes the file a quarter of
+  the size: errors and
+  `crol explain` point into it, `CrolData::reload` of a document in the layer
+  falls back to the text for that layer, and tools that want a syntax tree parse
+  it. A layer's `schema.crod` is kept and read as ever.
+- **It stands alone as far as templates go.** A layer can be compiled only if
+  it uses no template of another layer. Layers above it see its templates, as
+  they would in text, and one defined twice is an error.
+- **`#![extends(...)]` is followed from the text**, as ever.
+- **A file is not trusted.** A hash catches damage, and a file of another format
+  version is refused. What a file says it unpacks to is limited by its own
+  size. Reading checks that every id is in range, that an
+  expression holds only earlier ones, how deep expressions nest, and that every
+  span is in its document, so that no file can make loading panic or loop.
+
+The format is not stable before 1.0. A file says its version, `binary::FORMAT`, and
+is compiled again when that changes.
+
 ---
 
 ## 8. Variants
@@ -2597,6 +2630,7 @@ change it. Sealing changes no value and no fingerprint.
 | `crol eval [<layer>...] [--context a,b] [key[.path]]` | print evaluated data as a plain data-mode document (or one value); with a schema, struct fields that take their defaults are written out with the defaults the schema records, each marked `// default` (`--no-defaults` leaves them as the data does) |
 | `crol eval [<layer>...] --all-contexts` | print the base data, then for every other evaluated context a block `<a & b & !c & ...> { ... }` whose condition holds in that context only, with the keys whose value differs (`key: value`) or that are missing (`-key`). A `..` at the root is written in the base, or in the block of a context that has it where the base does not; for a root struct, a removed field as `key: (), -key`. The output is valid CROL and evaluates back to the same data |
 | `crol explain [<layer>...] [--context a,b] key[.path]` | print the operations that produced a value (section 12.3) |
+| `crol compile <layer> [-o <file>]` | write a layer as a `.crob` file (section 7.8), by default beside it |
 | `crol fmt [--check] <file>...` | format `.crod` and `.crol` files in place (or check). Formatting does not depend on the mode (section 12.2). It takes files, so a directory is an error |
 | `crol fingerprint [<layer>...]` | print the fingerprint in hex |
 | `crol from-ron <file>` | convert a RON value file to a CROL value document, on standard output, to keep in a `.crol` file |

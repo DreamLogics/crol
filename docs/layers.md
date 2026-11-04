@@ -126,6 +126,7 @@ fn main() -> Result<(), crol::Error> {
 - **Documents in memory**, for tests and data embedded in your binary:
   `CrolLayer::from_sources("base", [("web.crod", text)])`. These are always data
   mode.
+- **A compiled layer**: a [`.crob` file](#compiled-layers).
 - **Anything else**, through a [file loader](recipes.md#loading-documents-from-somewhere-else)
   of your own.
 
@@ -277,6 +278,42 @@ since by default your program decides what is loaded and in which order.
 In a [project](projects.md), the project file's layers decide the order, so
 `extends` is mainly useful for files outside a project. The language server warns
 about one in a layer that names something that is no lower layer.
+
+## Compiled layers
+
+Parsing large data takes time at every start. A layer that does not change between
+loads, such as data you generate, can be compiled to a `.crob` file, which loads
+several times faster, and takes about half the room of its text:
+
+```console
+$ crol compile data/base
+$ ls data
+base  base.crob  local
+$ crol eval data/base.crob data/local
+```
+
+In Rust, a path to one is a layer like any other, and `CrolLayer::to_binary` writes
+one:
+
+```rust
+let data: Data = CrolComposer::new()
+    .load(Path::new("data/base.crob"))?
+    .load(Path::new("data/local"))?
+    .compose()?;
+```
+
+It evaluates exactly as its documents do, with the same fingerprint, and it keeps
+their text, so errors and `crol explain` still show where a value was written. Layers
+above it can be plain text, and use its templates.
+
+A few things to keep in mind:
+
+- It does not update itself. Compile it again when its documents change: a `.crob`
+  file holds what they said then. A module path prefers the text, if both are there.
+- It cannot use a template of another layer, since it is compiled alone.
+- It lives outside a layer's directory: inside one, it is an error.
+- Its format can change between versions of `crol`. An old file is refused with a
+  message, and you compile it again.
 
 ## Next
 

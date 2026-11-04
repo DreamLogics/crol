@@ -750,3 +750,118 @@ fn a_context_evaluated_later_stays_after_reloading() {
         Stats { hp: 20, speed: 3 }
     );
 }
+
+const COMPILED: &str = "shared := { hp: 1 }\n+a: { ..&shared }\n+b: { hp: &root.a.hp + 1 }\n";
+
+fn compiled_layer() -> crol::CrolLayer {
+    let text = crol::CrolLayer::from_sources("base", [("units.crod", COMPILED)]);
+    crol::CrolLayer::from_binary("base", &text.to_binary().unwrap()).unwrap()
+}
+
+#[test]
+fn a_compiled_layer_loads_as_its_text_does() {
+    let text = crol::CrolLayer::from_sources("base", [("units.crod", COMPILED)]);
+    let one = crol::CrolComposer::<String>::new()
+        .load_layer(text)
+        .compose_data()
+        .unwrap();
+    let two = crol::CrolComposer::<String>::new()
+        .load_layer(compiled_layer())
+        .compose_data()
+        .unwrap();
+    assert_eq!(one.fingerprint(), two.fingerprint());
+}
+
+#[test]
+fn a_text_layer_goes_on_a_compiled_one_and_sees_its_templates() {
+    let top = crol::CrolLayer::from_sources("mod", [("a.crod", "a.hp: 5\n+c: { ..&shared }")]);
+    let data = crol::CrolComposer::<String>::new()
+        .load_layer(compiled_layer())
+        .load_layer(top)
+        .compose_data()
+        .unwrap();
+    let hp = |key| {
+        data.get::<std::collections::BTreeMap<String, u32>>(key)
+            .unwrap()["hp"]
+    };
+    assert_eq!((hp("a"), hp("b"), hp("c")), (5, 6, 1));
+}
+
+#[test]
+fn a_template_defined_twice_across_a_compiled_layer_is_an_error() {
+    let top = crol::CrolLayer::from_sources("mod", [("a.crod", "shared := { hp: 2 }")]);
+    let error = crol::CrolComposer::<String>::new()
+        .load_layer(compiled_layer())
+        .load_layer(top)
+        .compose_data()
+        .unwrap_err();
+    assert!(error.to_string().contains("defined twice"), "{error}");
+}
+
+#[test]
+fn errors_in_a_compiled_layer_point_into_its_text() {
+    let top = crol::CrolLayer::from_sources("mod", [("a.crod", "+a: { hp: 2 }")]);
+    let error = crol::CrolComposer::<String>::new()
+        .load_layer(compiled_layer())
+        .load_layer(top)
+        .compose_data()
+        .unwrap_err();
+    assert!(error.to_string().contains("already exists"), "{error}");
+}
+
+#[test]
+fn explain_works_through_a_compiled_layer() {
+    let top = crol::CrolLayer::from_sources("mod", [("a.crod", "a.hp: 5")]);
+    let data = crol::CrolComposer::<String>::new()
+        .load_layer(compiled_layer())
+        .load_layer(top)
+        .compose_data()
+        .unwrap();
+    let context = data.context(Vec::<String>::new()).unwrap();
+    assert_eq!(data.explain("a.hp", &context).unwrap().len(), 2);
+}
+
+#[test]
+fn reloading_a_document_of_a_compiled_layer_uses_its_text() {
+    let mut data = crol::CrolComposer::<String>::new()
+        .load_layer(compiled_layer())
+        .compose_data()
+        .unwrap();
+    let reloaded = data
+        .reload(&[change(
+            "base",
+            "units.crod",
+            Some("+a: { hp: 8 }\n+b: { hp: 1 }"),
+        )])
+        .unwrap();
+    assert!(!reloaded.changed.is_empty());
+    assert_eq!(
+        data.get::<std::collections::BTreeMap<String, u32>>("a")
+            .unwrap()["hp"],
+        8
+    );
+}
+
+#[test]
+fn a_layer_using_a_template_of_another_does_not_compile_alone() {
+    let layer = crol::CrolLayer::from_sources("top", [("a.crod", "+c: { ..&elsewhere }")]);
+    assert!(layer.to_binary().is_err());
+}
+
+#[test]
+fn a_compiled_file_is_read_as_a_layer_and_not_in_a_directory() {
+    let dir = std::env::temp_dir().join(format!("crol-crob-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let text = crol::CrolLayer::from_sources("base", [("units.crod", COMPILED)]);
+    let file = dir.join("base.crob");
+    std::fs::write(&file, text.to_binary().unwrap()).unwrap();
+    let data = crol::CrolComposer::<String>::new()
+        .load(file.as_path())
+        .unwrap()
+        .compose_data()
+        .unwrap();
+    assert!(data.contains("a"));
+    let error = crol::CrolLayer::from_path("dir", &dir).unwrap_err();
+    assert!(error.to_string().contains("a layer of its own"), "{error}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}

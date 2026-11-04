@@ -116,7 +116,7 @@ pub(crate) fn resolve(
 /// mode: what [`named`] then accepts or refuses, rather than says is not
 /// there.
 pub(crate) fn exists(base: &Path, last: &str) -> bool {
-    [Mode::Data.extension(), Mode::Value.extension()]
+    [Mode::Data.extension(), Mode::Value.extension(), "crob"]
         .iter()
         .any(|extension| base.join(format!("{last}.{extension}")).is_file())
         || base.join(last).is_dir()
@@ -147,6 +147,10 @@ pub(crate) fn named(
         ))),
         (true, false) => Ok(file),
         (false, true) => Ok(directory),
+        // Without a text form, a compiled layer (`SPEC.md` 7.8).
+        (false, false) if mode == Mode::Data && base.join(format!("{last}.crob")).is_file() => {
+            Ok(base.join(format!("{last}.crob")))
+        }
         (false, false) => {
             let other = base.join(format!("{last}.{}", mode.other().extension()));
             if other.is_file() {

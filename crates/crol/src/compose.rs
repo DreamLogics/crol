@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crol_eval::{
     Compiled, Context, ContextData, DataOptions, Diagnostic, ExplainStep, Key, Layer, Sources,
-    Value, ValueKind, VariantKeys, Variants, compile, evaluate_compiled, evaluate_contexts,
+    Value, ValueKind, VariantKeys, Variants, evaluate_compiled, evaluate_contexts,
 };
 use crol_syntax::TextRange;
 use crol_syntax::ast::{self, AstNode};
@@ -216,6 +216,9 @@ pub struct CrolLayer {
     /// Each document's path relative to the layer, its name for messages,
     /// its text, and where it came from, for its module paths.
     documents: Vec<Document>,
+    /// What lowering them gave, for a layer read from a `.crob` file
+    /// (`SPEC.md` 7.8).
+    lowered: Option<Arc<[u8]>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -282,7 +285,11 @@ impl CrolLayer {
                 }
             })
             .collect();
-        Self { name, documents }
+        Self {
+            name,
+            documents,
+            lowered: None,
+        }
     }
 
     /// A layer of one file, or of every `.crod` file below a directory
@@ -320,6 +327,9 @@ impl CrolLayer {
         project_file: Option<&SourceId>,
     ) -> Result<Self, Error> {
         let documents = match loader::load(loader, id)? {
+            Loaded::Document(bytes) if is_binary(&id.to_string()) => {
+                return Self::from_binary_at(name, &bytes, id);
+            }
             Loaded::Document(bytes) => {
                 loader::check_mode(id, Mode::Data)?;
                 let directory = target.map(|t| t[..t.len().saturating_sub(1)].to_vec());
@@ -337,6 +347,12 @@ impl CrolLayer {
                     // A directory never hides a document it holds, so that
                     // one of another mode cannot be lost without a word.
                     loader::check_mode(&entry, Mode::Data)?;
+                    if is_binary(&relative) {
+                        return Err(Error::new(format!(
+                            "{entry}: a `.crob` file is a layer of its own, not a document of one; move it out of {id}"
+                        ))
+                        .with_source_id(entry));
+                    }
                     let mut components: Vec<&str> = relative.split('/').collect();
                     if components.iter().any(|c| matches!(*c, "" | "." | "..")) {
                         return Err(Error::new(format!(
@@ -360,7 +376,61 @@ impl CrolLayer {
                 documents
             }
         };
-        Ok(Self { name, documents })
+        Ok(Self {
+            name,
+            documents,
+            lowered: None,
+        })
+    }
+
+    /// A layer from the bytes of a `.crob` file (`SPEC.md` 7.8).
+    pub fn from_binary(name: impl Into<String>, bytes: &[u8]) -> Result<Self, Error> {
+        let name = name.into();
+        let id = SourceId::new(format!("{name}.crob"));
+        Self::from_binary_at(name, bytes, &id)
+    }
+
+    fn from_binary_at(name: String, bytes: &[u8], id: &SourceId) -> Result<Self, Error> {
+        let in_file =
+            |message: String| Error::new(format!("{id}: {message}")).with_source_id(id.clone());
+        let layer = crol_eval::binary::read_layer(bytes).map_err(in_file)?;
+        let documents = layer
+            .documents
+            .into_iter()
+            .map(|document| Document {
+                display: format!("{id}:{}", document.relative),
+                relative: document.relative,
+                text: document.text,
+                source: None,
+                directory: None,
+            })
+            .collect();
+        Ok(Self {
+            name,
+            documents,
+            lowered: Some(layer.lowered),
+        })
+    }
+
+    /// The bytes of the layer's `.crob` file (`SPEC.md` 7.8): for a layer
+    /// that does not change, such as generated data, to load without
+    /// parsing. It may not use a template of another layer.
+    pub fn to_binary(&self) -> Result<Vec<u8>, Error> {
+        let mut sources = Sources::new();
+        let documents = self
+            .documents
+            .iter()
+            .map(|d| {
+                let file = sources.add(d.relative.clone(), d.text.as_str());
+                (d.relative.clone(), file)
+            })
+            .collect();
+        let layer = Layer {
+            name: self.name.clone(),
+            documents,
+        };
+        crol_eval::encode_layer(&sources, &layer)
+            .map_err(|found| Error::from_diagnostics(&sources, &found))
     }
 
     /// The layer's name.
@@ -574,6 +644,7 @@ impl<T: VariantName> CrolComposer<T> {
                             text: format!("#![extends({path})]\n"),
                             ..document.clone()
                         }],
+                        lowered: None,
                     };
                     let error = self.add(alone, &mut Vec::new()).err();
                     if error.is_none() {
@@ -803,7 +874,9 @@ impl<T: VariantName> CrolComposer<T> {
             .with_max_contexts(self.config.max_contexts)
             .with_variant_keys(self.config.variant_keys)
             .with_defaults(schema);
-        let (compiled, mut diagnostics) = compile(&sources, &layers);
+        let lowered: Vec<Option<Arc<[u8]>>> =
+            self.layers.iter().map(|l| l.lowered.clone()).collect();
+        let (compiled, mut diagnostics) = compile_lowered(&sources, &layers, &lowered);
         let Some(compiled) = compiled else {
             return Err(Error::from_diagnostics(&sources, &diagnostics));
         };
@@ -830,6 +903,7 @@ impl<T: VariantName> CrolComposer<T> {
             sources,
             layers,
             compiled: Arc::new(compiled),
+            lowered,
             schema: self.schema.map(Arc::new),
             data_options: options,
             base,
@@ -844,6 +918,21 @@ impl<T: VariantName> CrolComposer<T> {
             names: std::marker::PhantomData,
         })
     }
+}
+
+/// Whether a name is that of a `.crob` file.
+fn is_binary(name: &str) -> bool {
+    name.ends_with(".crob")
+}
+
+/// [`crol_eval::compile_binary`], for layers that may be from `.crob` files.
+fn compile_lowered(
+    sources: &Sources,
+    layers: &[Layer],
+    lowered: &[Option<Arc<[u8]>>],
+) -> (Option<Compiled>, Vec<Diagnostic>) {
+    let bytes: Vec<Option<&[u8]>> = lowered.iter().map(|l| l.as_deref()).collect();
+    crol_eval::compile_binary(sources, layers, &bytes)
 }
 
 /// The module paths a document's `#![extends(...)]` attributes name.
@@ -963,6 +1052,8 @@ pub struct CrolData<T = String> {
     layers: Vec<Layer>,
     /// For evaluating another context later.
     compiled: Arc<Compiled>,
+    /// For each layer from a `.crob` file, what it holds, until it changes.
+    lowered: Vec<Option<Arc<[u8]>>>,
     /// The schema as given, for reloading a `schema.crod`.
     schema: Option<Arc<crate::schema::SchemaFile>>,
     data_options: DataOptions,
@@ -1252,11 +1343,17 @@ impl<T: VariantName> CrolData<T> {
     pub fn reload(&mut self, changes: &[DocumentChange<'_>]) -> Result<Reloaded, Error> {
         let mut sources = self.sources.clone();
         let mut layers = self.layers.clone();
+        let mut lowered = self.lowered.clone();
         for change in changes {
-            let layer = layers
-                .iter_mut()
-                .find(|layer| layer.name == change.layer)
+            let index = layers
+                .iter()
+                .position(|layer| layer.name == change.layer)
                 .ok_or_else(|| Error::new(format!("there is no layer `{}`", change.layer)))?;
+            let layer = &mut layers[index];
+            // What the file says no longer holds: its text does.
+            if let Some(slot) = lowered.get_mut(index) {
+                *slot = None;
+            }
             let at = layer.documents.iter().position(|(p, _)| p == change.path);
             match (change.text, at) {
                 (Some(text), Some(at)) => {
@@ -1286,7 +1383,7 @@ impl<T: VariantName> CrolData<T> {
             }
             options = options.with_defaults(Some(schema.defaults()));
         }
-        let (compiled, mut diagnostics) = compile(&sources, &layers);
+        let (compiled, mut diagnostics) = compile_lowered(&sources, &layers, &lowered);
         let Some(compiled) = compiled else {
             return Err(Error::from_diagnostics(&sources, &diagnostics));
         };
@@ -1315,6 +1412,7 @@ impl<T: VariantName> CrolData<T> {
         };
         self.sources = sources;
         self.layers = layers;
+        self.lowered = lowered;
         self.compiled = Arc::new(compiled);
         self.data_options = options;
         self.base = base;

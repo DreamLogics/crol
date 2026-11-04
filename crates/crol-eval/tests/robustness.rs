@@ -1,7 +1,7 @@
 //! The evaluator never panics or loops on any parsed input (`SPEC.md`
 //! 14.2), and printing a value gives text that evaluates back to it.
 
-use crol_eval::{Sources, evaluate_value, print};
+use crol_eval::{Layer, Sources, evaluate_value, print};
 
 struct Gen(u64);
 
@@ -323,4 +323,93 @@ fn fuzz_findings() {
         assert!(evaluation.has_errors(), "{input:?}");
         let _ = evaluate_value(&sources, file);
     }
+}
+
+/// Whatever a `.crob` file says, reading and evaluating it never panics or
+/// loops: this changes what it holds past the hash, as a crafted file would.
+#[test]
+fn damaged_compiled_layers_do_not_panic() {
+    let text = "t := { a: 1, b: & + 1 }\n+x: Unit { ..&t, c: [1, 2], d: { e: &self.a } }\n\
+                x<rebel>.a: round!(2.5)\n+y: &root.x.a + 1\n-z\n..\n";
+    let mut sources = Sources::new();
+    let file = sources.add("a.crod", text);
+    let layer = Layer {
+        name: "base".into(),
+        documents: vec![("a.crod".into(), file)],
+    };
+    let bytes = crol_eval::encode_layer(&sources, &layer).unwrap_or_else(|d| panic!("{d:?}"));
+    let lowered = crol_eval::binary::read_layer(&bytes).unwrap().lowered;
+    let layers = [layer];
+    let run = |bytes: &[u8]| {
+        let (compiled, _) = crol_eval::compile_binary(&sources, &layers, &[Some(bytes)]);
+        if let Some(compiled) = compiled {
+            let _ = crol_eval::evaluate_compiled(&compiled, &Default::default());
+        }
+    };
+    run(&lowered);
+    for end in 0..lowered.len() {
+        run(&lowered[..end]);
+    }
+    let mut seed = 0x2545_F491_4F6C_DD1D_u64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    for _ in 0..20_000 {
+        let mut changed = lowered.to_vec();
+        for _ in 0..1 + next() % 4 {
+            let at = (next() % changed.len() as u64) as usize;
+            changed[at] = next() as u8;
+        }
+        run(&changed);
+    }
+}
+
+#[test]
+fn a_damaged_compiled_file_is_refused() {
+    let mut sources = Sources::new();
+    let file = sources.add("a.crod", "+x: 1");
+    let layer = Layer {
+        name: "base".into(),
+        documents: vec![("a.crod".into(), file)],
+    };
+    let bytes = crol_eval::encode_layer(&sources, &layer).unwrap_or_else(|d| panic!("{d:?}"));
+    let mut changed = bytes.clone();
+    *changed.last_mut().unwrap() ^= 1;
+    assert!(
+        crol_eval::binary::read_layer(&changed)
+            .unwrap_err()
+            .contains("damaged")
+    );
+    assert!(crol_eval::binary::read_layer(b"nonsense").is_err());
+    let mut other = bytes;
+    other[4] = 99;
+    assert!(
+        crol_eval::binary::read_layer(&other)
+            .unwrap_err()
+            .contains("format 99")
+    );
+}
+
+/// A file with the right hash can still lie about what it holds.
+#[test]
+fn a_compiled_file_cannot_ask_for_more_than_it_can_hold() {
+    let header = |size: u64, packed: &[u8]| {
+        let mut file = b"CROB".to_vec();
+        file.extend_from_slice(&crol_eval::binary::FORMAT.to_le_bytes());
+        file.extend_from_slice(blake3::hash(packed).as_bytes());
+        file.extend_from_slice(&size.to_le_bytes());
+        file.extend_from_slice(packed);
+        file
+    };
+    for size in [u64::MAX, 1 << 40, 100_000] {
+        let file = header(size, b"tiny");
+        let message = crol_eval::binary::read_layer(&file).unwrap_err();
+        assert!(message.contains("damaged"), "{message}");
+    }
+    let file = header(100, &[0xFF; 64]);
+    assert!(crol_eval::binary::read_layer(&file).is_err());
+    assert!(crol_eval::binary::read_layer(&header(0, b"")).is_err());
 }

@@ -32,6 +32,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "compiled_layer"
+path = "fuzz_targets/compiled_layer.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "evaluate_data"
 path = "fuzz_targets/evaluate_data.rs"
 test = false

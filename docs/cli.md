@@ -235,6 +235,16 @@ cc4e8c56505c9e470938b39dcaaacd82ef878e5d4ee574d8df4abbdde80aa544
 It covers values, not text, so it does not change when you reformat a file. Two
 machines that print the same fingerprint have the same data.
 
+## `crol compile`
+
+Writes a layer, a directory or a `.crod` file, as a [`.crob` file](layers.md#compiled-layers),
+which loads without parsing. By default it goes beside the layer, as `<layer>.crob`:
+
+```console
+$ crol compile data/base
+$ crol compile data/base -o build/base.crob
+```
+
 ## `crol fmt`
 
 Formats files in place. Unlike the commands above, it takes files, not layers or

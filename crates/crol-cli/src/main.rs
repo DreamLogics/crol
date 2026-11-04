@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 mod check;
+mod compile;
 mod diagnostics;
 mod eval;
 mod explain;
@@ -68,6 +69,8 @@ enum Command {
     /// Print the fingerprint of the evaluated data, or of a `.crol` value
     /// document, in hex.
     Fingerprint(fingerprint::Args),
+    /// Compile a layer to a `.crob` file, which loads without parsing.
+    Compile(compile::Args),
     /// Format `.crod` and `.crol` files in place, or check that they are
     /// formatted.
     Fmt(fmt::Args),
@@ -99,6 +102,7 @@ fn main() -> ExitCode {
         Command::Eval(args) => eval::run(&args, &mut reporter),
         Command::Explain(args) => explain::run(&args, &mut reporter),
         Command::Fingerprint(args) => fingerprint::run(&args, &mut reporter),
+        Command::Compile(args) => compile::run(&args, &mut reporter),
         Command::Fmt(args) => fmt::run(&args, &mut reporter),
         Command::FromRon(args) => from_ron::run(&args, &mut reporter),
         Command::Init => init::run(&mut reporter),

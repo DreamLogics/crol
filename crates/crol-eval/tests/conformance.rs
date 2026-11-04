@@ -233,6 +233,68 @@ fn formatting_keeps_data_and_fingerprints() {
     }
 }
 
+/// Every case with a fingerprint evaluates the same with its layers read
+/// from `.crob` files (`SPEC.md` 7.8). A layer that cannot be compiled alone,
+/// for using a template of another, stays text.
+#[test]
+fn compiled_layers_evaluate_the_same() {
+    let mut compared = 0;
+    for entry in fs::read_dir(cases_dir()).unwrap() {
+        let case = entry.unwrap().path();
+        let Ok(expected) = fs::read_to_string(case.join("expected.fingerprint")) else {
+            continue;
+        };
+        let Ok(dirs) = fs::read_dir(case.join("layers")) else {
+            continue;
+        };
+        let mut dirs: Vec<PathBuf> = dirs.map(|e| e.unwrap().path()).collect();
+        dirs.sort();
+        let mut sources = Sources::new();
+        let mut layers = Vec::new();
+        for dir in &dirs {
+            let mut files = Vec::new();
+            crol_files(dir, dir, &mut files);
+            let documents = files
+                .into_iter()
+                .map(|(relative, path)| {
+                    let file = sources.add(relative.clone(), fs::read_to_string(path).unwrap());
+                    (relative, file)
+                })
+                .collect();
+            let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+            layers.push(Layer { name, documents });
+        }
+        let encoded: Vec<Option<Vec<u8>>> = layers
+            .iter()
+            .map(|layer| crol_eval::encode_layer(&sources, layer).ok())
+            .collect();
+        let read: Vec<Option<crol_eval::binary::BinaryLayer>> = encoded
+            .iter()
+            .map(|bytes| {
+                let bytes = bytes.as_ref()?;
+                Some(crol_eval::binary::read_layer(bytes).unwrap())
+            })
+            .collect();
+        let lowered: Vec<Option<&[u8]>> = read
+            .iter()
+            .map(|layer| layer.as_ref().map(|l| &*l.lowered))
+            .collect();
+        compared += usize::from(lowered.iter().any(Option::is_some));
+        let (compiled, diagnostics) = crol_eval::compile_binary(&sources, &layers, &lowered);
+        let compiled = compiled.unwrap_or_else(|| panic!("{case:?}: {diagnostics:?}"));
+        let evaluation = crol_eval::evaluate_compiled(&compiled, &options(&case));
+        let base = evaluation
+            .value
+            .as_ref()
+            .unwrap_or_else(|| panic!("{case:?}: {:?}", evaluation.diagnostics));
+        let hash =
+            crol_eval::fingerprint::fingerprint(base, &evaluation.contexts, &evaluation.variants);
+        let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(hex, expected.trim(), "{case:?}");
+    }
+    assert!(compared > 10, "only {compared} cases compared");
+}
+
 #[test]
 fn conformance() {
     let update = std::env::var_os("UPDATE_EXPECT").is_some();

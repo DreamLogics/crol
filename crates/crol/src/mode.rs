@@ -95,7 +95,7 @@ impl fmt::Display for Mode {
 /// Whether a file a directory lists is a document of some mode: anything
 /// else in a layer's directory is not CROL's business (`SPEC.md` 7.1).
 pub(crate) fn is_document(name: &str) -> bool {
-    Mode::of(name).is_some()
+    Mode::of(name).is_some() || name.ends_with(".crob")
 }
 
 /// The last component of `name`, whichever separator it uses.

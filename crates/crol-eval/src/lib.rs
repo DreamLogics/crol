@@ -21,6 +21,7 @@
 
 use indexmap::IndexMap;
 
+pub mod binary;
 mod cond;
 mod diagnostic;
 mod eval;
@@ -226,7 +227,42 @@ pub fn evaluate_data(sources: &Sources, layers: &[Layer], options: &DataOptions)
 /// Reads and lowers layers of data-mode documents, with every diagnostic
 /// found; `None` if there are errors.
 pub fn compile(sources: &Sources, layers: &[Layer]) -> (Option<Compiled>, Vec<Diagnostic>) {
-    compile_documents(sources, layers, false)
+    compile_documents(sources, layers, false, &[])
+}
+
+/// [`compile`], where `lowered` holds, for each layer that has one, what its
+/// `.crob` file says, so that its documents are not parsed or lowered. The
+/// layer's documents must be those of the file.
+pub fn compile_binary(
+    sources: &Sources,
+    layers: &[Layer],
+    lowered: &[Option<&[u8]>],
+) -> (Option<Compiled>, Vec<Diagnostic>) {
+    compile_documents(sources, layers, false, lowered)
+}
+
+/// The `.crob` file of a layer (`SPEC.md` 7.8). It must evaluate on its own
+/// as far as its templates go: one of another layer is not known to it.
+pub fn encode_layer(sources: &Sources, layer: &Layer) -> Result<Vec<u8>, Vec<Diagnostic>> {
+    let layers = std::slice::from_ref(layer);
+    let (compiled, diagnostics) = compile(sources, layers);
+    let Some(compiled) = compiled else {
+        return Err(diagnostics);
+    };
+    let all = documents_of(layer, true);
+    let files: Vec<FileId> = all.iter().map(|(_, file)| *file).collect();
+    let documents: Vec<binary::BinaryDocument> = all
+        .iter()
+        .map(|(relative, file)| binary::BinaryDocument {
+            relative: relative.clone(),
+            display: sources.file(*file).name().to_owned(),
+            text: sources.file(*file).text().to_owned(),
+        })
+        .collect();
+    Ok(binary::write_file(
+        &documents,
+        &binary::write_lowered(&compiled.lowered, &files),
+    ))
 }
 
 /// [`compile`], for a layer's `schema.crod` too, which is otherwise left out.
@@ -234,7 +270,7 @@ pub fn compile_schema_documents(
     sources: &Sources,
     layers: &[Layer],
 ) -> (Option<Compiled>, Vec<Diagnostic>) {
-    compile_documents(sources, layers, true)
+    compile_documents(sources, layers, true, &[])
 }
 
 /// A layer's documents in the order they apply, without its `schema.crod`
@@ -253,11 +289,31 @@ fn compile_documents(
     sources: &Sources,
     layers: &[Layer],
     schema: bool,
+    lowered: &[Option<&[u8]>],
 ) -> (Option<Compiled>, Vec<Diagnostic>) {
     let mut diagnostics = Vec::new();
     let mut parses = Vec::new();
+    let mut ir = ir::Ir::default();
+    let mut parts = Vec::new();
+    let mut last_file = None;
     for (layer_index, layer) in layers.iter().enumerate() {
         let documents = documents_of(layer, schema);
+        last_file = documents.last().map(|(_, file)| *file).or(last_file);
+        if let Some(Some(bytes)) = lowered.get(layer_index) {
+            let all = documents_of(layer, true);
+            let files: Vec<FileId> = all.iter().map(|(_, file)| *file).collect();
+            match binary::read_lowered(bytes, &files, sources, layer_index, &mut ir) {
+                Ok(part) => parts.push(part),
+                Err(message) => {
+                    let span = files.first().map_or(Span::detached(), |file| {
+                        Span::new(*file, Default::default())
+                    });
+                    diagnostics.push(Diagnostic::error(span, message));
+                    return (None, diagnostics);
+                }
+            }
+            continue;
+        }
         for pair in documents.windows(2) {
             if pair[0].0 == pair[1].0 {
                 let span = Span::new(pair[1].1, Default::default());
@@ -295,7 +351,10 @@ fn compile_documents(
             index: *index,
         })
         .collect();
-    let (lowered, mut errors) = lower::lower_data(&documents);
+    let (mut lowered, mut errors) = lower::lower_data_over(&documents, ir, parts);
+    if let Some(file) = last_file {
+        lowered.root_span = Span::new(file, Default::default());
+    }
     diagnostics.append(&mut errors);
     if diagnostics.iter().any(Diagnostic::is_error) {
         return (None, diagnostics);

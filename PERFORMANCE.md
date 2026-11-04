@@ -39,6 +39,7 @@ On the development machine, for both the real data and `game`:
 | Evaluate, 10 contexts | 0.7 s, peak 592 MB | 0.61 s, peak 593 MB |
 | One context later (`evaluate_contexts`) | 96 ms | 91 ms |
 | Parse alone | 160 ms, 110 MB | |
+| Compile with the base layer from `.crob` | | 92 ms |
 
 After evaluation, 248 MB stays live on the real data: 124 MB of `Compiled` (the IR and
 the texts) and the values. `big` is at about 245 ms, over its 200 ms target.
@@ -101,10 +102,11 @@ Ideas, roughly by what they may give:
 
 ## Working beside others
 
-`.crob`, a binary form of layers, is being added at the same time. It touches `compile`
-in `crates/crol-eval/src/lib.rs`, `lower.rs`, `ir.rs` and a new `binary.rs`. Stay in
-`eval.rs` and `value.rs` where you can. If you change the types in `ir.rs`, expect to
-rebase, and say so. Work on a branch of your own, `perf/<what>`.
+`.crob`, a binary form of layers, reads and writes every type in `ir.rs`, in
+`crates/crol-eval/src/binary.rs`. If you change those types, change it too, raise
+`binary::FORMAT`, and keep `compiled_layers_evaluate_the_same` passing. `game` checks
+that a compiled layer gives the same fingerprint. Work on a branch of your own,
+`perf/<what>`.
 
 ## What to hand back
 

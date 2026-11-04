@@ -13,8 +13,8 @@ use std::fmt::Write as _;
 use std::time::Instant;
 
 use crol_eval::{
-    DataOptions, Layer, Sources, Variants, compile, evaluate_compiled, evaluate_contexts,
-    fingerprint,
+    DataOptions, Layer, Sources, Variants, binary, compile, compile_binary, encode_layer,
+    evaluate_compiled, evaluate_contexts, fingerprint,
 };
 
 const KEYS: usize = 14_000;
@@ -177,4 +177,30 @@ fn main() {
     let hash = fingerprint::fingerprint(base, &evaluation.contexts, &evaluation.variants);
     let hex: String = hash[..8].iter().map(|b| format!("{b:02x}")).collect();
     println!("fingerprint {hex}");
+
+    // The base layer as a `.crob` file, and the mod over it as text.
+    let start = Instant::now();
+    let bytes = encode_layer(&sources, &layers[0]).expect("the base layer compiles");
+    println!(
+        "encode the base layer: {:?}, {} MB",
+        start.elapsed(),
+        bytes.len() >> 20
+    );
+    let start = Instant::now();
+    let read = binary::read_layer(&bytes).expect("it reads back");
+    let read_time = start.elapsed();
+    let start = Instant::now();
+    let (compiled, diagnostics) = compile_binary(&sources, &layers, &[Some(&read.lowered), None]);
+    println!(
+        "compile from it: {read_time:?} to read, {:?} to link",
+        start.elapsed()
+    );
+    let compiled = compiled.unwrap_or_else(|| panic!("{:?}", diagnostics.first()));
+    let again = evaluate_compiled(&compiled, &options);
+    let same = fingerprint::fingerprint(
+        again.value.as_ref().expect("it evaluates"),
+        &again.contexts,
+        &again.variants,
+    );
+    assert_eq!(same, hash, "a compiled layer evaluates the same");
 }

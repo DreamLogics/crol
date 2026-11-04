@@ -369,6 +369,7 @@ dependencies = [
  "crol-syntax",
  "expect-test",
  "indexmap",
+ "lz4_flex",
 ]
 
 [[package]]
@@ -951,6 +952,12 @@ dependencies = [
  "serde_json",
  "serde_repr",
 ]
+
+[[package]]
+name = "lz4_flex"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ecbdfe44b1bd960b68170b417450a628c43f7cf56bb3c5317e61cb230ee7f226"
 
 [[package]]
 name = "memchr"
