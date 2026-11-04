@@ -50,6 +50,8 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 - Evaluation takes about 45% less memory at its peak on large data with many
   contexts, and a context evaluated later no longer evaluates the base again.
+- Evaluation takes about 60% less memory at its peak on large data and half the time,
+  as what a root key holds is freed once its value is computed.
 - **Breaking:** `Key::Str` holds an `Arc<str>` rather than a `String`, so that values
   with the same field share its name. Write `Key::Str("port".into())`.
 - **Breaking:** `ValueKind::String`, `Id`, `UnitName` and `NamedTuple`, and

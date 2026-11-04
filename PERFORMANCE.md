@@ -31,7 +31,8 @@ sitting. Absolute numbers from elsewhere do not transfer.
 
 ## Where it stands
 
-On the development machine, for both the real data and `game`:
+These are the numbers from before the work below, on the development machine, for
+both the real data and `game`:
 
 | Phase | Real data | `game` |
 | --- | --- | --- |
@@ -44,9 +45,43 @@ On the development machine, for both the real data and `game`:
 After evaluation, 248 MB stays live on the real data: 124 MB of `Compiled` (the IR and
 the texts) and the values. `big` is at about 245 ms, over its 200 ms target.
 
+Since then, on a machine about 1.75 times slower, so compare the columns and not with
+the table above, three runs each:
+
+| `game` and `big` | Before | After |
+| --- | --- | --- |
+| Peak of `evaluate` | 594 MB | 244 MB |
+| Peak of `compile` | 246 MB | 220 MB |
+| Compile | 746 ms | 662 ms |
+| Evaluate, 10 contexts | 1.08 s | 550 ms |
+| One context later | 150 ms | 97 ms |
+| Compile with the base layer from `.crob` | 139 ms | 88 ms |
+| `big` | 443 ms | 255 ms |
+
+`big` at 255 ms here is about 145 ms on the development machine, by that ratio, though
+it has not been measured there. Measured with a counting allocator, 199 MB stays live
+after evaluation: 17 MB of sources, 80 MB of `Compiled`, and 102 MB of values. The peak
+is 36 MB above that.
+
 Already done, so do not look there first: cells of a finished context are freed
 (`Evaluator::forget`), the base is not cloned, `Shape::Keyed` and `ValueKind::Keyed` are
-boxed, and a context evaluated later does not evaluate the base.
+boxed, and a context evaluated later does not evaluate the base. The cells of a root
+key that nothing reads are freed once its value is computed (`Evaluator::full_base`),
+field names and strings are shared, literals have a cell of their own, and a context
+only looks at the keys that can differ.
+
+Freeing a root key's cells is off when any key reads the whole root or another context
+(`evict` in `evaluate_data`), so data that does keeps the old peak. Check that first if
+the peak of the real data is far from that of `game`.
+
+Tried and dropped:
+
+- A faster hasher for `KeyedShape::slots`: no difference in `game`, and `big` was
+  slightly slower.
+- Parsing documents on several threads: compile fell from 655 ms to 445 ms, but with
+  glibc's allocator the peak rose from 262 MB to between 306 and 324 MB, and evaluation
+  slowed by 7%, because memory freed from another thread's arena is not reused. It is
+  worth trying again with another allocator, or if time comes to matter more than memory.
 
 ## Goals, in order
 
@@ -57,31 +92,27 @@ boxed, and a context evaluated later does not evaluate the base.
 
 ## Where the memory is
 
-Roughly 500 bytes for each field while the base is evaluated. These are estimates
-from reading the code, not measurements, so check them first; a counting
-`#[global_allocator]` in a throwaway program gives exact live and peak heap.
+The cells of one root key at a time now, so what they cost matters much less than it
+did, unless freeing them is off (see above). What stays is the live memory, measured
+with a counting `#[global_allocator]` in a throwaway program outside the workspace, as
+`forbid(unsafe_code)` applies to everything in it:
 
-- `Cell`: `RefCell<State>`, `expr`, and `location: Option<Location>`, whose
-  `Location` holds a `Weak`, an anchor, a name and a path, about 48 bytes for what is
-  mostly used for messages (`eval.rs`).
-- `PathLink`: one `Rc` for each location, holding a `Step` with an owned `String` key.
-- `KeyedShape::slots` and `Keyed::entries`: an `IndexMap` with an owned `Key::Str(String)`
-  for every field of every block, cloned per block and per location. `Key` holds an
-  `i128`, which makes it 16-aligned, and `Value` too.
-- `EntryRecipe`: one `Rc` for each entry, kept so that a spread can re-evaluate it.
-- `Evaluator::cells` keeps every cell of the base alive until the end, to break cycles.
+- The values, 102 MB. `Keyed` has a fixed cost for each block, and a map entry takes
+  96 bytes, as `Key` and `Value` are 16-aligned by their `i128`.
+- `Compiled`, 80 MB: expressions are 48 bytes each, `Entry` is 96, and the text of each
+  string literal.
+- `Cell` holds `location: Option<Location>` for messages, one `Rc<PathLink>` each.
+  That no longer matters for memory, but it is the largest allocation left for a literal.
 
 Ideas, roughly by what they may give:
 
-- Intern keys, in the IR and in shapes, instead of owned `String`s. `Key` is public, and
-  breaking it is allowed before 1.0, if the guide and changelog say so.
 - Make `Location` lazy or smaller: derive it for messages rather than store it per cell.
-- Free base cells once nothing can read them. Scalars need no `Cell` at all when they
-  are literals: a slot could hold the value directly.
 - Keep `i128` out of the common case, so that `Value` and `Key` lose their 16-byte
-  alignment.
-- Evaluate and convert a root key at a time, rather than holding every cell and every
-  `Value` at once. Late references make this subtle: read `SPEC.md` 7.5.
+  alignment. `Expr` does this with `Wide`; for `Value` it means changing a public type,
+  for perhaps 15% of the values, by estimate.
+- Lower each document as it is parsed, which would take the peak of `compile` well
+  below that of `evaluate`. Templates are collected from every document first, so
+  this needs two passes.
 - `plan.varying` decides what a context re-evaluates. See if it is wider than it must
   be: `reads.whole` makes every key vary.
 
