@@ -293,7 +293,9 @@ fn schema(input: &DeriveInput) -> syn::Result<TokenStream2> {
         }}
     };
 
-    let source = quote!((::std::string::String::from(::std::file!()), ::std::line!()));
+    // `/` separators on every platform, so that schema files are the same
+    // wherever they are generated.
+    let source = quote!((::std::file!().replace('\\', "/"), ::std::line!()));
     let definition = match &input.data {
         Data::Struct(data) => struct_definition(&attrs, &name, doc, &source, &data.fields)?,
         Data::Enum(data) => {
