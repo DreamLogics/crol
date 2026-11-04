@@ -1012,3 +1012,34 @@ fn go_to_value_below() {
     );
     client.stop();
 }
+
+#[test]
+fn layer_documents_that_name_another_schema_get_a_warning() {
+    let schema = r#"Schema { format: 1, root: "app::Service", types: {} }"#;
+    let dir = workspace(
+        "lsp-other-schema",
+        &[
+            (
+                "project.crol",
+                r#"Project { layers: List([{ name: "base", dir: "base", .. }]), schema: Some("schema"), .. }"#,
+            ),
+            ("schema.crol", schema),
+            ("other.crol", schema),
+            ("base/a.crol", "#![schema(super::other)]\n+a: 1,"),
+        ],
+    );
+    let client = Client::start(&dir);
+    let a = uri(&dir.join("base/a.crol"));
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": a, "languageId": "crol", "version": 1, "text": "#![schema(super::other)]\n+a: 1," } }),
+    );
+    let diagnostics = client.diagnostics_for(&a, |d| !d.is_empty());
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert_eq!(diagnostics[0]["severity"], 2);
+    assert_eq!(
+        diagnostics[0]["message"],
+        "this document names another schema than the project's, which is used instead"
+    );
+    client.stop();
+}

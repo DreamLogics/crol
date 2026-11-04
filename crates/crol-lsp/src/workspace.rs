@@ -210,7 +210,8 @@ pub(crate) fn evaluate(
                 contexts: &snapshot.evaluation.contexts,
                 variants: &snapshot.evaluation.variants,
             };
-            snapshot.extra = crol::check_view(view, schema, snapshot.root_type.as_deref(), &check);
+            let found = crol::check_view(view, schema, snapshot.root_type.as_deref(), &check);
+            snapshot.extra.extend(found);
         }
     }
     // Open documents that are in no layer are evaluated on their own.
@@ -230,7 +231,15 @@ pub(crate) fn evaluate(
         let schema = if is_project_file {
             Some(Ok(crol::schema::build::<Project>()))
         } else {
-            document_schema(text, path, remote, &mut snapshot.remote)
+            // `::` starts from the project's directory, else the
+            // workspace folder, else the document's own (`SPEC.md` 4.2).
+            let root_dir = project_path
+                .as_ref()
+                .and_then(|p| p.parent())
+                .or(root)
+                .or(path.parent())
+                .unwrap_or(Path::new("."));
+            document_schema(text, path, root_dir, remote, &mut snapshot.remote)
         };
         match schema {
             Some(Ok(schema)) => {
@@ -276,11 +285,12 @@ pub(crate) fn evaluate(
 fn document_schema(
     text: &str,
     path: &Path,
+    root: &Path,
     remote: &RemoteStatus,
     wanted: &mut Vec<(String, PathBuf)>,
 ) -> Option<Result<SchemaFile, (crol_syntax::TextRange, String)>> {
     // One named by URL or crate comes from the cache; the server fetches it.
-    let (range, schema_path) = crol::schema::attribute_path(text, path, false)?;
+    let (range, schema_path) = crol::schema::attribute_path(text, path, root, false)?;
     let schema_path = match crol::schema::attribute_remote(text) {
         Some(source) => {
             let key = (
@@ -354,7 +364,39 @@ fn load_project(
         }
         _ => schema_path.map_err(|e| e.to_string()),
     };
-    let schema = match schema_path? {
+    let schema_path = schema_path?;
+    // Every document in a layer should agree with the project's schema.
+    if let Some(schema_path) = &schema_path {
+        let files: Vec<FileId> = snapshot
+            .layers
+            .iter()
+            .flat_map(|l| l.documents.iter().map(|(_, file)| *file))
+            .collect();
+        for file in files {
+            let Some(path) = snapshot.path(file).map(Path::to_path_buf) else {
+                continue;
+            };
+            let text = snapshot.sources.file(file).text();
+            let remote = crol::schema::attribute_remote(text);
+            let disagrees = crol::schema::attribute_disagrees(
+                text,
+                &path,
+                &dir,
+                schema_path,
+                "the project's",
+                false,
+            );
+            if let Some(source) = remote {
+                let dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+                snapshot.remote.push((source, dir));
+            }
+            if let Some((range, message)) = disagrees {
+                let span = crol_eval::Span::new(file, range);
+                snapshot.extra.push(Diagnostic::warning(span, message));
+            }
+        }
+    }
+    let schema = match schema_path {
         Some(path) => Some(SchemaFile::read(&path).map_err(|e| e.to_string())?),
         None => None,
     };

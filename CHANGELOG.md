@@ -88,9 +88,16 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   with `-field` or left out with `..` take, marked `// default`
   (`--no-defaults` turns this off); `crol::fill_defaults` and
   `crol_eval::print::to_document_noted`.
+- A warning for a layer document whose `#![schema(...)]` names another
+  schema than the project's (or `--schema`), in `crol check` and the
+  language server; `crol::schema::attribute_disagrees`.
+- Language server: go to definition on `&` goes to the value below.
 
 ### Fixed
 
+- `#![schema(::path)]` resolves `::` from the root directory (the project
+  file's, else the working directory or workspace folder), and relative
+  paths from the document's directory (`SPEC.md` 4.2).
 - Unterminated string and char literals no longer make evaluation panic.
 - The parser reports tokens it skips while recovering, as in
   `<a * b>`; the formatter used to accept and garble them.
