@@ -56,6 +56,9 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   hover to match. Its globs are specified (`SPEC.md` 12.4), and one with a wrong
   form is an error in the project file. A `.crov` file that names a schema or that
   no glob matches is treated as before.
+- A document on its own keeps its last good evaluation while it does not evaluate,
+  as layers did, so accepting a field fills in its value and hover shows one, saying
+  that it is from the last evaluation. Hover in a layer does this too.
 - `&default` works in `crol` and in the language server, not only through
   `CrolComposer::schema`: they read defaults from the schema they check against
   (`SPEC.md` 6.1.3). `SchemaFile::defaults` gives them to a tool of your own.

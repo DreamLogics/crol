@@ -125,6 +125,9 @@ pub struct Snapshot {
     /// While the layers do not evaluate (as while a document is being
     /// typed): the latest evaluation of them that did, for completion.
     pub last_good: Option<Evaluation>,
+    /// While a document on its own does not evaluate: the latest evaluation
+    /// of it that did, by its path (ids do not outlive a snapshot).
+    last_good_documents: HashMap<PathBuf, Evaluation>,
     /// Documents evaluated on their own, each in the mode its extension
     /// states (`SPEC.md` 4): a name that states none is value mode.
     pub documents: Vec<(FileId, Evaluation)>,
@@ -300,6 +303,43 @@ impl Snapshot {
                 error: load.error.map(|e| e.to_string()),
             })
             .collect()
+    }
+
+    /// The latest evaluation that had a value of a file, if the one it
+    /// belongs to now has none: of the layers, or of a document on its own.
+    pub(crate) fn last_good_of(&self, file: Option<FileId>) -> Option<&Evaluation> {
+        match file {
+            Some(file) if !self.in_layers(file) => self.last_good_documents.get(self.path(file)?),
+            _ => self.last_good.as_ref(),
+        }
+    }
+
+    /// Takes over from `previous` what still stands while something does
+    /// not evaluate: a document being typed mostly does not.
+    pub(crate) fn keep_last_good(&mut self, mut previous: Snapshot) {
+        for (file, evaluation) in std::mem::take(&mut previous.documents) {
+            if evaluation.value.is_some()
+                && let Some(path) = previous.path(file).map(Path::to_path_buf)
+            {
+                previous.last_good_documents.insert(path, evaluation);
+            }
+        }
+        for (file, evaluation) in &self.documents {
+            if evaluation.value.is_none()
+                && let Some(path) = self.path(*file)
+                && let Some(good) = previous.last_good_documents.remove(path)
+            {
+                self.last_good_documents.insert(path.to_path_buf(), good);
+            }
+        }
+        if self.evaluation.value.is_none() {
+            // Better than what is below a layer that did not load, if that
+            // is all there is now.
+            self.last_good = match previous.evaluation.value {
+                Some(_) => Some(previous.evaluation),
+                None => self.last_good.take().or(previous.last_good),
+            };
+        }
     }
 
     /// What the project's `files` say of a value document: the project's
@@ -574,6 +614,7 @@ pub(crate) fn evaluate(
         options: DataOptions::default(),
         evaluation: Evaluation::default(),
         last_good: None,
+        last_good_documents: HashMap::new(),
         documents: Vec::new(),
         extra: Vec::new(),
         schema: None,

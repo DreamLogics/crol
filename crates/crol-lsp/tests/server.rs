@@ -2826,3 +2826,37 @@ fn default_reads_the_schema_of_a_document_on_its_own() {
     client.diagnostics_for(&plain, |d| says(d, "no schema is given"));
     client.stop();
 }
+
+#[test]
+fn a_document_on_its_own_keeps_its_last_good_evaluation() {
+    let text = "#![schema(schema)]\n\n+web: Service { replicas: 7, name: \"w\" }\n";
+    let dir = workspace(
+        "lsp-last-good",
+        &[("schema.crov", DEFAULTS_SCHEMA), ("a.crod", text)],
+    );
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "a.crod");
+    let broken = "#![schema(schema)]\n\n+web: Service { repl|icas: 7, name: 1 / 0 }\n";
+    let hover = buffer.hover(&mut client, broken);
+    assert!(hover.contains("`7`"), "{hover}");
+    assert!(hover.contains("last"), "{hover}");
+
+    // Filling in a field writes its value, not a placeholder.
+    let items = buffer.complete(
+        &mut client,
+        "#![schema(schema)]\n\n+web: Service { name: 1 / 0, rep| }\n",
+    );
+    let replicas = items.iter().find(|i| i["label"] == "replicas").unwrap();
+    assert_eq!(replicas["textEdit"]["newText"], "replicas: 7", "{replicas}");
+    client.stop();
+}
+
+#[test]
+fn a_value_document_keeps_its_last_good_evaluation() {
+    let dir = workspace("lsp-last-good-value", &[("a.crov", "{ port: 80 }\n")]);
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "a.crov");
+    let hover = buffer.hover(&mut client, "{ po|rt: 1 / 0 }\n");
+    assert!(hover.contains("`80`"), "{hover}");
+    client.stop();
+}

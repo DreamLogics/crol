@@ -2455,7 +2455,11 @@ After an edit it parses the edited file again at once (for syntax errors
 and the outline), and re-evaluates everything after a pause in typing
 (default 150 ms), cancelling an evaluation that a newer edit makes stale.
 Requests are answered from the latest finished evaluation, so the
-editor never waits for one. Changes to files on disk, the project file
+editor never waits for one. While a document does not evaluate, as is
+normal in the middle of an edit, hover, completion and the values
+accepting a field fills in come from the latest evaluation that had a value:
+of the project's layers for a file in them, else of that document on its own,
+for as long as it stays open. Hover says so. Changes to files on disk, the project file
 and the schema file are watched: a client that can register watchers is
 asked for every `.crod`, `.crov` and `.crol` file in the workspace, and any
 change, also to an open buffer, evaluates everything again, so a document

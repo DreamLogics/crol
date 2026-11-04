@@ -57,6 +57,9 @@ on the `extends` itself. A `.crod` file with no `extends` only knows itself, so 
 patch to a key from another file has nothing below it. Name what it builds on, or
 list your layers in `project.crov`.
 
+While a file does not evaluate, as in the middle of an edit, hover and completion
+use the last evaluation that did. Hover says so.
+
 A layer that does not load does not stop the others, as it does for `crol check`.
 A wrong file in a layer, such as a `.crov` or a `.crol` file, is reported on that
 file and left out, and the rest of the layer loads. A layer that cannot be read at

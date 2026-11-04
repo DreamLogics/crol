@@ -415,7 +415,7 @@ pub(crate) fn value_at(
 }
 
 /// The evaluation a document belongs to, else the project's; while that
-/// has no value, the latest of the project's that had one.
+/// has no value, the latest of the same that had one.
 pub(crate) fn evaluation_for(
     snapshot: &Snapshot,
     file: Option<crol_eval::FileId>,
@@ -423,9 +423,9 @@ pub(crate) fn evaluation_for(
     let evaluation = file
         .and_then(|f| snapshot.evaluation_of(f))
         .unwrap_or(&snapshot.evaluation);
-    match (&evaluation.value, &snapshot.last_good) {
-        (None, Some(good)) if file.is_none_or(|f| snapshot.in_layers(f)) => good,
-        _ => evaluation,
+    match &evaluation.value {
+        None => snapshot.last_good_of(file).unwrap_or(evaluation),
+        Some(_) => evaluation,
     }
 }
 
@@ -505,8 +505,16 @@ pub(crate) fn hover(
     } else {
         format!(" in {{{}}}", settings.context.join(", "))
     };
-    let mut markdown = match value_at(snapshot, file, &key, &steps, &settings.context) {
-        Some(value) => format!("**{described}**{in_context}: {}", show(&value)),
+    let current = snapshot
+        .evaluation_of(file)
+        .is_some_and(|e| e.value.is_some());
+    let evaluation = evaluation_for(snapshot, Some(file));
+    let mut markdown = match value_in(evaluation, &key, &steps, &settings.context) {
+        Some(value) if current => format!("**{described}**{in_context}: {}", show(&value)),
+        Some(value) => format!(
+            "**{described}**{in_context}: {} (at the last evaluation that had a value)",
+            show(&value)
+        ),
         None => format!("**{described}**{in_context}: no value"),
     };
     // The type and doc from the schema.

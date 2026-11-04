@@ -449,15 +449,8 @@ impl Server {
         if self.settings.remote_schemas && self.fetcher.fetch(&snapshot.remote) {
             snapshot = evaluate(&self.fetcher.status());
         }
-        if snapshot.evaluation.value.is_none()
-            && let Some(previous) = self.snapshot.take()
-        {
-            // Better than what is below a layer that did not load, if
-            // that is all there is now.
-            snapshot.last_good = match previous.evaluation.value {
-                Some(_) => Some(previous.evaluation),
-                None => snapshot.last_good.take().or(previous.last_good),
-            };
+        if let Some(previous) = self.snapshot.take() {
+            snapshot.keep_last_good(previous);
         }
         let by_file = snapshot.diagnostics(self.encoding);
         let mut published = HashSet::new();
