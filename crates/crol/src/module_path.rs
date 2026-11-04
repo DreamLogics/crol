@@ -23,8 +23,12 @@ pub(crate) fn resolve(
     if module_path.starts_with("::") && supers > 0 {
         return Err(invalid("`super` cannot follow `::`"));
     }
+    // The same directory may be written two ways, as `\\?\C:\x` and `C:/x`.
+    let canonical = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let within =
+        |base: &Path| base.starts_with(root) || canonical(base).starts_with(canonical(root));
     for _ in 0..supers {
-        if !base.pop() || !base.starts_with(root) {
+        if !base.pop() || !within(&base) {
             return Err(Error::new(format!(
                 "the module path `{module_path}` goes above the root directory {}",
                 root.display()
