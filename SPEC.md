@@ -2149,6 +2149,7 @@ field, instead of checking them by other rules.
 | `crol fmt [--check] <file>...` | format files in place (or check) |
 | `crol fingerprint [<layer>...]` | print the fingerprint in hex |
 | `crol from-ron <file>` | convert a RON value file to a CROL value document |
+| `crol --init`, `crol init` | set up the Cargo project around the working directory for CROL (below) |
 | `crol lsp` | run the language server on standard input and output (section 12.5) |
 
 Common flags: `--discrete a,b`, `--group a,b,c` (repeatable), `--parent child=parent`, `--color auto|always|never`,
@@ -2156,6 +2157,18 @@ Common flags: `--discrete a,b`, `--group a,b,c` (repeatable), `--parent child=pa
 `--offline` (section 4.1).
 Without layer arguments, every command that needs layers reads them, with
 the variants and options, from the project file.
+
+`crol --init` looks for `Cargo.toml` in the working directory, then in
+the directories above it; the nearest is the Cargo project. Next to it,
+it writes a commented, formatted project file (section 12.4) with one
+layer, `base`, in `data::base`, and creates that directory with a
+document `main.crol` holding only comments, unless that file exists, so
+that every command works at once and the layer survives version control.
+It then prints what is left to do; it changes no manifest or source
+file. It is an error, exit 1, with nothing written, when there is no
+`Cargo.toml`, when `project.crol` exists there (it is never overwritten),
+or when `data/base.crol` exists (the module path would be ambiguous,
+section 4.2). `--init` takes no command.
 
 ---
 

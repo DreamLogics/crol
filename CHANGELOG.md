@@ -108,6 +108,8 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   `CrolConfig::file_loaders`, `FileLoaders`, `ResolvedSource`, `SourceId`
   and `CrolError::source_id`. Exhaustive `CrolConfig` literals need the new
   field. The language server's open buffers are a file loader now.
+- `crol --init` (or `crol init`) sets up a Cargo project: a `project.crol`
+  next to `Cargo.toml` and a first layer in `data/base` (`SPEC.md` 11).
 
 ### Fixed
 

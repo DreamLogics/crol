@@ -9,16 +9,18 @@ mod explain;
 mod fingerprint;
 mod fmt;
 mod from_ron;
+mod init;
 mod layers;
 mod ron;
 
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::error::ErrorKind;
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 
 /// Check, evaluate, format and explain CROL data.
 #[derive(Debug, Parser)]
-#[command(name = "crol", version)]
+#[command(name = "crol", version, arg_required_else_help = true)]
 struct Cli {
     /// When to use colours in diagnostics.
     #[arg(long, value_enum, default_value_t = ColorWhen::Auto, global = true)]
@@ -29,8 +31,13 @@ struct Cli {
     #[arg(long, value_enum, default_value_t = MessageFormat::Human, global = true)]
     message_format: MessageFormat,
 
+    /// Set up the Cargo project around the current directory: write
+    /// `project.crol` and a first layer. The same as `crol init`.
+    #[arg(long)]
+    init: bool,
+
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -61,6 +68,9 @@ enum Command {
     Fmt(fmt::Args),
     /// Convert a RON value file to a CROL value document, on standard output.
     FromRon(from_ron::Args),
+    /// Set up the Cargo project around the current directory: write
+    /// `project.crol` and a first layer.
+    Init,
     /// Run the language server on standard input and output.
     Lsp,
 }
@@ -68,13 +78,24 @@ enum Command {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let mut reporter = diagnostics::Reporter::new(cli.color, cli.message_format);
-    let ok = match cli.command {
+    let command = match (cli.init, cli.command) {
+        (false, Some(command)) => command,
+        (true, None) => Command::Init,
+        (true, Some(_)) => Cli::command()
+            .error(ErrorKind::ArgumentConflict, "`--init` takes no command")
+            .exit(),
+        (false, None) => Cli::command()
+            .error(ErrorKind::MissingSubcommand, "a command is required")
+            .exit(),
+    };
+    let ok = match command {
         Command::Check(args) => check::run(&args, &mut reporter),
         Command::Eval(args) => eval::run(&args, &mut reporter),
         Command::Explain(args) => explain::run(&args, &mut reporter),
         Command::Fingerprint(args) => fingerprint::run(&args, &mut reporter),
         Command::Fmt(args) => fmt::run(&args, &mut reporter),
         Command::FromRon(args) => from_ron::run(&args, &mut reporter),
+        Command::Init => init::run(&mut reporter),
         Command::Lsp => match crol_lsp::serve_stdio() {
             Ok(()) => true,
             Err(error) => {
