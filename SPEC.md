@@ -1853,7 +1853,7 @@ defaults and ends those blocks with `..`, so it stays readable.
 | Command | Does |
 |---|---|
 | `crol check [<layer>...]` | read and evaluate the layers (each `name=source` or a source, named after it, where a source is a module path (section 4.2) or a file system path, the module path if both name something; without any, those of the project file, section 12.4); check them against the schema if one is given or configured; print diagnostics; exit 1 on errors |
-| `crol eval [<layer>...] [--context a,b] [key[.path]]` | print evaluated data as a plain data-mode document (or one value) |
+| `crol eval [<layer>...] [--context a,b] [key[.path]]` | print evaluated data as a plain data-mode document (or one value); with a schema, struct fields that take their defaults are written out with the defaults the schema records, each marked `// default` (`--no-defaults` leaves them as the data does) |
 | `crol eval [<layer>...] --all-contexts` | print the base data, then for every other evaluated context a block `<a & b & !c & ...> { ... }` whose condition holds in that context only, with the keys whose value differs (`key: value`) or that are missing (`-key`). The output is valid CROL and evaluates back to the same data |
 | `crol explain [<layer>...] [--context a,b] key.path` | print the operations that produced a value (section 12.3) |
 | `crol fmt [--check] <file>...` | format files in place (or check) |

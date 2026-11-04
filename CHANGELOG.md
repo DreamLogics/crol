@@ -82,6 +82,10 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   feature of `crol` (on by default in `crol-cli` and `crol-lsp`): fetched
   over HTTPS and cached; the language server's `remote_schemas` setting
   and `crol --offline` turn fetching off. `crate:crol` is built in.
+- `crol eval` with a schema writes out the defaults that fields removed
+  with `-field` or left out with `..` take, marked `// default`
+  (`--no-defaults` turns this off); `crol::fill_defaults` and
+  `crol_eval::print::to_document_noted`.
 
 ### Fixed
 

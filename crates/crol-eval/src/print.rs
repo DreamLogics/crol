@@ -12,11 +12,30 @@ use crate::variants::Variants;
 /// a type name is written as entries, without outer braces.
 pub fn to_document(value: &Value, config: &FormatConfig) -> String {
     let mut text = String::new();
-    write_value(&mut text, value);
+    write_value(&mut text, value, None);
     match format(&text, config) {
         Ok(formatted) => formatted,
         // The printer writes valid syntax; if it ever does not, the
         // unformatted text still says what the value is.
+        Err(_) => text + "\n",
+    }
+}
+
+/// What a printer says about an entry's value, as a comment after it:
+/// `limits: Limits { .. }, // default`.
+pub type Note<'a> = Option<&'a dyn Fn(&Value) -> Option<String>>;
+
+/// [`to_document`], with a comment after each entry `note` says something
+/// about.
+pub fn to_document_noted(
+    value: &Value,
+    config: &FormatConfig,
+    note: &dyn Fn(&Value) -> Option<String>,
+) -> String {
+    let mut text = String::new();
+    write_value(&mut text, value, Some(note));
+    match format(&text, config) {
+        Ok(formatted) => formatted,
         Err(_) => text + "\n",
     }
 }
@@ -37,7 +56,7 @@ pub fn to_all_contexts(
         for (key, value) in &keyed.entries {
             write_key(&mut text, key);
             text.push_str(": ");
-            write_value(&mut text, value);
+            write_value(&mut text, value, None);
             text.push_str(",\n");
         }
     }
@@ -55,7 +74,7 @@ pub fn to_all_contexts(
                 Some(value) => {
                     write_key(&mut body, key);
                     body.push_str(": ");
-                    write_value(&mut body, value);
+                    write_value(&mut body, value, None);
                 }
             }
             body.push_str(",\n");
@@ -82,11 +101,11 @@ pub fn to_all_contexts(
 /// Writes a value on one line, unformatted.
 pub fn to_text(value: &Value) -> String {
     let mut text = String::new();
-    write_value(&mut text, value);
+    write_value(&mut text, value, None);
     text
 }
 
-fn write_value(out: &mut String, value: &Value) {
+fn write_value(out: &mut String, value: &Value, note: Note<'_>) {
     match &value.kind {
         ValueKind::Unit => out.push_str("()"),
         ValueKind::Bool(b) => {
@@ -106,12 +125,12 @@ fn write_value(out: &mut String, value: &Value) {
         }
         ValueKind::List(elements) => {
             out.push('[');
-            write_elements(out, elements);
+            write_elements(out, elements, note);
             out.push(']');
         }
         ValueKind::Tuple(elements) => {
             out.push('(');
-            write_elements(out, elements);
+            write_elements(out, elements, note);
             if elements.len() == 1 {
                 out.push(',');
             }
@@ -121,7 +140,7 @@ fn write_value(out: &mut String, value: &Value) {
         ValueKind::NamedTuple(name, elements) => {
             out.push_str(name);
             out.push('(');
-            write_elements(out, elements);
+            write_elements(out, elements, note);
             out.push(')');
         }
         ValueKind::Keyed(keyed) => {
@@ -130,28 +149,34 @@ fn write_value(out: &mut String, value: &Value) {
                 out.push(' ');
             }
             out.push('{');
-            let mut first = true;
-            let mut separator = |out: &mut String| {
-                if !std::mem::take(&mut first) {
+            // Whether the next entry needs a `, ` before it.
+            let mut after_entry = false;
+            let separator = |out: &mut String, after_entry: &mut bool| {
+                if std::mem::replace(after_entry, true) {
                     out.push_str(", ");
                 }
             };
             for (key, value) in &keyed.entries {
-                separator(out);
+                separator(out, &mut after_entry);
                 write_key(out, key);
                 out.push_str(": ");
-                write_value(out, value);
+                write_value(out, value, note);
+                // A note is a comment after the entry, which breaks the block.
+                if let Some(text) = note.and_then(|note| note(value)) {
+                    let _ = writeln!(out, ", // {text}");
+                    after_entry = false;
+                }
             }
             // A defaulted field is one removed with `-field`; it must exist
             // to be removed.
             for key in &keyed.defaulted {
-                separator(out);
+                separator(out, &mut after_entry);
                 write_key(out, key);
                 out.push_str(": (), -");
                 write_key(out, key);
             }
             if keyed.defaults {
-                separator(out);
+                separator(out, &mut after_entry);
                 out.push_str("..");
             }
             out.push('}');
@@ -163,11 +188,11 @@ fn write_key(out: &mut String, key: &Key) {
     let _ = write!(out, "{key}");
 }
 
-fn write_elements(out: &mut String, elements: &[Value]) {
+fn write_elements(out: &mut String, elements: &[Value], note: Note<'_>) {
     for (i, element) in elements.iter().enumerate() {
         if i > 0 {
             out.push_str(", ");
         }
-        write_value(out, element);
+        write_value(out, element, note);
     }
 }

@@ -292,3 +292,62 @@ fn check_uses_the_schema_a_document_names() {
         "{stderr}"
     );
 }
+
+#[test]
+fn eval_shows_the_defaults_fields_take() {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("eval-defaults");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("schema.crol"),
+        r#"Schema {
+            format: 1,
+            root: "app::Service",
+            types: {
+                "app::Service": Struct {
+                    name: "Service",
+                    source: ("src/lib.rs", 1),
+                    fields: {
+                        replicas: { ty: U32, default: Value(1), .. },
+                        image: { ty: String, .. },
+                        tags: { ty: List(String), default: Unrecorded, .. },
+                    },
+                    ..
+                },
+            },
+        }"#,
+    )
+    .unwrap();
+    let data = dir.join("data.crol");
+    std::fs::write(
+        &data,
+        "+web: Service { image: \"w\", .. },\n\
+         +db: Service { image: \"d\", replicas: 2, tags: [] },\n\
+         db: & ~ { -replicas },\n",
+    )
+    .unwrap();
+    let schema = dir.join("schema.crol");
+    let eval = |extra: &[&str]| {
+        let mut args = vec![
+            "eval",
+            data.to_str().unwrap(),
+            "--schema",
+            schema.to_str().unwrap(),
+        ];
+        args.extend(extra);
+        let output = crol(&args);
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+    // A default the schema does not record stays left out, with `..`.
+    assert_eq!(
+        eval(&[]),
+        "web: Service {\n    image: \"w\",\n    replicas: 1, // default\n    ..,\n},\n\
+         db: Service {\n    image: \"d\",\n    tags: [],\n    replicas: 1, // default\n},\n"
+    );
+    assert_eq!(
+        eval(&["--no-defaults"]),
+        "web: Service { image: \"w\", .. },\n\
+         db: Service { image: \"d\", tags: [], replicas: (), -replicas },\n"
+    );
+}

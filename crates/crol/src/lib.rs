@@ -40,6 +40,7 @@ mod check;
 mod compose;
 mod de;
 mod error;
+mod fill;
 mod id;
 mod module_path;
 pub mod project;
@@ -60,6 +61,7 @@ pub use compose::{
 pub use crol_eval::{ExplainStep, StepKind, VariantKeys};
 pub use crol_eval::{Key, Keyed, Sources, Span, Value, ValueKind};
 pub use error::Error;
+pub use fill::{fill_defaults, fill_defaults_value};
 
 /// The error type of `crol`, as the specification names it.
 pub type CrolError = Error;
