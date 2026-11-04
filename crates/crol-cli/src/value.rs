@@ -128,7 +128,7 @@ fn root_directory(args: &InputArgs) -> Result<PathBuf, String> {
         None => Project::find(&working).map_err(|e| e.to_string())?,
     };
     Ok(project
-        .and_then(|p| p.parent().map(Path::to_path_buf))
+        .map(|p| crol::directory_of(&p).to_path_buf())
         .unwrap_or(working))
 }
 

@@ -436,7 +436,7 @@ pub fn attribute_path(
         _ => None,
     })?;
     let range = attr.syntax().text_range();
-    let dir = document.parent().unwrap_or(Path::new("."));
+    let dir = crate::directory_of(document);
     let Some(module_path) = attr.module_path() else {
         let source = attr
             .string()

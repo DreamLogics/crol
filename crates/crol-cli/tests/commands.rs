@@ -113,6 +113,144 @@ fn a_diagnostic_about_no_place_has_no_file() {
     assert!(stdout(&output).contains("\"file\":null"), "{output:?}");
 }
 
+// ---- Bare file names (`SPEC.md` 4.1, 4.2) ----
+
+/// A Cargo package that publishes a schema, with a data file in it.
+const FLEET: &[(&str, &str)] = &[
+    (
+        "Cargo.toml",
+        "[package]\nname = \"fleet\"\nversion = \"1.2.0\"\nedition = \"2021\"\n\n\
+         [lib]\npath = \"lib.rs\"\n\n[package.metadata.crol]\nschema = \"fleet.crov\"\n\n\
+         [workspace]\n",
+    ),
+    ("lib.rs", ""),
+    (
+        "fleet.crov",
+        r#"Schema {
+            format: 1,
+            root: "app::Service",
+            types: {
+                "app::Service": Struct {
+                    name: "Service",
+                    source: ("lib.rs", 1),
+                    fields: { replicas: { ty: U32, .. } },
+                    ..
+                },
+            },
+        }"#,
+    ),
+    (
+        "x.crod",
+        "#![schema(\"crate:fleet\")]\n+web: Service { replicas: -2 }\n",
+    ),
+    (
+        "sub/x.crod",
+        "#![schema(\"crate:fleet\")]\n+web: Service { replicas: -2 }\n",
+    ),
+];
+
+/// The schema was found: what is wrong is the data.
+fn schema_error(output: &Output) -> bool {
+    failed(output) && stderr(output).contains("-2") && !stderr(output).contains("not cached")
+}
+
+#[test]
+fn a_crate_schema_is_found_for_a_bare_file_name() {
+    let dir = tree("crate-bare", FLEET);
+    for name in ["x.crod", "./x.crod", "sub/x.crod", "./sub/x.crod"] {
+        let output = crol(&dir, &["check", "--offline", name]);
+        assert!(schema_error(&output), "{name}: {output:?}");
+    }
+}
+
+#[test]
+fn a_crate_schema_is_found_from_a_directory_below_the_package() {
+    let dir = tree("crate-below", FLEET);
+    for name in ["x.crod", "./x.crod"] {
+        let output = crol(&dir.join("sub"), &["check", "--offline", name]);
+        assert!(schema_error(&output), "{name}: {output:?}");
+    }
+    let output = crol(&dir.join("sub"), &["check", "--offline", "../x.crod"]);
+    assert!(schema_error(&output), "{output:?}");
+}
+
+#[test]
+fn a_crate_schema_of_a_project_given_by_its_bare_file_name() {
+    let dir = tree("crate-project", FLEET);
+    std::fs::create_dir(dir.join("data")).unwrap();
+    std::fs::write(dir.join("data/a.crod"), "+web: Service { replicas: -2 }\n").unwrap();
+    std::fs::write(
+        dir.join("project.crov"),
+        "Project { layers: List([{ name: \"base\", dir: \"data\", .. }]), \
+         schema: Some(\"crate:fleet\"), .. }",
+    )
+    .unwrap();
+    let output = crol(
+        &dir,
+        &["check", "--offline", "--project", "project.crov", "./data"],
+    );
+    assert!(schema_error(&output), "{output:?}");
+}
+
+#[test]
+fn a_layer_command_runs_for_a_project_given_by_its_bare_file_name() {
+    let dir = tree(
+        "command-project",
+        &[
+            (
+                "project.crov",
+                "Project { layers: Command([\"cat\", \"layers.crov\"]), .. }",
+            ),
+            ("layers.crov", "[{ name: \"base\", dir: \"data\", .. }]"),
+            ("data/a.crod", "+a: 1\n"),
+        ],
+    );
+    let output = crol(&dir, &["eval", "--project", "project.crov"]);
+    assert_eq!(stdout(&output).trim(), "a: 1", "{output:?}");
+}
+
+#[test]
+fn super_works_from_a_relative_path() {
+    let dir = tree(
+        "super-relative",
+        &[
+            ("y.crod", "+y: 1\n"),
+            ("sub/z.crod", "#![extends(super::y)]\n+z: 1\n"),
+        ],
+    );
+    for name in ["sub/z.crod", "./sub/z.crod"] {
+        let output = crol(&dir, &["eval", name]);
+        assert_eq!(stdout(&output), "y: 1\nz: 1\n", "{name}: {output:?}");
+    }
+    // Above the root, here the working directory, is still an error.
+    let output = crol(&dir.join("sub"), &["eval", "z.crod"]);
+    assert!(failed(&output), "{output:?}");
+    assert!(stderr(&output).contains("above the root"), "{output:?}");
+    let output = crol(&dir.join("sub"), &["eval", "./z.crod"]);
+    assert!(failed(&output), "{output:?}");
+    assert!(stderr(&output).contains("above the root"), "{output:?}");
+}
+
+#[test]
+fn an_extends_that_fails_is_reported() {
+    let dir = tree(
+        "extends-errors",
+        &[
+            ("missing.crod", "#![extends(nothing)]\n+a: 1\n"),
+            ("loop_a.crod", "#![extends(loop_b)]\n+a: 1\n"),
+            ("loop_b.crod", "#![extends(loop_a)]\n+b: 1\n"),
+        ],
+    );
+    for command in ["check", "eval", "fingerprint"] {
+        let output = crol(&dir, &[command, "missing.crod"]);
+        assert!(failed(&output), "{command}: {output:?}");
+        assert!(stderr(&output).contains("names nothing"), "{output:?}");
+        let output = crol(&dir, &[command, "loop_a.crod"]);
+        assert!(failed(&output), "{command}: {output:?}");
+        assert!(stderr(&output).contains("cycle"), "{output:?}");
+    }
+}
+
 // ---- Layers and keys (`SPEC.md` 11) ----
 
 const PROJECT: &str = "Project { layers: List([{ name: \"base\", dir: \"data\", .. }]), .. }";

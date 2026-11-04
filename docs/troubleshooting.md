@@ -211,10 +211,9 @@ the document, or make it agree.
 
 **`` schema: `fleet` is not cached, and fetching schemas is off ``**
 
-`--offline`, or `remote_schemas: false`, stops `crol` from fetching. If the crate
-is in your own Cargo workspace, this can also appear when you pass a file name
-without a directory: `crol check ./config.crod` works where
-`crol check config.crod` does not. A project file does not have this problem.
+`--offline`, or `remote_schemas: false`, stops `crol` from fetching. Without
+fetching, a crate has to be in your own Cargo workspace, among its dependencies,
+or in Cargo's registry cache.
 
 ## Warnings
 

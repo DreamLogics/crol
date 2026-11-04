@@ -13,6 +13,7 @@ use semver::{Version, VersionReq};
 
 use crate::error::Error;
 use crate::mode::Mode;
+use crate::module_path::current_if_empty;
 
 /// How long a request may take.
 #[cfg(any(feature = "remote-schemas", feature = "remote-schemas-async"))]
@@ -329,6 +330,8 @@ fn same_name(a: &str, b: &str) -> bool {
 /// The schema of the highest matching package `cargo metadata` lists, for
 /// a directory in a Cargo workspace.
 fn in_workspace(name: &str, req: &VersionReq, dir: &Path) -> Option<Result<PathBuf, Error>> {
+    // A relative path has no ancestors above where it starts.
+    let dir = std::path::absolute(current_if_empty(dir)).ok()?;
     if !dir.ancestors().any(|d| d.join("Cargo.toml").is_file()) {
         return None;
     }
@@ -337,7 +340,7 @@ fn in_workspace(name: &str, req: &VersionReq, dir: &Path) -> Option<Result<PathB
         let output = Command::new(&cargo)
             .args(["metadata", "--format-version", "1", "--offline"])
             .args(extra)
-            .current_dir(dir)
+            .current_dir(&dir)
             .stdin(Stdio::null())
             .stderr(Stdio::null())
             .output()

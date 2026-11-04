@@ -58,6 +58,23 @@ pub(crate) fn above_root(module_path: &str, root: &Path) -> Error {
     ))
 }
 
+/// A directory as something to run or look in: the empty path, which is what
+/// [`Path::parent`] gives for a bare file name, is the working directory.
+pub(crate) fn current_if_empty(dir: &Path) -> &Path {
+    if dir.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        dir
+    }
+}
+
+/// The directory `path` is in, also for a bare file name, whose parent is the
+/// empty path, which [`std::process::Command::current_dir`] and
+/// [`Path::ancestors`] do not take for the working directory.
+pub fn directory_of(path: &Path) -> &Path {
+    current_if_empty(path.parent().unwrap_or(Path::new("")))
+}
+
 /// Resolves a module path to the file (`name.crod`, or `name.crov` for a
 /// value document) or directory (`name/`) it names. `here` is the directory
 /// of the document the path is written in; code passes `None`, and relative
@@ -69,10 +86,16 @@ pub(crate) fn resolve(
     mode: Mode,
 ) -> Result<PathBuf, Error> {
     let parsed = parse(module_path)?;
+    let root = current_if_empty(root);
     let mut base = match (parsed.rooted, here) {
         (false, Some(here)) => here.to_path_buf(),
         _ => root.to_path_buf(),
     };
+    // A relative path does not spell out the directories `super` goes up to.
+    if parsed.supers > 0 && base.is_relative() {
+        let dir = current_if_empty(&base);
+        base = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    }
     // The same directory may be written two ways, as `\\?\C:\x` and `C:/x`.
     let canonical = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
     let within =
@@ -193,6 +216,15 @@ mod tests {
                 .contains("not an identifier")
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_bare_file_name_is_in_the_working_directory() {
+        assert_eq!(directory_of(Path::new("x.crod")), Path::new("."));
+        assert_eq!(directory_of(Path::new("")), Path::new("."));
+        assert_eq!(directory_of(Path::new("./x.crod")), Path::new("."));
+        assert_eq!(directory_of(Path::new("a/x.crod")), Path::new("a"));
+        assert_eq!(directory_of(Path::new("/x.crod")), Path::new("/"));
     }
 
     #[test]

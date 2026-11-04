@@ -159,6 +159,13 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   its `file`, `line` and `column` are `null` (`SPEC.md` 7.7). `Sources::get` is
   new, and `Sources::location` and `Diagnostic::display` accept a detached span.
 - `crol_eval::parse_path` refuses text that only holds a path, such as `+a`.
+- A bare file name is in the working directory: `crol check x.crod` finds a
+  `crate:` schema as `./x.crod` does, also from below the Cargo package, and so
+  does `--project project.crov`, whose layer command runs too. `super::` works
+  from a relative path, such as `crol check sub/x.crod`. `crol::directory_of` is
+  new.
+- The command line reports an `extends` that fails. It dropped the layer and went
+  on, so a cycle of `extends` printed nothing and exited with status 0.
 - The documents of a directory layer, and so the order of the `extends`
   they load, no longer depend on the order the platform lists files in
   (`SPEC.md` 7.1).

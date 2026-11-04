@@ -149,9 +149,8 @@ pub(crate) fn inputs(
         _ => None,
     };
     let project_dir = project_path
-        .as_ref()
-        .and_then(|p| p.parent())
-        .map(Path::to_path_buf)
+        .as_deref()
+        .map(|p| crol::directory_of(p).to_path_buf())
         .unwrap_or_default();
 
     // The root directory module paths start from (`SPEC.md` 4.2).
@@ -197,8 +196,12 @@ pub(crate) fn inputs(
                     );
                 }
             };
-            match source.load(layer.name.clone()) {
-                Ok(loaded) => composer = composer.load_layer(loaded),
+            // `load`, not `load_layer`: a failed `extends` is to be reported.
+            match source
+                .load(layer.name.clone())
+                .and_then(|loaded| composer.load(loaded))
+            {
+                Ok(loaded) => composer = loaded,
                 Err(error) => return fail(reporter, error.to_string()),
             }
         }
@@ -215,14 +218,12 @@ pub(crate) fn inputs(
             Some(Err(error)) if !Path::new(source).exists() => Err(error),
             _ => Path::new(source).load(&config),
         };
-        match layer {
-            Ok(layer) => {
-                let layer = match name {
-                    Some(name) => layer.with_name(name),
-                    None => layer,
-                };
-                composer = composer.load_layer(layer);
-            }
+        let named = layer.map(|layer| match name {
+            Some(name) => layer.with_name(name),
+            None => layer,
+        });
+        match named.and_then(|layer| composer.load(layer)) {
+            Ok(loaded) => composer = loaded,
             Err(error) => return fail(reporter, error.to_string()),
         }
     }

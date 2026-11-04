@@ -167,7 +167,7 @@ impl Project {
                     .ok_or_else(|| Error::new("project: the layer command is empty"))?;
                 let output = std::process::Command::new(program)
                     .args(arguments)
-                    .current_dir(dir)
+                    .current_dir(crate::module_path::current_if_empty(dir))
                     .output()
                     .map_err(|e| Error::new(format!("project: cannot run `{program}`: {e}")))?;
                 if !output.status.success() {

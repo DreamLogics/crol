@@ -528,6 +528,10 @@ platform.
 | `defaults::services` | the directory of the document it is written in; in code, the root directory |
 | `super::defaults::services` | the parent of that directory; `super` may repeat (`super::super::x`), only at the start |
 
+A document given by a bare file name (`x.crod`) is in the working
+directory, as `./x.crod` is, here and for what is looked up from a
+document's directory, such as a `crate:` schema (section 4.1).
+
 Every segment but the last names a directory. A module path has no
 extension: what it is resolved for says which one its last segment has.
 

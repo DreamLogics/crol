@@ -359,6 +359,8 @@ pub fn from_value<T: for<'de> Deserialize<'de>>(value: &Value, sources: &Sources
     deserialize(value, sources, de::Options::default(), None).map(|(value, _)| value)
 }
 
+pub use module_path::directory_of;
+
 /// Deserializes `value`, which is at the root key `key` if given, for the
 /// paths in errors.
 /// Resolves a module path (`SPEC.md` 4.2) to the file or directory it names.
