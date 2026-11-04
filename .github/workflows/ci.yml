@@ -104,3 +104,29 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # Checks that every publishable crate packages and builds on its own.
       - run: cargo package --workspace
+
+  grammar:
+    name: Tree-sitter grammar
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/cache-cargo-install-action@v2
+        with:
+          tool: tree-sitter-cli@0.25.10
+      - name: The generated parser is up to date
+        working-directory: tree-sitter-crol
+        run: |
+          tree-sitter generate
+          git diff --exit-code src/
+      - name: Corpus tests
+        working-directory: tree-sitter-crol
+        run: tree-sitter test
+      - name: The grammar and the Rust parser agree (SPEC.md 12.6)
+        working-directory: tree-sitter-crol
+        run: ./check-corpus.sh
+      - name: The Zed extension's queries are the grammar's
+        run: |
+          for query in highlights brackets indents outline textobjects; do
+            diff -u "tree-sitter-crol/queries/$query.scm" "editors/zed/languages/crol/$query.scm"
+          done
