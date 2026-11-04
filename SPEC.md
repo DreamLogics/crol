@@ -2211,7 +2211,7 @@ field, instead of checking them by other rules.
 | `crol check [<layer>...]` | read and evaluate the layers (each `name=source` or a source, named after it, where a source is a module path (section 4.2) or a file system path, the module path if both name something; without any, those of the project file, section 12.4), or one value document (below); check them against the schema if one is given or configured; print diagnostics; exit 1 on errors |
 | `crol eval [<layer>...] [--context a,b] [key[.path]]` | print evaluated data as a plain data-mode document (or one value); with a schema, struct fields that take their defaults are written out with the defaults the schema records, each marked `// default` (`--no-defaults` leaves them as the data does) |
 | `crol eval [<layer>...] --all-contexts` | print the base data, then for every other evaluated context a block `<a & b & !c & ...> { ... }` whose condition holds in that context only, with the keys whose value differs (`key: value`) or that are missing (`-key`). The output is valid CROL and evaluates back to the same data |
-| `crol explain [<layer>...] [--context a,b] key.path` | print the operations that produced a value (section 12.3) |
+| `crol explain [<layer>...] [--context a,b] key[.path]` | print the operations that produced a value (section 12.3) |
 | `crol fmt [--check] <file>...` | format `.crod` and `.crov` files in place (or check). Formatting does not depend on the mode (section 12.2). A `.crol` file is an error that offers both extensions; it takes files, so a directory is an error too |
 | `crol fingerprint [<layer>...]` | print the fingerprint in hex |
 | `crol from-ron <file>` | convert a RON value file to a CROL value document, on standard output, to keep in a `.crov` file |
@@ -2223,6 +2223,25 @@ Common flags: `--discrete a,b`, `--group a,b,c` (repeatable), `--parent child=pa
 `--offline` (section 4.1).
 Without layer arguments, every command that needs layers reads them, with
 the variants and options, from the project file.
+
+**Layers and keys.** `eval` and `explain` take a key after the layers, so
+their last argument is told apart by its form alone, never by what exists
+on disk, and a command means the same wherever it is run. It is a key if
+it has the form of a key with its path (section 5.1: `web`, `web.port`,
+`web.tags[0]`, `web["a b"]`) and does not end in `.crod`, `.crov` or
+`.crol`. Anything else, such as `data::base`, `./base`, `data/base`,
+`a.crod` or `base=data/base`, is a layer. Every argument before the last is
+a layer. So:
+
+- `crol eval web.port` in a project prints that value of the project's
+  data, and `crol eval data/base web.port` that value of the layer.
+- A bare name in the last place is a key. A layer there is written
+  `./base` or `::base`; `crol check` and `crol fingerprint` take no key,
+  and read `base` as a layer.
+- A key `x` with a field `crod` is written `x["crod"]`.
+- The key of `explain` is required: a last argument that is not a key is
+  an error. A key with no layers before it and no project file is an
+  error that says how to name a layer.
 
 **Modes.** Commands choose the mode by the rules of section 4:
 

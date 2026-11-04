@@ -112,3 +112,111 @@ fn a_diagnostic_about_no_place_has_no_file() {
     assert!(stdout(&output).contains("`a b` is not"), "{output:?}");
     assert!(stdout(&output).contains("\"file\":null"), "{output:?}");
 }
+
+// ---- Layers and keys (`SPEC.md` 11) ----
+
+const PROJECT: &str = "Project { layers: List([{ name: \"base\", dir: \"data\", .. }]), .. }";
+
+fn project(name: &str) -> PathBuf {
+    tree(
+        name,
+        &[
+            ("project.crov", PROJECT),
+            ("data/a.crod", "+web: { port: 80, tags: [\"x\"] }\n"),
+        ],
+    )
+}
+
+#[test]
+fn a_lone_key_reads_the_project() {
+    let dir = project("lone-key");
+    for (key, value) in [("web.port", "80"), ("web.tags[0]", "\"x\"")] {
+        let output = crol(&dir, &["eval", key]);
+        assert!(output.status.success(), "{key}: {output:?}");
+        assert_eq!(stdout(&output).trim(), value);
+    }
+    // A key alone, not only a path: this directory is no matter.
+    std::fs::create_dir(dir.join("web")).unwrap();
+    let output = crol(&dir, &["eval", "web"]);
+    assert!(output.status.success(), "{output:?}");
+    assert!(stdout(&output).contains("port: 80"), "{output:?}");
+}
+
+#[test]
+fn a_key_does_not_depend_on_what_exists() {
+    let dir = project("key-not-a-file");
+    std::fs::write(dir.join("web.port"), "not a layer").unwrap();
+    let output = crol(&dir, &["eval", "web.port"]);
+    assert_eq!(stdout(&output).trim(), "80", "{output:?}");
+    // Before the last argument, a bare name is a layer.
+    let output = crol(&dir, &["eval", "data", "web.port"]);
+    assert_eq!(stdout(&output).trim(), "80", "{output:?}");
+}
+
+#[test]
+fn what_cannot_be_a_key_is_a_layer() {
+    let dir = project("layer-forms");
+    for arguments in [
+        &["./data"][..],
+        &["data/"],
+        &["::data"],
+        &["base=data"],
+        &["data/a.crod"],
+    ] {
+        let mut args = vec!["eval"];
+        args.extend(arguments);
+        let output = crol(&dir, &args);
+        assert!(output.status.success(), "{arguments:?}: {output:?}");
+        assert!(stdout(&output).contains("web:"), "{arguments:?}");
+    }
+    std::fs::write(dir.join("b.crod"), "web.port: 81\n").unwrap();
+    let output = crol(&dir, &["eval", "::data", "b.crod"]);
+    assert!(stdout(&output).contains("port: 81"), "{output:?}");
+    let output = crol(&dir, &["eval", "::data", "b.crod", "web.port"]);
+    assert_eq!(stdout(&output).trim(), "81", "{output:?}");
+}
+
+#[test]
+fn a_key_without_layers_says_how_to_name_a_layer() {
+    let dir = tree("key-no-project", &[("base/a.crod", "+a: 1\n")]);
+    let output = crol(&dir, &["eval", "base"]);
+    assert!(failed(&output), "{output:?}");
+    assert!(stderr(&output).contains("no project.crov"), "{output:?}");
+    assert!(stderr(&output).contains("`./base`"), "{output:?}");
+    let output = crol(&dir, &["eval", "./base"]);
+    assert_eq!(stdout(&output).trim(), "a: 1", "{output:?}");
+}
+
+#[test]
+fn a_key_of_a_value_document() {
+    let dir = project("value-key");
+    std::fs::write(dir.join("v.crov"), "web: { port: 80 }\n..\n").unwrap();
+    let output = crol(&dir, &["eval", "v.crov", "web.port"]);
+    assert_eq!(stdout(&output).trim(), "80", "{output:?}");
+    let output = crol(&dir, &["eval", "v.crov"]);
+    assert!(stdout(&output).contains("web:"), "{output:?}");
+    // Among other sources it is a layer, wherever the key is.
+    let output = crol(&dir, &["eval", "./data", "v.crov", "web.port"]);
+    assert!(failed(&output), "{output:?}");
+    assert!(stderr(&output).contains("cannot be a layer"), "{output:?}");
+}
+
+#[test]
+fn explain_reads_the_project_for_a_lone_key() {
+    let dir = project("explain-key");
+    let output = crol(&dir, &["explain", "web.port"]);
+    assert!(output.status.success(), "{output:?}");
+    assert!(stdout(&output).contains("definition"), "{output:?}");
+    let output = crol(&dir, &["explain", "./data", "web.port"]);
+    assert!(output.status.success(), "{output:?}");
+}
+
+#[test]
+fn explain_needs_a_key() {
+    let dir = project("explain-no-key");
+    for argument in ["./data", "data/a.crod", "base=data", "a.crov"] {
+        let output = crol(&dir, &["explain", argument]);
+        assert!(failed(&output), "{argument}: {output:?}");
+        assert!(stderr(&output).contains("no key"), "{argument}: {output:?}");
+    }
+}

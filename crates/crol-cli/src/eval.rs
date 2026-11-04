@@ -12,8 +12,10 @@ use crate::diagnostics::Reporter;
 #[derive(Debug, clap::Args)]
 pub(crate) struct Args {
     /// The layers, lowest first, or one `.crov` file, then optionally a key
-    /// and path to print only that value: `web.limits.cpu`.
-    #[arg(value_name = "LAYER... [KEY[.PATH]]")]
+    /// and path to print only that value: `web.limits.cpu`. Without layers,
+    /// the project file's. A last argument of the form of a key is a key:
+    /// write a layer `./base` or `::base` there.
+    #[arg(value_name = "[LAYER...] [KEY[.PATH]]")]
     arguments: Vec<String>,
 
     /// The maximum line width of the output.
@@ -47,13 +49,15 @@ pub(crate) struct Args {
 /// Returns whether it succeeded.
 pub(crate) fn run(args: &Args, reporter: &mut Reporter) -> bool {
     let mut layers = args.arguments.clone();
-    // The last argument is a key path if it names no layer.
-    let path = match layers.last() {
-        Some(last) if layers.len() > 1 && !crate::layers::names_a_layer(last) => layers.pop(),
-        _ => None,
-    };
+    let path = layers.pop_if(|last| crate::layers::is_key(last));
     if let Some(document) = crate::value::argument(&layers) {
         return run_value(args, document, path.as_deref(), reporter);
+    }
+    if let (true, Some(path)) = (layers.is_empty(), &path)
+        && let Some(message) = crate::layers::no_layers_for(path, &args.inputs)
+    {
+        reporter.error(&message);
+        return false;
     }
     let contexts = match (&args.context, args.all_contexts) {
         (_, true) => None,

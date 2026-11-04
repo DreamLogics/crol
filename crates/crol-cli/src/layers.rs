@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crol::project::{FILE_NAME, Project};
 use crol::schema::SchemaFile;
-use crol::{CheckOptions, CrolComposer, CrolConfig, FileLoaders, LayerSource};
+use crol::{CheckOptions, CrolComposer, CrolConfig, FileLoaders, LayerSource, Mode};
 use crol_eval::{DataOptions, Diagnostic, Evaluation, Layer, Sources, Span, Variants};
 
 use crate::diagnostics::Reporter;
@@ -99,13 +99,25 @@ fn is_module_path(text: &str) -> bool {
     !rest.is_empty() && rest.split("::").all(crol_eval::is_identifier)
 }
 
-/// Whether a layer argument names something loadable.
-pub(crate) fn names_a_layer(argument: &str) -> bool {
-    let config = CrolConfig::<String>::default();
-    let source = argument
-        .split_once('=')
-        .map_or(argument, |(_, source)| source);
-    Path::new(source).exists() || is_module_path(source) && source.load(&config).is_ok()
+/// Whether the last argument of `eval` or `explain` is a key: it has the form
+/// of a key or path, and does not end like a document (`SPEC.md` 11). Only the
+/// form counts, so that a command means the same whatever files exist.
+pub(crate) fn is_key(argument: &str) -> bool {
+    crol_eval::parse_path(argument).is_ok()
+        && Mode::of(argument).is_none()
+        && !crol::is_retired(argument)
+}
+
+/// The error for `key` when there is nothing to read it from: no layers were
+/// given, and no project file is found. `None` if there is one.
+pub(crate) fn no_layers_for(key: &str, args: &InputArgs) -> Option<String> {
+    let dir = std::env::current_dir().ok()?;
+    let none = args.project.is_none() && matches!(Project::find(&dir), Ok(None));
+    none.then(|| {
+        format!(
+            "no layers given, and no {FILE_NAME} in this directory or above; `{key}` is read as a key, so write `./{key}` to name a layer"
+        )
+    })
 }
 
 /// The layers, variants, options and schema: from the arguments, or with no

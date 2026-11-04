@@ -215,6 +215,18 @@ fn entry_errors() {
 }
 
 #[test]
+fn paths_are_the_whole_text() {
+    for path in ["web", "web.port", "web.tags[0]", "web[\"a b\"]", "x.crod"] {
+        assert!(crol_eval::parse_path(path).is_ok(), "{path}");
+    }
+    for text in [
+        "", "+web", "-web", "?web", "a: 1, b", "a b", "::a", "./a", "a/b", "a=b", " a",
+    ] {
+        assert!(crol_eval::parse_path(text).is_err(), "{text}");
+    }
+}
+
+#[test]
 fn cycles() {
     check(
         r#"a: { ..&self.b, b: {} },

@@ -102,11 +102,9 @@ impl Reporter {
     /// Reports an error that is not about a place in a file.
     pub(crate) fn error(&mut self, message: &str) {
         if self.format == MessageFormat::Json {
-            let _ = writeln!(
-                std::io::stdout().lock(),
-                "{{\"severity\":\"error\",\"message\":{}}}",
-                json_string(message)
-            );
+            let diagnostic = crol_eval::Diagnostic::error(crol_eval::Span::detached(), message);
+            let line = json(&Sources::new(), &diagnostic);
+            let _ = writeln!(std::io::stdout().lock(), "{line}");
             return;
         }
         let diagnostic = Diagnostic::<()>::error().with_message(message);

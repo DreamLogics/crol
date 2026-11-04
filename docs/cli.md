@@ -175,10 +175,7 @@ web: { replicas: 2, port: 9090 }
 The output of `--all-contexts` is valid CROL that evaluates back to the same
 data.
 
-The last argument counts as a key only if there is at least one layer before it
-and it does not name a layer. So in a project, `crol eval web.port` does not work
-yet: `web.port` is read as a layer. Name the layers, with `--project` to keep
-the project's variants and schema:
+In a project, the key can come alone: the layers are the project's.
 
 ```crol
 // project.crov
@@ -189,9 +186,23 @@ Project {
 ```
 
 ```console
+$ crol eval web.port
+8080
+```
+
+To name other layers and keep the project's variants and schema, add `--project`:
+
+```console
 $ crol eval --project project.crov data::base data::local web.port
 9090
 ```
+
+`crol` tells a key from a layer by how the last argument is written, not by what
+is on disk: anything that reads as a key or path, such as `web`, `web.port` or
+`web.tags[0]`, is a key, unless it ends in `.crod`, `.crov` or `.crol`. So a layer
+in the last place cannot be a bare name: write `crol eval ./base` or
+`crol eval ::base`, as `crol eval base` asks for the key `base`. Before the last
+argument, a bare name is a layer as usual.
 
 ## `crol explain`
 
@@ -209,8 +220,8 @@ web.replicas in {prod}:
   data/base/services.crod:4:5  web<prod>.replicas  patch       8
 ```
 
-`--context a,b` chooses the context. The layers are required here, even in a
-project: `crol explain web.port` is an error.
+`--context a,b` chooses the context. In a project the layers can be left out, as
+for `crol eval`: `crol explain web.port`. The key is required.
 
 ## `crol fingerprint`
 

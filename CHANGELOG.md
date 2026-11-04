@@ -38,6 +38,10 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   patches, and its own variants are completed. A problem with the project is now
   shown on the file to blame.
 - `crol --init` writes `project.crov` and `data/base/main.crod`.
+- `crol eval` and `crol explain` tell a key from a layer by the form of the last
+  argument, not by what exists on disk (`SPEC.md` 11), so `crol eval web.port` and
+  `crol explain web.port` work in a project. A bare name in the last place is now
+  always a key: write `./base` or `::base` for a layer there.
 - `CrolLayer::without_file` is gone: `FileLoaders::with_project_file` names the
   one `.crov` file a layer's directory may hold.
 

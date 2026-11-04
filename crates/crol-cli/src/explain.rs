@@ -11,8 +11,8 @@ use crate::diagnostics::Reporter;
 #[derive(Debug, clap::Args)]
 pub(crate) struct Args {
     /// The layers, lowest first, then the key and path to explain:
-    /// `web.limits.memory_mb`.
-    #[arg(value_name = "LAYER... KEY[.PATH]", required = true)]
+    /// `web.limits.memory_mb`. Without layers, the project file's.
+    #[arg(value_name = "[LAYER...] KEY[.PATH]", required = true)]
     arguments: Vec<String>,
 
     /// The context, by its variants: `--context prod_eu,cache`. Default: the
@@ -29,11 +29,20 @@ pub(crate) fn run(args: &Args, reporter: &mut Reporter) -> bool {
     let Some((path, layers)) = args
         .arguments
         .split_last()
-        .filter(|(_, layers)| !layers.is_empty())
+        .filter(|(path, _)| crate::layers::is_key(path))
     else {
-        reporter.error("give the layers, then the key or path to explain");
+        let last = args.arguments.last().map_or("", String::as_str);
+        reporter.error(&format!(
+            "`{last}` is not a key or a path, so there is no key to explain; give the layers, if any, then the key"
+        ));
         return false;
     };
+    if layers.is_empty()
+        && let Some(message) = crate::layers::no_layers_for(path, &args.inputs)
+    {
+        reporter.error(&message);
+        return false;
+    }
     if let Some(document) = crate::value::argument(layers) {
         // Provenance is the operations of layers; a value has none.
         reporter.error(&format!(
