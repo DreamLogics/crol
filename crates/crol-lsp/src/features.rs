@@ -153,7 +153,7 @@ pub(crate) fn format(text: &str, encoding: Encoding) -> Option<Vec<TextEdit>> {
 
 // ---- Paths at the cursor ----
 
-fn token_at(
+pub(crate) fn token_at(
     text: &str,
     position: Position,
     encoding: Encoding,
@@ -195,7 +195,7 @@ fn selector_steps(selectors: impl Iterator<Item = ast::Selector>) -> Vec<PathSte
         .collect()
 }
 
-fn key_text(key: &ast::Key) -> Option<String> {
+pub(crate) fn key_text(key: &ast::Key) -> Option<String> {
     let token = key.token()?;
     Some(match token.kind() {
         SyntaxKind::STRING | SyntaxKind::RAW_STRING => token
@@ -251,6 +251,41 @@ fn target_path(token: &SyntaxToken) -> Option<(String, Vec<PathStep>)> {
         return None;
     };
     Some((key, segments))
+}
+
+/// The root key a token names: the key of a root entry's target, an id
+/// or a `&root` reference.
+pub(crate) fn root_key_at(token: &SyntaxToken) -> Option<String> {
+    if token
+        .parent()
+        .is_some_and(|p| p.kind() == SyntaxKind::ID_EXPR)
+    {
+        return Some(token.text().trim_matches('"').to_owned());
+    }
+    if let Some((key, _)) = reference_path(token) {
+        return Some(key);
+    }
+    // The key of a target, at the top level (or in an untyped outer
+    // block) or in a top-level variant block.
+    let key = token.parent().and_then(ast::Key::cast)?;
+    let target = key.syntax().parent().and_then(ast::Target::cast)?;
+    let mut node = target.syntax().parent()?;
+    while let Some(parent) = node.parent() {
+        match parent.kind() {
+            SyntaxKind::DOCUMENT => return key_text(&key),
+            SyntaxKind::VARIANT_BLOCK => node = parent,
+            SyntaxKind::BLOCK
+                if parent
+                    .parent()
+                    .is_some_and(|p| p.kind() == SyntaxKind::DOCUMENT)
+                    && ast::Block::cast(parent.clone())?.type_name().is_none() =>
+            {
+                return key_text(&key);
+            }
+            _ => return None,
+        }
+    }
+    None
 }
 
 /// The root key and path a reference names: `&root.db.host`.

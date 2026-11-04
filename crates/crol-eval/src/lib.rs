@@ -252,6 +252,22 @@ pub fn evaluate_data(sources: &Sources, layers: &[Layer], options: &DataOptions)
     }
 }
 
+/// The root operations of one data-mode document, each with its target's
+/// span and whether it is a definition, a patch or a remove (`SPEC.md`
+/// 7.2), for editors. The document is read on its own: names it uses from
+/// other documents do not change what its operations are.
+pub fn operations(sources: &Sources, file: FileId) -> Vec<(Span, StepKind)> {
+    let parse = crol_syntax::parse(sources.file(file).text());
+    let document = parse.document();
+    let (lowered, _) = lower::lower_data(&[lower::DataDocument {
+        file,
+        document: &document,
+        layer: 0,
+        index: 0,
+    }]);
+    lowered.ops.iter().map(|op| (op.span, op.kind())).collect()
+}
+
 /// Parses a path to a value: a root key, then selectors, as `web.limits.cpu`
 /// or `web.tags[0]` (`SPEC.md` 5.1).
 pub fn parse_path(text: &str) -> Result<(String, Vec<PathStep>), String> {

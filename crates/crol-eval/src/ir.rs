@@ -204,4 +204,15 @@ impl RootOp {
                 None => false,
             }
     }
+
+    /// What the operation is, as `crol explain` shows it.
+    pub(crate) fn kind(&self) -> crate::StepKind {
+        if self.op.is_none() {
+            crate::StepKind::Remove
+        } else if self.is_definition() {
+            crate::StepKind::Definition
+        } else {
+            crate::StepKind::Patch
+        }
+    }
 }

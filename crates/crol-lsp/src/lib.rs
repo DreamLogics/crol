@@ -15,6 +15,8 @@
 
 mod convert;
 mod features;
+mod navigate;
+mod tokens;
 mod workspace;
 
 use std::collections::{HashMap, HashSet};
@@ -147,6 +149,20 @@ impl Server {
             document_formatting_provider: Some(lsp_types::OneOf::Left(true)),
             hover_provider: Some(lsp_types::HoverProviderCapability::Simple(true)),
             definition_provider: Some(lsp_types::OneOf::Left(true)),
+            references_provider: Some(lsp_types::OneOf::Left(true)),
+            rename_provider: Some(lsp_types::OneOf::Right(lsp_types::RenameOptions {
+                prepare_provider: Some(true),
+                work_done_progress_options: Default::default(),
+            })),
+            workspace_symbol_provider: Some(lsp_types::OneOf::Left(true)),
+            semantic_tokens_provider: Some(
+                lsp_types::SemanticTokensOptions {
+                    legend: tokens::legend(),
+                    full: Some(lsp_types::SemanticTokensFullOptions::Bool(true)),
+                    ..Default::default()
+                }
+                .into(),
+            ),
             completion_provider: Some(lsp_types::CompletionOptions {
                 trigger_characters: Some([".", "&", "<", "@"].map(str::to_owned).to_vec()),
                 ..Default::default()
@@ -428,6 +444,100 @@ impl Server {
                             )
                         });
                 self.respond(id, result.map(lsp_types::GotoDefinitionResponse::Scalar));
+            }
+            request::References::METHOD => {
+                let result = serde_json::from_value::<lsp_types::ReferenceParams>(request.params)
+                    .ok()
+                    .and_then(|p| {
+                        let uri = p.text_document_position.text_document.uri;
+                        let text = self.text(&uri)?;
+                        navigate::references(
+                            self.snapshot.as_ref(),
+                            &uri,
+                            &text,
+                            p.text_document_position.position,
+                            p.context.include_declaration,
+                            encoding,
+                        )
+                    });
+                self.respond(id, result);
+            }
+            request::PrepareRenameRequest::METHOD => {
+                let result =
+                    serde_json::from_value::<lsp_types::TextDocumentPositionParams>(request.params)
+                        .ok()
+                        .and_then(|p| {
+                            let text = self.text(&p.text_document.uri)?;
+                            navigate::prepare_rename(&text, p.position, encoding)
+                        });
+                self.respond(id, result.map(lsp_types::PrepareRenameResponse::Range));
+            }
+            request::Rename::METHOD => {
+                let result = serde_json::from_value::<lsp_types::RenameParams>(request.params)
+                    .ok()
+                    .and_then(|p| {
+                        let uri = p.text_document_position.text_document.uri;
+                        let text = self.text(&uri)?;
+                        Some(navigate::rename(
+                            self.snapshot.as_ref(),
+                            &uri,
+                            &text,
+                            p.text_document_position.position,
+                            &p.new_name,
+                            encoding,
+                        ))
+                    });
+                match result {
+                    Some(Err(message)) => self.send(Message::Response(Response::new_err(
+                        id,
+                        lsp_server::ErrorCode::RequestFailed as i32,
+                        message,
+                    ))),
+                    result => self.respond(id, result.and_then(Result::ok).flatten()),
+                }
+            }
+            request::SemanticTokensFullRequest::METHOD => {
+                let result =
+                    serde_json::from_value::<lsp_types::SemanticTokensParams>(request.params)
+                        .ok()
+                        .and_then(|p| {
+                            let uri = p.text_document.uri;
+                            let text = self.text(&uri)?;
+                            // Root operations only mean something in a layer.
+                            let in_layers = self.snapshot.as_ref().is_some_and(|s| {
+                                convert::uri_to_path(&uri)
+                                    .and_then(|path| s.file_of(&path))
+                                    .is_some_and(|file| s.in_layers(file))
+                            });
+                            let operations = if in_layers {
+                                let mut sources = crol_eval::Sources::new();
+                                let file = sources.add(uri.as_str(), text.as_str());
+                                crol_eval::operations(&sources, file)
+                                    .into_iter()
+                                    .map(|(span, kind)| (span.range, kind))
+                                    .collect()
+                            } else {
+                                Vec::new()
+                            };
+                            Some(lsp_types::SemanticTokensResult::Tokens(tokens::tokens(
+                                &text,
+                                &operations,
+                                encoding,
+                            )))
+                        });
+                self.respond(id, result);
+            }
+            request::WorkspaceSymbolRequest::METHOD => {
+                let result =
+                    serde_json::from_value::<lsp_types::WorkspaceSymbolParams>(request.params)
+                        .ok()
+                        .zip(self.snapshot.as_ref())
+                        .map(|(p, snapshot)| {
+                            lsp_types::WorkspaceSymbolResponse::Flat(navigate::workspace_symbols(
+                                snapshot, &p.query, encoding,
+                            ))
+                        });
+                self.respond(id, result);
             }
             _ => self.send(Message::Response(Response::new_err(
                 id,
