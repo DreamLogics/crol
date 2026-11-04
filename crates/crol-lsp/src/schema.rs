@@ -127,22 +127,15 @@ fn entry_type_in(
                 .parent()
                 .is_some_and(|p| p.kind() != SyntaxKind::DOCUMENT)
     });
-    let mut doc = None;
-    let mut ty = match outer {
+    let key = features::key_text(&target.key()?)?;
+    let (mut ty, mut doc) = match outer {
         // In a block: the key is one of its fields.
         Some(outer) => {
             let ty = block_type_in(schema, root, &outer, depth + 1)?;
-            let key = features::key_text(&target.key()?)?;
-            let (ty, field_doc) = step(schema, &ty, &PathStep::Field(key))?;
-            doc = field_doc;
-            ty
+            step(schema, &ty, &PathStep::Field(key))?
         }
         // A root entry.
-        None => {
-            let (ty, field_doc) = root(&features::key_text(&target.key()?)?)?;
-            doc = field_doc;
-            ty
-        }
+        None => root(&key)?,
     };
     for s in features::selector_steps(target.selectors()) {
         let (next, field_doc) = step(schema, &ty, &s)?;
