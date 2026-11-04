@@ -497,7 +497,10 @@ web.replicas: 4,
 - The module path (section 4.2) names a `.crod` file or a directory.
   Each `extends` is a layer below this document, in the order written; an
   extended document's own `extends` come below it. A document that is
-  already loaded is not loaded again. A cycle is an error.
+  already loaded is not loaded again: a directory named twice is loaded
+  once, and a directory that holds documents loaded before it leaves them
+  out. A layer the application or the command line names itself is not
+  loaded for an `extends`, and stays whole. A cycle is an error.
 - **Tools** always follow it: they evaluate the document on top of those
   layers, so the editor shows the values below, the merged results, and
   the templates and keys the document can use. Diagnostics in extended

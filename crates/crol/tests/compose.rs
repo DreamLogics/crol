@@ -85,6 +85,144 @@ fn loading_fails_only_for_sources_that_name_nothing() {
     );
 }
 
+/// The relative paths of the documents, by layer, lowest first.
+fn documents(composer: &CrolComposer) -> Vec<Vec<String>> {
+    composer
+        .layers()
+        .iter()
+        .map(|layer| layer.documents().map(|d| d.0.to_owned()).collect())
+        .collect()
+}
+
+#[test]
+fn a_directory_extended_twice_is_loaded_once() {
+    let root = tree(
+        "compose-extends-directory",
+        &[
+            ("shared/a.crod", "+a: 1,"),
+            ("shared/b.crod", "+b: 1,"),
+            ("x.crod", "#![extends(shared)]\n\na: & + 1,"),
+            ("y.crod", "#![extends(shared)]\n\nb: & + 1,"),
+        ],
+    );
+    let config = CrolConfig {
+        load_extends: true,
+        ..config(&root)
+    };
+    let composer = CrolComposer::with_cfg(config)
+        .load("::x")
+        .unwrap()
+        .load("::y")
+        .unwrap();
+    assert_eq!(
+        documents(&composer),
+        [vec!["a.crod", "b.crod"], vec!["x.crod"], vec!["y.crod"]]
+    );
+    let data = composer.compose_data().unwrap();
+    assert_eq!(data.get::<u8>("a").unwrap(), 2);
+    assert_eq!(data.get::<u8>("b").unwrap(), 2);
+}
+
+#[test]
+fn a_document_of_a_directory_is_not_loaded_again_with_it() {
+    let root = tree(
+        "compose-extends-overlap",
+        &[
+            ("shared/a.crod", "+a: 1,"),
+            ("shared/b.crod", "+b: 1,"),
+            ("x.crod", "#![extends(shared::a)]\n\na: & + 1,"),
+            ("y.crod", "#![extends(shared)]\n\nb: & + 1,"),
+            // The other way around: the directory, then one of its documents.
+            ("z.crod", "#![extends(shared)]\n#![extends(shared::a)]\n+z: 1,"),
+            // A directory with a document that extends another one of it.
+            ("sibling/a.crod", "#![extends(b)]\n\nb: & + 1,"),
+            ("sibling/b.crod", "+b: 1,"),
+            ("w.crod", "#![extends(sibling)]\n\nb: & + 1,"),
+        ],
+    );
+    let config = CrolConfig {
+        load_extends: true,
+        ..config(&root)
+    };
+    let composer = CrolComposer::with_cfg(config.clone())
+        .load("::x")
+        .unwrap()
+        .load("::y")
+        .unwrap();
+    assert_eq!(
+        documents(&composer),
+        [
+            vec!["a.crod"],
+            vec!["x.crod"],
+            vec!["b.crod"],
+            vec!["y.crod"],
+        ]
+    );
+    let data = composer.compose_data().unwrap();
+    assert_eq!(data.get::<u8>("a").unwrap(), 2);
+    assert_eq!(data.get::<u8>("b").unwrap(), 2);
+
+    let composer = CrolComposer::with_cfg(config.clone())
+        .load("::z")
+        .unwrap();
+    assert_eq!(
+        documents(&composer),
+        [vec!["a.crod", "b.crod"], vec!["z.crod"]]
+    );
+
+    let composer = CrolComposer::with_cfg(config).load("::w").unwrap();
+    assert_eq!(
+        documents(&composer),
+        [vec!["b.crod"], vec!["a.crod"], vec!["w.crod"]]
+    );
+    assert_eq!(composer.compose_data().unwrap().get::<u8>("b").unwrap(), 3);
+}
+
+#[test]
+fn a_layer_that_is_named_stays_whole() {
+    let root = tree(
+        "compose-named-layer",
+        &[
+            ("named/a.crod", "#![extends(b)]\n\nb: & + 1,"),
+            ("named/b.crod", "?b: 1,\nb: & + 10,"),
+        ],
+    );
+    let config = CrolConfig {
+        load_extends: true,
+        ..config(&root)
+    };
+    let composer = CrolComposer::with_cfg(config).load("::named").unwrap();
+    assert_eq!(
+        documents(&composer),
+        [vec!["b.crod"], vec!["a.crod", "b.crod"]]
+    );
+}
+
+#[test]
+fn a_directory_extending_itself_is_a_cycle() {
+    let root = tree(
+        "compose-extends-own-directory",
+        &[("shared/a.crod", "#![extends(super::shared)]\n+a: 1,")],
+    );
+    let config = CrolConfig {
+        load_extends: true,
+        ..config(&root)
+    };
+    let error = CrolComposer::with_cfg(config).load("::shared").unwrap_err();
+    assert!(error.to_string().contains("cycle"), "{error}");
+}
+
+#[test]
+fn without_load_extends_a_layer_is_kept_as_it_is() {
+    let root = tree("compose-no-extends", &[("a.crod", "+a: 1,")]);
+    let composer = CrolComposer::with_cfg(config(&root))
+        .load("::a")
+        .unwrap()
+        .load("::a")
+        .unwrap();
+    assert_eq!(documents(&composer).len(), 2);
+}
+
 #[test]
 fn extends_loads_the_layers_below() {
     let root = tree(

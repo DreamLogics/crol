@@ -449,7 +449,8 @@ impl LayerSource for CrolLayer {
 pub struct CrolComposer<T = String> {
     config: CrolConfig<T>,
     layers: Vec<CrolLayer>,
-    /// The sources of documents loaded, for `load_extends`.
+    /// The sources of the documents loaded, and of the directories `extends`
+    /// loaded, for `load_extends`.
     loaded: HashSet<SourceId>,
     /// An error from `load_layer` or `with_variant`, reported by `compose`.
     error: Option<Error>,
@@ -563,14 +564,21 @@ impl<T: VariantName> CrolComposer<T> {
     }
 
     /// Adds `layer`, after the layers it extends if `load_extends` is set.
-    /// `in_progress` holds the sources whose extends are being loaded, to
-    /// find cycles.
-    fn add(&mut self, layer: CrolLayer, in_progress: &mut Vec<SourceId>) -> Result<(), Error> {
+    /// A layer loaded for an `extends` leaves out the documents already
+    /// loaded, which a directory may share with what came before it
+    /// (`SPEC.md` 4.1), and is not added if that is all of them; one the
+    /// application names stays whole. `in_progress` holds the sources whose
+    /// extends are being loaded, to find cycles, and is empty for the latter.
+    fn add(&mut self, mut layer: CrolLayer, in_progress: &mut Vec<SourceId>) -> Result<(), Error> {
+        let for_extends = !in_progress.is_empty();
         if self.config.load_extends {
             // In document order: by path (`SPEC.md` 7.1).
             let mut documents: Vec<&Document> = layer.documents.iter().collect();
             documents.sort_by(|a, b| a.relative.cmp(&b.relative));
             for document in documents {
+                if self.is_loaded(document) {
+                    continue;
+                }
                 for module_path in extends_of(&document.text) {
                     let resolved = self.config.file_loaders.resolve_from(
                         &module_path,
@@ -592,13 +600,25 @@ impl<T: VariantName> CrolComposer<T> {
                     if let Some(source) = &document.source {
                         in_progress.push(source.clone());
                     }
-                    in_progress.push(id);
+                    in_progress.push(id.clone());
                     self.add(extended, in_progress)?;
                     in_progress.pop();
                     if document.source.is_some() {
                         in_progress.pop();
                     }
+                    // A directory's own id is no document's.
+                    self.loaded.insert(id);
                 }
+            }
+        }
+        if for_extends {
+            let had_documents = !layer.documents.is_empty();
+            let loaded = &self.loaded;
+            layer
+                .documents
+                .retain(|d| !d.source.as_ref().is_some_and(|s| loaded.contains(s)));
+            if had_documents && layer.documents.is_empty() {
+                return Ok(());
             }
         }
         for document in &layer.documents {
@@ -608,6 +628,13 @@ impl<T: VariantName> CrolComposer<T> {
         }
         self.layers.push(layer);
         Ok(())
+    }
+
+    fn is_loaded(&self, document: &Document) -> bool {
+        document
+            .source
+            .as_ref()
+            .is_some_and(|source| self.loaded.contains(source))
     }
 
     /// The layers loaded so far, lowest first, including those loaded for
