@@ -4,6 +4,8 @@ use std::fmt;
 
 use crol_eval::{Diagnostic, Sources, Span};
 
+use crate::loader::SourceId;
+
 /// An error from reading, evaluating, deserializing or serializing CROL.
 ///
 /// An evaluation error carries every diagnostic found, rendered as
@@ -23,6 +25,8 @@ struct ErrorImpl {
     path: Option<String>,
     /// Every diagnostic, for errors from reading and evaluation.
     diagnostics: Vec<String>,
+    /// The source that could not be loaded.
+    source_id: Option<SourceId>,
 }
 
 impl Error {
@@ -33,7 +37,14 @@ impl Error {
             location: None,
             path: None,
             diagnostics: Vec::new(),
+            source_id: None,
         }))
+    }
+
+    /// Adds which source could not be loaded, unless it already says.
+    pub(crate) fn with_source_id(mut self, id: SourceId) -> Self {
+        self.0.source_id.get_or_insert(id);
+        self
     }
 
     pub(crate) fn from_diagnostics(sources: &Sources, diagnostics: &[Diagnostic]) -> Self {
@@ -80,6 +91,11 @@ impl Error {
     /// The path of the value that was being deserialized: `web.port`.
     pub fn path(&self) -> Option<&str> {
         self.0.path.as_deref()
+    }
+
+    /// The source a file loader could not load, for errors from loading.
+    pub fn source_id(&self) -> Option<&SourceId> {
+        self.0.source_id.as_ref()
     }
 
     /// Every diagnostic, for errors from reading and evaluation, as

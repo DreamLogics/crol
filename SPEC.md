@@ -498,6 +498,14 @@ exists; `super` above the root directory. A file or directory whose name
 is not an identifier (`my-file.crol`) or is hidden cannot be named by a
 module path; code can still load it by a file system path.
 
+This describes the default file loader. A module path is resolved by the
+file loaders (section 10.7), the same way in all of them: its form is
+checked, `super` above the root is an error, and only then does any
+loader see it, as the names from the root to what it names. Another loader
+decides what those names are in its own tree, which need not be a
+directory. A document it loaded still has a directory in that tree (its
+path without the last name), from which its relative paths start.
+
 
 ---
 
@@ -1023,7 +1031,9 @@ separators. A layer is one of:
   skipped;
 - one file;
 - in-memory documents, `CrolLayer::from_sources(name, [(path, text), ...])`,
-  for tests, editors and embedded data.
+  for tests, editors and embedded data;
+- what a file loader (section 10.7) holds under a module path: one
+  document, or the documents it lists below a directory.
 
 `CrolComposer::load` (section 10.7) takes a module path (section 4.2) or
 a file system path naming a file or a directory, and names the layer
@@ -1136,7 +1146,8 @@ Evaluating the same layers, with the same options, gives the same data
 on every platform:
 
 - No operation reads the environment, the clock, the file system (after
-  loading) or randomness.
+  loading) or randomness. File loaders (section 10.7) run while loading
+  and never during evaluation: the layers hold the text they gave.
 - Integer arithmetic is exact or an error. Float arithmetic is IEEE 754
   binary64 with round-to-nearest-even and no fused multiply-add; float
   literal parsing is correctly rounded (`f64::from_str`).
@@ -1677,6 +1688,8 @@ tools:
   source names nothing or cannot be read; syntax and every other error
   come from `compose`, all together. `load_layer(CrolLayer)` adds a
   layer built in code.
+- `with_file_loader(loader)` registers a file loader (below), and
+  `without_file_system()` turns off the default one.
 - `with_variant(v)` makes `v` active in the context to compose (section
   8.1). It fails for an undeclared variant (when variants are declared), or a second choice in a group
   that is not an ancestor or descendant of the first. Without any, the
@@ -1714,12 +1727,90 @@ With typed variants (section 8.1), `CrolComposer<Env>`, `with_variant`,
 `CrolData` stores values identical to the base value once (shared), so
 memory grows with what variants change, not with their number.
 
+**File loaders.** A file loader is where documents come from: it resolves
+module paths to sources, and loads sources. Everything the composer reads
+by module path, the layers of `load` and the documents of `extends`, goes
+through the file loaders.
+
+```rust
+pub trait FileLoader: Send + Sync {
+    /// The source a module path names; `None` if this loader has nothing
+    /// by that name. An error stops the search.
+    fn resolve(&self, path: &ModulePath<'_>) -> Result<Option<SourceId>, LoaderError>;
+    /// What a source holds.
+    fn load(&self, source: &SourceId) -> Result<Loaded, LoaderError>;
+}
+
+pub enum Loaded {
+    Document(Vec<u8>),                    // UTF-8 text (2.1)
+    Directory(Vec<(String, SourceId)>),   // relative path and source of each
+}
+
+let config: Config = CrolComposer::new()
+    .with_file_loader(Embedded::new())    // asked first
+    .load("::data::base")?                // from it, else the file system
+    .compose()?;
+```
+
+- `ModulePath` gives a loader `segments()`, the names from the root to what
+  the path names, with `super` and the directory of the document it is
+  written in already applied (section 4.2): `super::defaults` in
+  `data/base/web.crol` is `["data", "defaults"]`. A loader cannot be led
+  above the root: no segment is empty, `.` or `..`, or holds a `/`, and a
+  path that goes above the root is an error before any loader is asked.
+  `written()` and `from()` give the path as written and the source of the
+  document it is written in, for loaders that want them.
+- Module paths have no scheme, so loaders are chained **by order**: those
+  registered, first the first, then the default. The first to give a
+  source has the path, and it alone loads that source and what it lists. A
+  loader that has nothing falls through to the next; one that fails
+  stops the search. A path that no loader has is an error.
+- The default is **`FsLoader`**, for `root_path`: the files and directories
+  of sections 4.2 and 7.1. Registering `FsLoader::new(dir)` adds another
+  tree in front of it. `load` with a `&Path` is always the default's, and
+  a relative path written in a document that was loaded that way starts
+  from its directory, which only the default knows: other loaders are not
+  asked for it, as that document is not at any place in their trees.
+- A **`SourceId`** is a source's identity: a name of the loader's choosing
+  (`SourceId::new("embedded:data/base.crol")`), which identifies the source
+  among those of every loader and so starts with something of the loader's
+  own, or a file system path (`SourceId::from_path`), compared by its
+  canonical path. Sources are compared by it to load a document once and to
+  find cycles of `extends`. It is the document's name in diagnostics and
+  provenance (section 12.3), and it is in every error from loading:
+  `cannot read embedded:data/base.crol: ...`, and `CrolError::source_id()`.
+- Documents of a `Directory` are ordered by relative path, whatever order
+  the loader lists them in (section 7.1), so its order cannot change
+  the result. Relative paths use `/`; one with an empty, `.` or `..`
+  component is an error, and so is listing a directory as a document.
+  What a directory holds is up to the loader: section 7.1's rules are
+  `FsLoader`'s.
+- A loader must give the same text for the same source for a composition
+  to be reproducible (section 7.6). It is `Send + Sync`, as the composer
+  is, and blocking.
+- **Trust.** A path a loader does not have falls through to the file
+  system, also when it is written in a document that loader loaded: a
+  document from elsewhere can then `extends` files below `root_path`. For
+  documents that are not trusted with those, `without_file_system()`
+  takes the default out of the chain, and refuses a `&Path` as well.
+
+`FileLoaders` is the chain itself, `CrolConfig::file_loaders`, for reading
+outside a composer: `file_loaders.resolve(module_path, root)` gives a
+`ResolvedSource`, whose `load(name)` is a `CrolLayer` and whose `text()` is
+the text of a single document. An application reads a schema or project
+file from its loaders this way (`SchemaFile::from_text`, `crol::from_str`),
+and loads a project's layers. `schema::attribute_path` and the functions
+that take a `Path` (`SchemaFile::read`, `Project::read`, `Project::find`) are
+the file system's, as are schemas named by URL or crate (section 4.1), which
+are fetched to a cache and read from there.
+
 `CrolConfig<T>`:
 
 | Field | Default | Section |
 |---|---|---|
 | `variants: CrolVariants<T>` | none declared (any name, as `Discrete`) | 8.1 |
 | `root_path: PathBuf` | the working directory | 4.2 |
+| `file_loaders: FileLoaders` | the file system below `root_path` | 10.7 |
 | `load_extends: bool` | `false` | 4.1 |
 | `contexts: Option<Vec<Vec<T>>>` | `None` (every valid context) | 8.1 |
 | `max_contexts: usize` | `4096` | 8.1 |
@@ -2062,7 +2153,9 @@ Project {
 ```
 
 - `dir` is a module path (section 4.2), written as a string; the root
-  directory is the project file's. `glob` is a module path whose
+  directory is the project file's. The language server resolves it through
+  a file loader (section 10.7) that puts open buffers over the file
+  system. `glob` is a module path whose
   segments may hold `*` (any part of one name) or be `**` (any number of
   directories). `read_only` layers
   (generated data, vendored data) are loaded but get no diagnostics or
@@ -2269,7 +2362,9 @@ top-level type name, or on an expression; an alias that is a reserved
 word; a spread or `..` at the data-mode root, or a data-mode document
 that is not entries; `extends` in value mode; a `schema` string that
 is not a URL or crate; a module path that names nothing, both a file and
-a directory, or goes above the root directory; a cycle of `extends`; two `use`s giving one name to different types; two definitions of a key under one condition in one layer;
+a directory, or goes above the root directory; a file loader that fails,
+or lists a path that is not relative or a directory as a document (10.7);
+a cycle of `extends`; two `use`s giving one name to different types; two definitions of a key under one condition in one layer;
 a variant entry in a block without a fixed location; an unknown variant;
 a condition that can never hold; `|`, `^`, `+` or parentheses in a
 reference's variant selector; a `+` list inside a condition;

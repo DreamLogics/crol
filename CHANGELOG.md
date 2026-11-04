@@ -100,9 +100,20 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 - Language server: go to definition on `&` goes to the value below.
 - Language server: completion and hover in documents on their own come
   from the schema they name, and in the project file from crol's.
+- File loaders (`SPEC.md` 10.7): the `FileLoader` trait resolves module
+  paths to sources and loads them, so that layers and `extends` can come
+  from anywhere. `CrolComposer::with_file_loader` registers one, chained by
+  order with fallthrough to `FsLoader`, the code that read files before and
+  still the default; `without_file_system` turns that off.
+  `CrolConfig::file_loaders`, `FileLoaders`, `ResolvedSource`, `SourceId`
+  and `CrolError::source_id`. Exhaustive `CrolConfig` literals need the new
+  field. The language server's open buffers are a file loader now.
 
 ### Fixed
 
+- The documents of a directory layer, and so the order of the `extends`
+  they load, no longer depend on the order the platform lists files in
+  (`SPEC.md` 7.1).
 - `#![schema(::path)]` resolves `::` from the root directory (the project
   file's, else the working directory or workspace folder), and relative
   paths from the document's directory (`SPEC.md` 4.2).

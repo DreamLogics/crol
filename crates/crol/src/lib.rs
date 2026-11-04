@@ -42,6 +42,7 @@ mod de;
 mod error;
 mod fill;
 mod id;
+mod loader;
 mod module_path;
 pub mod project;
 mod raw;
@@ -66,6 +67,9 @@ pub use fill::{fill_defaults, fill_defaults_value};
 /// The error type of `crol`, as the specification names it.
 pub type CrolError = Error;
 pub use id::{Id, IdUse};
+pub use loader::{
+    FileLoader, FileLoaders, FsLoader, Loaded, LoaderError, ModulePath, ResolvedSource, SourceId,
+};
 pub use raw::RawValue;
 pub use schema::Schema;
 

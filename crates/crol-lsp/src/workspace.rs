@@ -3,10 +3,13 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crol::project::Project;
 use crol::schema::SchemaFile;
-use crol::{CheckOptions, CrolLayer};
+use crol::{
+    CheckOptions, FileLoader, FileLoaders, FsLoader, Loaded, LoaderError, ModulePath, SourceId,
+};
 use crol_eval::{DataOptions, Diagnostic, Evaluation, FileId, Layer, Severity, Sources};
 use lsp_types::Uri;
 
@@ -16,6 +19,29 @@ use crate::convert::{self, Encoding};
 /// What the server knows of schemas named by URL or crate that are being
 /// fetched or failed to: a message for each, by source and directory.
 pub(crate) type RemoteStatus = HashMap<(String, PathBuf), String>;
+
+/// The open buffers, by canonical path.
+type Buffers = Arc<HashMap<PathBuf, String>>;
+
+/// The file system with the open buffers over it: a buffer replaces its
+/// file, saved or not (`SPEC.md` 12.5).
+struct BufferLoader {
+    files: FsLoader,
+    open: Buffers,
+}
+
+impl FileLoader for BufferLoader {
+    fn resolve(&self, path: &ModulePath<'_>) -> Result<Option<SourceId>, LoaderError> {
+        self.files.resolve(path)
+    }
+
+    fn load(&self, source: &SourceId) -> Result<Loaded, LoaderError> {
+        match source.canonical_path().and_then(|p| self.open.get(p)) {
+            Some(text) => Ok(Loaded::Document(text.clone().into_bytes())),
+            None => self.files.load(source),
+        }
+    }
+}
 
 /// An application's own checks: they receive the latest evaluation and
 /// return diagnostics, published with the others (`SPEC.md` 12.5).
@@ -222,10 +248,11 @@ pub(crate) fn evaluate(
         problem: None,
         remote: Vec::new(),
     };
-    let canonical_open: HashMap<PathBuf, &String> = open
-        .iter()
-        .map(|(p, t)| (p.canonicalize().unwrap_or_else(|_| p.clone()), t))
-        .collect();
+    let canonical_open: Buffers = Arc::new(
+        open.iter()
+            .map(|(p, t)| (p.canonicalize().unwrap_or_else(|_| p.clone()), t.clone()))
+            .collect(),
+    );
     let project_path = settings
         .project
         .clone()
@@ -255,7 +282,7 @@ pub(crate) fn evaluate(
         }
     }
     // Open documents that are in no layer are evaluated on their own.
-    for (path, text) in &canonical_open {
+    for (path, text) in canonical_open.iter() {
         if snapshot.paths.contains(path) {
             continue;
         }
@@ -358,7 +385,7 @@ fn document_schema(
 fn load_project(
     snapshot: &mut Snapshot,
     project_path: &Path,
-    open: &HashMap<PathBuf, &String>,
+    open: &Buffers,
     remote: &RemoteStatus,
 ) -> Result<(Option<SchemaFile>, Option<String>, CheckOptions), String> {
     let project = Project::read(project_path).map_err(|e| e.to_string())?;
@@ -372,18 +399,22 @@ fn load_project(
         .with_max_contexts(project.options.max_contexts)
         .with_contexts(project.options.contexts.clone());
     options = options.with_variant_keys(project.options.variant_keys().map_err(|e| e.to_string())?);
+    let loaders = FileLoaders::new().with(BufferLoader {
+        files: FsLoader::new(&dir),
+        open: Arc::clone(open),
+    });
     for layer in project.layer_list(&dir).map_err(|e| e.to_string())? {
-        let path = crol::resolve_module_path(&layer.dir, &dir, None)
+        let source = loaders
+            .resolve(&layer.dir, &dir)
             .map_err(|e| format!("layer `{}`: {e}", layer.name))?;
-        let loaded = CrolLayer::from_path(layer.name.clone(), &path)
+        let loaded = source
+            .load(layer.name.clone())
             .map_err(|e| e.to_string())?
             .without_file(project_path);
         let mut documents = Vec::new();
         for (relative, display, text) in loaded.documents() {
             let path = PathBuf::from(display);
             let canonical = path.canonicalize().unwrap_or(path);
-            // An open buffer replaces its file, saved or not.
-            let text = open.get(&canonical).map_or(text, |t| t.as_str());
             let file = snapshot.sources.add(display, text);
             snapshot.paths.push(canonical);
             if layer.read_only {
@@ -448,4 +479,43 @@ fn load_project(
     check.allow_unknown_fields = project.options.allow_unknown_fields;
     check.require_complete = project.options.require_complete;
     Ok((schema, project.root.clone(), check))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A project of one layer directory, with `web.crol` on disk.
+    fn project(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("crol-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        std::fs::write(
+            root.join("project.crol"),
+            "Project { layers: List([{ name: \"base\", dir: \"data\", .. }]), .. }",
+        )
+        .unwrap();
+        std::fs::write(root.join("data/web.crol"), "+port: 80,").unwrap();
+        root
+    }
+
+    #[test]
+    fn an_open_buffer_replaces_its_file_in_a_layer() {
+        let root = project("buffers");
+        let settings = Settings::default();
+        let remote = RemoteStatus::new();
+        let open = HashMap::from([(root.join("data/web.crol"), "+port: 81,".to_owned())]);
+        let snapshot = evaluate(Some(&root), &settings, &open, None, &remote);
+        assert_eq!(snapshot.problem, None);
+        assert_eq!(snapshot.layers.len(), 1);
+        let file = snapshot.file_of(&root.join("data/web.crol")).unwrap();
+        assert_eq!(snapshot.sources.file(file).text(), "+port: 81,");
+        assert!(snapshot.in_layers(file));
+
+        // Closed, the file is read again.
+        let snapshot = evaluate(Some(&root), &settings, &HashMap::new(), None, &remote);
+        let file = snapshot.file_of(&root.join("data/web.crol")).unwrap();
+        assert_eq!(snapshot.sources.file(file).text(), "+port: 80,");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

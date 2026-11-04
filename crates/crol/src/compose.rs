@@ -14,7 +14,7 @@ use serde::Deserialize;
 use crate::de;
 use crate::error::Error;
 use crate::id::IdUse;
-use crate::module_path;
+use crate::loader::{self, FileLoader, FileLoaders, FsLoader, Loaded, Origin, SourceId};
 
 /// A variant name type: maps values to the names data writes in selectors,
 /// and back (`SPEC.md` 8.1). Implemented for `String`, which accepts every
@@ -138,6 +138,9 @@ pub struct CrolConfig<T = String> {
     /// Where `::` module paths start (`SPEC.md` 4.2). Default: the working
     /// directory.
     pub root_path: PathBuf,
+    /// Where documents come from (`SPEC.md` 10.7). Default: the file system
+    /// below `root_path`.
+    pub file_loaders: FileLoaders,
     /// Follow `#![extends(...)]`: load the extended documents as layers
     /// below the one that extends them (`SPEC.md` 4.1). Default: `false`.
     pub load_extends: bool,
@@ -168,6 +171,7 @@ impl<T> Default for CrolConfig<T> {
         Self {
             variants: CrolVariants::default(),
             root_path: std::env::current_dir().unwrap_or_default(),
+            file_loaders: FileLoaders::new(),
             load_extends: false,
             contexts: None,
             max_contexts: 4096,
@@ -196,7 +200,7 @@ impl<T> CrolConfig<T> {
 pub struct CrolLayer {
     name: String,
     /// Each document's path relative to the layer, its name for messages,
-    /// its text, and the directory it is in, for its module paths.
+    /// its text, and where it came from, for its module paths.
     documents: Vec<Document>,
 }
 
@@ -205,8 +209,36 @@ struct Document {
     relative: String,
     display: String,
     text: String,
-    directory: Option<PathBuf>,
-    canonical: Option<PathBuf>,
+    /// `None` for documents built in code.
+    source: Option<SourceId>,
+    /// The document's directory, as names from the root; `None` for a
+    /// document that was not reached from the root, loaded by a file
+    /// system path.
+    directory: Option<Vec<String>>,
+}
+
+impl Document {
+    fn origin(&self) -> Origin<'_> {
+        Origin {
+            from: self.source.as_ref(),
+            directory: self.directory.as_deref(),
+        }
+    }
+
+    fn read(
+        relative: String,
+        id: &SourceId,
+        bytes: Vec<u8>,
+        directory: Option<Vec<String>>,
+    ) -> Result<Self, Error> {
+        Ok(Self {
+            relative,
+            display: id.to_string(),
+            text: loader::text(id, bytes)?,
+            source: Some(id.clone()),
+            directory,
+        })
+    }
 }
 
 impl CrolLayer {
@@ -229,8 +261,8 @@ impl CrolLayer {
                     display: format!("{name}/{relative}"),
                     relative,
                     text: text.into(),
-                    directory: None,
-                    canonical: None,
+                    source: None,
+                    directory: Some(Vec::new()),
                 }
             })
             .collect();
@@ -240,17 +272,58 @@ impl CrolLayer {
     /// A layer of one file, or of every `.crol` file below a directory
     /// (`SPEC.md` 7.1). Hidden files and directories are skipped.
     pub fn from_path(name: impl Into<String>, path: &Path) -> Result<Self, Error> {
-        let name = name.into();
-        let mut documents = Vec::new();
-        if path.is_dir() {
-            read_directory(path, path, &mut documents)?;
-        } else {
-            let relative = path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            documents.push(read_document(path, relative)?);
-        }
+        let relative = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let loader = FsLoader::new(path);
+        let id = SourceId::from_path(path);
+        Self::read(name.into(), &loader, &id, relative, None)
+    }
+
+    /// The layer a source holds. `file_name` is its relative path if it is
+    /// a document, and `target` its names from the root, if known.
+    pub(crate) fn read(
+        name: String,
+        loader: &dyn FileLoader,
+        id: &SourceId,
+        file_name: String,
+        target: Option<&[String]>,
+    ) -> Result<Self, Error> {
+        let documents = match loader::load(loader, id)? {
+            Loaded::Document(bytes) => {
+                let directory = target.map(|t| t[..t.len().saturating_sub(1)].to_vec());
+                vec![Document::read(file_name, id, bytes, directory)?]
+            }
+            Loaded::Directory(mut entries) => {
+                // By path, whatever order the loader found them in
+                // (`SPEC.md` 7.1).
+                entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+                let mut documents = Vec::with_capacity(entries.len());
+                for (relative, entry) in entries {
+                    let mut components: Vec<&str> = relative.split('/').collect();
+                    if components.iter().any(|c| matches!(*c, "" | "." | "..")) {
+                        return Err(Error::new(format!(
+                            "{id}: `{relative}` is not a relative path below it"
+                        ))
+                        .with_source_id(id.clone()));
+                    }
+                    components.pop();
+                    let directory = target.map(|t| {
+                        let components = components.iter().map(|c| (*c).to_owned());
+                        t.iter().cloned().chain(components).collect()
+                    });
+                    let Loaded::Document(bytes) = loader::load(loader, &entry)? else {
+                        return Err(Error::new(format!(
+                            "{id}: {entry} is listed as a document, and is a directory"
+                        ))
+                        .with_source_id(entry));
+                    };
+                    documents.push(Document::read(relative, &entry, bytes, directory)?);
+                }
+                documents
+            }
+        };
         Ok(Self { name, documents })
     }
 
@@ -262,9 +335,9 @@ impl CrolLayer {
     /// The layer without the file at `path`: a project file is never read
     /// as data, even inside a layer's directory (`SPEC.md` 12.4).
     pub fn without_file(mut self, path: &Path) -> Self {
-        if let Ok(path) = path.canonicalize() {
-            self.documents
-                .retain(|d| d.canonical.as_ref() != Some(&path));
+        if path.canonicalize().is_ok() {
+            let file = SourceId::from_path(path);
+            self.documents.retain(|d| d.source.as_ref() != Some(&file));
         }
         self
     }
@@ -276,53 +349,13 @@ impl CrolLayer {
     }
 
     /// The documents: each one's path relative to the layer, its name for
-    /// messages (a file system path, or `layer/path` in memory), and its
-    /// text.
+    /// messages (its [`SourceId`], or `layer/path` for documents built in
+    /// code), and its text.
     pub fn documents(&self) -> impl Iterator<Item = (&str, &str, &str)> {
         self.documents
             .iter()
             .map(|d| (d.relative.as_str(), d.display.as_str(), d.text.as_str()))
     }
-}
-
-fn read_document(path: &Path, relative: String) -> Result<Document, Error> {
-    let bytes = std::fs::read(path)
-        .map_err(|e| Error::new(format!("cannot read {}: {e}", path.display())))?;
-    let text = String::from_utf8(bytes)
-        .map_err(|_| Error::new(format!("{} is not valid UTF-8", path.display())))?;
-    Ok(Document {
-        relative,
-        display: path.display().to_string(),
-        text,
-        directory: path.parent().map(Path::to_path_buf),
-        canonical: path.canonicalize().ok(),
-    })
-}
-
-fn read_directory(base: &Path, dir: &Path, documents: &mut Vec<Document>) -> Result<(), Error> {
-    let entries = std::fs::read_dir(dir)
-        .map_err(|e| Error::new(format!("cannot read {}: {e}", dir.display())))?;
-    for entry in entries {
-        let entry = entry.map_err(|e| Error::new(format!("cannot read {}: {e}", dir.display())))?;
-        let path = entry.path();
-        if entry.file_name().to_string_lossy().starts_with('.') {
-            continue;
-        }
-        // `is_dir` and `is_file` follow symbolic links.
-        if path.is_dir() {
-            read_directory(base, &path, documents)?;
-        } else if path.is_file() && path.extension().is_some_and(|e| e == "crol") {
-            let relative = path
-                .strip_prefix(base)
-                .unwrap_or(&path)
-                .components()
-                .map(|c| c.as_os_str().to_string_lossy())
-                .collect::<Vec<_>>()
-                .join("/");
-            documents.push(read_document(&path, relative)?);
-        }
-    }
-    Ok(())
 }
 
 /// Where a layer comes from: a module path (`&str`, `String`) or a file
@@ -335,8 +368,10 @@ pub trait LayerSource {
 
 impl LayerSource for &str {
     fn load<T>(self, config: &CrolConfig<T>) -> Result<CrolLayer, Error> {
-        let path = module_path::resolve(self, &config.root_path, None)?;
-        CrolLayer::from_path(self, &path)
+        config
+            .file_loaders
+            .resolve(self, &config.root_path)?
+            .load(self)
     }
 }
 
@@ -347,7 +382,13 @@ impl LayerSource for String {
 }
 
 impl LayerSource for &Path {
-    fn load<T>(self, _: &CrolConfig<T>) -> Result<CrolLayer, Error> {
+    fn load<T>(self, config: &CrolConfig<T>) -> Result<CrolLayer, Error> {
+        if !config.file_loaders.file_system() {
+            return Err(Error::new(format!(
+                "cannot read {}: the file system is turned off",
+                self.display()
+            )));
+        }
         if !self.exists() {
             return Err(Error::new(format!("{} does not exist", self.display())));
         }
@@ -392,8 +433,8 @@ impl LayerSource for CrolLayer {
 pub struct CrolComposer<T = String> {
     config: CrolConfig<T>,
     layers: Vec<CrolLayer>,
-    /// Canonical paths of documents loaded, for `load_extends`.
-    loaded: HashSet<PathBuf>,
+    /// The sources of documents loaded, for `load_extends`.
+    loaded: HashSet<SourceId>,
     /// An error from `load_layer` or `with_variant`, reported by `compose`.
     error: Option<Error>,
     /// The schema, for `&default`.
@@ -429,6 +470,21 @@ impl<T: VariantName> CrolComposer<T> {
             schema: None,
             aliases: None,
         }
+    }
+
+    /// Registers a file loader (`SPEC.md` 10.7), asked after those already
+    /// registered and before the default [`FsLoader`], for what is loaded
+    /// from now on.
+    pub fn with_file_loader(mut self, loader: impl FileLoader + 'static) -> Self {
+        self.config.file_loaders = self.config.file_loaders.with(loader);
+        self
+    }
+
+    /// Turns off the default [`FsLoader`]: see
+    /// [`FileLoaders::without_file_system`].
+    pub fn without_file_system(mut self) -> Self {
+        self.config.file_loaders = self.config.file_loaders.without_file_system();
+        self
     }
 
     /// Adds a layer on top of those loaded so far (`SPEC.md` 7.1). It fails
@@ -490,43 +546,46 @@ impl<T: VariantName> CrolComposer<T> {
     }
 
     /// Adds `layer`, after the layers it extends if `load_extends` is set.
-    /// `in_progress` holds the documents whose extends are being loaded, to
+    /// `in_progress` holds the sources whose extends are being loaded, to
     /// find cycles.
-    fn add(&mut self, layer: CrolLayer, in_progress: &mut Vec<PathBuf>) -> Result<(), Error> {
+    fn add(&mut self, layer: CrolLayer, in_progress: &mut Vec<SourceId>) -> Result<(), Error> {
         if self.config.load_extends {
-            for document in &layer.documents {
+            // In document order: by path (`SPEC.md` 7.1).
+            let mut documents: Vec<&Document> = layer.documents.iter().collect();
+            documents.sort_by(|a, b| a.relative.cmp(&b.relative));
+            for document in documents {
                 for module_path in extends_of(&document.text) {
-                    let here = document.directory.as_deref();
-                    let path = module_path::resolve(&module_path, &self.config.root_path, here)?;
-                    let canonical = path.canonicalize().unwrap_or(path.clone());
-                    if in_progress.contains(&canonical)
-                        || document.canonical.as_ref() == Some(&canonical)
-                    {
+                    let resolved = self.config.file_loaders.resolve_from(
+                        &module_path,
+                        &self.config.root_path,
+                        document.origin(),
+                    )?;
+                    let id = resolved.id().clone();
+                    if in_progress.contains(&id) || document.source.as_ref() == Some(&id) {
                         return Err(Error::new(format!(
-                            "{}: `extends` forms a cycle through {}",
-                            document.display,
-                            path.display()
+                            "{}: `extends` forms a cycle through {id}",
+                            document.display
                         )));
                     }
-                    if self.loaded.contains(&canonical) {
+                    if self.loaded.contains(&id) {
                         continue;
                     }
-                    let extended = CrolLayer::from_path(module_path.clone(), &path)?;
-                    if let Some(canonical) = &document.canonical {
-                        in_progress.push(canonical.clone());
+                    let extended = resolved.load(module_path.clone())?;
+                    if let Some(source) = &document.source {
+                        in_progress.push(source.clone());
                     }
-                    in_progress.push(canonical.clone());
+                    in_progress.push(id);
                     self.add(extended, in_progress)?;
                     in_progress.pop();
-                    if document.canonical.is_some() {
+                    if document.source.is_some() {
                         in_progress.pop();
                     }
                 }
             }
         }
         for document in &layer.documents {
-            if let Some(canonical) = &document.canonical {
-                self.loaded.insert(canonical.clone());
+            if let Some(source) = &document.source {
+                self.loaded.insert(source.clone());
             }
         }
         self.layers.push(layer);
