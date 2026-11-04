@@ -576,6 +576,24 @@ struct ContextState {
     /// The chain of the root's entries.
     chain: Chain,
     templates: VBinds,
+    /// The keys that can differ from the base, if that was found out.
+    varying: Option<std::collections::HashSet<Arc<str>>>,
+}
+
+/// What a computed cell holds.
+fn done_shape(cell: &Lazy) -> Option<Rc<Shaped>> {
+    match &*cell.state.borrow() {
+        State::Done(Ok(shaped)) => Some(shaped.clone()),
+        _ => None,
+    }
+}
+
+/// The keyed value in `shaped`, if it is one.
+fn keyed_shape(shaped: &Option<Rc<Shaped>>) -> Option<&KeyedShape> {
+    match &shaped.as_ref()?.shape {
+        Shape::Keyed(keyed) => Some(keyed),
+        _ => None,
+    }
 }
 
 fn root_location(cell: &Lazy) -> Location {
@@ -747,6 +765,7 @@ pub(crate) fn evaluate(ir: &Ir, root: ExprId) -> (Option<Value>, Vec<Diagnostic>
         root: location,
         chain: None,
         templates: None,
+        varying: None,
     });
     let span = ir.exprs[root].span;
     let value = evaluator.full_value(&root_cell, span, &mut Vec::new()).ok();
@@ -1092,58 +1111,69 @@ pub(crate) fn evaluate_data(
         let root_cell = evaluator.contexts[id].root_cell.clone();
         // Only keys that can differ are evaluated again, unless the base
         // failed: then every context's own errors are wanted.
-        let varying = evaluator.share.then(|| plan.varying(context));
-        let (slots, defaults, defaulted) = match &*root_cell.state.borrow() {
-            State::Done(Ok(shaped)) => match &shaped.shape {
-                Shape::Keyed(keyed) => {
-                    (keyed.slots.clone(), keyed.defaults, keyed.defaulted.clone())
-                }
-                _ => Default::default(),
-            },
-            _ => Default::default(),
+        let varying = evaluator.share.then(|| {
+            let known = evaluator.contexts[id].varying.take();
+            known.unwrap_or_else(|| plan.varying(context))
+        });
+        let shaped = done_shape(&root_cell);
+        let no_keys = KeyedShape::default();
+        let slots = keyed_shape(&shaped).unwrap_or(&no_keys);
+        let (defaults, defaulted) = (slots.defaults, slots.defaulted.clone());
+        let slots = &slots.slots;
+        // A key that cannot differ has the base's slot, so that only the keys
+        // that can differ can be new, changed or gone. Each is evaluated in
+        // root order.
+        let mut evaluated: Vec<usize> = match &varying {
+            Some(varying) => varying
+                .iter()
+                .filter_map(|key| slots.get_index_of(&KeyRef::Str(key)))
+                .collect(),
+            None => (0..slots.len()).collect(),
         };
-        let mut changes = IndexMap::new();
+        evaluated.sort_unstable();
+        // The differences from base keys, by their place there.
+        let mut in_base = Vec::new();
+        let mut own = Vec::new();
         let mut failed = false;
-        for (key, slot) in &slots {
-            let base_value = base_keyed.entries.get(key);
-            let name = match key {
-                Key::Str(name) => &**name,
-                Key::Int(_) => "",
-            };
-            if let (Some(varying), Some(_)) = (&varying, base_value)
-                && !varying.contains(name)
-            {
-                continue;
-            }
-            match evaluator.full_value(
-                &slot.value,
-                Span::detached(),
-                &mut vec![(Rc::as_ptr(&root_cell), None)],
-            ) {
-                Ok(value) => {
-                    if !base_value.is_some_and(|b| b.identical(&value)) {
-                        changes.insert(key.clone(), Some(value));
-                    }
-                }
+        let mut visiting = vec![(Rc::as_ptr(&root_cell), None)];
+        for (key, slot) in evaluated.into_iter().filter_map(|i| slots.get_index(i)) {
+            let base_value = base_keyed.entries.get_full(key);
+            match evaluator.full_value(&slot.value, Span::detached(), &mut visiting) {
+                Ok(value) => match base_value {
+                    Some((_, _, base)) if base.identical(&value) => {}
+                    Some((position, ..)) => in_base.push((position, key.clone(), Some(value))),
+                    None => own.push((key.clone(), Some(value))),
+                },
                 Err(_) => failed = true,
             }
         }
-        // Base keys the context removes, in root order before its own keys.
-        let removed: Vec<Key> = base_keyed
-            .entries
-            .keys()
-            .filter(|k| !slots.contains_key(*k))
-            .cloned()
-            .collect();
-        let mut ordered = IndexMap::with_capacity(changes.len() + removed.len());
-        for key in base_keyed.entries.keys() {
-            if let Some(change) = changes.shift_remove(key) {
-                ordered.insert(key.clone(), change);
-            } else if removed.contains(key) {
-                ordered.insert(key.clone(), None);
+        let mut removed = |position: usize, key: &Key| {
+            if !slots.contains_key(key) {
+                in_base.push((position, key.clone(), None));
+            }
+        };
+        match &varying {
+            Some(varying) => {
+                for key in varying {
+                    if let Some((position, key, _)) = base_keyed.entries.get_full(&KeyRef::Str(key))
+                    {
+                        removed(position, key);
+                    }
+                }
+            }
+            None => {
+                for (position, key) in base_keyed.entries.keys().enumerate() {
+                    removed(position, key);
+                }
             }
         }
-        ordered.extend(changes);
+        // Keys in root order, and the context's own keys after them.
+        in_base.sort_unstable_by_key(|(position, ..)| *position);
+        let ordered: IndexMap<Key, Option<Value>> = in_base
+            .into_iter()
+            .map(|(_, key, change)| (key, change))
+            .chain(own)
+            .collect();
         record(&mut evaluator, index);
         // A root key of the base made again holds what the context made.
         if forget && !evaluator.remade {
@@ -1831,6 +1861,7 @@ impl Evaluator<'_> {
             root: root.clone(),
             chain: chain.clone(),
             templates: None,
+            varying: None,
         });
         let plan = self.plan.expect("only data mode has more than one context");
         let templates = self.bind_cells(plan.templates, &chain, None, id, true);
@@ -1838,28 +1869,24 @@ impl Evaluator<'_> {
 
         // A key that cannot differ from the base shares the base's cell.
         let shared = (self.share && id > 0).then(|| {
-            let base = &self.contexts[0];
-            let (slots, defaulted) = match &*base.root_cell.state.borrow() {
-                State::Done(Ok(shaped)) => match &shaped.shape {
-                    Shape::Keyed(keyed) => (keyed.slots.clone(), keyed.defaulted.clone()),
-                    _ => Default::default(),
-                },
-                _ => Default::default(),
-            };
-            (plan.varying(context), slots, defaulted)
+            (plan.varying(context), done_shape(&self.contexts[0].root_cell))
         });
+        let no_keys = KeyedShape::default();
         let mut slots = Vec::new();
         // The keys whose chain ends in a remove (`SPEC.md` 10.3).
         let mut defaulted = BTreeSet::new();
         for (key, key_plan) in &plan.keys {
-            if let Some((varying, base_slots, base_defaulted)) = &shared
+            if let Some((varying, base)) = &shared
                 && !varying.contains(key)
             {
-                let key = Key::Str(key.clone());
-                if let Some((position, _, slot)) = base_slots.get_full(&key) {
-                    slots.push((self.base_created[position], key, slot.clone()));
-                } else if base_defaulted.contains(&key) {
-                    defaulted.insert(key);
+                let base = keyed_shape(base).unwrap_or(&no_keys);
+                if let Some((position, key, slot)) = base.slots.get_full(&KeyRef::Str(key)) {
+                    slots.push((self.base_created[position], key.clone(), slot.clone()));
+                } else {
+                    let key = Key::Str(key.clone());
+                    if base.defaulted.contains(&key) {
+                        defaulted.insert(key);
+                    }
                 }
                 continue;
             }
@@ -1897,6 +1924,7 @@ impl Evaluator<'_> {
             shape: Shape::Keyed(Box::new(keyed)),
             span: Span::detached(),
         })));
+        self.contexts[id].varying = shared.map(|(varying, _)| varying);
         id
     }
 
