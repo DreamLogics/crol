@@ -174,7 +174,7 @@ pub(crate) fn token_at(
 }
 
 /// The steps a target's selectors take, ignoring conditions.
-fn selector_steps(selectors: impl Iterator<Item = ast::Selector>) -> Vec<PathStep> {
+pub(crate) fn selector_steps(selectors: impl Iterator<Item = ast::Selector>) -> Vec<PathStep> {
     selectors
         .filter_map(|s| match s {
             ast::Selector::Field(f) => Some(PathStep::Field(f.name()?.text().to_owned())),
@@ -307,7 +307,7 @@ fn reference_path(token: &SyntaxToken) -> Option<(String, Vec<PathStep>)> {
     Some((key, steps))
 }
 
-fn describe_path(key: &str, path: &[PathStep]) -> String {
+pub(crate) fn describe_path(key: &str, path: &[PathStep]) -> String {
     let mut out = Key::Str(key.to_owned()).to_string();
     for step in path {
         match step {

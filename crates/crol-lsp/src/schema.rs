@@ -1,0 +1,192 @@
+//! What the schema says about a place in the data (`SPEC.md` 10.9, 12.5).
+
+use crol::schema::{Field, SchemaFile, TypeDef, TypeExpr, VariantShape};
+use crol_eval::PathStep;
+use crol_syntax::SyntaxKind;
+use crol_syntax::ast::{self, AstNode};
+use indexmap::IndexMap;
+
+use crate::features;
+use crate::workspace::Snapshot;
+
+/// The type of a block: its type name's, else that of its place in the
+/// block or root entry around it, through struct fields, map values,
+/// elements, and the payloads of options, newtypes and transparent types.
+pub(crate) fn block_type(snapshot: &Snapshot, block: &ast::Block) -> Option<TypeExpr> {
+    let schema = snapshot.schema.as_ref()?;
+    let root = snapshot.root_type.as_deref().unwrap_or(&schema.root);
+    block_type_in(schema, root, block, 0)
+}
+
+fn block_type_in(
+    schema: &SchemaFile,
+    root: &str,
+    block: &ast::Block,
+    depth: usize,
+) -> Option<TypeExpr> {
+    if let Some(name) = block.type_name() {
+        return named(schema, name.text());
+    }
+    if depth > crol_syntax::MAX_NESTING {
+        return None;
+    }
+    let entry = block.syntax().parent().and_then(ast::Entry::cast)?;
+    let target = entry.target()?;
+    // The block or document the entry is in, through variant blocks.
+    let mut container = entry.syntax().parent()?;
+    while container.kind() == SyntaxKind::VARIANT_BLOCK {
+        container = container.parent()?;
+    }
+    let outer = ast::Block::cast(container.clone()).filter(|b| {
+        b.type_name().is_some()
+            || container
+                .parent()
+                .is_some_and(|p| p.kind() != SyntaxKind::DOCUMENT)
+    });
+    let mut ty = match outer {
+        // In a block: the key is one of its fields.
+        Some(outer) => {
+            let ty = block_type_in(schema, root, &outer, depth + 1)?;
+            let key = features::key_text(&target.key()?)?;
+            step(schema, &ty, &PathStep::Field(key))?
+        }
+        // A root entry: the key's value has the root type.
+        None => TypeExpr::Named(root.to_owned()),
+    };
+    for s in features::selector_steps(target.selectors()) {
+        ty = step(schema, &ty, &s)?;
+    }
+    Some(ty)
+}
+
+/// The named type with the serde name `name`, if exactly one has it.
+pub(crate) fn named(schema: &SchemaFile, name: &str) -> Option<TypeExpr> {
+    let mut found = schema.by_name(name);
+    let (path, _) = found.next()?;
+    found
+        .next()
+        .is_none()
+        .then(|| TypeExpr::Named(path.to_owned()))
+}
+
+fn step(schema: &SchemaFile, ty: &TypeExpr, step: &PathStep) -> Option<TypeExpr> {
+    match (ty, step) {
+        (TypeExpr::Option(inner), _) => self::step(schema, inner, step),
+        (TypeExpr::Named(path), _) => match schema.get(path)? {
+            TypeDef::Struct { fields, .. } => match step {
+                PathStep::Field(name) => field(fields, name).map(|f| f.ty.clone()),
+                _ => None,
+            },
+            TypeDef::TupleStruct { fields, .. } => match step {
+                PathStep::Element(i) => fields.get(*i).cloned(),
+                _ => None,
+            },
+            TypeDef::Newtype { inner, .. } | TypeDef::Transparent { inner, .. } => {
+                self::step(schema, inner, step)
+            }
+            _ => None,
+        },
+        (TypeExpr::Map(_, value), PathStep::Field(_) | PathStep::Accessor(_)) => {
+            Some((**value).clone())
+        }
+        (
+            TypeExpr::List(item) | TypeExpr::Set(item) | TypeExpr::Array(item, _),
+            PathStep::Accessor(_) | PathStep::Element(_),
+        ) => Some((**item).clone()),
+        (TypeExpr::Tuple(items), PathStep::Element(i)) => items.get(*i).cloned(),
+        _ => None,
+    }
+}
+
+/// A struct's field by its name or an alias.
+pub(crate) fn field<'a>(fields: &'a IndexMap<String, Field>, name: &str) -> Option<&'a Field> {
+    fields.get(name).or_else(|| {
+        fields
+            .values()
+            .find(|f| f.aliases.iter().any(|a| a == name))
+    })
+}
+
+/// The struct a type is, through options, newtypes and transparent types:
+/// its serde name and fields.
+pub(crate) fn struct_of<'a>(
+    schema: &'a SchemaFile,
+    ty: &TypeExpr,
+) -> Option<(&'a str, &'a IndexMap<String, Field>)> {
+    match ty {
+        TypeExpr::Option(inner) => struct_of(schema, inner),
+        TypeExpr::Named(path) => match schema.get(path)? {
+            TypeDef::Struct { name, fields, .. } => Some((name, fields)),
+            TypeDef::Newtype { inner, .. } | TypeDef::Transparent { inner, .. } => {
+                struct_of(schema, inner)
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// A value of the right shape for a type, to be filled in: `0`, `""`,
+/// `[]`, `None`, `Limits { .. }`, an enum's first variant.
+pub(crate) fn placeholder(schema: &SchemaFile, ty: &TypeExpr) -> String {
+    placeholder_at(schema, ty, 0)
+}
+
+fn placeholder_at(schema: &SchemaFile, ty: &TypeExpr, depth: usize) -> String {
+    // Types that contain themselves stop here.
+    if depth > 8 {
+        return "()".to_owned();
+    }
+    let many = |types: &[TypeExpr]| {
+        types
+            .iter()
+            .map(|t| placeholder_at(schema, t, depth + 1))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    match ty {
+        TypeExpr::Bool => "false".to_owned(),
+        TypeExpr::Char => "' '".to_owned(),
+        TypeExpr::String => "\"\"".to_owned(),
+        TypeExpr::Unit | TypeExpr::Any => "()".to_owned(),
+        TypeExpr::I8
+        | TypeExpr::I16
+        | TypeExpr::I32
+        | TypeExpr::I64
+        | TypeExpr::I128
+        | TypeExpr::U8
+        | TypeExpr::U16
+        | TypeExpr::U32
+        | TypeExpr::U64
+        | TypeExpr::U128 => "0".to_owned(),
+        TypeExpr::F32 | TypeExpr::F64 => "0.0".to_owned(),
+        TypeExpr::Bytes | TypeExpr::List(_) | TypeExpr::Set(_) | TypeExpr::Array(..) => {
+            "[]".to_owned()
+        }
+        TypeExpr::Id(_) => "@\"\"".to_owned(),
+        TypeExpr::Option(_) => "None".to_owned(),
+        TypeExpr::Tuple(items) => format!("({})", many(items)),
+        TypeExpr::Map(..) => "{}".to_owned(),
+        TypeExpr::Named(path) => match schema.get(path) {
+            None => "()".to_owned(),
+            Some(TypeDef::Struct { name, .. }) => format!("{name} {{ .. }}"),
+            Some(TypeDef::TupleStruct { name, fields, .. }) => format!("{name}({})", many(fields)),
+            Some(TypeDef::Newtype { name, inner, .. }) => {
+                format!("{name}({})", placeholder_at(schema, inner, depth + 1))
+            }
+            Some(TypeDef::Transparent { inner, .. }) => placeholder_at(schema, inner, depth + 1),
+            Some(TypeDef::UnitStruct { name, .. }) => name.clone(),
+            Some(TypeDef::Enum { variants, .. }) => match variants.first() {
+                None => "()".to_owned(),
+                Some((name, variant)) => match &variant.shape {
+                    VariantShape::Unit => name.clone(),
+                    VariantShape::Newtype(inner) => {
+                        format!("{name}({})", placeholder_at(schema, inner, depth + 1))
+                    }
+                    VariantShape::Tuple(items) => format!("{name}({})", many(items)),
+                    VariantShape::Struct(_) => format!("{name} {{ .. }}"),
+                },
+            },
+        },
+    }
+}

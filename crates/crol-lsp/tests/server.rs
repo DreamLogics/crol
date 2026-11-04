@@ -474,3 +474,190 @@ fn inlay_hints_show_what_entries_compute() {
     assert_eq!(hints_in(&mut client, &local), [(19, "= 6".to_owned())]);
     client.stop();
 }
+
+/// Applies LSP text edits to an ASCII text.
+fn apply(text: &str, edits: &[Value]) -> String {
+    let offset = |position: &Value| {
+        let line = position["line"].as_u64().unwrap() as usize;
+        let character = position["character"].as_u64().unwrap() as usize;
+        text.split_inclusive('\n')
+            .take(line)
+            .map(str::len)
+            .sum::<usize>()
+            + character
+    };
+    let mut edits: Vec<(usize, usize, &str)> = edits
+        .iter()
+        .map(|e| {
+            (
+                offset(&e["range"]["start"]),
+                offset(&e["range"]["end"]),
+                e["newText"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    edits.sort_by_key(|e| std::cmp::Reverse(e.0));
+    let mut out = text.to_owned();
+    for (start, end, new) in edits {
+        out.replace_range(start..end, new);
+    }
+    out
+}
+
+#[test]
+fn code_actions_fix_what_the_diagnostics_say() {
+    let dir = workspace(
+        "lsp-actions",
+        &[
+            (
+                "project.crol",
+                r#"Project { layers: List([{ name: "base", dir: "base", .. }, { name: "local", dir: "local", .. }]), schema: Some("schema"), .. }"#,
+            ),
+            (
+                "schema.crol",
+                r#"Schema {
+                    format: 1,
+                    root: "app::Service",
+                    types: {
+                        "app::Service": Struct {
+                            name: "Service",
+                            source: ("src/lib.rs", 1),
+                            fields: {
+                                replicas: { ty: U32, .. },
+                                port: { ty: U16, .. },
+                                limits: { ty: Named("app::Limits"), .. },
+                            },
+                            ..
+                        },
+                        "app::Limits": Struct {
+                            name: "Limits",
+                            source: ("src/lib.rs", 9),
+                            fields: { cpu: { ty: F64, .. }, memory_mb: { ty: U32, .. } },
+                            ..
+                        },
+                    },
+                }"#,
+            ),
+            (
+                "base/a.crol",
+                "+web: Service { replicas: 2, port: 80, limits: Limits { cpu: 1.0, memory_mb: 512 } },",
+            ),
+            ("local/a.crol", ""),
+        ],
+    );
+    let mut client = Client::start(&dir);
+    let local = uri(&dir.join("local/a.crol"));
+    let mut version = 1;
+    let mut open = |client: &mut Client, text: &str, errors: bool| {
+        if version == 1 {
+            client.notify(
+                "textDocument/didOpen",
+                json!({ "textDocument": { "uri": local, "languageId": "crol", "version": 1, "text": text } }),
+            );
+        } else {
+            client.notify(
+                "textDocument/didChange",
+                json!({
+                    "textDocument": { "uri": local, "version": version },
+                    "contentChanges": [{ "text": text }],
+                }),
+            );
+        }
+        version += 1;
+        client.diagnostics_for(&local, |d| d.is_empty() != errors)
+    };
+    // Each action's title and the text after it.
+    let actions = |client: &mut Client, text: &str, diagnostic: &Value| {
+        let found = client.request(
+            "textDocument/codeAction",
+            json!({
+                "textDocument": { "uri": local },
+                "range": diagnostic["range"],
+                "context": { "diagnostics": [diagnostic], "triggerKind": 2 },
+            }),
+        );
+        found
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| {
+                let edits = a["edit"]["changes"][&local].as_array().unwrap();
+                (a["title"].as_str().unwrap().to_owned(), apply(text, edits))
+            })
+            .collect::<Vec<_>>()
+    };
+    let message = |d: &[Value], part: &str| {
+        d.iter()
+            .find(|d| d["message"].as_str().unwrap().contains(part))
+            .unwrap_or_else(|| panic!("no diagnostic with `{part}` in {d:?}"))
+            .clone()
+    };
+
+    // Missing fields, from the schema, and a misspelt field.
+    let text = "+api: Service { replicas: 1 },\n+db: Service { replicas: 1, prot: 2, limits: Limits { cpu: 1.0, memory_mb: 1 } },";
+    let diagnostics = open(&mut client, text, true);
+    assert_eq!(
+        actions(&mut client, text, &message(&diagnostics, "is missing")),
+        [
+            (
+                "Add the missing fields".to_owned(),
+                text.replace(
+                    "replicas: 1 }",
+                    "replicas: 1, port: 0, limits: Limits { .. } }"
+                )
+            ),
+            (
+                "End the block with `..`".to_owned(),
+                text.replace("replicas: 1 }", "replicas: 1, .. }")
+            ),
+        ]
+    );
+    assert_eq!(
+        actions(&mut client, text, &message(&diagnostics, "no field `prot`")),
+        [(
+            "Change to `port`".to_owned(),
+            text.replace("prot:", "port:")
+        )]
+    );
+
+    // A bind that does not exist.
+    let text = "x: { y: &replicas },";
+    let diagnostics = open(&mut client, text, true);
+    assert_eq!(
+        actions(&mut client, text, &message(&diagnostics, "no bind")),
+        [(
+            "Change to `&self.replicas`".to_owned(),
+            "x: { y: &self.replicas },".to_owned()
+        )]
+    );
+
+    // Declaring a key that exists.
+    let text = "+web: Service { replicas: 3, .. },";
+    let diagnostics = open(&mut client, text, true);
+    assert_eq!(
+        actions(&mut client, text, &message(&diagnostics, "already exists")),
+        [(
+            "Patch `web` instead of declaring it".to_owned(),
+            "web: Service { replicas: 3, .. },".to_owned()
+        )]
+    );
+
+    // The values below, as comments, when asked for.
+    let text = "web.limits: Limits { ..&, cpu: 2.0 },";
+    open(&mut client, text, false);
+    let found = client.request(
+        "textDocument/codeAction",
+        json!({
+            "textDocument": { "uri": local },
+            "range": { "start": { "line": 0, "character": 2 }, "end": { "line": 0, "character": 2 } },
+            "context": { "diagnostics": [], "triggerKind": 1 },
+        }),
+    );
+    let action = &found.as_array().unwrap()[0];
+    assert_eq!(action["title"], "Write the values below as comments");
+    assert_eq!(
+        apply(text, action["edit"]["changes"][&local].as_array().unwrap()),
+        "web.limits: Limits {\n    // memory_mb: 512\n    ..&, cpu: 2.0 },"
+    );
+    client.stop();
+}

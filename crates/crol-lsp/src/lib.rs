@@ -13,10 +13,12 @@
 
 #![forbid(unsafe_code)]
 
+mod actions;
 mod convert;
 mod features;
 mod hints;
 mod navigate;
+mod schema;
 mod tokens;
 mod workspace;
 
@@ -175,6 +177,15 @@ impl Server {
             })),
             workspace_symbol_provider: Some(lsp_types::OneOf::Left(true)),
             inlay_hint_provider: Some(lsp_types::OneOf::Left(true)),
+            code_action_provider: Some(lsp_types::CodeActionProviderCapability::Options(
+                lsp_types::CodeActionOptions {
+                    code_action_kinds: Some(vec![
+                        lsp_types::CodeActionKind::QUICKFIX,
+                        lsp_types::CodeActionKind::REFACTOR_REWRITE,
+                    ]),
+                    ..Default::default()
+                },
+            )),
             semantic_tokens_provider: Some(
                 lsp_types::SemanticTokensOptions {
                     legend: tokens::legend(),
@@ -556,6 +567,22 @@ impl Server {
                                 encoding,
                             )))
                         });
+                self.respond(id, result);
+            }
+            request::CodeActionRequest::METHOD => {
+                let result = serde_json::from_value::<lsp_types::CodeActionParams>(request.params)
+                    .ok()
+                    .and_then(|p| {
+                        let text = self.text(&p.text_document.uri)?;
+                        Some(actions::code_actions(
+                            self.snapshot.as_ref(),
+                            &p.text_document.uri,
+                            &text,
+                            &p,
+                            &self.settings,
+                            encoding,
+                        ))
+                    });
                 self.respond(id, result);
             }
             request::InlayHintRequest::METHOD => {
