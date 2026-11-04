@@ -228,6 +228,37 @@ pub(crate) fn inputs(
     if contexts.is_some() {
         options = options.with_contexts(contexts);
     }
+    // Else the schema the documents name with `#![schema(...)]`, if they
+    // agree (`SPEC.md` 4.1).
+    if schema_path.is_none() {
+        let mut named: Vec<PathBuf> = Vec::new();
+        for layer in composer.layers() {
+            for (_, display, text) in layer.documents() {
+                match crol::schema::attribute_path(text, Path::new(display)) {
+                    Some((_, Ok(path))) => {
+                        let path = path.canonicalize().unwrap_or(path);
+                        if !named.contains(&path) {
+                            named.push(path);
+                        }
+                    }
+                    Some((_, Err(error))) => {
+                        return fail(reporter, format!("{display}: {error}"));
+                    }
+                    None => {}
+                }
+            }
+        }
+        match named.len() {
+            0 => {}
+            1 => schema_path = named.pop(),
+            _ => {
+                return fail(
+                    reporter,
+                    "the documents name different schemas; choose one with --schema".to_owned(),
+                );
+            }
+        }
+    }
     let schema = match &schema_path {
         Some(path) => match SchemaFile::read(path) {
             Ok(schema) => Some(schema),

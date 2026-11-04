@@ -241,3 +241,54 @@ fn project_files_give_the_layers_and_the_schema() {
         "web: Service { replicas: 1 },\n"
     );
 }
+
+#[test]
+fn check_uses_the_schema_a_document_names() {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("schema-attribute");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("schema.crol"),
+        r#"Schema {
+            format: 1,
+            root: "app::Service",
+            types: {
+                "app::Service": Struct {
+                    name: "Service",
+                    source: ("src/lib.rs", 1),
+                    fields: { replicas: { ty: U32, .. } },
+                    ..
+                },
+            },
+        }"#,
+    )
+    .unwrap();
+    let good = dir.join("good.crol");
+    let bad = dir.join("bad.crol");
+    let missing = dir.join("missing.crol");
+    std::fs::write(
+        &good,
+        "#![schema(::schema)]\n+web: Service { replicas: 2 },\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &bad,
+        "#![schema(::schema)]\n+web: Service { replicas: -2 },\n",
+    )
+    .unwrap();
+    std::fs::write(&missing, "#![schema(::nothing)]\n+web: 1,\n").unwrap();
+
+    let output = crol(&["check", good.to_str().unwrap()]);
+    assert!(output.status.success(), "{output:?}");
+    let output = crol(&["check", "--color", "never", bad.to_str().unwrap()]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("expected u32, found -2"), "{stderr}");
+    let output = crol(&["check", "--color", "never", missing.to_str().unwrap()]);
+    assert!(!output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("schema: the module path `::nothing`"),
+        "{stderr}"
+    );
+}

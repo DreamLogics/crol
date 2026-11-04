@@ -829,3 +829,70 @@ fn completion_and_hover_from_the_schema() {
     );
     client.stop();
 }
+
+#[test]
+fn documents_on_their_own_are_checked_against_their_schema() {
+    let dir = workspace(
+        "lsp-document-schema",
+        &[
+            (
+                "schema.crol",
+                r#"Schema {
+                    format: 1,
+                    root: "app::Service",
+                    types: {
+                        "app::Service": Struct {
+                            name: "Service",
+                            source: ("src/lib.rs", 1),
+                            fields: { replicas: { ty: U32, .. } },
+                            ..
+                        },
+                    },
+                }"#,
+            ),
+            ("config.crol", ""),
+        ],
+    );
+    let mut client = Client::start(&dir);
+    let config = uri(&dir.join("config.crol"));
+    let open = |client: &mut Client, version: i32, text: &str| {
+        if version == 1 {
+            client.notify(
+                "textDocument/didOpen",
+                json!({ "textDocument": { "uri": config, "languageId": "crol", "version": 1, "text": text } }),
+            );
+        } else {
+            client.notify(
+                "textDocument/didChange",
+                json!({
+                    "textDocument": { "uri": config, "version": version },
+                    "contentChanges": [{ "text": text }],
+                }),
+            );
+        }
+        client.diagnostics_for(&config, |d| !d.is_empty())
+    };
+    let diagnostics = open(
+        &mut client,
+        1,
+        "#![schema(::schema)]\n\nService { replicas: \"two\" }",
+    );
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert!(
+        diagnostics[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("found \"two\""),
+        "{diagnostics:?}"
+    );
+    let diagnostics = open(&mut client, 2, "#![schema(::nothing)]\n\n{ replicas: 2 }");
+    assert!(
+        diagnostics[0]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("schema: "),
+        "{diagnostics:?}"
+    );
+    assert_eq!(diagnostics[0]["range"]["start"]["line"], 0);
+    client.stop();
+}

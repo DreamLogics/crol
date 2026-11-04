@@ -214,6 +214,36 @@ pub(crate) fn evaluate(
             .add(path.display().to_string(), text.as_str());
         snapshot.paths.push(path.clone());
         let evaluation = crol_eval::evaluate_value(&snapshot.sources, file);
+        match document_schema(text, path) {
+            Some(Ok(schema)) => {
+                if let Some(value) = &evaluation.value {
+                    // A top-level type name chooses the type (`SPEC.md` 4.1).
+                    let named = match &value.kind {
+                        crol_eval::ValueKind::Keyed(k) => k.name.as_deref(),
+                        crol_eval::ValueKind::NamedTuple(n, _)
+                        | crol_eval::ValueKind::UnitName(n) => Some(n.as_str()),
+                        _ => None,
+                    };
+                    let root = named.and_then(|n| {
+                        let mut found = schema.by_name(n).map(|(path, _)| path.to_owned());
+                        found.next().filter(|_| found.next().is_none())
+                    });
+                    snapshot.extra.extend(crol::check_value(
+                        value,
+                        &schema,
+                        root.as_deref(),
+                        &CheckOptions::default(),
+                    ));
+                }
+            }
+            Some(Err((range, message))) => {
+                snapshot.extra.push(Diagnostic::error(
+                    crol_eval::Span::new(file, range),
+                    message,
+                ));
+            }
+            None => {}
+        }
         snapshot.documents.push((file, evaluation));
     }
     if let Some(checks) = checks {
@@ -221,6 +251,20 @@ pub(crate) fn evaluate(
         snapshot.extra.extend(found);
     }
     snapshot
+}
+
+/// The schema a document names with `#![schema(...)]`, read; an error at
+/// the attribute if it cannot be read.
+fn document_schema(
+    text: &str,
+    path: &Path,
+) -> Option<Result<SchemaFile, (crol_syntax::TextRange, String)>> {
+    let (range, schema_path) = crol::schema::attribute_path(text, path)?;
+    Some(
+        schema_path
+            .and_then(SchemaFile::read)
+            .map_err(|e| (range, e.to_string())),
+    )
 }
 
 /// Loads the project's layers into the snapshot; returns its schema, root
