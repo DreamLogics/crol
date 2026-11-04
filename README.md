@@ -3,12 +3,12 @@
 **CROL, the Composable Rust Object Language**, is a text format for
 configuration and data files that load into Rust data models through
 [serde](https://serde.rs). It looks like [RON](https://github.com/ron-rs/ron),
-but a document holds *operations* as well as values: it can declare, replace,
+but a document holds _operations_ as well as values: it can declare, replace,
 patch and remove definitions, including ones written in other files and in
-lower-priority *layers*. Many files, from many sources, combine into one data
+lower-priority _layers_. Many files, from many sources, combine into one data
 set with fixed, predictable rules.
 
-```rust
+```crol
 // base/services.crol
 service_defaults := { replicas: 1, port: 8080, tags: ["managed"] },
 
@@ -23,7 +23,7 @@ service_defaults := { replicas: 1, port: 8080, tags: ["managed"] },
 },
 ```
 
-```rust
+```crol
 // local/overrides.crol: a later layer
 web.port: 9090,
 web.tags: & + ["local"],
@@ -41,16 +41,16 @@ The full design is in [`SPEC.md`](SPEC.md).
 
 ## Crates
 
-| Crate | Contents | Status |
-|---|---|---|
-| [`crol`](crates/crol) | the library: `CrolComposer`, serde `Deserializer` and `Serializer`, `from_str`, `to_string` | done |
-| [`crol-syntax`](crates/crol-syntax) | lexer, error-recovering parser, lossless syntax tree, typed AST, formatter | done |
-| [`crol-eval`](crates/crol-eval) | layers, chains, the evaluator, variants, fingerprints | done |
-| [`crol-derive`](crates/crol-derive) | `#[derive(Schema)]` and `#[derive(VariantName)]` | done |
-| [`crol-lsp`](crates/crol-lsp) | the language server, as a library | diagnostics, symbols, formatting, hover, completion, definition |
-| [`crol-cli`](crates/crol-cli) | the `crol` command-line tool | done |
-| [`tree-sitter-crol`](tree-sitter-crol) | the tree-sitter grammar and queries | done |
-| [`editors/zed`](editors/zed) | the Zed extension | syntax and language server |
+| Crate                                  | Contents                                                                                    | Status                                                          |
+| -------------------------------------- | ------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| [`crol`](crates/crol)                  | the library: `CrolComposer`, serde `Deserializer` and `Serializer`, `from_str`, `to_string` | done                                                            |
+| [`crol-syntax`](crates/crol-syntax)    | lexer, error-recovering parser, lossless syntax tree, typed AST, formatter                  | done                                                            |
+| [`crol-eval`](crates/crol-eval)        | layers, chains, the evaluator, variants, fingerprints                                       | done                                                            |
+| [`crol-derive`](crates/crol-derive)    | `#[derive(Schema)]` and `#[derive(VariantName)]`                                            | done                                                            |
+| [`crol-lsp`](crates/crol-lsp)          | the language server, as a library                                                           | diagnostics, symbols, formatting, hover, completion, definition |
+| [`crol-cli`](crates/crol-cli)          | the `crol` command-line tool                                                                | done                                                            |
+| [`tree-sitter-crol`](tree-sitter-crol) | the tree-sitter grammar and queries                                                         | done                                                            |
+| [`editors/zed`](editors/zed)           | the Zed extension                                                                           | syntax and language server                                      |
 
 ## Development
 
