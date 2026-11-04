@@ -371,7 +371,11 @@ fn missing_step(
     here: Option<&Location>,
 ) -> String {
     let missing = here.map_or_else(
-        || describe_selector(selector).trim_start_matches('.').to_owned(),
+        || {
+            describe_selector(selector)
+                .trim_start_matches('.')
+                .to_owned()
+        },
         Location::describe,
     );
     let Some(op) = op else {

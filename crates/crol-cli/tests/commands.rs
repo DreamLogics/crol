@@ -287,7 +287,10 @@ fn errors_in_a_project_file_point_at_the_file() {
 fn errors_in_a_schema_file_point_at_the_file() {
     let dir = tree(
         "schema-file-errors",
-        &[("s.crov", "Schema {\n    format: \"one\",\n}\n"), ("a.crod", "+a: 1\n")],
+        &[
+            ("s.crov", "Schema {\n    format: \"one\",\n}\n"),
+            ("a.crod", "+a: 1\n"),
+        ],
     );
     let output = crol(&dir, &["check", "a.crod", "--schema", "s.crov"]);
     assert!(failed(&output), "{output:?}");

@@ -133,7 +133,10 @@ fn a_document_of_a_directory_is_not_loaded_again_with_it() {
             ("x.crod", "#![extends(shared::a)]\n\na: & + 1,"),
             ("y.crod", "#![extends(shared)]\n\nb: & + 1,"),
             // The other way around: the directory, then one of its documents.
-            ("z.crod", "#![extends(shared)]\n#![extends(shared::a)]\n+z: 1,"),
+            (
+                "z.crod",
+                "#![extends(shared)]\n#![extends(shared::a)]\n+z: 1,",
+            ),
             // A directory with a document that extends another one of it.
             ("sibling/a.crod", "#![extends(b)]\n\nb: & + 1,"),
             ("sibling/b.crod", "+b: 1,"),
@@ -162,9 +165,7 @@ fn a_document_of_a_directory_is_not_loaded_again_with_it() {
     assert_eq!(data.get::<u8>("a").unwrap(), 2);
     assert_eq!(data.get::<u8>("b").unwrap(), 2);
 
-    let composer = CrolComposer::with_cfg(config.clone())
-        .load("::z")
-        .unwrap();
+    let composer = CrolComposer::with_cfg(config.clone()).load("::z").unwrap();
     assert_eq!(
         documents(&composer),
         [vec!["a.crod", "b.crod"], vec!["z.crod"]]
