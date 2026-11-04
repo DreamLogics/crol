@@ -13,6 +13,10 @@ use lsp_types::Uri;
 use crate::Settings;
 use crate::convert::{self, Encoding};
 
+/// What the server knows of schemas named by URL or crate that are being
+/// fetched or failed to: a message for each, by source and directory.
+pub(crate) type RemoteStatus = HashMap<(String, PathBuf), String>;
+
 /// An application's own checks: they receive the latest evaluation and
 /// return diagnostics, published with the others (`SPEC.md` 12.5).
 pub type Checks = Box<dyn Fn(&Snapshot) -> Vec<Diagnostic> + Send>;
@@ -45,6 +49,9 @@ pub struct Snapshot {
     /// A message for the project as a whole, such as a project file that
     /// cannot be read.
     pub problem: Option<String>,
+    /// The schemas named by URL or crate, by source and directory, for
+    /// fetching them.
+    pub(crate) remote: Vec<(String, PathBuf)>,
 }
 
 impl Snapshot {
@@ -158,6 +165,7 @@ pub(crate) fn evaluate(
     settings: &Settings,
     open: &HashMap<PathBuf, String>,
     checks: Option<&crate::Checks>,
+    remote: &RemoteStatus,
 ) -> Snapshot {
     let mut snapshot = Snapshot {
         sources: Sources::new(),
@@ -172,6 +180,7 @@ pub(crate) fn evaluate(
         paths: Vec::new(),
         read_only: HashSet::new(),
         problem: None,
+        remote: Vec::new(),
     };
     let canonical_open: HashMap<PathBuf, &String> = open
         .iter()
@@ -183,12 +192,7 @@ pub(crate) fn evaluate(
         .or_else(|| root.and_then(Project::find));
     let mut check = CheckOptions::default();
     if let Some(project_path) = &project_path {
-        match load_project(
-            &mut snapshot,
-            project_path,
-            &canonical_open,
-            settings.remote_schemas,
-        ) {
+        match load_project(&mut snapshot, project_path, &canonical_open, remote) {
             Ok((schema, root_type, options)) => {
                 snapshot.schema = schema;
                 snapshot.root_type = root_type;
@@ -226,7 +230,7 @@ pub(crate) fn evaluate(
         let schema = if is_project_file {
             Some(Ok(crol::schema::build::<Project>()))
         } else {
-            document_schema(text, path, settings.remote_schemas)
+            document_schema(text, path, remote, &mut snapshot.remote)
         };
         match schema {
             Some(Ok(schema)) => {
@@ -272,13 +276,27 @@ pub(crate) fn evaluate(
 fn document_schema(
     text: &str,
     path: &Path,
-    fetch: bool,
+    remote: &RemoteStatus,
+    wanted: &mut Vec<(String, PathBuf)>,
 ) -> Option<Result<SchemaFile, (crol_syntax::TextRange, String)>> {
-    let (range, schema_path) = crol::schema::attribute_path(text, path, fetch)?;
+    // One named by URL or crate comes from the cache; the server fetches it.
+    let (range, schema_path) = crol::schema::attribute_path(text, path, false)?;
+    let schema_path = match crol::schema::attribute_remote(text) {
+        Some(source) => {
+            let key = (
+                source,
+                path.parent().unwrap_or(Path::new(".")).to_path_buf(),
+            );
+            let status = remote.get(&key).cloned();
+            wanted.push(key);
+            schema_path.map_err(|e| status.unwrap_or_else(|| e.to_string()))
+        }
+        None => schema_path.map_err(|e| e.to_string()),
+    };
     Some(
         schema_path
-            .and_then(SchemaFile::read)
-            .map_err(|e| (range, e.to_string())),
+            .and_then(|p| SchemaFile::read(p).map_err(|e| e.to_string()))
+            .map_err(|e| (range, e)),
     )
 }
 
@@ -288,7 +306,7 @@ fn load_project(
     snapshot: &mut Snapshot,
     project_path: &Path,
     open: &HashMap<PathBuf, &String>,
-    fetch: bool,
+    remote: &RemoteStatus,
 ) -> Result<(Option<SchemaFile>, Option<String>, CheckOptions), String> {
     let project = Project::read(project_path).map_err(|e| e.to_string())?;
     let dir = project_path
@@ -326,10 +344,17 @@ fn load_project(
         });
     }
     snapshot.options = options;
-    let schema = match project
-        .schema_path(&dir, fetch)
-        .map_err(|e| e.to_string())?
-    {
+    let schema_path = project.schema_path(&dir, false);
+    let schema_path = match project.schema.clone() {
+        Some(source) if source.starts_with("https://") || source.starts_with("crate:") => {
+            let key = (source, dir.clone());
+            let status = remote.get(&key).cloned();
+            snapshot.remote.push(key);
+            schema_path.map_err(|e| status.unwrap_or_else(|| e.to_string()))
+        }
+        _ => schema_path.map_err(|e| e.to_string()),
+    };
+    let schema = match schema_path? {
         Some(path) => Some(SchemaFile::read(&path).map_err(|e| e.to_string())?),
         None => None,
     };

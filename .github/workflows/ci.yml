@@ -38,6 +38,10 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      # Each way of fetching schemas on its own, and neither.
+      - run: cargo clippy -p crol --all-targets --features remote-schemas -- -D warnings
+      - run: cargo clippy -p crol --all-targets --features remote-schemas-async -- -D warnings
+      - run: cargo clippy -p crol-lsp -p crol-cli --all-targets --no-default-features -- -D warnings
 
   test:
     name: Test (${{ matrix.os }})

@@ -420,8 +420,13 @@ Config {
   cached copy is used. A crate's schema is downloaded once per version,
   since published versions do not change; only the version list is
   fetched again. Only the schema file is kept, never the package.
-- Fetching needs the `remote-schemas` feature of `crol`, which
-  `crol-cli` and `crol-lsp` enable by default.
+- Fetching needs a feature of `crol`: `remote-schemas` fetches with a
+  blocking client (`schema::resolve_remote`), `remote-schemas-async`
+  with Tokio and reqwest (`schema::resolve_remote_async`, and
+  `resolve_remote` on a runtime of its own). `crol-cli` and `crol-lsp`
+  enable the async one by default. The language server never waits for
+  a fetch: it evaluates with the cache, says the schema is being
+  fetched, and evaluates again when it arrives.
 - At most one `schema` attribute per document.
 
 **`type(Name)`** gives the type name of a value-mode document written as

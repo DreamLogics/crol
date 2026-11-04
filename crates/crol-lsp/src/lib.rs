@@ -19,6 +19,7 @@ mod convert;
 mod features;
 mod hints;
 mod navigate;
+mod remote;
 mod schema;
 mod tokens;
 mod workspace;
@@ -27,7 +28,6 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::RecvTimeoutError;
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
 use lsp_types::notification::{self, Notification as _};
 use lsp_types::request::{self, Request as _};
@@ -117,6 +117,8 @@ pub struct Server {
     refresh_hints: bool,
     /// How many requests the server has sent the client, for their ids.
     requests_sent: u64,
+    /// Fetches schemas named by URL or crate.
+    fetcher: remote::Fetcher,
 }
 
 /// Runs `crol lsp`: the server on standard input and output.
@@ -227,6 +229,7 @@ impl Server {
             checks,
             refresh_hints,
             requests_sent: 0,
+            fetcher: remote::Fetcher::new(),
         };
         server.evaluate();
         Ok(server)
@@ -241,23 +244,30 @@ impl Server {
     /// Serves until the client asks the server to shut down.
     pub fn run(mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         loop {
-            let message = match self.dirty_since {
-                Some(since) => {
-                    let wait = Duration::from_millis(self.settings.debounce_ms)
-                        .saturating_sub(since.elapsed());
-                    match self.connection.receiver.recv_timeout(wait) {
-                        Ok(message) => message,
-                        Err(RecvTimeoutError::Timeout) => {
-                            self.evaluate();
-                            continue;
-                        }
-                        Err(RecvTimeoutError::Disconnected) => return Ok(()),
-                    }
-                }
-                None => match self.connection.receiver.recv() {
+            // A schema fetched, a message, or the pause in typing over.
+            let wait = self.dirty_since.map(|since| {
+                Duration::from_millis(self.settings.debounce_ms).saturating_sub(since.elapsed())
+            });
+            let timeout = match wait {
+                Some(wait) => crossbeam_channel::after(wait),
+                None => crossbeam_channel::never(),
+            };
+            let message = crossbeam_channel::select! {
+                recv(self.connection.receiver) -> message => match message {
                     Ok(message) => message,
                     Err(_) => return Ok(()),
                 },
+                recv(self.fetcher.receiver) -> fetched => {
+                    if let Ok(fetched) = fetched {
+                        self.fetcher.done(fetched);
+                        self.evaluate();
+                    }
+                    continue;
+                }
+                recv(timeout) -> _ => {
+                    self.evaluate();
+                    continue;
+                }
             };
             match message {
                 Message::Request(request) => {
@@ -372,12 +382,21 @@ impl Server {
     /// Evaluates everything and publishes the diagnostics.
     fn evaluate(&mut self) {
         self.dirty_since = None;
-        let mut snapshot = workspace::evaluate(
-            self.root.as_deref(),
-            &self.settings,
-            &self.open,
-            self.checks.as_ref(),
-        );
+        let evaluate = |status: &workspace::RemoteStatus| {
+            workspace::evaluate(
+                self.root.as_deref(),
+                &self.settings,
+                &self.open,
+                self.checks.as_ref(),
+                status,
+            )
+        };
+        let mut snapshot = evaluate(&self.fetcher.status());
+        // Schemas named by URL or crate come from the cache; those not
+        // fetched yet this session are fetched, and evaluation says so.
+        if self.settings.remote_schemas && self.fetcher.fetch(&snapshot.remote) {
+            snapshot = evaluate(&self.fetcher.status());
+        }
         if snapshot.evaluation.value.is_none()
             && let Some(previous) = self.snapshot.take()
         {

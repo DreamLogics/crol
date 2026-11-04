@@ -21,9 +21,12 @@ allow = [
     "Zlib",
     "CC0-1.0",
 ]
-# The Mozilla CA certificates `ureq` checks HTTPS against, behind crol's
-# `remote-schemas` feature: a permissive data licence.
-exceptions = [{ crate = "webpki-roots", allow = ["CDLA-Permissive-2.0"] }]
+# The Mozilla CA certificates the HTTPS clients behind crol's
+# `remote-schemas` features check against: a permissive data licence.
+exceptions = [
+    { crate = "webpki-roots", allow = ["CDLA-Permissive-2.0"] },
+    { crate = "webpki-root-certs", allow = ["CDLA-Permissive-2.0"] },
+]
 confidence-threshold = 0.9
 
 [bans]

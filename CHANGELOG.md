@@ -78,10 +78,12 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   against it.
 - A field written by a serde alias counts as present for completeness,
   in `crol::check` and, given `CrolComposer::schema`, in the deserializer.
-- Schemas from URLs and crates (`SPEC.md` 4.1), behind the `remote-schemas`
-  feature of `crol` (on by default in `crol-cli` and `crol-lsp`): fetched
-  over HTTPS and cached; the language server's `remote_schemas` setting
-  and `crol --offline` turn fetching off. `crate:crol` is built in.
+- Schemas from URLs and crates (`SPEC.md` 4.1), fetched over HTTPS and
+  cached: `remote-schemas` (blocking, with ureq) and `remote-schemas-async`
+  (Tokio and reqwest) features of `crol`; `crol-cli` and `crol-lsp` use the
+  async one by default, and the language server fetches in the background.
+  The language server's `remote_schemas` setting and `crol --offline` turn
+  fetching off. `crate:crol` is built in.
 - `crol eval` with a schema writes out the defaults that fields removed
   with `-field` or left out with `..` take, marked `// default`
   (`--no-defaults` turns this off); `crol::fill_defaults` and

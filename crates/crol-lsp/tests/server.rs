@@ -921,3 +921,45 @@ fn the_project_file_is_checked_against_its_schema() {
     );
     client.stop();
 }
+
+#[test]
+fn remote_schemas_are_fetched_without_blocking() {
+    let dir = workspace("lsp-remote-schema", &[("config.crol", "")]);
+    let config = uri(&dir.join("config.crol"));
+    // Nothing listens there, so fetching fails at once.
+    let text = "#![schema(\"https://127.0.0.1:9/schema.crol\")]\n\n{ replicas: 2 }";
+    let open = |client: &Client| {
+        client.notify(
+            "textDocument/didOpen",
+            json!({ "textDocument": { "uri": config, "languageId": "crol", "version": 1, "text": text } }),
+        );
+    };
+    let message = |diagnostics: &[Value]| {
+        diagnostics
+            .first()
+            .and_then(|d| d["message"].as_str())
+            .unwrap_or_default()
+            .to_owned()
+    };
+
+    let client = Client::start_with(&dir, json!({ "remote_schemas": false }));
+    open(&client);
+    let diagnostics = client.diagnostics_for(&config, |d| !d.is_empty());
+    assert!(
+        message(&diagnostics).ends_with("is not cached, and fetching schemas is off"),
+        "{diagnostics:?}"
+    );
+    client.stop();
+
+    let client = Client::start(&dir);
+    open(&client);
+    let diagnostics = client.diagnostics_for(&config, |d| !d.is_empty());
+    assert_eq!(
+        message(&diagnostics),
+        "schema: fetching `https://127.0.0.1:9/schema.crol`"
+    );
+    let diagnostics =
+        client.diagnostics_for(&config, |d| message(d).starts_with("schema: cannot fetch"));
+    assert_eq!(diagnostics[0]["range"]["start"]["line"], 0);
+    client.stop();
+}

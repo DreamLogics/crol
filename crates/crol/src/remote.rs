@@ -6,12 +6,16 @@ use std::io::Read as _;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
+use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
 use semver::{Version, VersionReq};
 
 use crate::error::Error;
 
+/// How long a request may take.
+#[cfg(any(feature = "remote-schemas", feature = "remote-schemas-async"))]
+const TIMEOUT: Duration = Duration::from_secs(10);
 /// The most a schema file may hold.
 const MAX_SCHEMA: u64 = 16 << 20;
 /// The most a downloaded crate may hold, packed and unpacked.
@@ -20,6 +24,7 @@ const MAX_CRATE: u64 = 64 << 20;
 const RETRY: Duration = Duration::from_secs(60);
 /// The schema path a crate's `[package.metadata.crol]` table defaults to.
 const DEFAULT_SCHEMA: &str = "crol/schema.crol";
+#[cfg(any(feature = "remote-schemas", feature = "remote-schemas-async"))]
 const USER_AGENT: &str = concat!(
     "crol/",
     env!("CARGO_PKG_VERSION"),
@@ -61,36 +66,190 @@ impl Dirs {
     }
 }
 
-/// The schema file a URL or crate names, for a document or project in
-/// `dir`. Without `fetch`, only cached copies and local crates are used.
-/// Results are remembered for the process, failures for a minute.
-pub(crate) fn resolve(source: &str, dir: &Path, fetch: bool) -> Result<PathBuf, Error> {
-    type Memo = Mutex<HashMap<(String, PathBuf, bool), (Instant, Result<PathBuf, Error>)>>;
-    static MEMO: OnceLock<Memo> = OnceLock::new();
-    let memo = MEMO.get_or_init(Default::default);
-    let key = (source.to_owned(), dir.to_path_buf(), fetch);
-    if let Some((at, result)) = memo.lock().unwrap_or_else(|e| e.into_inner()).get(&key)
-        && (result.is_ok() || at.elapsed() < RETRY)
-    {
-        return result.clone();
+/// An HTTPS client.
+pub(crate) trait Http: Sync {
+    /// Gets a URL, redirects included, reading at most `limit` bytes.
+    fn get(&self, url: &str, limit: u64) -> impl Future<Output = Result<Vec<u8>, String>> + Send;
+}
+
+/// The client for when fetching is off: it is never asked.
+pub(crate) struct Offline;
+
+impl Http for Offline {
+    fn get(&self, _: &str, _: u64) -> impl Future<Output = Result<Vec<u8>, String>> + Send {
+        std::future::ready(Err("fetching schemas is off".to_owned()))
     }
-    let result = Dirs::from_env().and_then(|dirs| resolve_in(source, dir, fetch, &dirs));
-    memo.lock()
+}
+
+/// A blocking client, with `ureq`.
+#[cfg(feature = "remote-schemas")]
+pub(crate) struct Blocking;
+
+#[cfg(feature = "remote-schemas")]
+impl Http for Blocking {
+    fn get(&self, url: &str, limit: u64) -> impl Future<Output = Result<Vec<u8>, String>> + Send {
+        let config = ureq::Agent::config_builder()
+            .https_only(true)
+            .timeout_global(Some(TIMEOUT))
+            .user_agent(USER_AGENT)
+            .build();
+        let agent = ureq::Agent::new_with_config(config);
+        let result = agent
+            .get(url)
+            .call()
+            .and_then(|r| r.into_body().with_config().limit(limit).read_to_vec())
+            .map_err(|e| e.to_string());
+        std::future::ready(result)
+    }
+}
+
+/// An async client, with `reqwest`; it needs a Tokio runtime.
+#[cfg(feature = "remote-schemas-async")]
+pub(crate) struct Async(reqwest::Client);
+
+#[cfg(feature = "remote-schemas-async")]
+impl Async {
+    fn new() -> Result<Self, Error> {
+        // reqwest takes rustls's process-wide provider; another may be
+        // installed already.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        reqwest::Client::builder()
+            .https_only(true)
+            .timeout(TIMEOUT)
+            .user_agent(USER_AGENT)
+            .build()
+            .map(Self)
+            .map_err(|e| Error::new(format!("schema: cannot start an HTTPS client: {e}")))
+    }
+}
+
+#[cfg(feature = "remote-schemas-async")]
+impl Http for Async {
+    fn get(&self, url: &str, limit: u64) -> impl Future<Output = Result<Vec<u8>, String>> + Send {
+        let request = self.0.get(url);
+        async move {
+            let mut response = request
+                .send()
+                .await
+                .and_then(reqwest::Response::error_for_status)
+                .map_err(|e| e.to_string())?;
+            let mut body = Vec::new();
+            while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+                if (body.len() + chunk.len()) as u64 > limit {
+                    return Err(format!("the response is larger than {limit} bytes"));
+                }
+                body.extend_from_slice(&chunk);
+            }
+            Ok(body)
+        }
+    }
+}
+
+/// Runs a future whose client never waits: [`Blocking`] or [`Offline`].
+fn block_on<F: Future>(future: F) -> F::Output {
+    let mut future = std::pin::pin!(future);
+    match future
+        .as_mut()
+        .poll(&mut Context::from_waker(Waker::noop()))
+    {
+        Poll::Ready(output) => output,
+        Poll::Pending => unreachable!("a blocking client never waits"),
+    }
+}
+
+type Memo = Mutex<HashMap<(String, PathBuf, bool), (Instant, Result<PathBuf, Error>)>>;
+
+/// Results are remembered for the process, failures for a minute.
+fn memo() -> &'static Memo {
+    static MEMO: OnceLock<Memo> = OnceLock::new();
+    MEMO.get_or_init(Default::default)
+}
+
+fn remembered(key: &(String, PathBuf, bool)) -> Option<Result<PathBuf, Error>> {
+    let memo = memo().lock().unwrap_or_else(|e| e.into_inner());
+    let (at, result) = memo.get(key)?;
+    (result.is_ok() || at.elapsed() < RETRY).then(|| result.clone())
+}
+
+fn remember(key: (String, PathBuf, bool), result: &Result<PathBuf, Error>) {
+    memo()
+        .lock()
         .unwrap_or_else(|e| e.into_inner())
         .insert(key, (Instant::now(), result.clone()));
+}
+
+/// The schema file a URL or crate names, for a document or project in
+/// `dir`, blocking. Without `fetch`, or without a blocking client, only
+/// cached copies and local crates are used.
+pub(crate) fn resolve(source: &str, dir: &Path, fetch: bool) -> Result<PathBuf, Error> {
+    let fetch = fetch
+        && cfg!(any(
+            feature = "remote-schemas",
+            feature = "remote-schemas-async"
+        ));
+    let key = (source.to_owned(), dir.to_path_buf(), fetch);
+    if let Some(result) = remembered(&key) {
+        return result;
+    }
+    let result = Dirs::from_env().and_then(|dirs| {
+        #[cfg(feature = "remote-schemas")]
+        if fetch {
+            return block_on(resolve_in(source, dir, true, &dirs, &Blocking));
+        }
+        // With only the async client, on a runtime of its own.
+        #[cfg(all(feature = "remote-schemas-async", not(feature = "remote-schemas")))]
+        if fetch {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| Error::new(format!("schema: cannot start a runtime: {e}")))?;
+            let http = Async::new()?;
+            return runtime.block_on(resolve_in(source, dir, true, &dirs, &http));
+        }
+        block_on(resolve_in(source, dir, false, &dirs, &Offline))
+    });
+    remember_fetched(key, &result);
     result
 }
 
-pub(crate) fn resolve_in(
+/// Remembers a result; one fetched is also what the cache now gives.
+fn remember_fetched(key: (String, PathBuf, bool), result: &Result<PathBuf, Error>) {
+    if key.2 && result.is_ok() {
+        remember((key.0.clone(), key.1.clone(), false), result);
+    }
+    remember(key, result);
+}
+
+/// [`resolve`], without blocking on the network; it needs a Tokio runtime.
+#[cfg(feature = "remote-schemas-async")]
+pub(crate) async fn resolve_async(source: &str, dir: &Path, fetch: bool) -> Result<PathBuf, Error> {
+    let key = (source.to_owned(), dir.to_path_buf(), fetch);
+    if let Some(result) = remembered(&key) {
+        return result;
+    }
+    let result = match (Dirs::from_env(), fetch) {
+        (Err(e), _) => Err(e),
+        (Ok(dirs), true) => match Async::new() {
+            Ok(http) => resolve_in(source, dir, true, &dirs, &http).await,
+            Err(e) => Err(e),
+        },
+        (Ok(dirs), false) => resolve_in(source, dir, false, &dirs, &Offline).await,
+    };
+    remember_fetched(key, &result);
+    result
+}
+
+pub(crate) async fn resolve_in(
     source: &str,
     dir: &Path,
     fetch: bool,
     dirs: &Dirs,
+    http: &impl Http,
 ) -> Result<PathBuf, Error> {
     if source.starts_with("https://") {
-        url(source, fetch, dirs)
+        url(source, fetch, dirs, http).await
     } else if let Some(spec) = source.strip_prefix("crate:") {
-        krate(spec, dir, fetch, dirs)
+        krate(spec, dir, fetch, dirs, http).await
     } else {
         Err(Error::new(format!(
             "schema: `{source}` is neither a URL (`https://...`) nor a crate (`crate:name@version`)"
@@ -100,12 +259,12 @@ pub(crate) fn resolve_in(
 
 /// A URL's schema: fetched when allowed, else, or when that fails, the
 /// cached copy.
-fn url(url: &str, fetch: bool, dirs: &Dirs) -> Result<PathBuf, Error> {
+async fn url(url: &str, fetch: bool, dirs: &Dirs, http: &impl Http) -> Result<PathBuf, Error> {
     let hash = blake3::hash(url.as_bytes()).to_hex();
     let path = dirs.cache.join("urls").join(format!("{hash}.crol"));
     let mut failed = None;
     if fetch {
-        match get(url, MAX_SCHEMA) {
+        match http.get(url, MAX_SCHEMA).await {
             Ok(bytes) => {
                 write(&path, &bytes)?;
                 return Ok(path);
@@ -125,7 +284,13 @@ fn url(url: &str, fetch: bool, dirs: &Dirs) -> Result<PathBuf, Error> {
 /// A crate's schema, from the first of: this version of crol, for its own
 /// schema; the Cargo workspace and its dependencies; Cargo's registry
 /// cache; crates.io.
-fn krate(spec: &str, dir: &Path, fetch: bool, dirs: &Dirs) -> Result<PathBuf, Error> {
+async fn krate(
+    spec: &str,
+    dir: &Path,
+    fetch: bool,
+    dirs: &Dirs,
+    http: &impl Http,
+) -> Result<PathBuf, Error> {
     let (name, req) = spec.split_once('@').unwrap_or((spec, "*"));
     let valid = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
     if name.is_empty() || name.len() > 64 || !name.chars().all(valid) {
@@ -148,7 +313,7 @@ fn krate(spec: &str, dir: &Path, fetch: bool, dirs: &Dirs) -> Result<PathBuf, Er
     if let Some(found) = in_registry_cache(name, &req, dirs) {
         return found;
     }
-    from_crates_io(name, &req, fetch, dirs)
+    from_crates_io(name, &req, fetch, dirs, http).await
 }
 
 /// Cargo treats `-` and `_` in crate names as the same.
@@ -266,16 +431,17 @@ fn schema_path(
 
 /// The schema of the highest matching version on crates.io, downloaded
 /// once; offline, or without `fetch`, the highest matching one cached.
-fn from_crates_io(
+async fn from_crates_io(
     name: &str,
     req: &VersionReq,
     fetch: bool,
     dirs: &Dirs,
+    http: &impl Http,
 ) -> Result<PathBuf, Error> {
     let cache = dirs.cache.join("crates");
     let mut failed = None;
     if fetch {
-        match index_versions(name) {
+        match index_versions(name, http).await {
             Ok(versions) => {
                 let Some((name, version)) = versions
                     .into_iter()
@@ -290,7 +456,7 @@ fn from_crates_io(
                 if path.is_file() {
                     return Ok(path);
                 }
-                match download(&name, &version) {
+                match download(&name, &version, http).await {
                     Ok(text) => {
                         write(&path, &text)?;
                         return Ok(path);
@@ -333,7 +499,7 @@ fn from_crates_io(
 
 /// The versions of a crate that are not yanked, with the name as
 /// published, from the crates.io sparse index.
-fn index_versions(name: &str) -> Result<Vec<(String, Version)>, String> {
+async fn index_versions(name: &str, http: &impl Http) -> Result<Vec<(String, Version)>, String> {
     let lower = name.to_ascii_lowercase();
     let prefix = match lower.len() {
         1 => "1".to_owned(),
@@ -341,11 +507,12 @@ fn index_versions(name: &str) -> Result<Vec<(String, Version)>, String> {
         3 => format!("3/{}", &lower[..1]),
         _ => format!("{}/{}", &lower[..2], &lower[2..4]),
     };
-    let body = get(
-        &format!("https://index.crates.io/{prefix}/{lower}"),
-        MAX_CRATE,
-    )
-    .map_err(|e| e.to_string())?;
+    let body = http
+        .get(
+            &format!("https://index.crates.io/{prefix}/{lower}"),
+            MAX_CRATE,
+        )
+        .await?;
     let text = String::from_utf8(body).map_err(|e| e.to_string())?;
     Ok(text
         .lines()
@@ -361,9 +528,11 @@ fn index_versions(name: &str) -> Result<Vec<(String, Version)>, String> {
 }
 
 /// Downloads a crate and takes its schema out.
-fn download(name: &str, version: &Version) -> Result<Vec<u8>, Error> {
+async fn download(name: &str, version: &Version, http: &impl Http) -> Result<Vec<u8>, Error> {
     let url = format!("https://static.crates.io/crates/{name}/{name}-{version}.crate");
-    let packed = get(&url, MAX_CRATE)
+    let packed = http
+        .get(&url, MAX_CRATE)
+        .await
         .map_err(|e| Error::new(format!("schema: cannot download `{name}` {version}: {e}")))?;
     schema_in_package(name, version, &packed)
 }
@@ -407,24 +576,6 @@ pub(crate) fn schema_in_package(
     find(&root.join(&schema))?.ok_or_else(|| missing(&schema.to_string_lossy()))
 }
 
-/// Gets a URL over HTTPS, redirects included, reading at most `limit`
-/// bytes.
-fn get(url: &str, limit: u64) -> Result<Vec<u8>, ureq::Error> {
-    let config = ureq::Agent::config_builder()
-        .https_only(true)
-        .timeout_global(Some(Duration::from_secs(10)))
-        .user_agent(USER_AGENT)
-        .build();
-    let agent = ureq::Agent::new_with_config(config);
-    agent
-        .get(url)
-        .call()?
-        .into_body()
-        .with_config()
-        .limit(limit)
-        .read_to_vec()
-}
-
 /// Writes a cache file whole: to a temporary file, then renamed.
 fn write(path: &Path, bytes: &[u8]) -> Result<(), Error> {
     let failed =
@@ -465,7 +616,7 @@ mod tests {
     fn urls_come_from_the_cache_without_fetching() {
         let dirs = dirs("urls");
         let url = "https://example.org/schema.crol";
-        let error = resolve_in(url, &outside(), false, &dirs).unwrap_err();
+        let error = block_on(resolve_in(url, &outside(), false, &dirs, &Offline)).unwrap_err();
         assert_eq!(
             error.message(),
             "schema: https://example.org/schema.crol is not cached, and fetching schemas is off"
@@ -473,7 +624,10 @@ mod tests {
         let hash = blake3::hash(url.as_bytes()).to_hex();
         let cached = dirs.cache.join("urls").join(format!("{hash}.crol"));
         file(&cached, "Schema {}");
-        assert_eq!(resolve_in(url, &outside(), false, &dirs).unwrap(), cached);
+        assert_eq!(
+            block_on(resolve_in(url, &outside(), false, &dirs, &Offline)).unwrap(),
+            cached
+        );
     }
 
     #[test]
@@ -496,7 +650,7 @@ mod tests {
             &src.join("plain-1.0.0/Cargo.toml"),
             "[package]\nname = \"plain\"\n",
         );
-        let resolve = |source| resolve_in(source, &outside(), false, &dirs);
+        let resolve = |source| block_on(resolve_in(source, &outside(), false, &dirs, &Offline));
         let expected = src.join("my_app-2.1.3/crol/schema.crol");
         assert_eq!(resolve("crate:my_app@2.1").unwrap(), expected);
         assert_eq!(resolve("crate:my-app@2").unwrap(), expected);
@@ -519,12 +673,13 @@ mod tests {
     #[test]
     fn crates_in_the_workspace_come_first() {
         let dirs = dirs("workspace");
-        let error = resolve_in(
+        let error = block_on(resolve_in(
             "crate:crol-eval",
             Path::new(env!("CARGO_MANIFEST_DIR")),
             false,
             &dirs,
-        )
+            &Offline,
+        ))
         .unwrap_err();
         assert!(
             error
@@ -537,9 +692,24 @@ mod tests {
     #[test]
     fn crol_provides_its_own_schema() {
         let dirs = dirs("own");
-        let path = resolve_in("crate:crol", &outside(), false, &dirs).unwrap();
+        let path = block_on(resolve_in("crate:crol", &outside(), false, &dirs, &Offline)).unwrap();
         let schema = crate::schema::SchemaFile::read(&path).unwrap();
         assert_eq!(schema, crate::schema::build::<crate::schema::SchemaFile>());
+    }
+
+    #[cfg(feature = "remote-schemas-async")]
+    #[test]
+    fn the_async_client_starts_and_resolves_without_fetching() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            assert!(Async::new().is_ok());
+            let dirs = dirs("async");
+            let path = resolve_in("crate:crol", &outside(), false, &dirs, &Offline).await;
+            assert!(path.unwrap().is_file());
+        });
     }
 
     #[test]

@@ -448,19 +448,40 @@ pub fn attribute_path(
 }
 
 /// The schema file a URL or a crate names (`SPEC.md` 4.1), for a document
-/// or project in `dir`: fetched over HTTPS if `fetch` allows, and cached.
-#[cfg(feature = "remote-schemas")]
+/// or project in `dir`, cached. With the `remote-schemas` feature it is
+/// fetched over HTTPS if `fetch` allows, blocking; without it, or without
+/// `fetch`, only cached copies and local crates are used. Without any
+/// `remote-schemas` feature, it is an error.
 pub fn resolve_remote(source: &str, dir: &Path, fetch: bool) -> Result<PathBuf, Error> {
-    crate::remote::resolve(source, dir, fetch)
+    #[cfg(feature = "_remote")]
+    return crate::remote::resolve(source, dir, fetch);
+    #[cfg(not(feature = "_remote"))]
+    {
+        let _ = (dir, fetch);
+        Err(Error::new(format!(
+            "schema: `{source}`: schemas from URLs and crates need the `remote-schemas` feature of crol"
+        )))
+    }
 }
 
-/// The schema file a URL or a crate names (`SPEC.md` 4.1); this build of
-/// crol does not have the `remote-schemas` feature, so it is an error.
-#[cfg(not(feature = "remote-schemas"))]
-pub fn resolve_remote(source: &str, _dir: &Path, _fetch: bool) -> Result<PathBuf, Error> {
-    Err(Error::new(format!(
-        "schema: `{source}`: schemas from URLs and crates need the `remote-schemas` feature of crol"
-    )))
+/// [`resolve_remote`] without blocking on the network, fetching if `fetch`
+/// allows. It must run in a Tokio runtime.
+#[cfg(feature = "remote-schemas-async")]
+pub async fn resolve_remote_async(source: &str, dir: &Path, fetch: bool) -> Result<PathBuf, Error> {
+    crate::remote::resolve_async(source, dir, fetch).await
+}
+
+/// The URL or crate a document's `#![schema("...")]` names, if it names
+/// one: what [`attribute_path`] resolves, for fetching it beforehand.
+pub fn attribute_remote(text: &str) -> Option<String> {
+    use crol_syntax::ast::AttributeKind;
+    let parse = crol_syntax::parse(text);
+    parse.document().attributes().find_map(|a| match a.kind() {
+        Some(AttributeKind::Schema(attr)) => attr
+            .string()
+            .and_then(|s| crate::from_str::<String>(s.text()).ok()),
+        _ => None,
+    })
 }
 
 /// Builds the schema of `T` and every type it uses.
