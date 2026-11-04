@@ -896,6 +896,10 @@ fn document_schema(
     remote: &RemoteStatus,
     wanted: &mut Vec<(String, PathBuf)>,
 ) -> Option<Result<SchemaFile, (crol_syntax::TextRange, String)>> {
+    // A schema file's schema is built in (`SPEC.md` 10.10).
+    if crol::schema::is_schema_file(text) {
+        return Some(Ok(crol::schema::build::<SchemaFile>()));
+    }
     // One named by URL or crate comes from the cache; the server fetches it.
     let (range, schema_path) = crol::schema::attribute_path(text, path, root, false)?;
     let schema_path = match crol::schema::attribute_remote(text) {

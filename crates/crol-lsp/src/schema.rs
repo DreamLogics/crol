@@ -6,7 +6,7 @@ use crol_syntax::ast::{self, AstNode};
 use crol_syntax::{SyntaxKind, SyntaxNode};
 use indexmap::IndexMap;
 
-use crate::place::{self, Scope};
+use crate::place::{self, Place, Scope};
 use crate::workspace::{DocumentSchema, Snapshot};
 
 /// How deep to follow types into each other where a type may contain
@@ -55,28 +55,100 @@ pub(crate) fn block_fields<'a>(
     shape_struct(schema, shape).map(|fields| (schema, fields))
 }
 
-/// The type at the offset `end` in an entry's target, the end of a segment
-/// of it, and the doc of what is there: the field's, or the type's for a
-/// root entry.
-pub(crate) fn entry_type(
-    snapshot: &Snapshot,
-    file: Option<FileId>,
-    entry: &ast::Entry,
-    end: crol_syntax::TextSize,
-) -> Option<(TypeExpr, String)> {
-    let schema = snapshot.schema_for(file)?;
-    let text = document_text(entry.syntax());
-    let scope = Scope::new(snapshot, file);
-    let cursor = place::locate(&scope, &text, end);
-    let place = cursor.current()?;
-    let Some(Shape::Type(ty)) = &place.shape else {
-        return None;
-    };
+/// What hover says of a place: the doc and the type of what is there.
+pub(crate) struct About {
+    /// The doc: of the field the place is in, else, where it is in none, of
+    /// its type. It may be empty.
+    pub(crate) doc: String,
+    /// The type, as [`rust_type`] writes it.
+    pub(crate) ty: Option<String>,
+}
+
+/// What the schema says of a place: nothing if it does not know the place,
+/// or knows only that it can hold anything.
+pub(crate) fn about(schema: &DocumentSchema<'_>, place: &Place<'_>) -> Option<About> {
+    let ty = expected_type(schema, place)?;
     let doc = match &place.doc {
         Some(doc) => doc.clone(),
-        None => named_def(schema.file, ty).map_or(String::new(), |d| d.doc().to_owned()),
+        None => named_def(schema.file, &ty).map_or(String::new(), |d| d.doc().to_owned()),
     };
-    Some((ty.clone(), doc))
+    if doc.is_empty() && ty == TypeExpr::Any {
+        return None;
+    }
+    let ty = Some(rust_type(schema.file, &ty));
+    Some(About { doc, ty })
+}
+
+/// The type of a place. A root value of a struct variant of the root type
+/// has only the fields as its shape; its type is the root type.
+fn expected_type(schema: &DocumentSchema<'_>, place: &Place<'_>) -> Option<TypeExpr> {
+    match place.shape.as_ref()? {
+        Shape::Type(ty) => Some(ty.clone()),
+        Shape::Fields(_) if place.path.as_ref().is_some_and(|p| p.len() == 1) => {
+            Some(root_expr(schema))
+        }
+        Shape::Fields(_) | Shape::Keys => None,
+    }
+}
+
+/// What hover says of `Name` at a place, written as a value there or as the
+/// name of one: of the variant it is, by the variant's doc, else the doc of
+/// the place; of the type it is, by the doc of the place, else the type's.
+/// Nothing for what is no name there, such as `Some`.
+pub(crate) fn about_name(
+    schema: &DocumentSchema<'_>,
+    place: &Place<'_>,
+    name: &str,
+) -> Option<About> {
+    let doc = place.doc.clone().unwrap_or_default();
+    let found = match expected_type(schema, place) {
+        Some(ty) if ty != TypeExpr::Any => name_in(schema.file, &ty, name, 0),
+        _ => self::named(schema.file, name).and_then(|ty| name_in(schema.file, &ty, name, 0)),
+    }?;
+    let chosen = match found {
+        (own, ty, true) if !own.is_empty() => About {
+            doc: own,
+            ty: Some(ty),
+        },
+        (_, ty, true) => About { doc, ty: Some(ty) },
+        (own, ty, false) if doc.is_empty() => About {
+            doc: own,
+            ty: Some(ty),
+        },
+        (_, ty, false) => About { doc, ty: Some(ty) },
+    };
+    Some(chosen)
+}
+
+/// `Name` in a type: its doc, how to write it, and whether it is a variant.
+fn name_in(
+    schema: &SchemaFile,
+    ty: &TypeExpr,
+    name: &str,
+    depth: usize,
+) -> Option<(String, String, bool)> {
+    if depth > MAX_DEPTH {
+        return None;
+    }
+    match ty {
+        TypeExpr::Option(inner) => name_in(schema, inner, name, depth + 1),
+        TypeExpr::Named(path) => match schema.get(path)? {
+            TypeDef::Enum {
+                name: own,
+                variants,
+                ..
+            } => {
+                let found = variant(variants, name)?;
+                Some((found.doc.clone(), format!("{own}::{name}"), true))
+            }
+            def if def.name() == name => Some((def.doc().to_owned(), name.to_owned(), false)),
+            TypeDef::Newtype { inner, .. } | TypeDef::Transparent { inner, .. } => {
+                name_in(schema, inner, name, depth + 1)
+            }
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// The place one step into a shape, and the doc of the field stepped into.
@@ -326,9 +398,12 @@ pub(crate) fn rust_type(schema: &SchemaFile, ty: &TypeExpr) -> String {
             let items: Vec<String> = items.iter().map(inner).collect();
             format!("({})", items.join(", "))
         }
-        TypeExpr::Named(path) => schema
-            .get(path)
-            .map_or_else(|| path.clone(), |d| d.name().to_owned()),
+        TypeExpr::Named(path) => match schema.get(path).map(TypeDef::name) {
+            // A type that data writes with no name.
+            Some("") => path.rsplit("::").next().unwrap_or(path).to_owned(),
+            Some(name) => name.to_owned(),
+            None => path.clone(),
+        },
         other => format!("{other:?}").to_lowercase(),
     }
 }
@@ -469,6 +544,7 @@ fn placeholder_at(schema: &SchemaFile, ty: &TypeExpr, depth: usize) -> String {
         TypeExpr::Map(..) => "{}".to_owned(),
         TypeExpr::Named(path) => match schema.get(path) {
             None => "()".to_owned(),
+            Some(TypeDef::Struct { name, .. }) if name.is_empty() => "{ .. }".to_owned(),
             Some(TypeDef::Struct { name, .. }) => format!("{name} {{ .. }}"),
             Some(TypeDef::TupleStruct { name, fields, .. }) => format!("{name}({})", many(fields)),
             Some(TypeDef::Newtype { name, inner, .. }) => {

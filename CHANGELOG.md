@@ -11,6 +11,23 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Changed
 
+- Language server: hover shows the doc comment first, then the type on its own
+  line, in Markdown that renders. A value has the doc of the field it is assigned
+  to, also in a list, a map or `Some(...)`, at any depth, and a variant its own
+  doc. A field with no doc shows its type, and where nothing is known there is no
+  hover. The evaluated value is gone from hover, except on a reference or id, on
+  one line. The layers are shown after the doc, for a key in data with more than
+  one operation (`SPEC.md` 12.5).
+- A schema file now has a real schema: `crate:crol` describes `Schema` and every
+  type below it, with docs, instead of taking `types` as `Any`, and
+  `#![schema("crate:crol@...")]` makes a `.crov` document a schema file, which
+  `crol check` and the language server check against the schema built in, with no
+  lookup, cache or network (`SPEC.md` 10.10). So a schema file with a mistake below
+  `types` that went unnoticed in `crol check` is now reported. The format and what
+  `build` and `to_text` write for your types are unchanged; `build::<SchemaFile>()`
+  and the docs in `build::<Project>()` are what changed.
+- The language server's `max_contexts_in_hover` setting is no longer documented; it
+  never did anything, and is still accepted.
 - A file's extension now states its mode (`SPEC.md` 4): `.crod` is data mode and
   `.crov` is value mode, so the name of a file tells how it behaves. Two modes
   stay, as they serve different purposes. `.crol` is retired: rename layers to
@@ -78,6 +95,9 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Added
 
+- Language server: completion and hover at every level of a schema file, and the
+  paths in `types` offered in `root` and `Named("...")`, in the quotes too.
+- `crol::schema::is_schema_file` and `crol::schema::SCHEMA_PATH`.
 - `crol::Mode`, `crol::is_retired`, `crol::value_type`, and
   `crol_eval::fingerprint::fingerprint_value`.
 - A line break separates entries, in addition to the comma (`SPEC.md` 5.3).
@@ -182,6 +202,8 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Fixed
 
+- `crate:crol` no longer stays on what an earlier build of the same version left
+  in the cache.
 - A cycle between root keys (`+a: &root.b`, `+b: &root.a`) and a root key that
   holds the root (`+a: &root`) are reported with their spans. `crol` exited with
   status 1 and no message, and panicked with `--message-format json`.

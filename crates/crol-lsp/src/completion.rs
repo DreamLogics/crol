@@ -95,7 +95,7 @@ pub(crate) fn complete(
     let offset = convert::offset(text, position, encoding);
     let at = usize::from(offset);
     if in_string_or_comment(text, at) {
-        return Vec::new();
+        return type_paths_in_string(snapshot, uri, text, offset, encoding);
     }
     let line_start = text[..at].rfind('\n').map_or(0, |i| i + 1);
     let before = &text[line_start..at];
@@ -126,6 +126,85 @@ pub(crate) fn complete(
         item.filter_text = Some(item.label.clone());
     }
     items
+}
+
+/// Whether a schema is the one of schema files.
+fn of_schema_files(schema: &SchemaFile) -> bool {
+    schema.root == crol::schema::SCHEMA_PATH
+}
+
+/// The paths of a schema file's types, from its latest evaluation.
+fn type_paths(snapshot: &Snapshot, file: Option<FileId>) -> Vec<String> {
+    let evaluation = features::evaluation_for(snapshot, file);
+    let types = features::value_in(evaluation, "types", &[], &[]);
+    let Some(ValueKind::Keyed(keyed)) = types.map(|v| v.kind) else {
+        return Vec::new();
+    };
+    keyed
+        .entries
+        .keys()
+        .filter_map(|key| match key {
+            crol_eval::Key::Str(path) => Some(path.clone()),
+            crol_eval::Key::Int(_) => None,
+        })
+        .collect()
+}
+
+/// Whether a value at the cursor is the path of a type in a schema file:
+/// `root`, or what `Named(...)` holds.
+fn wants_type_path(cursor: &Cursor<'_>) -> bool {
+    let root = [PathStep::Field("root".to_owned())];
+    cursor.call() == Some("Named")
+        || cursor
+            .value()
+            .is_some_and(|place| place.path.as_deref() == Some(&root))
+}
+
+/// In a string of a schema file that is the path of a type: the paths of its
+/// types, each replacing what the quotes hold.
+fn type_paths_in_string(
+    snapshot: &Snapshot,
+    uri: &Uri,
+    text: &str,
+    offset: TextSize,
+    encoding: Encoding,
+) -> Vec<CompletionItem> {
+    let file = convert::uri_to_path(uri).and_then(|p| snapshot.file_of(&p));
+    if !snapshot
+        .schema_for(file)
+        .is_some_and(|s| of_schema_files(s.file))
+    {
+        return Vec::new();
+    }
+    let root = crol_syntax::parse(text).syntax();
+    let Some(token) = root
+        .token_at_offset(offset)
+        .find(|t| t.kind() == SyntaxKind::STRING)
+    else {
+        return Vec::new();
+    };
+    let scope = Scope::new(snapshot, file);
+    if !wants_type_path(&place::locate(&scope, text, token.text_range().start())) {
+        return Vec::new();
+    }
+    // What the quotes hold. A string not closed yet goes on past its line.
+    let quote = TextSize::of('"');
+    let start = token.text_range().start() + quote;
+    let rest = &token.text()[1..];
+    let line = rest.split('\n').next().unwrap_or(rest);
+    let line = line.strip_suffix('"').unwrap_or(line);
+    let inside = TextRange::at(start, TextSize::of(line));
+    let index = LineIndex::new(text);
+    let edit_range = convert::range(text, &index, inside, encoding);
+    type_paths(snapshot, file)
+        .into_iter()
+        .map(|path| {
+            let mut item = item(path.clone(), CompletionItemKind::CLASS, None);
+            item.filter_text = Some(path.clone());
+            item.text_edit = Some(CompletionTextEdit::Edit(TextEdit::new(edit_range, path)));
+            item
+        })
+        .collect()
 }
 
 fn items_at(
@@ -461,6 +540,14 @@ impl Completer<'_> {
         };
         let mut items = Vec::new();
         value_items(schema, &ty, &mut items, 0);
+        if of_schema_files(schema) && wants_type_path(&self.cursor) {
+            for path in type_paths(self.snapshot, self.file) {
+                let quoted = crol_eval::quote(&path);
+                let mut item = item(path, CompletionItemKind::CLASS, None);
+                item.insert_text = Some(quoted);
+                items.push(item);
+            }
+        }
         items
     }
 
@@ -600,6 +687,8 @@ fn value_items(schema: &SchemaFile, ty: &TypeExpr, out: &mut Vec<CompletionItem>
                     ));
                 }
             }
+            // A type data writes with no name has no value to offer by one.
+            Some(def) if def.name().is_empty() => {}
             Some(def @ (TypeDef::Struct { .. } | TypeDef::TupleStruct { .. })) => {
                 out.push(with_insert(
                     documented(

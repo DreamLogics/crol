@@ -2,7 +2,7 @@
 
 #![allow(missing_docs)]
 
-use crol::schema::{self, FieldDefault, SchemaFile, TypeDef, TypeExpr};
+use crol::schema::{self, FieldDefault, SchemaFile, TypeDef, TypeExpr, VariantShape};
 use crol_derive::{Schema, VariantName};
 use serde_derive::{Deserialize, Serialize};
 
@@ -884,4 +884,209 @@ fn a_type_without_a_schema_is_described_by_the_field() {
     assert!(check(good).is_empty());
     let bad = "Stamped { at: 2026, anything: 1, ordered: { a: 1 } }";
     assert_eq!(check(bad).len(), 1);
+}
+
+/// The schema of schema files, and every definition in it, as (what, doc).
+fn own_docs(schema: &SchemaFile) -> Vec<(String, String)> {
+    let mut docs = Vec::new();
+    let mut fields = |path: &str, fields: &indexmap::IndexMap<String, schema::Field>| {
+        for (name, field) in fields {
+            docs.push((format!("{path}.{name}"), field.doc.clone()));
+        }
+    };
+    let mut variants = Vec::new();
+    for (path, def) in &schema.types {
+        match def {
+            TypeDef::Struct { fields: found, .. } => fields(path, found),
+            TypeDef::Enum {
+                variants: found, ..
+            } => {
+                for (name, variant) in found {
+                    let at = format!("{path}::{name}");
+                    if let VariantShape::Struct(found) = &variant.shape {
+                        fields(&at, found);
+                    }
+                    variants.push((at, variant.doc.clone()));
+                }
+            }
+            _ => panic!("{path}"),
+        }
+        variants.push((path.clone(), def.doc().to_owned()));
+    }
+    docs.append(&mut variants);
+    docs
+}
+
+#[test]
+fn the_schema_of_schema_files_has_a_doc_at_every_level() {
+    let schema = schema::build::<SchemaFile>();
+    assert_eq!(schema.root, schema::SCHEMA_PATH);
+    for path in [
+        "crol::schema::Field",
+        "crol::schema::FieldDefault",
+        "crol::schema::Repr",
+        "crol::schema::Schema",
+        "crol::schema::TypeDef",
+        "crol::schema::TypeExpr",
+        "crol::schema::VariantDef",
+        "crol::schema::VariantShape",
+    ] {
+        assert!(schema.get(path).is_some(), "{path}");
+    }
+    // What editors show is what the model says, in the comments of its code.
+    let source = include_str!("../src/schema.rs");
+    let comments: String = source
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("///"))
+        .map(str::trim)
+        .collect::<Vec<_>>()
+        .join(" ");
+    for (what, doc) in own_docs(&schema) {
+        assert!(!doc.is_empty(), "{what} has no doc");
+        assert!(comments.contains(&doc), "{what}: {doc:?} is no doc comment");
+    }
+}
+
+#[test]
+fn schema_files_of_every_shape_pass_their_own_schema() {
+    let own = schema::build::<SchemaFile>();
+    let check = |text: &str| {
+        let value: crol::RawValue = crol::from_str(text).unwrap();
+        let root = crol::value_type(&value.0, &own);
+        assert_eq!(root.as_deref(), Some(schema::SCHEMA_PATH));
+        let found = crol::check_value(&value.0, &own, root.as_deref(), &Default::default());
+        assert!(found.is_empty(), "{found:?}\n{text}");
+    };
+    // Its own, the project file's, and that of a type of every shape.
+    check(&own.to_text().unwrap());
+    check(&schema::build::<crol::project::Project>().to_text().unwrap());
+    let field = |ty| schema::Field::new(ty);
+    let mut everything = schema::Field::new(TypeExpr::Tuple(vec![
+        TypeExpr::Id(vec!["a".to_owned()]),
+        TypeExpr::Array(Box::new(TypeExpr::U8), 3),
+        TypeExpr::Set(Box::new(TypeExpr::Bytes)),
+        TypeExpr::Map(Box::new(TypeExpr::I64), Box::new(TypeExpr::Any)),
+        TypeExpr::Option(Box::new(TypeExpr::Named("a".to_owned()))),
+    ]));
+    everything.doc = "Doc.".to_owned();
+    everything.aliases = vec!["other".to_owned()];
+    everything.default = schema::FieldDefault::Unrecorded;
+    everything.flatten = true;
+    everything.refers = vec!["a".to_owned()];
+    let source = ("a.rs".to_owned(), 1);
+    let plain = |shape| schema::VariantDef {
+        shape,
+        doc: String::new(),
+        aliases: Vec::new(),
+        explicit_defaults: Some(true),
+    };
+    let types = [
+        TypeDef::Struct {
+            name: "S".to_owned(),
+            doc: "Doc.".to_owned(),
+            source: source.clone(),
+            fields: [("x".to_owned(), everything.clone())].into_iter().collect(),
+            deny_unknown_fields: true,
+            default: crol::schema::default_value(&1),
+            explicit_defaults: Some(false),
+        },
+        TypeDef::TupleStruct {
+            name: "T".to_owned(),
+            doc: String::new(),
+            source: source.clone(),
+            fields: vec![TypeExpr::Bool, TypeExpr::Char],
+        },
+        TypeDef::Newtype {
+            name: "N".to_owned(),
+            doc: String::new(),
+            source: source.clone(),
+            inner: TypeExpr::F64,
+        },
+        TypeDef::Transparent {
+            name: "W".to_owned(),
+            doc: String::new(),
+            source: source.clone(),
+            inner: TypeExpr::Unit,
+        },
+        TypeDef::UnitStruct {
+            name: "U".to_owned(),
+            doc: String::new(),
+            source: source.clone(),
+        },
+        TypeDef::Enum {
+            name: "E".to_owned(),
+            doc: String::new(),
+            source: source.clone(),
+            repr: schema::Repr::Internal {
+                tag: "t".to_owned(),
+            },
+            variants: [
+                ("A".to_owned(), plain(VariantShape::Unit)),
+                ("B".to_owned(), plain(VariantShape::Newtype(TypeExpr::I8))),
+                (
+                    "C".to_owned(),
+                    plain(VariantShape::Tuple(vec![TypeExpr::U8, TypeExpr::U16])),
+                ),
+                (
+                    "D".to_owned(),
+                    plain(VariantShape::Struct(
+                        [("y".to_owned(), field(TypeExpr::Any))]
+                            .into_iter()
+                            .collect(),
+                    )),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        },
+        TypeDef::Enum {
+            name: "F".to_owned(),
+            doc: String::new(),
+            source: source.clone(),
+            repr: schema::Repr::Adjacent {
+                tag: "t".to_owned(),
+                content: "c".to_owned(),
+            },
+            variants: Default::default(),
+        },
+        TypeDef::Enum {
+            name: "G".to_owned(),
+            doc: String::new(),
+            source,
+            repr: schema::Repr::Untagged,
+            variants: Default::default(),
+        },
+    ];
+    let schema = SchemaFile {
+        format: schema::FORMAT,
+        root: "a".to_owned(),
+        types: types
+            .into_iter()
+            .map(|def| (def.name().to_owned(), def))
+            .collect(),
+    };
+    check(&schema.to_text().unwrap());
+    assert_eq!(
+        SchemaFile::from_text(&schema.to_text().unwrap()).unwrap(),
+        schema
+    );
+}
+
+#[test]
+fn schema_files_say_so_themselves() {
+    let own = schema::build::<SchemaFile>();
+    assert!(schema::is_schema_file(&own.to_text().unwrap()));
+    assert!(schema::is_schema_file("#![schema(\"crate:crol\")]\n\n1\n"));
+    let version = env!("CARGO_PKG_VERSION");
+    let exact = format!("#![schema(\"crate:crol@{version}\")]\n\n1\n");
+    assert!(schema::is_schema_file(&exact));
+    for text in [
+        "Schema { format: 1, root: \"a\", types: {} }\n",
+        "#![schema(crol::schema)]\n\n1\n",
+        "#![schema(\"crate:crol-eval\")]\n\n1\n",
+        "#![schema(\"crate:crol@999\")]\n\n1\n",
+        "#![schema(\"https://example.com/crate:crol.crov\")]\n\n1\n",
+    ] {
+        assert!(!schema::is_schema_file(text), "{text}");
+    }
 }

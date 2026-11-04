@@ -210,14 +210,13 @@ fn hover_completion_and_definition_in_a_project() {
     );
     client.diagnostics_for(&local, |d| d.is_empty());
 
-    // On a target: the final value and its history.
+    // On a target with several operations: its history.
     let hover = client.request(
         "textDocument/hover",
         json!({ "textDocument": { "uri": local }, "position": { "line": 0, "character": 5 } }),
     );
     let markdown = hover["contents"]["value"].as_str().unwrap();
-    assert!(markdown.starts_with("**web.port**: `8080`"), "{markdown}");
-    assert!(markdown.contains("`+web` (definition"), "{markdown}");
+    assert!(markdown.starts_with("- `+web` (definition"), "{markdown}");
     assert!(markdown.contains("`web.port` (patch"), "{markdown}");
 
     // On a reference: the value it names.
@@ -823,10 +822,7 @@ fn completion_and_hover_from_the_schema() {
         json!({ "textDocument": { "uri": base }, "position": { "line": 0, "character": 18 } }),
     );
     let markdown = hover["contents"]["value"].as_str().unwrap();
-    assert!(
-        markdown.contains("`u32` — Number of copies to run."),
-        "{markdown}"
-    );
+    assert_eq!(markdown, "Number of copies to run.\n\n`u32`");
     client.stop();
 }
 
@@ -1194,7 +1190,7 @@ fn documents_on_their_own_complete_from_their_schema() {
         json!({ "textDocument": { "uri": config }, "position": { "line": 2, "character": 2 } }),
     );
     let markdown = hover["contents"]["value"].as_str().unwrap_or_default();
-    assert!(markdown.contains("`String` — Where to listen."), "{hover}");
+    assert_eq!(markdown, "Where to listen.\n\n`String`", "{hover}");
 
     // The project file: the fields of `Project` crol provides.
     let project = uri(&dir.join("project.crov"));
@@ -1909,59 +1905,29 @@ fn hover_at_any_depth() {
     pair: (\"a\", { count: 2 }),
     wrapped: Wrapper({ count: 3 }),
 }";
+    let path = "Where the certificate is.\n\n`String`";
+    let host = "The host.\n\n`String`";
     let cases = [
-        (
-            "path: \"x\"",
-            "**server.tls.cert.path**: `\"x\"`",
-            "`String` — Where the certificate is.",
-        ),
-        ("name: \"b\"", "**services[1].name**: `\"b\"`", "`String`"),
-        (
-            "path: \"y\"",
-            "**services[1].server.tls.cert.path**: `\"y\"`",
-            "`String` — Where the certificate is.",
-        ),
-        (
-            "mode: Strict",
-            "**services[1].server.tls.cert.mode**: `Strict`",
-            "`Mode`",
-        ),
-        (
-            "path: \"z\"",
-            "**fallback.0.tls.cert.path**: `\"z\"`",
-            "`String`",
-        ),
-        (
-            "enabled: true",
-            "**by_name.web.server.tls.enabled**: `true`",
-            "`bool`",
-        ),
-        (
-            "name: \"http\"",
-            "**ports[80].name**: `\"http\"`",
-            "`String`",
-        ),
-        (
-            "host: \"h\"",
-            "**backend.host**: `\"h\"`",
-            "`String` — The host.",
-        ),
-        ("count: 1", "**backend.retry.count**: `1`", "`u32`"),
-        (
-            "host: \"i\"",
-            "**backends[1].host**: `\"i\"`",
-            "`String` — The host.",
-        ),
-        ("count: 2", "**pair.1.count**: `2`", "`u32`"),
-        ("count: 3", "**wrapped.0.count**: `3`", "`u32`"),
+        ("path: \"x\"", path),
+        ("name: \"b\"", "`String`"),
+        ("path: \"y\"", path),
+        ("mode: Strict", "`Mode`"),
+        ("path: \"z\"", path),
+        ("enabled: true", "`bool`"),
+        ("name: \"http\"", "`String`"),
+        ("host: \"h\"", host),
+        ("count: 1", "`u32`"),
+        ("host: \"i\"", host),
+        ("count: 2", "`u32`"),
+        ("count: 3", "`u32`"),
     ];
     let mut failures = Vec::new();
-    for (word, value, ty) in cases {
+    for (word, wanted) in cases {
         let i = text.find(word).unwrap() + 1;
         let marked = format!("{HEADER}{}|{}", &text[..i], &text[i..]);
         let markdown = buffer.hover(&mut client, &marked);
-        if !markdown.starts_with(value) || !markdown.contains(ty) {
-            failures.push(format!("wanted {value} and {ty}, got {markdown:?}"));
+        if markdown != wanted {
+            failures.push(format!("wanted {wanted:?}, got {markdown:?}"));
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
@@ -2421,7 +2387,7 @@ fn a_document_on_its_own_is_evaluated_on_what_it_extends() {
         version: 1,
     };
 
-    // Hover has the value on top of what is below, with its history.
+    // Hover has the operations on the key, in what is below too.
     let hover = buffer.hover(&mut client, "#![extends(base)]\n\nweb.po|rt: & + 1\n");
     assert!(hover.contains("`81`"), "{hover}");
     assert!(hover.contains("base.crod"), "{hover}");
@@ -2798,7 +2764,7 @@ fn default_reads_the_project_schema() {
     let mut buffer = Buffer::open(&client, &dir, "data/a.crod");
     let hover = buffer.hover(
         &mut client,
-        "+web: Service { repl|icas: &default * 2, .. }\n",
+        "+web: Service { replicas: &default * 2, .. }\n+top: &root.web.repl|icas\n",
     );
     assert!(hover.contains("`6`"), "{hover}");
     client.stop();
@@ -2836,7 +2802,8 @@ fn a_document_on_its_own_keeps_its_last_good_evaluation() {
     );
     let mut client = Client::start(&dir);
     let mut buffer = Buffer::open(&client, &dir, "a.crod");
-    let broken = "#![schema(schema)]\n\n+web: Service { repl|icas: 7, name: 1 / 0 }\n";
+    let broken = "#![schema(schema)]\n\n+web: Service { replicas: 7, name: 1 / 0 }\n\
+                  +top: &root.web.repl|icas\n";
     let hover = buffer.hover(&mut client, broken);
     assert!(hover.contains("`7`"), "{hover}");
     assert!(hover.contains("last"), "{hover}");
@@ -2856,7 +2823,7 @@ fn a_value_document_keeps_its_last_good_evaluation() {
     let dir = workspace("lsp-last-good-value", &[("a.crov", "{ port: 80 }\n")]);
     let mut client = Client::start(&dir);
     let mut buffer = Buffer::open(&client, &dir, "a.crov");
-    let hover = buffer.hover(&mut client, "{ po|rt: 1 / 0 }\n");
+    let hover = buffer.hover(&mut client, "{ port: 1 / 0, copy: &root.po|rt }\n");
     assert!(hover.contains("`80`"), "{hover}");
     client.stop();
 }
@@ -3003,23 +2970,19 @@ fn hover_on_a_dotted_target_is_about_the_segment_under_it() {
     );
     let mut client = Client::start(&dir);
     let mut buffer = Buffer::open(&client, &dir, "config.crov");
-    let hover = buffer.hover(
-        &mut client,
-        "#![schema(schema)]\n\n{ server.t|ls.cert.path: \"a\" }\n",
-    );
-    assert!(hover.contains("**server.tls**"), "{hover}");
-    assert!(!hover.contains("cert.path"), "{hover}");
-    let hover = buffer.hover(
-        &mut client,
-        "#![schema(schema)]\n\n{ ser|ver.tls.cert.path: \"a\" }\n",
-    );
-    assert!(hover.contains("**server**"), "{hover}");
-    let hover = buffer.hover(
-        &mut client,
-        "#![schema(schema)]\n\n{ server.tls.cert.pa|th: \"a\" }\n",
-    );
-    assert!(hover.contains("**server.tls.cert.path**"), "{hover}");
-    assert!(hover.contains("`String`"), "{hover}");
+    let text = |marked: &str| format!("#![schema(schema)]\n\n{{ {marked}: \"a\" }}\n");
+    for (marked, wanted) in [
+        ("ser|ver.tls.cert.path", "`Server`"),
+        ("server.t|ls.cert.path", "How to encrypt.\n\n`Tls`"),
+        ("server.tls.ce|rt.path", "`Cert`"),
+        (
+            "server.tls.cert.pa|th",
+            "Where the certificate is.\n\n`String`",
+        ),
+    ] {
+        let hover = buffer.hover(&mut client, &text(marked));
+        assert_eq!(hover, wanted, "{marked}");
+    }
     client.stop();
 }
 
@@ -3047,5 +3010,611 @@ fn inlay_hints_on_elements() {
     );
     let buffer = Buffer::open(&client, &dir, "value.crov");
     assert_eq!(inlay_labels(&mut client, &buffer), ["= 2", "= 4"]);
+    client.stop();
+}
+
+/// Types to generate a real schema file from, as an application does.
+#[allow(dead_code)]
+mod generated {
+    /// The main configuration.
+    #[derive(crol::Schema)]
+    pub(super) struct Config {
+        /// The name of the configuration.
+        name: String,
+        /// Labels to attach.
+        tags: Vec<String>,
+        /// A shorter name, if there is one.
+        nick: Option<String>,
+        /// How much it may use.
+        limits: Limits,
+        /// How it runs.
+        mode: Mode,
+        /// The next one along.
+        next: Option<Box<Config>>,
+        undocumented: u32,
+    }
+
+    /// Limits on what it uses.
+    #[derive(crol::Schema)]
+    pub(super) struct Limits {
+        /// Memory, in megabytes.
+        memory: u32,
+    }
+
+    /// How something runs.
+    #[derive(crol::Schema)]
+    pub(super) enum Mode {
+        /// As fast as it can.
+        Fast,
+        Slow,
+        /// By hand.
+        Custom {
+            /// How hard to try.
+            effort: u32,
+        },
+    }
+}
+
+fn generated_schema() -> String {
+    crol::schema::build::<generated::Config>()
+        .to_text()
+        .unwrap()
+}
+
+const GENERATED_PROJECT: &str = r#"Project {
+    layers: List([
+        { name: "base", dir: "base", read_only: true },
+        { name: "local", dir: "local", .. },
+    ]),
+    schema: Some("crol::schema"),
+    files: [{ glob: "cfg::*", type: "app::Config" }],
+    ..,
+}
+"#;
+
+/// `text` with `|` before `word`, at the first place `context` is, for
+/// [`Buffer::hover`].
+fn mark(text: &str, context: &str, word: &str) -> String {
+    let at = text.find(context).expect(context) + context.find(word).expect(word);
+    format!("{}|{}", &text[..at], &text[at..])
+}
+
+/// A hover case: where it is, as in [`mark`], and how the text starts.
+type HoverCase<'a> = (&'a str, &'a str, &'a str);
+
+/// Hovers on each case, and reports every one that fails at once.
+fn check_hovers(client: &mut Client, buffer: &mut Buffer, text: &str, cases: &[HoverCase<'_>]) {
+    let mut failures = Vec::new();
+    for (context, word, wanted) in cases {
+        let markdown = buffer.hover(client, &mark(text, context, word));
+        if !markdown.starts_with(wanted) {
+            failures.push(format!(
+                "{word} in {context}: wanted {wanted:?}, got {markdown:?}"
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Hovers on every character, as the mouse goes. A fence that is not at the
+/// start of a line does not open in Markdown, and shows as raw text.
+fn check_every_hover_renders(client: &mut Client, buffer: &Buffer, text: &str) {
+    for (line, content) in text.lines().enumerate() {
+        for character in 0..content.encode_utf16().count() {
+            let hover = client.request(
+                "textDocument/hover",
+                json!({
+                    "textDocument": { "uri": buffer.uri },
+                    "position": { "line": line, "character": character },
+                }),
+            );
+            let Some(markdown) = hover["contents"]["value"].as_str() else {
+                continue;
+            };
+            let place = format!("{line}:{character}: {markdown:?}");
+            assert_eq!(hover["contents"]["kind"], "markdown", "{place}");
+            for (at, _) in markdown.match_indices("```") {
+                assert!(at == 0 || markdown[..at].ends_with('\n'), "{place}");
+            }
+            // Not a value: a doc and a type.
+            assert!(!markdown.starts_with("**"), "{place}");
+            assert!(markdown.lines().count() <= 5, "{place}");
+        }
+    }
+}
+
+#[test]
+fn hover_in_a_project_file_shows_the_doc_of_the_field() {
+    let dir = workspace(
+        "lsp-hover-project-file",
+        &[
+            ("project.crov", GENERATED_PROJECT),
+            ("crol/schema.crov", &generated_schema()),
+            ("base/a.crod", ""),
+            ("local/a.crod", ""),
+        ],
+    );
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "project.crov");
+    let layer = "The layer's name.\n\n`String`";
+    check_hovers(
+        &mut client,
+        &mut buffer,
+        GENERATED_PROJECT,
+        &[
+            // The type name of a value that is no field's.
+            ("Project {", "Project", "A project file"),
+            // A key, and a value through a variant, a list and a block.
+            (
+                "layers:",
+                "layers",
+                "The layers, lowest first.\n\n`ProjectLayers`",
+            ),
+            (
+                "List(",
+                "List",
+                "The layers, listed.\n\n`ProjectLayers::List`",
+            ),
+            ("name: \"base\"", "name", layer),
+            ("\"base\"", "base", layer),
+            ("dir: \"base\"", "dir", "Its module path"),
+            ("read_only:", "read_only", "Generated or vendored data"),
+            ("true", "true", "Generated or vendored data"),
+            // A value in `Some(...)`, and `Some` itself.
+            ("schema:", "schema", "The schema:"),
+            ("Some(", "Some", "The schema:"),
+            ("\"crol::schema\"", "crol", "The schema:"),
+            // In a list of the field's.
+            ("glob:", "glob", "A module path whose segments"),
+            ("\"cfg::*\"", "cfg", "A module path whose segments"),
+            ("\"app::Config\"", "app", "The schema path of their type."),
+        ],
+    );
+    buffer.change(&client, GENERATED_PROJECT);
+    client.diagnostics_for(&buffer.uri, |_| true);
+    check_every_hover_renders(&mut client, &buffer, GENERATED_PROJECT);
+    client.stop();
+}
+
+#[test]
+fn hover_in_a_schema_file_shows_the_doc_of_the_field() {
+    let text = generated_schema();
+    let dir = workspace("lsp-hover-schema-file", &[("crol/schema.crov", &text)]);
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "crol/schema.crov");
+    let ty = "The type of the field.";
+    let fields = "The fields, by the name data writes them with.";
+    check_hovers(
+        &mut client,
+        &mut buffer,
+        &text,
+        &[
+            ("Schema {", "Schema", "A schema file:"),
+            ("format: 1", "format", "The format version"),
+            ("format: 1", "1", "The format version"),
+            ("root:", "root", "The path of the root type"),
+            ("root: \"", "\"", "The path of the root type"),
+            ("types:", "types", "Every named type"),
+            // An entry of a map has the doc of the map's field.
+            (
+                "\"server::generated::Config\": Struct",
+                "server",
+                "Every named type",
+            ),
+            ("Struct {", "Struct", "A struct with named fields."),
+            ("name: \"Config\"", "name", "The name data writes"),
+            ("\"Config\"", "Config", "The name data writes"),
+            ("doc: \"The main", "doc", "The doc comment"),
+            ("\"The main", "The", "The doc comment"),
+            ("source: (", "source", "Where it is defined"),
+            // An element of a tuple has the field's doc too.
+            ("source: (\"", "\"", "Where it is defined"),
+            ("fields: {", "fields", fields),
+            ("name: { ty", "name", fields),
+            ("ty: String", "ty", ty),
+            // The `:` and the bracket a value starts with are in the entry.
+            ("ty: String", ":", ty),
+            ("name: { ty", "{", fields),
+            // A variant has its own doc; what it holds, the field's.
+            ("ty: String", "String", "`String`, `str` or `PathBuf`"),
+            ("ty: List(String)", "List", "`Vec<T>`, `VecDeque<T>`"),
+            ("ty: Named(\"", "Named", "A type in the schema's `types`"),
+            ("ty: Named(\"", "\"", ty),
+            ("ty: Option(", "Option", "`Option<T>`"),
+            // The variants of an enum and the fields in them.
+            ("Enum {", "Enum", "An enum."),
+            ("variants: {", "variants", "The variants, by"),
+            ("shape: Unit", "shape", "What the variant holds"),
+            ("shape: Unit", "Unit", "No value:"),
+            ("shape: Struct", "Struct", "Named fields"),
+        ],
+    );
+    buffer.change(&client, &text);
+    client.diagnostics_for(&buffer.uri, |_| true);
+    check_every_hover_renders(&mut client, &buffer, &text);
+    client.stop();
+}
+
+#[test]
+fn hover_in_data_shows_the_doc_of_the_field() {
+    let text = "#![schema(crol::schema)]
+
++web: Config {
+    name: \"w\",
+    tags: [\"a\", \"b\"],
+    nick: Some(\"n\"),
+    limits: { memory: 512 },
+    mode: Fast,
+    next: None,
+    undocumented: 1,
+}
++db: Config {
+    name: \"d\",
+    tags: [],
+    nick: None,
+    limits: { memory: 1 },
+    mode: Slow,
+    next: Some(Config { name: \"e\", tags: [\"z\"], nick: None, limits: { memory: 7 }, mode: Custom { effort: 3 }, next: None, undocumented: 4 }),
+    undocumented: 2,
+}
+";
+    let dir = workspace(
+        "lsp-hover-data",
+        &[("crol/schema.crov", &generated_schema()), ("a.crod", text)],
+    );
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "a.crod");
+    let name = "The name of the configuration.\n\n`String`";
+    let tags = "Labels to attach.\n\n`String`";
+    check_hovers(
+        &mut client,
+        &mut buffer,
+        text,
+        &[
+            ("+web", "web", "The main configuration.\n\n`Config`"),
+            ("Config {", "Config", "The main configuration."),
+            ("name: \"w\"", "name", name),
+            ("\"w\"", "w", name),
+            ("\"b\"", "b", tags),
+            (
+                "Some(\"n\")",
+                "n",
+                "A shorter name, if there is one.\n\n`String`",
+            ),
+            ("nick: None", "None", "A shorter name, if there is one."),
+            ("memory: 512", "512", "Memory, in megabytes.\n\n`u32`"),
+            // A variant's doc, else the field's.
+            ("mode: Fast", "Fast", "As fast as it can.\n\n`Mode::Fast`"),
+            ("mode: Slow", "Slow", "How it runs.\n\n`Mode::Slow`"),
+            ("Custom {", "Custom", "By hand."),
+            // At any depth, through `Some` and a named block.
+            ("\"e\"", "e", name),
+            ("\"z\"", "z", tags),
+            ("effort: 3", "3", "How hard to try.\n\n`u32`"),
+        ],
+    );
+    // No doc: the type alone.
+    for word in ["undocumented", "1"] {
+        let markdown = buffer.hover(&mut client, &mark(text, "undocumented: 1", word));
+        assert_eq!(markdown, "`u32`", "{word}");
+    }
+    client.stop();
+}
+
+#[test]
+fn hover_shows_the_layers_only_when_there_are_several_operations() {
+    let config = "Config { name: \"w\", tags: [], nick: None, limits: { memory: 1 }, \
+                  mode: Fast, next: None, undocumented: 1 }";
+    let base = format!("+web: {config}\n");
+    let project = "Project {
+    layers: List([{ name: \"base\", dir: \"base\", .. }, { name: \"top\", dir: \"top\", .. }]),
+    schema: Some(\"crol::schema\"),
+    ..,
+}
+";
+    let dir = workspace(
+        "lsp-hover-history",
+        &[
+            ("project.crov", project),
+            ("crol/schema.crov", &generated_schema()),
+            ("base/a.crod", &base),
+            ("top/a.crod", "web.limits.memory: 2\n"),
+        ],
+    );
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "top/a.crod");
+
+    // Several operations: the doc, the type, and after them the layers.
+    let markdown = buffer.hover(&mut client, "web.limits.mem|ory: 2\n");
+    let (doc, history) = markdown.split_once("\n\n---\n\n").expect(&markdown);
+    assert_eq!(doc, "Memory, in megabytes.\n\n`u32`");
+    assert!(history.contains("layer `base`"), "{markdown}");
+    assert!(history.contains("layer `top`"), "{markdown}");
+
+    // The same on the value.
+    assert_eq!(
+        buffer.hover(&mut client, "web.limits.memory: |2\n"),
+        markdown
+    );
+
+    // One operation: the doc alone.
+    let mut below = Buffer::open(&client, &dir, "base/a.crod");
+    let markdown = below.hover(&mut client, &mark(&base, "tags: []", "tags"));
+    assert_eq!(markdown, "Labels to attach.\n\n`Vec<String>`");
+    client.stop();
+}
+
+#[test]
+fn hover_on_a_reference_has_what_it_names_after_the_doc() {
+    let config = "Config { name: \"w\", tags: [], nick: None, limits: { memory: 1 }, \
+                  mode: Fast, next: None, undocumented: 1 }";
+    let text = format!(
+        "#![schema(crol::schema)]\n\n+web: {config}\n+db: Config {{ name: &root.web.name, \
+         tags: [], nick: None, limits: {{ memory: 1 }}, mode: Fast, next: None, \
+         undocumented: 2 }}\n"
+    );
+    let dir = workspace(
+        "lsp-hover-reference",
+        &[("crol/schema.crov", &generated_schema()), ("a.crod", &text)],
+    );
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "a.crod");
+    let markdown = buffer.hover(&mut client, &mark(&text, "&root.web.name", "web"));
+    assert_eq!(
+        markdown,
+        "The name of the configuration.\n\n`String`\n\n**web.name**: `\"w\"`"
+    );
+    client.stop();
+}
+
+#[test]
+fn hover_keeps_to_values_and_keys() {
+    let text = "#![schema(crol::schema)]\n\nt := 1\nn = +web: Config { .. }\n";
+    let dir = workspace(
+        "lsp-hover-elsewhere",
+        &[("crol/schema.crov", &generated_schema()), ("a.crod", text)],
+    );
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "a.crod");
+    for (context, word) in [
+        ("#![schema", "schema"),
+        ("crol::schema", "crol"),
+        ("t := 1", "t"),
+        ("t := 1", "1"),
+        ("n = +web", "n"),
+        ("{ .. }", ".."),
+        ("{ .. }", "}"),
+    ] {
+        let markdown = buffer.hover(&mut client, &mark(text, context, word));
+        assert_eq!(markdown, "(no hover)", "{word} in {context}");
+    }
+    client.stop();
+}
+
+#[test]
+fn hover_says_nothing_where_nothing_is_known() {
+    let dir = workspace("lsp-hover-nothing", &[("a.crov", "{ port: 80 }\n")]);
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "a.crov");
+    for marked in [
+        "{ po|rt: 80, tags: [\"a\"], nested: { on: true } }\n",
+        "{ port: 8|0, tags: [\"a\"], nested: { on: true } }\n",
+        "{ port: 80, tags: [\"|a\"], nested: { on: true } }\n",
+        "{ port: 80, tags: [\"a\"], nested: { on: tr|ue } }\n",
+        "|{ port: 80, tags: [\"a\"], nested: { on: true } }\n",
+    ] {
+        assert_eq!(buffer.hover(&mut client, marked), "(no hover)", "{marked}");
+    }
+    client.stop();
+}
+
+#[test]
+fn completion_at_every_level_of_a_schema_file() {
+    let text = generated_schema();
+    let dir = workspace("lsp-complete-schema-file", &[("crol/schema.crov", &text)]);
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "crol/schema.crov");
+    let head = "#![schema(\"crate:crol@0.1\")]\n\n";
+    let cases: &[Case<'_>] = &[
+        ("Schema { | }", &["format", "root", "types"], &[]),
+        ("Schema { format: 1, | }", &["root", "types"], &["format"]),
+        (
+            "Schema { types: { \"a::B\": | } }",
+            &[
+                "Struct",
+                "TupleStruct",
+                "Newtype",
+                "Transparent",
+                "UnitStruct",
+                "Enum",
+            ],
+            &[],
+        ),
+        (
+            "Schema { types: { \"a::B\": Struct { | } } }",
+            &[
+                "name",
+                "doc",
+                "source",
+                "fields",
+                "deny_unknown_fields",
+                "default",
+                "explicit_defaults",
+            ],
+            &["repr", "variants"],
+        ),
+        (
+            "Schema { types: { \"a::B\": Enum { | } } }",
+            &["name", "doc", "source", "repr", "variants"],
+            &["fields"],
+        ),
+        (
+            "Schema { types: { \"a::B\": Enum { repr: | } } }",
+            &["External", "Internal", "Adjacent", "Untagged"],
+            &[],
+        ),
+        (
+            "Schema { types: { \"a::B\": Enum { repr: Internal { | } } } }",
+            &["tag"],
+            &["content"],
+        ),
+        (
+            "Schema { types: { \"a::B\": Enum { variants: { V: { | } } } } }",
+            &["shape", "doc", "aliases", "explicit_defaults"],
+            &[],
+        ),
+        (
+            "Schema { types: { \"a::B\": Enum { variants: { V: { shape: | } } } } }",
+            &["Unit", "Newtype", "Tuple", "Struct"],
+            &[],
+        ),
+        (
+            "Schema { types: { \"a::B\": Enum { variants: { V: { shape: Struct({ x: { | } }) } } } } }",
+            &["ty", "doc"],
+            &[],
+        ),
+        (
+            "Schema { types: { \"a::B\": Struct { fields: { x: { | } } } } }",
+            &["ty", "doc", "aliases", "default", "flatten", "refers"],
+            &[],
+        ),
+        (
+            "Schema { types: { \"a::B\": Struct { fields: { x: { ty: String, | } } } } }",
+            &["doc", "aliases", "default", "flatten", "refers"],
+            &["ty"],
+        ),
+        (
+            "Schema { types: { \"a::B\": Struct { fields: { x: { ty: | } } } } }",
+            &[
+                "Bool", "String", "U32", "Option", "List", "Map", "Named", "Any",
+            ],
+            &[],
+        ),
+        (
+            "Schema { types: { \"a::B\": Struct { fields: { x: { ty: List(|) } } } } }",
+            &["Bool", "String", "Named"],
+            &[],
+        ),
+        (
+            "Schema { types: { \"a::B\": Struct { fields: { x: { ty: Map(String, Option(|)) } } } } }",
+            &["Named", "Any"],
+            &[],
+        ),
+        (
+            "Schema { types: { \"a::B\": Struct { fields: { x: { default: | } } } } }",
+            &["Required", "Unrecorded", "Value"],
+            &[],
+        ),
+        (
+            "Schema { types: { \"a::B\": Struct { deny_unknown_fields: | } } }",
+            &["true", "false"],
+            &[],
+        ),
+        (
+            "Schema { types: { \"a::B\": Struct { explicit_defaults: | } } }",
+            &["None", "Some", "true", "false"],
+            &[],
+        ),
+    ];
+    check_completions(&mut client, &mut buffer, head, cases);
+
+    // Fields come with their docs and types, also of a type with no name.
+    let items = buffer.complete(&mut client, &format!("{head}Schema {{ | }}"));
+    let format = items.iter().find(|i| i["label"] == "format").unwrap();
+    let doc = format["documentation"]["value"].as_str().unwrap();
+    assert!(doc.starts_with("The format version"), "{format}");
+    let items = buffer.complete(
+        &mut client,
+        &format!("{head}Schema {{ types: {{ \"a::B\": Struct {{ | }} }} }}"),
+    );
+    let fields = items.iter().find(|i| i["label"] == "fields").unwrap();
+    assert_eq!(fields["detail"], "Map<String, Field>", "{fields}");
+    client.stop();
+}
+
+#[test]
+fn completion_names_the_types_of_a_schema_file() {
+    let text = generated_schema();
+    let dir = workspace("lsp-complete-type-paths", &[("crol/schema.crov", &text)]);
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "crol/schema.crov");
+    let wanted = "server::generated::Limits";
+    let named = "Named(\"server::generated::Limits\")";
+    let root = "root: \"server::generated::Config\"";
+    // In `Named("...")` and `root: "..."`, with the quotes written or not.
+    for (written, replacement, inserted) in [
+        (named, "Named(|)", "\"server::generated::Limits\""),
+        (named, "Named(\"|\")", wanted),
+        (named, "Named(\"ser|\")", wanted),
+        (named, "Named(\"ser|", wanted),
+        (root, "root: \"|\"", wanted),
+    ] {
+        assert!(text.contains(written), "{written}");
+        let items = buffer.complete(&mut client, &text.replacen(written, replacement, 1));
+        let found = items.iter().find(|i| i["label"] == wanted);
+        let found = found.unwrap_or_else(|| panic!("{replacement}: {:?}", labels(&items)));
+        assert_eq!(found["textEdit"]["newText"], inserted, "{replacement}");
+        let range = &found["textEdit"]["range"];
+        assert_eq!(
+            range["start"]["line"], range["end"]["line"],
+            "{replacement}"
+        );
+    }
+    client.stop();
+}
+
+#[test]
+fn completion_at_every_level_of_a_project_file() {
+    let dir = workspace(
+        "lsp-complete-project-file",
+        &[("project.crov", GENERATED_PROJECT)],
+    );
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "project.crov");
+    let cases: &[Case<'_>] = &[
+        (
+            "Project { | }",
+            &["layers", "variants", "options", "schema", "files"],
+            &[],
+        ),
+        ("Project { layers: | }", &["List", "Command"], &[]),
+        (
+            "Project { layers: List([{ | }]) }",
+            &["name", "dir", "read_only"],
+            &[],
+        ),
+        (
+            "Project { layers: List([{ read_only: | }]) }",
+            &["true", "false"],
+            &[],
+        ),
+        ("Project { schema: | }", &["None", "Some"], &[]),
+        (
+            "Project { options: { | } }",
+            &["implicit_some", "max_contexts"],
+            &[],
+        ),
+        ("Project { variants: [|] }", &["Discrete", "Grouped"], &[]),
+    ];
+    check_completions(&mut client, &mut buffer, "", cases);
+    client.stop();
+}
+
+#[test]
+fn a_schema_file_is_checked_against_the_built_in_schema() {
+    let text = generated_schema();
+    let dir = workspace("lsp-schema-file-checked", &[("crol/schema.crov", &text)]);
+    let client = Client::start(&dir);
+    let file = uri(&dir.join("crol/schema.crov"));
+    open_text(&client, &file, &text);
+    client.diagnostics_for(&file, |d| d.is_empty());
+    client.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": file, "version": 2 },
+            "contentChanges": [{ "text": text.replacen("source:", "sauce:", 1) }],
+        }),
+    );
+    client.diagnostics_for(&file, |d| says(d, "has no field `sauce`"));
     client.stop();
 }

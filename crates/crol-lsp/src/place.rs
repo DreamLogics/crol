@@ -24,7 +24,8 @@ pub(crate) struct Place<'a> {
     pub(crate) shape: Option<Shape<'a>>,
     /// The path from the root, if the place has one.
     pub(crate) path: Option<Vec<PathStep>>,
-    /// The doc of the last field stepped into.
+    /// The doc of the field the place is in: the last one stepped into, also
+    /// from an element of its list or a payload in it. It may be empty.
     pub(crate) doc: Option<String>,
 }
 
@@ -121,7 +122,11 @@ impl<'a> Scope<'a> {
             (Some(schema), Some(shape)) => schema::step_shape(schema.file, shape, &step),
             _ => None,
         };
-        let (shape, doc) = stepped.map_or((None, None), |(s, d)| (Some(s), d));
+        let (shape, doc) = match stepped {
+            // An element or a map's value is still in the field around it.
+            Some((shape, doc)) => (Some(shape), doc.or(place.doc)),
+            None => (None, None),
+        };
         Place { shape, path, doc }
     }
 
@@ -134,7 +139,7 @@ impl<'a> Scope<'a> {
         Place {
             shape,
             path: place.path.clone(),
-            doc: None,
+            doc: place.doc.clone(),
         }
     }
 
@@ -167,7 +172,7 @@ impl<'a> Scope<'a> {
         Place {
             shape,
             path,
-            doc: None,
+            doc: place.doc.clone(),
         }
     }
 }
@@ -293,6 +298,25 @@ impl<'a> Cursor<'a> {
             .last()
             .filter(|f| matches!(f.progress, Progress::Value { .. }))
             .map(|f| &f.current)
+    }
+
+    /// The place of a value at the offset: as [`Cursor::value`], or the
+    /// document's, for the value that is the whole of it.
+    pub(crate) fn value_or_root(&self) -> Option<&Place<'a>> {
+        self.value().or_else(|| {
+            self.frames
+                .last()
+                .filter(|f| f.bracket == Bracket::Root)
+                .map(|f| &f.place)
+        })
+    }
+
+    /// The `Name` of the `Name( ... )` the offset is directly in.
+    pub(crate) fn call(&self) -> Option<&str> {
+        self.frames
+            .last()
+            .filter(|f| f.bracket == Bracket::Args)
+            .map(|f| f.name.as_str())
     }
 
     /// The blocks around the offset, innermost first, with the document

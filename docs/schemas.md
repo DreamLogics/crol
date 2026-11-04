@@ -327,7 +327,9 @@ in this order:
 2. the local Cargo registry cache (`~/.cargo/registry/src`);
 3. crates.io, taking the highest matching version.
 
-`crate:crol` is built in: it is the schema of CROL's own schema files.
+`crate:crol` is built in: it is the schema of CROL's own schema files. `crol
+check` and your editor check a schema file against it without looking anything
+up, and your editor completes and documents it at every level.
 
 **Caching.** Remote schemas are fetched over HTTPS only, and cached in
 `CROL_CACHE_DIR` if set, or else a `crol` directory in your platform's cache

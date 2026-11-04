@@ -2118,7 +2118,7 @@ suite runs both on every case to keep them in agreement.
 
 A schema file is a value-mode CROL document, so a `.crov` file, of the type
 `crol::schema::Schema`. Its first line names its own schema, so editors
-check schema files too. An excerpt, for the `Service` of section 10.9
+check schema files too (below). An excerpt, for the `Service` of section 10.9
 (the definitions of `app::Limits` and `app::Volume` are left out):
 
 ```rust
@@ -2223,6 +2223,20 @@ transparent are left out: `Box<Service>` is `Named("app::Service")`.
 
 The generated file writes only the fields that differ from their
 defaults and ends those blocks with `..`, so it stays readable.
+
+**A file's own schema.** A `.crov` document whose `#![schema("...")]` names
+`crate:crol`, with no version, with the requirement this version of crol writes
+or with this version, is a schema file. Nothing else makes one: not its name,
+nor that a project's `schema` names it. The schema of schema files is built into
+crol, as `crol::schema::build::<SchemaFile>()`, so `crol check` and the language
+server use it directly, with or without the features for remote schemas, and
+with no lookup, cache or network, like the project file's (section 12.4). It
+describes a schema file at every level, with docs: `Schema`, `TypeDef`, `Repr`,
+`VariantDef`, `VariantShape`, `Field`, `FieldDefault` and `TypeExpr`, and takes
+what is written in `default` as `Any`. It is
+what `crate:crol` resolves to, also for another requirement that this version
+meets, in which case it goes through the cache, where it replaces what an
+earlier build of the same version left.
 
 **Compatibility.** A field added with a default that leaves the meaning
 of existing files as it was does not change `format`: `explicit_defaults`
@@ -2484,8 +2498,9 @@ its own: syntax, evaluation (a `.crov` file as a value-mode document, a
 `#![extends(...)]` layers, loaded by the composer as for `crol check`,
 with open buffers over the files), and checks against its
 `#![schema(...)]` if it has one, else the one the nearest extended
-document names. Hover, go to definition, completion and inlay hints see
-those layers. An open document with another extension
+document names. A project file (section 12.4) and a schema file (section
+10.10) have the schema built into crol. Hover, go to definition, completion
+and inlay hints see those layers. An open document with another extension
 is value mode, as a text with no layers, and a `.crol` file is not
 evaluated: its one diagnostic says to rename it. With a project file, an open
 document in none of its layers is served in the same way. At start it reads the
@@ -2500,7 +2515,7 @@ editor never waits for one. While a document does not evaluate, as is
 normal in the middle of an edit, hover, completion and the values
 accepting a field fills in come from the latest evaluation that had a value:
 of the project's layers for a file in them, else of that document on its own,
-for as long as it stays open. Hover says so. Changes to files on disk, the project file
+for as long as it stays open. A value on hover says so. Changes to files on disk, the project file
 and the schema file are watched: a client that can register watchers is
 asked for every `.crod`, `.crov` and `.crol` file in the workspace, and any
 change, also to an open buffer, evaluates everything again, so a document
@@ -2545,20 +2560,29 @@ project file, and what can be evaluated still is:
   latest evaluation that had a value (below), else that of the layers below
   what is missing.
 
-**Hover.**
+**Hover.** Hover says what a place is for: the doc comment first, then the
+type on a line of its own, in Markdown, with nothing to scroll past. Evaluated
+values are for inlay hints, `crol eval` and `crol explain`.
 
 - On a target or key, for the segment under the cursor (`limits` in
-  `web.limits.cpu: 2` is `web.limits`): the type and doc comment from the
-  schema; the
-  value *below* this entry (what `&` is here) and the *final* value,
-  each with where it came from (file, line, layer); for a key that
-  differs between contexts, the value per context, up to a limit.
-- On `&`, `&self`, `&parent`, `&root...`, `&default` or a bind: the value it
-  refers to, and the definition it comes from.
-- On an id: a summary of what it names (type name, first lines of the
-  definition, the layer).
-- On a variant name: its declaration (group, parent).
-- On an operator: the values of both sides and the result.
+  `web.limits.cpu: 2` is `web.limits`): the field's doc comment and type.
+- On a value: the same doc as on the key of its entry. That goes for the
+  value's first token (a literal, a name, the bracket it opens with), the `:`
+  before it, and everything it holds that is in no field of its own: the
+  elements of a list or tuple, the values of a map, and what `Some(...)` and
+  other payloads hold, at any depth. The type is that of the value there.
+- On an enum variant's name, as a value or the name of a block or payload: the
+  variant's doc, else the field's, and the type as `Enum::Variant`. On a type
+  name: the field's doc, else the type's. A root entry, or the document as a
+  whole, is in no field, and has the doc of its type.
+- A field with no doc shows its type alone. Where the schema knows nothing, as
+  without one or in what `Any` holds, and on what is no key or value, as a bind's
+  name or an attribute, there is no hover.
+- On a reference or id, after those: what it names, and its value if that fits
+  on a line, since that cannot be read off the document as a written value can.
+- In data, on a key or value that more than one operation has touched, in the
+  context chosen with the `context` setting: below a rule, each operation with
+  its value, file, line and layer. One operation adds nothing to the document.
 
 **Inlay hints** (optional, off by default): the result after an
 expression that computes something (`& * 4` shows `= 2048`), the value of
@@ -2573,8 +2597,8 @@ enum in a dotted target or an unnamed block is taken as the variant of
 the value there. This uses the tokens before the cursor, so an
 unfinished line, at the cursor or above it, changes nothing. Nothing is
 offered in strings and comments. Every item replaces the word at the
-cursor. `:`, space, `{`, `[`, `(` and `,` trigger completion, as do `.`,
-`&`, `<` and `@`.
+cursor, except in such a string (below). `:`, space, `{`, `[`, `(` and `,`
+trigger completion, as do `.`, `&`, `<` and `@`.
 
 - Keys: in a block of a known type and after a `.` in a target, the
   fields not written yet (in that block, not one around a variant
@@ -2588,6 +2612,9 @@ cursor. `:`, space, `{`, `[`, `(` and `,` trigger completion, as do `.`,
 - Values: after `key:`, in a list and in a payload, enum variants and
   type names that fit the type there;
   `true`/`false`; ids filtered by `#[crol(refers(...))]`; `None`/`Some`.
+  In a schema file (section 10.10), `root` and `Named(...)` offer the paths in
+  its `types`, as a string or inside the quotes of one, the only place in a
+  string where anything is offered.
 - After `&root.`, `&self.`, `&parent.` and binds: the keys of the
   evaluated value at that path. After `&` (and `..&`): bind and
   template names, `self`, `parent`, `root`, `default`.
@@ -2632,9 +2659,8 @@ enum variants (from the schema), early and late references, binds, and
 operations that are definitions or patches.
 
 **Settings** (initialisation options, changeable at run time):
-`context` (the context for inlay hints and the first context shown on
-hover; default the base), `inlay_hints`, `debounce_ms`, `max_contexts_in_hover`,
-`remote_schemas` (section 4.1)
+`context` (the context for inlay hints and the layers on hover; default the
+base), `inlay_hints`, `debounce_ms`, `remote_schemas` (section 4.1)
 and `project` (a project file path, overriding the search).
 
 **Application-specific checks.** Checks the format cannot do belong to

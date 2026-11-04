@@ -304,8 +304,10 @@ async fn krate(
     let own = Version::parse(env!("CARGO_PKG_VERSION")).expect("crol's version");
     if same_name(name, "crol") && req.matches(&own) {
         let path = dirs.cache.join("crates").join(format!("crol-{own}.crov"));
-        if !path.is_file() {
-            let text = crate::schema::build::<crate::schema::SchemaFile>().to_text()?;
+        // A build of this version may have written another schema, so what
+        // is there counts only if it is this one.
+        let text = crate::schema::build::<crate::schema::SchemaFile>().to_text()?;
+        if std::fs::read_to_string(&path).ok().as_deref() != Some(text.as_str()) {
             write(&path, text.as_bytes())?;
         }
         return Ok(path);
@@ -703,6 +705,12 @@ mod tests {
     #[test]
     fn crol_provides_its_own_schema() {
         let dirs = dirs("own");
+        let path = block_on(resolve_in("crate:crol", &outside(), false, &dirs, &Offline)).unwrap();
+        let schema = crate::schema::SchemaFile::read(&path).unwrap();
+        assert_eq!(schema, crate::schema::build::<crate::schema::SchemaFile>());
+
+        // What an earlier build of this version left behind goes.
+        std::fs::write(&path, "Schema { format: 1, root: \"x\", types: {} }").unwrap();
         let path = block_on(resolve_in("crate:crol", &outside(), false, &dirs, &Offline)).unwrap();
         let schema = crate::schema::SchemaFile::read(&path).unwrap();
         assert_eq!(schema, crate::schema::build::<crate::schema::SchemaFile>());

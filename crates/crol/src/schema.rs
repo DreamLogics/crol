@@ -30,6 +30,10 @@ use crate::raw::RawValue;
 /// The format version of schema files (`SPEC.md` 10.10).
 pub const FORMAT: u32 = 1;
 
+/// The path of the type of schema files, in their own schema
+/// ([`SchemaFile`]'s [`Schema`] implementation).
+pub const SCHEMA_PATH: &str = "crol::schema::Schema";
+
 /// A type that is part of a schema (`SPEC.md` 10.9). Derive it with
 /// `#[derive(crol::Schema)]`; `crol` implements it for the scalars, strings,
 /// collections, tuples, arrays and its own types.
@@ -73,33 +77,38 @@ impl Registry {
     }
 }
 
-/// A schema: its root type and the named types it uses (`SPEC.md` 10.10).
+/// A schema file: the Rust types data loads into, as tools see them. It is
+/// generated from those types, so change them rather than this file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename = "Schema")]
 pub struct SchemaFile {
-    /// The format version, [`FORMAT`].
+    /// The format version of this file. It changes only when the format of
+    /// schema files does.
     pub format: u32,
-    /// The path of the root type.
+    /// The path of the root type: the type the schema was built for, which
+    /// each root value has unless it says otherwise.
     pub root: String,
-    /// Each named type's path and definition, sorted by path.
+    /// Every named type the root type uses, by path.
     pub types: BTreeMap<String, TypeDef>,
 }
 
-/// A named type's definition.
+/// The definition of a named type.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TypeDef {
     /// A struct with named fields.
     Struct {
-        /// The serde name.
+        /// The name data writes: the serde name.
         name: String,
-        /// The doc comment.
+        /// The doc comment, which editors show.
         #[serde(default, skip_serializing_if = "String::is_empty")]
         doc: String,
-        /// The file, relative to the Cargo workspace root, and line.
+        /// Where it is defined: the file, relative to the Cargo workspace root, and
+        /// the line.
         source: (String, u32),
-        /// The fields, by serde name.
+        /// The fields, by the name data writes them with.
         fields: IndexMap<String, Field>,
-        /// `#[serde(deny_unknown_fields)]`.
+        /// `#[serde(deny_unknown_fields)]`: whether a field it does not have is
+        /// an error even where unknown fields are allowed.
         #[serde(default, skip_serializing_if = "is_false")]
         deny_unknown_fields: bool,
         /// The struct's recorded default value, with `#[crol(defaults)]` and
@@ -111,65 +120,70 @@ pub enum TypeDef {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         explicit_defaults: Option<bool>,
     },
-    /// `struct P(A, B)`
+    /// A tuple struct: `struct P(A, B)`.
     TupleStruct {
-        /// The serde name.
+        /// The name data writes: the serde name.
         name: String,
-        /// The doc comment.
+        /// The doc comment, which editors show.
         #[serde(default, skip_serializing_if = "String::is_empty")]
         doc: String,
-        /// The file and line.
+        /// Where it is defined: the file, relative to the Cargo workspace root, and
+        /// the line.
         source: (String, u32),
-        /// The elements' types.
+        /// The type of each element.
         fields: Vec<TypeExpr>,
     },
-    /// `struct N(A)`: data writes `N(x)` or `x`.
+    /// A newtype struct, `struct N(A)`: data writes `N(x)` or `x`.
     Newtype {
-        /// The serde name.
+        /// The name data writes: the serde name.
         name: String,
-        /// The doc comment.
+        /// The doc comment, which editors show.
         #[serde(default, skip_serializing_if = "String::is_empty")]
         doc: String,
-        /// The file and line.
+        /// Where it is defined: the file, relative to the Cargo workspace root, and
+        /// the line.
         source: (String, u32),
         /// The wrapped type.
         inner: TypeExpr,
     },
-    /// `#[serde(transparent)]`: data writes only `x`.
+    /// A struct with `#[serde(transparent)]`: data writes only `x`.
     Transparent {
-        /// The serde name.
+        /// The name data writes: the serde name.
         name: String,
-        /// The doc comment.
+        /// The doc comment, which editors show.
         #[serde(default, skip_serializing_if = "String::is_empty")]
         doc: String,
-        /// The file and line.
+        /// Where it is defined: the file, relative to the Cargo workspace root, and
+        /// the line.
         source: (String, u32),
         /// The wrapped type.
         inner: TypeExpr,
     },
-    /// `struct U;`
+    /// A unit struct: `struct U;`.
     UnitStruct {
-        /// The serde name.
+        /// The name data writes: the serde name.
         name: String,
-        /// The doc comment.
+        /// The doc comment, which editors show.
         #[serde(default, skip_serializing_if = "String::is_empty")]
         doc: String,
-        /// The file and line.
+        /// Where it is defined: the file, relative to the Cargo workspace root, and
+        /// the line.
         source: (String, u32),
     },
     /// An enum.
     Enum {
-        /// The serde name.
+        /// The name data writes: the serde name.
         name: String,
-        /// The doc comment.
+        /// The doc comment, which editors show.
         #[serde(default, skip_serializing_if = "String::is_empty")]
         doc: String,
-        /// The file and line.
+        /// Where it is defined: the file, relative to the Cargo workspace root, and
+        /// the line.
         source: (String, u32),
-        /// How serde represents it.
+        /// How serde represents it; `External` if left out.
         #[serde(default, skip_serializing_if = "Repr::is_external")]
         repr: Repr,
-        /// The variants, by serde name.
+        /// The variants, by the name data writes them with.
         variants: IndexMap<String, VariantDef>,
     },
 }
@@ -207,22 +221,23 @@ fn is_false(b: &bool) -> bool {
 /// How serde represents an enum.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Repr {
-    /// The default: `V`, `V(x)`, `V { ... }`.
+    /// The default: data writes `V`, `V(x)` or `V { ... }`.
     #[default]
     External,
-    /// `#[serde(tag = "...")]`
+    /// `#[serde(tag = "...")]`: the variant is a field of the block.
     Internal {
-        /// The tag field.
+        /// The name of the field that says the variant.
         tag: String,
     },
-    /// `#[serde(tag = "...", content = "...")]`
+    /// `#[serde(tag = "...", content = "...")]`: the variant and its value are
+    /// two fields of the block.
     Adjacent {
-        /// The tag field.
+        /// The name of the field that says the variant.
         tag: String,
-        /// The content field.
+        /// The name of the field that holds its value.
         content: String,
     },
-    /// `#[serde(untagged)]`
+    /// `#[serde(untagged)]`: only the shape of the value says the variant.
     Untagged,
 }
 
@@ -232,16 +247,16 @@ impl Repr {
     }
 }
 
-/// An enum variant.
+/// A variant of an enum.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename = "")]
 pub struct VariantDef {
-    /// Its payload.
+    /// What the variant holds.
     pub shape: VariantShape,
-    /// The doc comment.
+    /// The doc comment, which editors show.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub doc: String,
-    /// serde aliases.
+    /// Other names data may write it by: `#[serde(alias = "...")]`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
     /// For a struct variant, `#[crol(explicit_defaults)]`, as on a struct.
@@ -249,16 +264,16 @@ pub struct VariantDef {
     pub explicit_defaults: Option<bool>,
 }
 
-/// A variant's payload.
+/// What a variant holds.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum VariantShape {
-    /// `V`
+    /// No value: data writes `V`.
     Unit,
-    /// `V(x)`
+    /// One value of this type: data writes `V(x)`.
     Newtype(TypeExpr),
-    /// `V(a, b)`
+    /// Values of these types: data writes `V(a, b)`.
     Tuple(Vec<TypeExpr>),
-    /// `V { ... }`
+    /// Named fields: data writes `V { ... }`.
     Struct(IndexMap<String, Field>),
 }
 
@@ -266,18 +281,18 @@ pub enum VariantShape {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename = "")]
 pub struct Field {
-    /// Its type.
+    /// The type of the field.
     pub ty: TypeExpr,
-    /// The doc comment.
+    /// The doc comment, which editors show.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub doc: String,
-    /// serde aliases.
+    /// Other names data may write it by: `#[serde(alias = "...")]`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
-    /// Its default.
+    /// Its default, for when `..` leaves it out.
     #[serde(default, skip_serializing_if = "FieldDefault::is_required")]
     pub default: FieldDefault,
-    /// `#[serde(flatten)]`
+    /// `#[serde(flatten)]`: its fields are written in the block around it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub flatten: bool,
     /// For an id field, the root types an id may name (`#[crol(refers(...))]`).
@@ -299,7 +314,7 @@ impl Field {
     }
 }
 
-/// A field's default (`SPEC.md` 10.10).
+/// The default of a field (`SPEC.md` 10.10).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub enum FieldDefault {
     /// No default: the field must be written, even with `..`.
@@ -319,37 +334,57 @@ impl FieldDefault {
 
 /// A type expression (`SPEC.md` 10.10).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[allow(missing_docs)]
 pub enum TypeExpr {
+    /// `bool`.
     Bool,
+    /// `char`.
     Char,
+    /// `String`, `str` or `PathBuf`.
     String,
+    /// `()`.
     Unit,
+    /// `i8`.
     I8,
+    /// `i16`.
     I16,
+    /// `i32`.
     I32,
+    /// `i64` or `isize`.
     I64,
+    /// `i128`.
     I128,
+    /// `u8`.
     U8,
+    /// `u16`.
     U16,
+    /// `u32`.
     U32,
+    /// `u64` or `usize`.
     U64,
+    /// `u128`.
     U128,
+    /// `f32`.
     F32,
+    /// `f64`.
     F64,
     /// `serde_bytes` and the like.
     Bytes,
     /// `crol::Id`, with the types it may refer to (`[]`: any root key).
     Id(Vec<String>),
+    /// `Option<T>`.
     Option(Box<TypeExpr>),
+    /// `Vec<T>`, `VecDeque<T>` or a slice.
     List(Box<TypeExpr>),
-    /// A set: its elements are unique.
+    /// `HashSet<T>` or `BTreeSet<T>`: its elements are unique.
     Set(Box<TypeExpr>),
-    /// `[T; n]`
+    /// `[T; n]`: the type of its elements, and how many there are.
     Array(Box<TypeExpr>, usize),
+    /// A tuple, with the type of each element.
     Tuple(Vec<TypeExpr>),
+    /// `HashMap<K, V>`, `BTreeMap<K, V>` or `IndexMap<K, V>`: the type of the
+    /// keys, and of the values.
     Map(Box<TypeExpr>, Box<TypeExpr>),
-    /// A type in the schema's `types`.
+    /// A type in the schema's `types`, by its path.
     Named(String),
     /// Anything; not checked.
     Any,
@@ -425,6 +460,30 @@ impl SchemaFile {
             "#![schema(\"crate:crol@{}\")]\n\n{body}",
             own_requirement()
         ))
+    }
+}
+
+/// Whether a document is a schema file: it says so itself, by naming crol's
+/// own schema with `#![schema("crate:crol@...")]`, as [`SchemaFile::to_text`]
+/// writes it (`SPEC.md` 10.10). That schema is
+/// `build::<SchemaFile>()`, which tools use directly: it needs no crate
+/// lookup, cache or network.
+pub fn is_schema_file(text: &str) -> bool {
+    attribute_remote(text).is_some_and(|source| names_own_schema(&source))
+}
+
+/// Whether a `#![schema("...")]` names the schema of this version of crol:
+/// `crate:crol`, for no version in particular, for what it writes itself, or
+/// for this version. Any other requirement goes the way of other crates.
+fn names_own_schema(source: &str) -> bool {
+    let Some(spec) = source.strip_prefix("crate:") else {
+        return false;
+    };
+    match spec.split_once('@') {
+        None => spec == "crol",
+        Some((name, version)) => {
+            name == "crol" && (version == own_requirement() || version == env!("CARGO_PKG_VERSION"))
+        }
     }
 }
 
@@ -916,31 +975,546 @@ impl Schema for std::time::Duration {
     }
 }
 
-/// The schema of schema files, so that editors check them too.
+impl Schema for crate::RawValue {
+    fn describe(_: &mut Registry) -> TypeRef {
+        TypeExpr::Any
+    }
+}
+
+// ---- The schema of schema files (`SPEC.md` 10.10) ----
+
+/// A struct's definition, for hand-written schemas.
+#[track_caller]
+pub(crate) fn struct_def(
+    name: &str,
+    doc: &str,
+    fields: Vec<(&str, Field)>,
+    default: Option<RawValue>,
+) -> TypeDef {
+    let (file, line) = caller();
+    TypeDef::Struct {
+        name: name.to_owned(),
+        doc: doc.to_owned(),
+        source: (file, line),
+        fields: named(fields),
+        deny_unknown_fields: false,
+        default,
+        explicit_defaults: None,
+    }
+}
+
+/// An enum's definition, for hand-written schemas.
+#[track_caller]
+pub(crate) fn enum_def(name: &str, doc: &str, variants: Vec<(&str, VariantDef)>) -> TypeDef {
+    TypeDef::Enum {
+        name: name.to_owned(),
+        doc: doc.to_owned(),
+        source: caller(),
+        repr: Repr::External,
+        variants: named(variants),
+    }
+}
+
+/// The place of the call to a function that tracks its caller, as `source`
+/// has it.
+#[track_caller]
+fn caller() -> (String, u32) {
+    let location = std::panic::Location::caller();
+    (location.file().replace('\\', "/"), location.line())
+}
+
+fn named<T>(items: Vec<(&str, T)>) -> IndexMap<String, T> {
+    items
+        .into_iter()
+        .map(|(name, item)| (name.to_owned(), item))
+        .collect()
+}
+
+/// A field, for hand-written schemas.
+pub(crate) fn field(ty: TypeRef, doc: &str, default: FieldDefault) -> Field {
+    let mut field = Field::new(ty);
+    field.doc = doc.to_owned();
+    field.default = default;
+    field
+}
+
+/// A variant, for hand-written schemas.
+pub(crate) fn variant(shape: VariantShape, doc: &str) -> VariantDef {
+    VariantDef {
+        shape,
+        doc: doc.to_owned(),
+        aliases: Vec::new(),
+        explicit_defaults: None,
+    }
+}
+
+fn list(item: TypeRef) -> TypeRef {
+    TypeExpr::List(Box::new(item))
+}
+
+fn string_map(value: TypeRef) -> TypeRef {
+    TypeExpr::Map(Box::new(TypeExpr::String), Box::new(value))
+}
+
+// What a schema file holds, as its types say it: a type here that differs
+// from the `Deserialize` of the type is a bug, and the tests of the crate
+// check generated files against this. The docs are those of the types.
+
+/// The fields every definition starts with.
+fn definition_fields(fields: Vec<(&'static str, Field)>) -> Vec<(&'static str, Field)> {
+    let mut all = vec![
+        (
+            "name",
+            field(
+                TypeExpr::String,
+                "The name data writes: the serde name.",
+                FieldDefault::Required,
+            ),
+        ),
+        ("doc", doc_field()),
+        (
+            "source",
+            field(
+                TypeExpr::Tuple(vec![TypeExpr::String, TypeExpr::U32]),
+                "Where it is defined: the file, relative to the Cargo workspace root, and the line.",
+                FieldDefault::Required,
+            ),
+        ),
+    ];
+    all.extend(fields);
+    all
+}
+
+fn doc_field() -> Field {
+    field(
+        TypeExpr::String,
+        "The doc comment, which editors show.",
+        recorded_default(""),
+    )
+}
+
+fn aliases_field() -> Field {
+    field(
+        list(TypeExpr::String),
+        "Other names data may write it by: `#[serde(alias = \"...\")]`.",
+        recorded_default(&Vec::<String>::new()),
+    )
+}
+
+fn explicit_defaults_doc() -> Field {
+    field(
+        TypeExpr::Option(Box::new(TypeExpr::Bool)),
+        "`#[crol(explicit_defaults)]`: whether fields take their defaults only with `..` (`SPEC.md` 10.3). `None`: `require_complete` says.",
+        none_value(),
+    )
+}
+
 impl Schema for SchemaFile {
     fn describe(registry: &mut Registry) -> TypeRef {
-        // Schema files are validated by reading them; their own schema is
-        // not described in detail.
-        registry.add("crol::schema::Schema", |_| TypeDef::Struct {
-            name: "Schema".to_owned(),
-            doc: "A CROL schema file (SPEC.md 10.10).".to_owned(),
-            source: (file!().replace('\\', "/"), line!()),
-            fields: [
-                ("format".to_owned(), Field::new(TypeExpr::U32)),
-                ("root".to_owned(), Field::new(TypeExpr::String)),
-                (
-                    "types".to_owned(),
-                    Field::new(TypeExpr::Map(
-                        Box::new(TypeExpr::String),
-                        Box::new(TypeExpr::Any),
-                    )),
-                ),
-            ]
-            .into_iter()
-            .collect(),
-            deny_unknown_fields: false,
-            default: None,
-            explicit_defaults: None,
+        registry.add(SCHEMA_PATH, |registry| {
+            let types = string_map(registry.describe::<TypeDef>());
+            struct_def(
+                "Schema",
+                "A schema file: the Rust types data loads into, as tools see them. It is generated from those types, so change them rather than this file.",
+                vec![
+                    (
+                        "format",
+                        field(
+                            TypeExpr::U32,
+                            "The format version of this file. It changes only when the format of schema files does.",
+                            FieldDefault::Required,
+                        ),
+                    ),
+                    (
+                        "root",
+                        field(
+                            TypeExpr::String,
+                            "The path of the root type: the type the schema was built for, which each root value has unless it says otherwise.",
+                            FieldDefault::Required,
+                        ),
+                    ),
+                    (
+                        "types",
+                        field(
+                            types,
+                            "Every named type the root type uses, by path.",
+                            FieldDefault::Required,
+                        ),
+                    ),
+                ],
+                None,
+            )
+        })
+    }
+}
+
+impl Schema for TypeDef {
+    fn describe(registry: &mut Registry) -> TypeRef {
+        registry.add("crol::schema::TypeDef", |registry| {
+            let expr = registry.describe::<TypeExpr>();
+            let fields = string_map(registry.describe::<Field>());
+            let variants = string_map(registry.describe::<VariantDef>());
+            let repr = registry.describe::<Repr>();
+            let wrapped = || {
+                definition_fields(vec![(
+                    "inner",
+                    field(expr.clone(), "The wrapped type.", FieldDefault::Required),
+                )])
+            };
+            let shape = |fields| VariantShape::Struct(named(fields));
+            enum_def(
+                "TypeDef",
+                "The definition of a named type.",
+                vec![
+                    (
+                        "Struct",
+                        variant(
+                            shape(definition_fields(vec![
+                                (
+                                    "fields",
+                                    field(
+                                        fields,
+                                        "The fields, by the name data writes them with.",
+                                        FieldDefault::Required,
+                                    ),
+                                ),
+                                (
+                                    "deny_unknown_fields",
+                                    field(
+                                        TypeExpr::Bool,
+                                        "`#[serde(deny_unknown_fields)]`: whether a field it does not have is an error even where unknown fields are allowed.",
+                                        recorded_default(&false),
+                                    ),
+                                ),
+                                (
+                                    "default",
+                                    field(
+                                        TypeExpr::Option(Box::new(TypeExpr::Any)),
+                                        "The struct's recorded default value, with `#[crol(defaults)]` and `#[serde(default)]` on the struct.",
+                                        none_value(),
+                                    ),
+                                ),
+                                ("explicit_defaults", explicit_defaults_doc()),
+                            ])),
+                            "A struct with named fields.",
+                        ),
+                    ),
+                    (
+                        "TupleStruct",
+                        variant(
+                            shape(definition_fields(vec![(
+                                "fields",
+                                field(
+                                    list(expr.clone()),
+                                    "The type of each element.",
+                                    FieldDefault::Required,
+                                ),
+                            )])),
+                            "A tuple struct: `struct P(A, B)`.",
+                        ),
+                    ),
+                    (
+                        "Newtype",
+                        variant(
+                            shape(wrapped()),
+                            "A newtype struct, `struct N(A)`: data writes `N(x)` or `x`.",
+                        ),
+                    ),
+                    (
+                        "Transparent",
+                        variant(
+                            shape(wrapped()),
+                            "A struct with `#[serde(transparent)]`: data writes only `x`.",
+                        ),
+                    ),
+                    (
+                        "UnitStruct",
+                        variant(
+                            shape(definition_fields(Vec::new())),
+                            "A unit struct: `struct U;`.",
+                        ),
+                    ),
+                    (
+                        "Enum",
+                        variant(
+                            shape(definition_fields(vec![
+                                (
+                                    "repr",
+                                    field(
+                                        repr,
+                                        "How serde represents it; `External` if left out.",
+                                        recorded_default(&Repr::External),
+                                    ),
+                                ),
+                                (
+                                    "variants",
+                                    field(
+                                        variants,
+                                        "The variants, by the name data writes them with.",
+                                        FieldDefault::Required,
+                                    ),
+                                ),
+                            ])),
+                            "An enum.",
+                        ),
+                    ),
+                ],
+            )
+        })
+    }
+}
+
+impl Schema for Repr {
+    fn describe(registry: &mut Registry) -> TypeRef {
+        registry.add("crol::schema::Repr", |_| {
+            let name = |name, doc| (name, field(TypeExpr::String, doc, FieldDefault::Required));
+            let tag = "The name of the field that says the variant.";
+            enum_def(
+                "Repr",
+                "How serde represents an enum.",
+                vec![
+                    (
+                        "External",
+                        variant(
+                            VariantShape::Unit,
+                            "The default: data writes `V`, `V(x)` or `V { ... }`.",
+                        ),
+                    ),
+                    (
+                        "Internal",
+                        variant(
+                            VariantShape::Struct(named(vec![name("tag", tag)])),
+                            "`#[serde(tag = \"...\")]`: the variant is a field of the block.",
+                        ),
+                    ),
+                    (
+                        "Adjacent",
+                        variant(
+                            VariantShape::Struct(named(vec![
+                                name("tag", tag),
+                                name("content", "The name of the field that holds its value."),
+                            ])),
+                            "`#[serde(tag = \"...\", content = \"...\")]`: the variant and its value are two fields of the block.",
+                        ),
+                    ),
+                    (
+                        "Untagged",
+                        variant(
+                            VariantShape::Unit,
+                            "`#[serde(untagged)]`: only the shape of the value says the variant.",
+                        ),
+                    ),
+                ],
+            )
+        })
+    }
+}
+
+impl Schema for VariantDef {
+    fn describe(registry: &mut Registry) -> TypeRef {
+        registry.add("crol::schema::VariantDef", |registry| {
+            let shape = registry.describe::<VariantShape>();
+            let mut explicit_defaults = explicit_defaults_doc();
+            explicit_defaults.doc =
+                "For a struct variant, `#[crol(explicit_defaults)]`, as on a struct.".to_owned();
+            struct_def(
+                "",
+                "A variant of an enum.",
+                vec![
+                    (
+                        "shape",
+                        field(shape, "What the variant holds.", FieldDefault::Required),
+                    ),
+                    ("doc", doc_field()),
+                    ("aliases", aliases_field()),
+                    ("explicit_defaults", explicit_defaults),
+                ],
+                None,
+            )
+        })
+    }
+}
+
+impl Schema for VariantShape {
+    fn describe(registry: &mut Registry) -> TypeRef {
+        registry.add("crol::schema::VariantShape", |registry| {
+            let expr = registry.describe::<TypeExpr>();
+            let fields = string_map(registry.describe::<Field>());
+            enum_def(
+                "VariantShape",
+                "What a variant holds.",
+                vec![
+                    (
+                        "Unit",
+                        variant(VariantShape::Unit, "No value: data writes `V`."),
+                    ),
+                    (
+                        "Newtype",
+                        variant(
+                            VariantShape::Newtype(expr.clone()),
+                            "One value of this type: data writes `V(x)`.",
+                        ),
+                    ),
+                    (
+                        "Tuple",
+                        variant(
+                            VariantShape::Newtype(list(expr)),
+                            "Values of these types: data writes `V(a, b)`.",
+                        ),
+                    ),
+                    (
+                        "Struct",
+                        variant(
+                            VariantShape::Newtype(fields),
+                            "Named fields: data writes `V { ... }`.",
+                        ),
+                    ),
+                ],
+            )
+        })
+    }
+}
+
+impl Schema for Field {
+    fn describe(registry: &mut Registry) -> TypeRef {
+        registry.add("crol::schema::Field", |registry| {
+            let ty = registry.describe::<TypeExpr>();
+            let default = registry.describe::<FieldDefault>();
+            struct_def(
+                "",
+                "A field of a struct or struct variant.",
+                vec![
+                    (
+                        "ty",
+                        field(ty, "The type of the field.", FieldDefault::Required),
+                    ),
+                    ("doc", doc_field()),
+                    ("aliases", aliases_field()),
+                    (
+                        "default",
+                        field(
+                            default,
+                            "Its default, for when `..` leaves it out.",
+                            recorded_default(&FieldDefault::Required),
+                        ),
+                    ),
+                    (
+                        "flatten",
+                        field(
+                            TypeExpr::Bool,
+                            "`#[serde(flatten)]`: its fields are written in the block around it.",
+                            recorded_default(&false),
+                        ),
+                    ),
+                    (
+                        "refers",
+                        field(
+                            list(TypeExpr::String),
+                            "For an id field, the root types an id may name (`#[crol(refers(...))]`).",
+                            recorded_default(&Vec::<String>::new()),
+                        ),
+                    ),
+                ],
+                None,
+            )
+        })
+    }
+}
+
+impl Schema for FieldDefault {
+    fn describe(registry: &mut Registry) -> TypeRef {
+        registry.add("crol::schema::FieldDefault", |_| {
+            enum_def(
+                "FieldDefault",
+                "The default of a field (`SPEC.md` 10.10).",
+                vec![
+                    (
+                        "Required",
+                        variant(
+                            VariantShape::Unit,
+                            "No default: the field must be written, even with `..`.",
+                        ),
+                    ),
+                    (
+                        "Unrecorded",
+                        variant(VariantShape::Unit, "A default whose value is not recorded."),
+                    ),
+                    (
+                        "Value",
+                        variant(VariantShape::Newtype(TypeExpr::Any), "The default value."),
+                    ),
+                ],
+            )
+        })
+    }
+}
+
+impl Schema for TypeExpr {
+    fn describe(registry: &mut Registry) -> TypeRef {
+        let path = "crol::schema::TypeExpr";
+        let expr = TypeExpr::Named(path.to_owned());
+        registry.add(path, |_| {
+            let unit = |name, doc| (name, variant(VariantShape::Unit, doc));
+            let holds = |name, ty, doc| (name, variant(VariantShape::Newtype(ty), doc));
+            let pair = |name, a, b, doc| (name, variant(VariantShape::Tuple(vec![a, b]), doc));
+            enum_def(
+                "TypeExpr",
+                "A type expression (`SPEC.md` 10.10).",
+                vec![
+                    unit("Bool", "`bool`."),
+                    unit("Char", "`char`."),
+                    unit("String", "`String`, `str` or `PathBuf`."),
+                    unit("Unit", "`()`."),
+                    unit("I8", "`i8`."),
+                    unit("I16", "`i16`."),
+                    unit("I32", "`i32`."),
+                    unit("I64", "`i64` or `isize`."),
+                    unit("I128", "`i128`."),
+                    unit("U8", "`u8`."),
+                    unit("U16", "`u16`."),
+                    unit("U32", "`u32`."),
+                    unit("U64", "`u64` or `usize`."),
+                    unit("U128", "`u128`."),
+                    unit("F32", "`f32`."),
+                    unit("F64", "`f64`."),
+                    unit("Bytes", "`serde_bytes` and the like."),
+                    holds(
+                        "Id",
+                        list(TypeExpr::String),
+                        "`crol::Id`, with the types it may refer to (`[]`: any root key).",
+                    ),
+                    holds("Option", expr.clone(), "`Option<T>`."),
+                    holds("List", expr.clone(), "`Vec<T>`, `VecDeque<T>` or a slice."),
+                    holds(
+                        "Set",
+                        expr.clone(),
+                        "`HashSet<T>` or `BTreeSet<T>`: its elements are unique.",
+                    ),
+                    pair(
+                        "Array",
+                        expr.clone(),
+                        TypeExpr::U64,
+                        "`[T; n]`: the type of its elements, and how many there are.",
+                    ),
+                    holds(
+                        "Tuple",
+                        list(expr.clone()),
+                        "A tuple, with the type of each element.",
+                    ),
+                    pair(
+                        "Map",
+                        expr.clone(),
+                        expr.clone(),
+                        "`HashMap<K, V>`, `BTreeMap<K, V>` or `IndexMap<K, V>`: the type of the keys, and of the values.",
+                    ),
+                    holds(
+                        "Named",
+                        TypeExpr::String,
+                        "A type in the schema's `types`, by its path.",
+                    ),
+                    unit("Any", "Anything; not checked."),
+                ],
+            )
         })
     }
 }

@@ -56,9 +56,10 @@ pub(crate) fn no_contexts(path: &Path, flag: &str, reporter: &mut Reporter) -> b
 }
 
 /// Reads and evaluates the document at `path`, and checks it against the
-/// schema `--schema` gives, else, for a project file, the one `crol`
-/// provides, else the one it names, else the project's, for a type that the
-/// project's `files` give it. Returns `None` after reporting an error.
+/// schema `--schema` gives, else, for a project or schema file, the one
+/// `crol` provides, else the one it names, else the project's, for a type
+/// that the project's `files` give it. Returns `None` after reporting an
+/// error.
 pub(crate) fn read(path: &Path, args: &InputArgs, reporter: &mut Reporter) -> Option<Document> {
     if args.declares_variants() {
         no_contexts(path, "--discrete, --group, --parent", reporter);
@@ -104,9 +105,9 @@ fn checked(evaluation: &mut Evaluation, expected: &Expected) -> Option<String> {
     root
 }
 
-/// What a document is checked against: `--schema`, for a project file the
-/// schema `crol` provides for it (`SPEC.md` 12.4), the schema it names, or
-/// the type the project's `files` give it.
+/// What a document is checked against: `--schema`, for a project or schema
+/// file the schema `crol` provides for it (`SPEC.md` 12.4, 10.10), the schema
+/// it names, or the type the project's `files` give it.
 fn expected(path: &Path, text: &str, args: &InputArgs) -> Result<Expected, String> {
     let schema_only = |schema| Expected {
         schema: Some(schema),
@@ -123,6 +124,9 @@ fn expected(path: &Path, text: &str, args: &InputArgs) -> Result<Expected, Strin
             .is_some_and(|project| same_file(project, path));
     if is_project_file {
         return Ok(schema_only(crol::schema::build::<Project>()));
+    }
+    if crol::schema::is_schema_file(text) {
+        return Ok(schema_only(crol::schema::build::<SchemaFile>()));
     }
     let project_path = project_path(args)?;
     let working = std::env::current_dir().unwrap_or_default();

@@ -12,8 +12,11 @@ finds your [project file](projects.md#how-it-is-found) by itself.
 
 - **Diagnostics**: everything `crol check` reports, as you type. Errors that
   occur only in some contexts say which ones.
-- **Hover**: on a key, its type and docs from the schema, the value below, the
-  final value, and where they came from. On a reference, what it refers to.
+- **Hover**: on a key or on a value, the doc comment of the field, then its
+  type. A value inside a list or `Some(...)` has the field's doc too, and an enum
+  variant has its own. A key that several operations touched lists them, with
+  their layers, below that, and a reference adds what it refers to. Without a
+  schema, there is mostly nothing to say, and no hover.
 - **Completion**: field names, enum variants, type names, ids, variants, and
   keys after `&root.`, `&self.` and the like. It knows the type at the cursor at
   any depth: through nested blocks, lists, `Some(...)`, dotted keys and variant
@@ -34,6 +37,13 @@ finds your [project file](projects.md#how-it-is-found) by itself.
 Most of this works better with a [schema](schemas.md). Without one, you still get
 syntax errors, evaluation errors and references, but no type checks and no
 field names from your types.
+
+`project.crov` and generated schema files need no schema from you. Both have one
+built into `crol`, so hover and completion work at every level of them, offline:
+in a schema file, also for type expressions such as `ty: List(Named("..."))`,
+and the paths in `types` are offered in `root` and `Named("...")`. A file is a
+schema file by the `#![schema("crate:crol@...")]` that is generated on its first
+line; keep that line.
 
 ## How the server sees your files
 
@@ -60,7 +70,7 @@ patch to a key from another file has nothing below it. Name what it builds on, o
 list your layers in `project.crov`.
 
 While a file does not evaluate, as in the middle of an edit, hover and completion
-use the last evaluation that did. Hover says so.
+use the last evaluation that did. A value on hover says so.
 
 A layer that does not load does not stop the others, as it does for `crol check`.
 A wrong file in a layer, such as a `.crov` or a `.crol` file, is reported on that
@@ -127,10 +137,9 @@ For highlighting, indentation and folding, there is a
 
 | Setting                 | Default | Means                                                                 |
 | ----------------------- | ------- | --------------------------------------------------------------------- |
-| `context`               | `[]`    | the context for inlay hints, and the first one on hover, as a list of variants |
+| `context`               | `[]`    | the context for inlay hints and the layers on hover, as a list of variants |
 | `inlay_hints`           | `false` | show inlay hints                                                      |
 | `debounce_ms`           | `150`   | the pause in typing before evaluating                                 |
-| `max_contexts_in_hover` | `8`     | how many contexts a hover lists values for                            |
 | `remote_schemas`        | `true`  | fetch [schemas from URLs and crates](schemas.md#remote-schemas)       |
 | `project`               | none    | a project file, instead of searching for one                          |
 

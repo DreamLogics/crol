@@ -535,3 +535,74 @@ fn files_need_a_schema_and_a_type_it_has() {
     assert!(!output.status.success(), "{output:?}");
     assert!(stderr(&output).contains("a::**"), "{output:?}");
 }
+
+/// A schema file as `SchemaFile::to_text` writes it, with every shape.
+const GENERATED_SCHEMA: &str = r#"#![schema("crate:crol@0.1")]
+
+Schema {
+    format: 1,
+    root: "app::Config",
+    types: {
+        "app::Config": Struct {
+            name: "Config",
+            doc: "The configuration.",
+            source: ("src/main.rs", 26),
+            fields: {
+                name: { ty: String, doc: "Its name.", .. },
+                mode: { ty: Named("app::Mode"), default: Value(Fast), .. },
+                pair: { ty: Tuple([U8, Option(Bool)]), default: Unrecorded, .. },
+            },
+            explicit_defaults: Some(true),
+            ..,
+        },
+        "app::Mode": Enum {
+            name: "Mode",
+            source: ("src/main.rs", 7),
+            repr: Internal { tag: "type" },
+            variants: {
+                Fast: { shape: Unit, .. },
+                Set: { shape: Newtype(Set(String)), aliases: ["S"], .. },
+                Pair: { shape: Tuple([U8, Array(I16, 3)]), .. },
+                Named: { shape: Struct({ x: { ty: Map(String, Any), .. } }), .. },
+            },
+            ..,
+        },
+    },
+}
+"#;
+
+#[test]
+fn check_validates_a_schema_file_against_the_built_in_schema() {
+    let run = |dir: &Path| {
+        Command::new(env!("CARGO_BIN_EXE_crol"))
+            .args(["--color", "never", "check", "crol/schema.crov", "--offline"])
+            .current_dir(dir)
+            .env("CROL_CACHE_DIR", dir.join("cache"))
+            .output()
+            .expect("crol runs")
+    };
+    let dir = tree("schema-file", &[("crol/schema.crov", GENERATED_SCHEMA)]);
+    let output = run(&dir);
+    assert!(output.status.success(), "{}", stderr(&output));
+    // It needs nothing from the cache.
+    assert!(!dir.join("cache").exists());
+
+    // Below `types`, as at the top.
+    for (from, to, says) in [
+        (
+            "doc: \"Its name.\"",
+            "dok: \"Its name.\"",
+            "has no field `dok`",
+        ),
+        ("ty: String", "ty: Strng", "has no variant `Strng`"),
+        ("shape: Unit", "shape: 1", "a `VariantShape` variant"),
+        ("(\"src/main.rs\", 7)", "\"src/main.rs\"", "a tuple of 2"),
+        ("Struct {", "Strukt {", "has no variant `Strukt`"),
+    ] {
+        let text = GENERATED_SCHEMA.replacen(from, to, 1);
+        let dir = tree("schema-file-wrong", &[("crol/schema.crov", &text)]);
+        let output = run(&dir);
+        assert!(!output.status.success(), "{to}");
+        assert!(stderr(&output).contains(says), "{to}: {}", stderr(&output));
+    }
+}

@@ -10,6 +10,7 @@ use lsp_types::{
 
 use crate::Settings;
 use crate::convert::{self, Encoding};
+use crate::place::{self, Scope};
 use crate::workspace::Snapshot;
 
 // ---- Document symbols ----
@@ -484,22 +485,67 @@ pub(crate) fn value_in(
     crol_eval::value_at_path(keyed.entries.get(&Key::Str(key.to_owned()))?, path).cloned()
 }
 
-fn show(value: &Value) -> String {
-    let one_line = print::to_text(value);
-    if one_line.len() <= 80 {
-        format!("`{one_line}`")
-    } else {
-        format!(
-            "```crol\n{}```",
-            print::to_document(value, &Default::default())
-        )
+/// A value on one line, in code: nothing for what does not fit on one.
+fn one_line(value: &Value) -> Option<String> {
+    let text = print::to_text(value);
+    (text.len() <= MAX_VALUE).then(|| code(&text))
+}
+
+/// What fits on a line of a hover.
+const MAX_VALUE: usize = 80;
+
+/// `text` as Markdown inline code, whatever backticks it holds.
+fn code(text: &str) -> String {
+    let longest = text
+        .split(|c| c != '`')
+        .map(str::len)
+        .max()
+        .unwrap_or_default();
+    if longest == 0 {
+        return format!("`{text}`");
     }
+    let fence = "`".repeat(longest + 1);
+    format!("{fence} {text} {fence}")
 }
 
 // ---- Hover ----
 
-/// On a target, a reference into the root, or an id: the value, and on a
-/// target in the project, the operations behind it (`SPEC.md` 12.3, 12.5).
+/// Whether a token can be a value, or the start of a part of one. The `:`
+/// goes with these: it is in the entry, and past the key.
+fn in_value(token: &SyntaxToken) -> bool {
+    use SyntaxKind::*;
+    let outside = |kind| matches!(kind, ATTRIBUTE | VALUE_BIND | BIND | COND_NAME | VARIANT);
+    matches!(
+        token.kind(),
+        IDENT
+            | COLON
+            | L_BRACE
+            | L_BRACK
+            | L_PAREN
+            | INT
+            | FLOAT
+            | STRING
+            | RAW_STRING
+            | CHAR
+            | TRUE_KW
+            | FALSE_KW
+            | AMP
+            | SELF_KW
+            | PARENT_KW
+            | ROOT_KW
+            | DEFAULT_KW
+    ) && !token.parent_ancestors().any(|n| outside(n.kind()))
+}
+
+/// The path of a place, as a root key and the path in its value.
+fn split_path(path: &[PathStep]) -> Option<(String, Vec<PathStep>)> {
+    from_root(path.to_vec())
+}
+
+/// The doc, then the type, of what is at the cursor, with one line for what
+/// a reference or an id names, and the operations of a key in data that more
+/// than one has touched (`SPEC.md` 12.5). No hover where none of it is
+/// known.
 pub(crate) fn hover(
     snapshot: &Snapshot,
     uri: &Uri,
@@ -511,8 +557,87 @@ pub(crate) fn hover(
     let path = convert::uri_to_path(uri)?;
     let file = snapshot.file_of(&path)?;
     let (_, token) = token_at(text, position, encoding)?;
-    // Where the segment of a target under the cursor ends.
-    let mut target_end = None;
+    let scope = Scope::new(snapshot, Some(file));
+    let schema = snapshot.schema_for(Some(file));
+    let target = token.parent_ancestors().find_map(ast::Target::cast);
+    // The place, what the schema says of it, and the path of the entry.
+    let mut about = None;
+    let mut entry_path = None;
+    if target.is_some() {
+        if let Some((key, steps, end)) = segment_path(&token) {
+            let cursor = place::locate(&scope, text, end);
+            about = schema
+                .as_ref()
+                .zip(cursor.current())
+                .and_then(|(schema, place)| crate::schema::about(schema, place));
+            entry_path = Some((key, steps));
+        }
+    } else if in_value(&token) {
+        let cursor = place::locate(&scope, text, token.text_range().start());
+        let place = match token.kind() {
+            SyntaxKind::COLON => cursor.current(),
+            _ => cursor.value_or_root(),
+        };
+        if let Some(place) = place {
+            let name = (token.kind() == SyntaxKind::IDENT)
+                .then(|| token.text())
+                .filter(|_| !is_reference(&token));
+            about = schema.as_ref().and_then(|schema| {
+                name.and_then(|name| crate::schema::about_name(schema, place, name))
+                    .or_else(|| crate::schema::about(schema, place))
+            });
+            entry_path = place.path.as_deref().and_then(split_path);
+        }
+    }
+    let mut parts = Vec::new();
+    if let Some(about) = about {
+        if !about.doc.trim().is_empty() {
+            parts.push(about.doc.trim().to_owned());
+        }
+        parts.extend(about.ty.map(|ty| code(&ty)));
+    }
+    parts.extend(named_value(snapshot, file, &token, settings));
+    let mut markdown = parts.join("\n\n");
+    if let Some((key, steps)) = entry_path
+        && let Some(history) = history(snapshot, file, &describe_path(&key, &steps), settings)
+    {
+        if !markdown.is_empty() {
+            markdown.push_str("\n\n---\n\n");
+        }
+        markdown.push_str(&history);
+    }
+    if markdown.is_empty() {
+        return None;
+    }
+    let index = LineIndex::new(text);
+    Some(Hover {
+        contents: HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: markdown,
+        }),
+        range: Some(convert::range(text, &index, token.text_range(), encoding)),
+    })
+}
+
+/// Whether a token is a part of a reference or an id, rather than a value
+/// of its own.
+fn is_reference(token: &SyntaxToken) -> bool {
+    token.parent_ancestors().any(|n| {
+        matches!(
+            n.kind(),
+            SyntaxKind::REFERENCE | SyntaxKind::PATH_EXPR | SyntaxKind::ID_EXPR
+        )
+    })
+}
+
+/// On a reference or an id, what it names: its path and value on one line,
+/// which is not to be read off the document as a written value is.
+fn named_value(
+    snapshot: &Snapshot,
+    file: crol_eval::FileId,
+    token: &SyntaxToken,
+    settings: &Settings,
+) -> Option<String> {
     let (key, steps) = if token
         .parent()
         .is_some_and(|p| p.kind() == SyntaxKind::ID_EXPR)
@@ -523,92 +648,62 @@ pub(crate) fn hover(
             .trim_matches('"')
             .to_owned();
         (id, Vec::new())
-    } else if let Some(found) = reference_path(&token) {
-        found
-    } else if let Some(found) = relative_reference_path(&token) {
-        found
     } else {
-        let (key, steps, end) = segment_path(&token)?;
-        target_end = Some(end);
-        (key, steps)
+        reference_path(token).or_else(|| relative_reference_path(token))?
     };
-    let is_target = target_end.is_some();
+    let evaluation = evaluation_for(snapshot, Some(file));
+    let stale = snapshot
+        .last_good_of(Some(file))
+        .is_some_and(|good| std::ptr::eq(good, evaluation));
+    let value = value_in(evaluation, &key, &steps, &settings.context)?;
+    let shown = one_line(&value)?;
     let described = describe_path(&key, &steps);
     let in_context = if settings.context.is_empty() {
         String::new()
     } else {
         format!(" in {{{}}}", settings.context.join(", "))
     };
-    let evaluation = evaluation_for(snapshot, Some(file));
-    let stale = snapshot
-        .last_good_of(Some(file))
-        .is_some_and(|good| std::ptr::eq(good, evaluation));
-    let mut markdown = match value_in(evaluation, &key, &steps, &settings.context) {
-        Some(value) if stale => format!(
-            "**{described}**{in_context}: {} (at the last evaluation that had a value)",
-            show(&value)
-        ),
-        Some(value) => format!("**{described}**{in_context}: {}", show(&value)),
-        None => format!("**{described}**{in_context}: no value"),
-    };
-    // The type and doc from the schema.
-    if let Some(end) = target_end
-        && let Some(entry) = token
-            .parent_ancestors()
-            .find_map(ast::Target::cast)
-            .and_then(|t| t.syntax().parent())
-            .and_then(ast::Entry::cast)
-        && let Some((ty, doc)) = crate::schema::entry_type(snapshot, Some(file), &entry, end)
-        && let Some(schema) = snapshot.schema_for(Some(file))
-    {
-        markdown.push_str(&format!(
-            "\n\n`{}`",
-            crate::schema::rust_type(schema.file, &ty)
-        ));
-        if !doc.is_empty() {
-            markdown.push_str(&format!(" — {doc}"));
-        }
+    let mut line = format!("**{described}**{in_context}: {shown}");
+    if stale {
+        line.push_str(" (at the last evaluation that had a value)");
     }
-    if is_target && let Some((layers, options)) = snapshot.chain_of(file) {
-        let path_text = described.clone();
-        if let Ok(history) = crol_eval::explain(
-            &snapshot.sources,
-            layers,
-            options,
-            &path_text,
-            &settings.context,
-        ) && !history.is_empty()
-        {
-            markdown.push_str("\n\n");
-            for step in history {
-                let location = snapshot.sources.location(step.span);
-                let kind = match step.kind {
-                    StepKind::Definition => "definition",
-                    StepKind::Patch => "patch",
-                    StepKind::Remove => "remove",
-                };
-                let value = step
-                    .value
-                    .as_ref()
-                    .map_or_else(|| "(missing)".to_owned(), print::to_text);
-                markdown.push_str(&format!(
-                    "- `{}` ({kind}, {}:{}, layer `{}`): `{value}`\n",
-                    step.entry,
-                    file_name(location.name),
-                    location.line_col.line,
-                    step.layer
-                ));
-            }
-        }
-    }
-    let index = LineIndex::new(text);
-    Some(Hover {
-        contents: HoverContents::Markup(MarkupContent {
-            kind: MarkupKind::Markdown,
-            value: markdown,
-        }),
-        range: Some(convert::range(text, &index, token.text_range(), encoding)),
-    })
+    Some(line)
+}
+
+/// The operations on `path` in the layers of a data document, one to a line,
+/// if there is more than one: what one operation does is there to read.
+fn history(
+    snapshot: &Snapshot,
+    file: crol_eval::FileId,
+    path: &str,
+    settings: &Settings,
+) -> Option<String> {
+    let (layers, options) = snapshot.chain_of(file)?;
+    let steps = crol_eval::explain(&snapshot.sources, layers, options, path, &settings.context);
+    let steps = steps.ok().filter(|steps| steps.len() > 1)?;
+    let lines: Vec<String> = steps
+        .into_iter()
+        .map(|step| {
+            let location = snapshot.sources.location(step.span);
+            let kind = match step.kind {
+                StepKind::Definition => "definition",
+                StepKind::Patch => "patch",
+                StepKind::Remove => "remove",
+            };
+            let value = step.value.as_ref().map_or_else(
+                || "(missing)".to_owned(),
+                |value| one_line(value).unwrap_or_else(|| "(a long value)".to_owned()),
+            );
+            format!(
+                "- {} ({kind}, {}:{}, layer `{}`): {value}",
+                code(&step.entry),
+                file_name(location.name),
+                location.line_col.line,
+                step.layer
+            )
+        })
+        .collect();
+    Some(lines.join("\n"))
 }
 
 fn file_name(path: &str) -> &str {

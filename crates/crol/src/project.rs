@@ -12,14 +12,15 @@ use crate::error::Error;
 use crate::loader::SourceId;
 use crate::mode::{Mode, RETIRED};
 use crate::schema::{
-    Field, FieldDefault, Registry, Repr, Schema, TypeDef, TypeExpr, TypeRef, VariantDef,
-    VariantShape, recorded_default,
+    FieldDefault, Registry, Repr, Schema, TypeDef, TypeExpr, TypeRef, VariantDef, VariantShape,
+    field, recorded_default, struct_def,
 };
 
 /// The file name tools look for.
 pub const FILE_NAME: &str = "project.crov";
 
-/// A project file (`SPEC.md` 12.4).
+/// A project file: what tools that are not the application need to know to
+/// evaluate its data (`SPEC.md` 12.4).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Project {
     /// The layers, lowest first.
@@ -30,7 +31,7 @@ pub struct Project {
     /// Variant parents: child to parent.
     #[serde(default)]
     pub parents: IndexMap<String, String>,
-    /// Options, as `CrolConfig` has them.
+    /// How the data is evaluated and checked.
     #[serde(default)]
     pub options: ProjectOptions,
     /// The schema: a module path written as a string, a URL, or a crate.
@@ -71,19 +72,19 @@ pub struct ProjectLayer {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProjectOptions {
-    /// `CrolConfig::implicit_some`.
+    /// Any value is accepted where an `Option` is expected, as `Some`.
     pub implicit_some: bool,
-    /// `CrolConfig::allow_unknown_fields`.
+    /// Keys a struct does not have are ignored.
     pub allow_unknown_fields: bool,
-    /// `CrolConfig::require_complete`.
+    /// Every field must be written unless the value has `..`.
     pub require_complete: bool,
-    /// `CrolConfig::warn_cross_file_patches`.
+    /// Warn about patches to a key from several documents of one layer.
     pub warn_cross_file_patches: bool,
-    /// `CrolConfig::max_contexts`.
+    /// How many contexts may be evaluated.
     pub max_contexts: usize,
-    /// `CrolConfig::contexts`.
+    /// The contexts to evaluate; default: every one.
     pub contexts: Option<Vec<Vec<String>>>,
-    /// `CrolConfig::variant_keys`: `Any`, `NoNewKeys` or `SameKeys`.
+    /// The variant keys rule: `Any`, `NoNewKeys` or `SameKeys`.
     pub variant_keys: String,
 }
 
@@ -360,31 +361,6 @@ impl Project {
 
 // ---- The project file's schema (`SPEC.md` 12.4) ----
 
-/// A struct's definition, for the hand-written schemas below.
-fn struct_def(
-    name: &str,
-    doc: &str,
-    fields: Vec<(&str, Field)>,
-    default: Option<crate::RawValue>,
-) -> TypeDef {
-    TypeDef::Struct {
-        name: name.to_owned(),
-        doc: doc.to_owned(),
-        source: (file!().replace('\\', "/"), line!()),
-        fields: fields.into_iter().map(|(n, f)| (n.to_owned(), f)).collect(),
-        deny_unknown_fields: false,
-        default,
-        explicit_defaults: None,
-    }
-}
-
-fn field(ty: TypeRef, doc: &str, default: FieldDefault) -> Field {
-    let mut field = Field::new(ty);
-    field.doc = doc.to_owned();
-    field.default = default;
-    field
-}
-
 impl Schema for Project {
     fn describe(registry: &mut Registry) -> TypeRef {
         registry.add("crol::project::Project", |registry| {
@@ -396,12 +372,12 @@ impl Schema for Project {
             let none = || crate::schema::none_value();
             struct_def(
                 "Project",
-                "A project file: what tools that are not the application need to know to evaluate its data (SPEC.md 12.4).",
+                "A project file: what tools that are not the application need to know to evaluate its data (`SPEC.md` 12.4).",
                 vec![
                     ("layers", field(layers, "The layers, lowest first.", FieldDefault::Required)),
-                    ("variants", field(variants, "The variants (SPEC.md 8.1).", recorded_default(&Vec::<Variant>::new()))),
+                    ("variants", field(variants, "The variants (`SPEC.md` 8.1).", recorded_default(&Vec::<Variant>::new()))),
                     ("parents", field(parents, "Variant parents: child to parent.", recorded_default(&IndexMap::<String, String>::new()))),
-                    ("options", field(options, "Options, as `CrolConfig` has them.", recorded_default(&ProjectOptions::default()))),
+                    ("options", field(options, "How the data is evaluated and checked.", recorded_default(&ProjectOptions::default()))),
                     ("schema", field(TypeExpr::Option(Box::new(TypeExpr::String)), "The schema: a module path written as a string, a URL, or a crate.", none())),
                     ("root", field(TypeExpr::Option(Box::new(TypeExpr::String)), "The path of the type of root values; default: the schema's root.", none())),
                     ("files", field(files, "Value-mode documents and their types.", recorded_default(&Vec::<FilePattern>::new()))),
@@ -452,7 +428,7 @@ impl Schema for ProjectLayer {
                 "A layer of a project.",
                 vec![
                     ("name", field(TypeExpr::String, "The layer's name.", FieldDefault::Required)),
-                    ("dir", field(TypeExpr::String, "Its module path (SPEC.md 4.2), from the project's directory.", FieldDefault::Required)),
+                    ("dir", field(TypeExpr::String, "Its module path (`SPEC.md` 4.2), from the project's directory.", FieldDefault::Required)),
                     ("read_only", field(TypeExpr::Bool, "Generated or vendored data: loaded, but without diagnostics or code actions in the editor.", recorded_default(&false))),
                 ],
                 None,
@@ -576,7 +552,7 @@ impl<T: Schema> Schema for Variant<T> {
             };
             TypeDef::Enum {
                 name: "Variant".to_owned(),
-                doc: "A variant declaration (SPEC.md 8.1).".to_owned(),
+                doc: "A variant declaration (`SPEC.md` 8.1).".to_owned(),
                 source: (file!().replace('\\', "/"), line!()),
                 repr: Repr::External,
                 variants: [
