@@ -59,6 +59,10 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 - A document on its own keeps its last good evaluation while it does not evaluate,
   as layers did, so accepting a field fills in its value and hover shows one, saying
   that it is from the last evaluation. Hover in a layer does this too.
+- In the language server, a block of an internally tagged, adjacently tagged or
+  untagged enum offers its fields, hover on a dotted target is about the segment
+  under the cursor, and inlay hints cover elements of lists, tuples and
+  `Name(...)`, such as `[1 + 1]`.
 - `&default` works in `crol` and in the language server, not only through
   `CrolComposer::schema`: they read defaults from the schema they check against
   (`SPEC.md` 6.1.3). `SchemaFile::defaults` gives them to a tool of your own.

@@ -270,14 +270,13 @@ The path is a [module path](projects.md#module-paths), and the file or
 directory it names is loaded as a layer below this one.
 
 `extends` only adds layers below. It is not an import, and it makes nothing
-visible that layering would not. `crol` commands always follow it. **Your program
-does not**, unless you set `CrolConfig::load_extends`, since by default your
-program decides what is loaded and in which order. The language server does not
-follow it yet, and reports an error on files outside a project's layers that use
-it.
+visible that layering would not. `crol` commands and the language server always
+follow it. **Your program does not**, unless you set `CrolConfig::load_extends`,
+since by default your program decides what is loaded and in which order.
 
 In a [project](projects.md), the project file's layers decide the order, so
-`extends` is mainly useful for files outside a project.
+`extends` is mainly useful for files outside a project. The language server warns
+about one in a layer that names something that is no lower layer.
 
 ## Next
 

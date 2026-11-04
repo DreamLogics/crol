@@ -2860,3 +2860,192 @@ fn a_value_document_keeps_its_last_good_evaluation() {
     assert!(hover.contains("`80`"), "{hover}");
     client.stop();
 }
+
+#[test]
+fn a_leftover_crol_file_in_a_layer_may_be_what_is_missing() {
+    let dir = three_layers(
+        "lsp-failed-crol",
+        &[("middle/old.crol", "+cache: 1\n")],
+        "middle",
+    );
+    std::fs::write(dir.join("top/a.crod"), "cache.size: 1\n").unwrap();
+    let client = Client::start(&dir);
+    let diagnostics = client.diagnostics_for(&uri(&dir.join("top/a.crod")), |d| !d.is_empty());
+    assert_eq!(diagnostics[0]["severity"], 2, "{diagnostics:?}");
+    client.diagnostics_for(&uri(&dir.join("middle/old.crol")), |d| says(d, "retired"));
+    client.stop();
+}
+
+#[test]
+fn a_stray_file_in_an_extended_directory_is_reported_on_it() {
+    let dir = workspace(
+        "lsp-extends-stray",
+        &[
+            ("shared/a.crod", "+web: 1\n"),
+            ("shared/stray.crov", "1\n"),
+            ("local.crod", "#![extends(shared)]\n\nweb: 2\n"),
+        ],
+    );
+    let client = Client::start(&dir);
+    let local = uri(&dir.join("local.crod"));
+    open_text(&client, &local, "#![extends(shared)]\n\nweb: 2\n");
+    client.diagnostics_for(&uri(&dir.join("shared/stray.crov")), |d| {
+        says(d, "cannot be a layer")
+    });
+    client.stop();
+}
+
+#[test]
+fn super_paths_and_directories_can_be_extended() {
+    let dir = workspace(
+        "lsp-extends-super",
+        &[
+            ("shared/a.crod", "+web: { port: 1 }\n"),
+            ("shared/b.crod", "+db: { port: 2 }\n"),
+            ("deep/er/local.crod", ""),
+        ],
+    );
+    let client = Client::start(&dir);
+    let local = uri(&dir.join("deep/er/local.crod"));
+    let text = "#![extends(super::super::shared)]\n\nweb.port: 3\ndb.port: 4\n";
+    open_text(&client, &local, text);
+    client.diagnostics_for(&local, |d| d.is_empty());
+    client.stop();
+}
+
+/// A schema of the enums serde writes without a name.
+const TAGGED_SCHEMA: &str = r#"Schema {
+    format: 1,
+    root: "app::Root",
+    types: {
+        "app::Root": Struct {
+            name: "Root",
+            source: ("src/lib.rs", 1),
+            fields: {
+                internal: { ty: Named("app::Internal"), .. },
+                adjacent: { ty: Named("app::Adjacent"), .. },
+                untagged: { ty: Named("app::Untagged"), .. },
+                external: { ty: Named("app::External"), .. },
+            },
+            ..
+        },
+        "app::Internal": Enum {
+            name: "Internal",
+            source: ("src/lib.rs", 2),
+            repr: Internal { tag: "kind" },
+            variants: {
+                Disk: { shape: Struct({ path: { ty: String, .. } }), .. },
+                Memory: { shape: Newtype(Named("app::Memory")), .. },
+            },
+            ..
+        },
+        "app::Memory": Struct {
+            name: "Memory",
+            source: ("src/lib.rs", 3),
+            fields: { size: { ty: U32, .. }, path: { ty: String, .. } },
+            ..
+        },
+        "app::Adjacent": Enum {
+            name: "Adjacent",
+            source: ("src/lib.rs", 4),
+            repr: Adjacent { tag: "t", content: "c" },
+            variants: { A: { shape: Unit, .. } },
+            ..
+        },
+        "app::Untagged": Enum {
+            name: "Untagged",
+            source: ("src/lib.rs", 5),
+            repr: Untagged,
+            variants: {
+                One: { shape: Struct({ first: { ty: U32, .. } }), .. },
+                Two: { shape: Struct({ second: { ty: U32, .. } }), .. },
+            },
+            ..
+        },
+        "app::External": Enum {
+            name: "External",
+            source: ("src/lib.rs", 6),
+            variants: { One: { shape: Struct({ first: { ty: U32, .. } }), .. } },
+            ..
+        },
+    },
+}"#;
+
+#[test]
+fn enums_without_a_name_offer_their_fields() {
+    let dir = workspace(
+        "lsp-tagged",
+        &[
+            ("schema.crov", TAGGED_SCHEMA),
+            ("a.crov", "#![schema(schema)]\n\n{ .. }\n"),
+        ],
+    );
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "a.crov");
+    let cases: &[Case<'_>] = &[
+        ("{ internal: { | } }", &["kind", "path", "size"], &[]),
+        ("{ internal: { kind: \"Disk\", | } }", &["path"], &["kind"]),
+        ("{ adjacent: { | } }", &["t", "c"], &[]),
+        ("{ untagged: { | } }", &["first", "second"], &[]),
+        // The name says the variant here, and a block has none.
+        ("{ external: { | } }", &[], &["first"]),
+    ];
+    check_completions(&mut client, &mut buffer, HEADER, cases);
+    client.stop();
+}
+
+#[test]
+fn hover_on_a_dotted_target_is_about_the_segment_under_it() {
+    let text = "#![schema(schema)]\n\n{ server: { tls: { cert: { path: \"a\" } } } }\n";
+    let dir = workspace(
+        "lsp-hover-segment",
+        &[("schema.crov", NESTED_SCHEMA), ("config.crov", text)],
+    );
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "config.crov");
+    let hover = buffer.hover(
+        &mut client,
+        "#![schema(schema)]\n\n{ server.t|ls.cert.path: \"a\" }\n",
+    );
+    assert!(hover.contains("**server.tls**"), "{hover}");
+    assert!(!hover.contains("cert.path"), "{hover}");
+    let hover = buffer.hover(
+        &mut client,
+        "#![schema(schema)]\n\n{ ser|ver.tls.cert.path: \"a\" }\n",
+    );
+    assert!(hover.contains("**server**"), "{hover}");
+    let hover = buffer.hover(
+        &mut client,
+        "#![schema(schema)]\n\n{ server.tls.cert.pa|th: \"a\" }\n",
+    );
+    assert!(hover.contains("**server.tls.cert.path**"), "{hover}");
+    assert!(hover.contains("`String`"), "{hover}");
+    client.stop();
+}
+
+#[test]
+fn inlay_hints_on_elements() {
+    let dir = workspace(
+        "lsp-element-hints",
+        &[
+            (
+                "project.crov",
+                r#"Project { layers: List([{ name: "base", dir: "base", .. }]), .. }"#,
+            ),
+            (
+                "base/a.crod",
+                "+a: [1 + 1, 2, 3 * 3]\n+b: (2 + 2, \"x\")\n+c: Some(1 + 4)\n+d: [1] + [2 + 4]\n",
+            ),
+            ("value.crov", "{ a: [1 + 1, { b: [2 + 2] }] }\n"),
+        ],
+    );
+    let mut client = Client::start_with(&dir, json!({ "debounce_ms": 10, "inlay_hints": true }));
+    let buffer = Buffer::open(&client, &dir, "base/a.crod");
+    assert_eq!(
+        inlay_labels(&mut client, &buffer),
+        ["= 2", "= 9", "= 4", "= 5", "= [1, 6]"]
+    );
+    let buffer = Buffer::open(&client, &dir, "value.crov");
+    assert_eq!(inlay_labels(&mut client, &buffer), ["= 2", "= 4"]);
+    client.stop();
+}

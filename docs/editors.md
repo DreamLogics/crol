@@ -46,7 +46,9 @@ writable layers, not only the ones you have open, and `read_only` layers get non
 **Other open files**, and all open files if there is no project, are evaluated on
 their own, and checked against their `#![schema(...)]` if they have one. The
 [extension](modes.md) gives the mode: a `.crov` file is a value document, and a
-`.crod` file is data, as a layer of its own, with its variants and patches.
+`.crod` file is data, as a layer of its own, with its variants and patches. A
+`.crov` file in a project gets the project's schema only through
+[`files`](projects.md#value-documents-in-a-project), which give it a type.
 
 A `.crod` file is evaluated on top of what its `#![extends(...)]` names, as with
 `crol check`, and open files among those count even when they are not saved. Hover,

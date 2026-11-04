@@ -2506,7 +2506,9 @@ project file, and what can be evaluated still is:
 
 **Hover.**
 
-- On a target or key: the type and doc comment from the schema; the
+- On a target or key, for the segment under the cursor (`limits` in
+  `web.limits.cpu: 2` is `web.limits`): the type and doc comment from the
+  schema; the
   value *below* this entry (what `&` is here) and the *final* value,
   each with where it came from (file, line, layer); for a key that
   differs between contexts, the value per context, up to a limit.
@@ -2518,7 +2520,8 @@ project file, and what can be evaluated still is:
 - On an operator: the values of both sides and the result.
 
 **Inlay hints** (optional, off by default): the result after an
-expression that computes something (`& * 4` shows `= 2048`), in the
+expression that computes something (`& * 4` shows `= 2048`), the value of
+an entry or an element of a list, tuple or `Name(...)`, in the
 context chosen with the `context` setting.
 
 **Completion.** The type expected at the cursor is found from the
@@ -2534,7 +2537,10 @@ cursor. `:`, space, `{`, `[`, `(` and `,` trigger completion, as do `.`,
 
 - Keys: in a block of a known type and after a `.` in a target, the
   fields not written yet (in that block, not one around a variant
-  block), with those of flattened fields, each with its doc; accepting
+  block), with those of flattened fields, each with its doc. A block of a
+  tagged or untagged enum (section 10.4) has no name to say the variant, so
+  it offers the tag and the fields of every variant, and an adjacently tagged
+  one its tag and content. Accepting
   one fills in the value below if there is one
   (typing `rep` in a patch of `web` gives `replicas: 2`), else a
   placeholder of the right shape; only the name before an existing `:`.
