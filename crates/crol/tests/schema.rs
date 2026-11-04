@@ -664,8 +664,8 @@ fn defaults_left_out_without_the_marker_are_filled_in() {
     });
     assert_eq!(
         text,
-        "a: Relaxed {\n    name: \"x\",\n    port: 0, // default\n    note: None, // default\n},\n\
-         b: Plain { name: \"x\", port: 1 },\n"
+        "a: Relaxed {\n    name: \"x\",\n    port: 0, // default\n    note: None, // default\n}\n\
+         b: Plain { name: \"x\", port: 1 }\n"
     );
 }
 

@@ -1,7 +1,7 @@
-left_out: Relaxed { name: "a" },
-with_marker: Relaxed { name: "a", .. },
-written: Relaxed { name: "a", port: 1, note: None },
-no_default: Relaxed { port: 1 },
-variant_left_out: Job { name: "a" },
-variant_no_default: Job { retries: 1 },
-needs_marker: Service { replicas: 1, image: "a" },
+left_out: Relaxed { name: "a" }
+with_marker: Relaxed { name: "a", .. }
+written: Relaxed { name: "a", port: 1, note: None }
+no_default: Relaxed { port: 1 }
+variant_left_out: Job { name: "a" }
+variant_no_default: Job { retries: 1 }
+needs_marker: Service { replicas: 1, image: "a" }
