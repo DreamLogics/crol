@@ -904,7 +904,7 @@ fn the_project_file_is_checked_against_its_schema() {
         "lsp-project-file",
         &[("project.crol", project), ("base/a.crol", "+web: 1,")],
     );
-    let mut client = Client::start(&dir);
+    let client = Client::start(&dir);
     let file = uri(&dir.join("project.crol"));
     let text = r#"Project { layers: List([{ name: "base", dir: "base", .. }]), options: { max_contexts: -1, .. }, .. }"#;
     client.notify(
