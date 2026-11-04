@@ -214,7 +214,16 @@ pub(crate) fn evaluate(
             .add(path.display().to_string(), text.as_str());
         snapshot.paths.push(path.clone());
         let evaluation = crol_eval::evaluate_value(&snapshot.sources, file);
-        match document_schema(text, path) {
+        // The project file has the schema `crol` provides (`SPEC.md` 12.4).
+        let is_project_file = project_path
+            .as_ref()
+            .is_some_and(|p| p.canonicalize().unwrap_or_else(|_| p.clone()) == *path);
+        let schema = if is_project_file {
+            Some(Ok(crol::schema::build::<Project>()))
+        } else {
+            document_schema(text, path)
+        };
+        match schema {
             Some(Ok(schema)) => {
                 if let Some(value) = &evaluation.value {
                     // A top-level type name chooses the type (`SPEC.md` 4.1).

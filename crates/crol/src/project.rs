@@ -9,6 +9,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::compose::Variant;
 use crate::error::Error;
+use crate::schema::{
+    Field, FieldDefault, Registry, Repr, Schema, TypeDef, TypeExpr, TypeRef, VariantDef,
+    VariantShape, recorded_default,
+};
 
 /// The file name tools look for.
 pub const FILE_NAME: &str = "project.crol";
@@ -204,6 +208,247 @@ impl Project {
     }
 }
 
+// ---- The project file's schema (`SPEC.md` 12.4) ----
+
+/// A struct's definition, for the hand-written schemas below.
+fn struct_def(
+    name: &str,
+    doc: &str,
+    fields: Vec<(&str, Field)>,
+    default: Option<crate::RawValue>,
+) -> TypeDef {
+    TypeDef::Struct {
+        name: name.to_owned(),
+        doc: doc.to_owned(),
+        source: (file!().replace('\\', "/"), line!()),
+        fields: fields.into_iter().map(|(n, f)| (n.to_owned(), f)).collect(),
+        deny_unknown_fields: false,
+        default,
+    }
+}
+
+fn field(ty: TypeRef, doc: &str, default: FieldDefault) -> Field {
+    let mut field = Field::new(ty);
+    field.doc = doc.to_owned();
+    field.default = default;
+    field
+}
+
+impl Schema for Project {
+    fn describe(registry: &mut Registry) -> TypeRef {
+        registry.add("crol::project::Project", |registry| {
+            let layers = registry.describe::<ProjectLayers>();
+            let variants = registry.describe::<Vec<Variant>>();
+            let parents = registry.describe::<IndexMap<String, String>>();
+            let options = registry.describe::<ProjectOptions>();
+            let files = registry.describe::<Vec<FilePattern>>();
+            let none = || crate::schema::none_value();
+            struct_def(
+                "Project",
+                "A project file: what tools that are not the application need to know to evaluate its data (SPEC.md 12.4).",
+                vec![
+                    ("layers", field(layers, "The layers, lowest first.", FieldDefault::Required)),
+                    ("variants", field(variants, "The variants (SPEC.md 8.1).", recorded_default(&Vec::<Variant>::new()))),
+                    ("parents", field(parents, "Variant parents: child to parent.", recorded_default(&IndexMap::<String, String>::new()))),
+                    ("options", field(options, "Options, as `CrolConfig` has them.", recorded_default(&ProjectOptions::default()))),
+                    ("schema", field(TypeExpr::Option(Box::new(TypeExpr::String)), "The schema: a module path written as a string, a URL, or a crate.", none())),
+                    ("root", field(TypeExpr::Option(Box::new(TypeExpr::String)), "The path of the type of root values; default: the schema's root.", none())),
+                    ("files", field(files, "Value-mode documents and their types.", recorded_default(&Vec::<FilePattern>::new()))),
+                ],
+                None,
+            )
+        })
+    }
+}
+
+impl Schema for ProjectLayers {
+    fn describe(registry: &mut Registry) -> TypeRef {
+        registry.add("crol::project::ProjectLayers", |registry| {
+            let list = registry.describe::<Vec<ProjectLayer>>();
+            let variant = |shape, doc: &str| VariantDef {
+                shape,
+                doc: doc.to_owned(),
+                aliases: Vec::new(),
+            };
+            TypeDef::Enum {
+                name: "ProjectLayers".to_owned(),
+                doc: "Where the layers come from.".to_owned(),
+                source: (file!().replace('\\', "/"), line!()),
+                repr: Repr::External,
+                variants: [
+                    ("List".to_owned(), variant(VariantShape::Newtype(list), "The layers, listed.")),
+                    (
+                        "Command".to_owned(),
+                        variant(
+                            VariantShape::Newtype(TypeExpr::List(Box::new(TypeExpr::String))),
+                            "A command that prints the layer list as a CROL value, run in the project's directory.",
+                        ),
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+            }
+        })
+    }
+}
+
+impl Schema for ProjectLayer {
+    fn describe(registry: &mut Registry) -> TypeRef {
+        registry.add("crol::project::ProjectLayer", |_| {
+            struct_def(
+                "ProjectLayer",
+                "A layer of a project.",
+                vec![
+                    ("name", field(TypeExpr::String, "The layer's name.", FieldDefault::Required)),
+                    ("dir", field(TypeExpr::String, "Its module path (SPEC.md 4.2), from the project's directory.", FieldDefault::Required)),
+                    ("read_only", field(TypeExpr::Bool, "Generated or vendored data: loaded, but without diagnostics or code actions in the editor.", recorded_default(&false))),
+                ],
+                None,
+            )
+        })
+    }
+}
+
+impl Schema for ProjectOptions {
+    fn describe(registry: &mut Registry) -> TypeRef {
+        registry.add("crol::project::ProjectOptions", |registry| {
+            let contexts = registry.describe::<Option<Vec<Vec<String>>>>();
+            let d = ProjectOptions::default();
+            struct_def(
+                "ProjectOptions",
+                "Options of a project, as `CrolConfig` has them.",
+                vec![
+                    (
+                        "implicit_some",
+                        field(
+                            TypeExpr::Bool,
+                            "Any value is accepted where an `Option` is expected, as `Some`.",
+                            recorded_default(&d.implicit_some),
+                        ),
+                    ),
+                    (
+                        "allow_unknown_fields",
+                        field(
+                            TypeExpr::Bool,
+                            "Keys a struct does not have are ignored.",
+                            recorded_default(&d.allow_unknown_fields),
+                        ),
+                    ),
+                    (
+                        "require_complete",
+                        field(
+                            TypeExpr::Bool,
+                            "Every field must be written unless the value has `..`.",
+                            recorded_default(&d.require_complete),
+                        ),
+                    ),
+                    (
+                        "warn_cross_file_patches",
+                        field(
+                            TypeExpr::Bool,
+                            "Warn about patches to a key from several documents of one layer.",
+                            recorded_default(&d.warn_cross_file_patches),
+                        ),
+                    ),
+                    (
+                        "max_contexts",
+                        field(
+                            TypeExpr::U64,
+                            "How many contexts may be evaluated.",
+                            recorded_default(&d.max_contexts),
+                        ),
+                    ),
+                    (
+                        "contexts",
+                        field(
+                            contexts,
+                            "The contexts to evaluate; default: every one.",
+                            recorded_default(&d.contexts),
+                        ),
+                    ),
+                    (
+                        "variant_keys",
+                        field(
+                            TypeExpr::String,
+                            "The variant keys rule: `Any`, `NoNewKeys` or `SameKeys`.",
+                            recorded_default(&d.variant_keys),
+                        ),
+                    ),
+                ],
+                crate::schema::default_value(&d),
+            )
+        })
+    }
+}
+
+impl Schema for FilePattern {
+    fn describe(registry: &mut Registry) -> TypeRef {
+        registry.add("crol::project::FilePattern", |_| {
+            struct_def(
+                "FilePattern",
+                "Value-mode documents of a type.",
+                vec![
+                    (
+                        "glob",
+                        field(
+                            TypeExpr::String,
+                            "A module path whose segments may hold `*`, or be `**`.",
+                            FieldDefault::Required,
+                        ),
+                    ),
+                    (
+                        "type",
+                        field(
+                            TypeExpr::String,
+                            "The schema path of their type.",
+                            FieldDefault::Required,
+                        ),
+                    ),
+                ],
+                None,
+            )
+        })
+    }
+}
+
+impl<T: Schema> Schema for Variant<T> {
+    fn describe(registry: &mut Registry) -> TypeRef {
+        let arg = registry.describe::<T>();
+        let path = format!("crol::compose::Variant<{}>", crate::schema::type_name(&arg));
+        registry.add(&path, |_| {
+            let variant = |shape, doc: &str| VariantDef {
+                shape,
+                doc: doc.to_owned(),
+                aliases: Vec::new(),
+            };
+            TypeDef::Enum {
+                name: "Variant".to_owned(),
+                doc: "A variant declaration (SPEC.md 8.1).".to_owned(),
+                source: (file!().replace('\\', "/"), line!()),
+                repr: Repr::External,
+                variants: [
+                    (
+                        "Discrete".to_owned(),
+                        variant(
+                            VariantShape::Newtype(arg.clone()),
+                            "A flag: on or off, independent of the rest.",
+                        ),
+                    ),
+                    (
+                        "Grouped".to_owned(),
+                        variant(
+                            VariantShape::Newtype(TypeExpr::List(Box::new(arg.clone()))),
+                            "Alternatives: at most one of them is active.",
+                        ),
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+            }
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,5 +484,29 @@ mod tests {
             project.options.variant_keys().unwrap(),
             crol_eval::VariantKeys::Any
         );
+
+        // The schema `crol` provides accepts it.
+        let schema = crate::schema::build::<Project>();
+        let value: crate::RawValue = crate::from_str(text).unwrap();
+        let errors = crate::check_value(&value.0, &schema, None, &Default::default());
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn the_schema_and_the_deserializer_agree_on_mistakes() {
+        let schema = crate::schema::build::<Project>();
+        for text in [
+            r#"Project { layers: Lists([]), .. }"#,
+            r#"Project { layers: List([{ name: "a", dir: 1, .. }]), .. }"#,
+            r#"Project { layers: List([]), variants: [Flag("x")], .. }"#,
+            r#"Project { layers: List([]), options: { max_contexts: -1, .. }, .. }"#,
+            r#"Project { layers: List([]), schema: 3, .. }"#,
+        ] {
+            let value: crate::RawValue = crate::from_str(text).unwrap();
+            let checked = crate::check_value(&value.0, &schema, None, &Default::default());
+            let error = crate::from_str::<Project>(text).unwrap_err();
+            assert_eq!(checked.len(), 1, "{text}: {checked:?}");
+            assert_eq!(checked[0].message, error.message(), "{text}");
+        }
     }
 }

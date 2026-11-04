@@ -804,7 +804,7 @@ impl Schema for SchemaFile {
         registry.add("crol::schema::Schema", |_| TypeDef::Struct {
             name: "Schema".to_owned(),
             doc: "A CROL schema file (SPEC.md 10.10).".to_owned(),
-            source: (file!().to_owned(), line!()),
+            source: (file!().replace('\\', "/"), line!()),
             fields: [
                 ("format".to_owned(), Field::new(TypeExpr::U32)),
                 ("root".to_owned(), Field::new(TypeExpr::String)),

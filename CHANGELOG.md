@@ -73,6 +73,9 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   `crol::check`.
 - Fuzz targets in `fuzz/` for the parser and both evaluation modes.
 - A limit of 256 conditional operations for one entry (`SPEC.md` 7.7).
+- `crol` provides the schema of the project file (`Schema` for `Project`
+  and the types in it), and the language server checks the project file
+  against it.
 
 ### Fixed
 

@@ -896,3 +896,28 @@ fn documents_on_their_own_are_checked_against_their_schema() {
     assert_eq!(diagnostics[0]["range"]["start"]["line"], 0);
     client.stop();
 }
+
+#[test]
+fn the_project_file_is_checked_against_its_schema() {
+    let project = r#"Project { layers: List([{ name: "base", dir: "base", .. }]), .. }"#;
+    let dir = workspace(
+        "lsp-project-file",
+        &[("project.crol", project), ("base/a.crol", "+web: 1,")],
+    );
+    let mut client = Client::start(&dir);
+    let file = uri(&dir.join("project.crol"));
+    let text = r#"Project { layers: List([{ name: "base", dir: "base", .. }]), options: { max_contexts: -1, .. }, .. }"#;
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": file, "languageId": "crol", "version": 1, "text": text } }),
+    );
+    let diagnostics = client.diagnostics_for(&file, |d| !d.is_empty());
+    assert!(
+        diagnostics[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("found -1"),
+        "{diagnostics:?}"
+    );
+    client.stop();
+}
