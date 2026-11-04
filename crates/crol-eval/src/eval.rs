@@ -399,6 +399,8 @@ pub(crate) struct Evaluator<'ir> {
     share: bool,
     /// For each base root key, in root order, the operation that created it.
     base_created: Vec<usize>,
+    /// Where `&default` finds defaults.
+    defaults: Option<&'ir dyn DefaultsProvider>,
 }
 
 /// What the entries of a block are evaluated in.
@@ -428,6 +430,60 @@ fn root_location(cell: &Lazy) -> Location {
     }
 }
 
+/// Where `&default` finds defaults (`SPEC.md` 6.1.3): usually a schema.
+pub trait DefaultsProvider: std::fmt::Debug + Send + Sync {
+    /// The default of the field at `path` from the type named `type_name`
+    /// (`None`: the root type), or with an empty path the type's own
+    /// default; `None` if no default is recorded.
+    fn default_of(&self, type_name: Option<&str>, path: &[String]) -> Option<Value>;
+}
+
+/// A shape for a value that is already computed, such as a default.
+fn shaped_from_value(value: &Value) -> Rc<Shaped> {
+    let cells = |items: &[Value]| {
+        items
+            .iter()
+            .map(|v| Cell::done(shaped_from_value(v)))
+            .collect()
+    };
+    let shape = match &value.kind {
+        ValueKind::Unit => Shape::Unit,
+        ValueKind::Bool(b) => Shape::Bool(*b),
+        ValueKind::Int(i) => Shape::Int(*i),
+        ValueKind::Float(f) => Shape::Float(*f),
+        ValueKind::Char(c) => Shape::Char(*c),
+        ValueKind::String(s) => Shape::Str(Rc::from(s.as_str())),
+        ValueKind::Id(s) => Shape::Id(Rc::from(s.as_str())),
+        ValueKind::UnitName(n) => Shape::UnitName(Rc::from(n.as_str())),
+        ValueKind::List(items) => Shape::List(cells(items)),
+        ValueKind::Tuple(items) => Shape::Tuple(cells(items)),
+        ValueKind::NamedTuple(n, items) => Shape::Named(Rc::from(n.as_str()), cells(items)),
+        ValueKind::Keyed(keyed) => Shape::Keyed(KeyedShape {
+            name: keyed.name.as_deref().map(Rc::from),
+            slots: keyed
+                .entries
+                .iter()
+                .map(|(k, v)| {
+                    let cell = Cell::done(shaped_from_value(v));
+                    (
+                        k.clone(),
+                        Slot {
+                            value: cell,
+                            recipe: Recipe::Fixed,
+                        },
+                    )
+                })
+                .collect(),
+            defaults: keyed.defaults,
+            defaulted: keyed.defaulted.clone(),
+        }),
+    };
+    Rc::new(Shaped {
+        shape,
+        span: value.span,
+    })
+}
+
 /// Evaluates a lowered value-mode document.
 pub(crate) fn evaluate(ir: &Ir, root: ExprId) -> (Option<Value>, Vec<Diagnostic>) {
     let mut evaluator = Evaluator {
@@ -439,6 +495,7 @@ pub(crate) fn evaluate(ir: &Ir, root: ExprId) -> (Option<Value>, Vec<Diagnostic>
         plan: None,
         share: false,
         base_created: Vec::new(),
+        defaults: None,
     };
     let root_cell = Rc::new(Cell {
         state: RefCell::new(State::Running),
@@ -493,6 +550,7 @@ pub(crate) struct DataInput<'a> {
     pub(crate) max_contexts: usize,
     pub(crate) variant_keys: VariantKeys,
     pub(crate) evaluate_every_key: bool,
+    pub(crate) defaults: Option<&'a dyn DefaultsProvider>,
 }
 
 /// The evaluated data: the variants (declared, or found in the data), the
@@ -712,6 +770,7 @@ pub(crate) fn evaluate_data(
         plan: Some(&plan),
         share: false,
         base_created: Vec::new(),
+        defaults: input.defaults,
     };
     // Errors in the static structure of the chains are reported once.
     evaluator.check_chains(input);
@@ -960,6 +1019,7 @@ pub(crate) fn explain(
         plan: Some(&plan),
         share: false,
         base_created: Vec::new(),
+        defaults: input.defaults,
     };
     let id = evaluator.context_state(&context);
     let Some(key_plan) = plan.keys.get(key) else {
@@ -1998,10 +2058,30 @@ impl Evaluator<'_> {
                 let root = self.contexts[env.context].root.clone();
                 self.value_at(&root, span)
             }
-            RefKind::Default => Err(self.fail(
-                span,
-                "&default: defaults come from a schema, and no schema is given",
-            )),
+            RefKind::Default(target) => {
+                let Some(defaults) = self.defaults else {
+                    return Err(self.fail(
+                        span,
+                        "&default: defaults come from a schema, and no schema is given",
+                    ));
+                };
+                let path: Vec<String> = target.path.iter().map(|p| p.to_string()).collect();
+                match defaults.default_of(target.type_name.as_deref(), &path) {
+                    Some(value) => Ok(shaped_from_value(&value)),
+                    None => {
+                        let what = match &target.type_name {
+                            Some(name) if path.is_empty() => format!("`{name}`"),
+                            Some(name) => format!("`{name}.{}`", path.join(".")),
+                            None if path.is_empty() => "the root type".to_owned(),
+                            None => format!("`{}` of the root type", path.join(".")),
+                        };
+                        Err(Fail::Missing(
+                            span,
+                            format!("&default: the schema records no default for {what}"),
+                        ))
+                    }
+                }
+            }
             RefKind::Bind { up, target } => {
                 let location = self.chain_location(&env.chain, *up, span, "bind")?;
                 let mut value = self.value_at(&location, span)?;

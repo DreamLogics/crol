@@ -3,7 +3,6 @@
 
 use std::io::Write;
 
-use crol::CrolConfig;
 use crol_eval::{Key, Value, ValueKind, print};
 use crol_syntax::format::FormatConfig;
 
@@ -36,7 +35,7 @@ pub(crate) struct Args {
     all_contexts: bool,
 
     #[command(flatten)]
-    variants: crate::layers::VariantArgs,
+    inputs: crate::layers::InputArgs,
 }
 
 /// Returns whether it succeeded.
@@ -44,12 +43,7 @@ pub(crate) fn run(args: &Args, reporter: &mut Reporter) -> bool {
     let mut layers = args.arguments.clone();
     // The last argument is a key path if it names no layer.
     let path = match layers.last() {
-        Some(last)
-            if layers.len() > 1
-                && !crate::layers::names_a_layer(last, &CrolConfig::<String>::default()) =>
-        {
-            layers.pop()
-        }
+        Some(last) if layers.len() > 1 && !crate::layers::names_a_layer(last) => layers.pop(),
         _ => None,
     };
     let contexts = match (&args.context, args.all_contexts) {
@@ -57,12 +51,11 @@ pub(crate) fn run(args: &Args, reporter: &mut Reporter) -> bool {
         (Some(context), false) => Some(vec![context.clone()]),
         (None, false) => Some(Vec::new()),
     };
-    let Some((sources, evaluation)) =
-        crate::layers::evaluate(&layers, &args.variants, contexts, reporter)
-    else {
+    let Some(inputs) = crate::layers::inputs(&layers, &args.inputs, contexts, reporter) else {
         return false;
     };
-    reporter.diagnostics(&sources, &evaluation.diagnostics);
+    let evaluation = crate::layers::evaluate(&inputs);
+    reporter.diagnostics(&inputs.sources, &evaluation.diagnostics);
     let Some(base) = evaluation.value else {
         return false;
     };

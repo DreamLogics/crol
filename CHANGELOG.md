@@ -44,3 +44,13 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   the operations behind a value, with the value after each.
 - Contexts evaluate only the keys that can differ from the base, and store
   only their differences.
+- Schemas (`SPEC.md` 10.9, 10.10): the `Schema` trait, `crol::schema::build`,
+  `write` and `check_file`, and schema files read and written as CROL.
+- `crol-derive`: `#[derive(Schema)]` and `#[derive(VariantName)]`, behind
+  the `derive` feature of `crol`.
+- `crol::check`: schema checks of evaluated data without the Rust types,
+  including ids.
+- `&default` (`SPEC.md` 6.1.3), with `CrolComposer::schema`.
+- The project file (`SPEC.md` 12.4); `crol` commands read their layers,
+  variants, options and schema from it when given no layers, and take
+  `--project` and `--schema`.

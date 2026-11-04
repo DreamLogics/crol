@@ -62,12 +62,20 @@ pub(crate) enum RefKind {
     Parent(usize),
     /// `&root`
     Root,
-    /// `&default`
-    Default,
+    /// `&default`, with the target whose default it is.
+    Default(DefaultTarget),
     /// `&name` for an entry bind: the bound target, `up` blocks out.
     Bind { up: usize, target: Vec<Selector> },
     /// `&name` for a value bind or template.
     ValueBind(BindId),
+}
+
+/// Whose default `&default` is (`SPEC.md` 6.1.3): a field path from the
+/// nearest enclosing type name, or with no type name, from the root type.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct DefaultTarget {
+    pub(crate) type_name: Option<Rc<str>>,
+    pub(crate) path: Vec<Rc<str>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

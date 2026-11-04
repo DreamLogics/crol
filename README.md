@@ -32,22 +32,25 @@ web.tags: & + ["local"],
 The full design is in [`SPEC.md`](SPEC.md).
 
 > **Status:** early development. The format and the APIs will change before
-> 1.0. Milestones 1 to 5 are done: the parser and formatter, single
-> documents with `crol::from_str` and `crol::to_string`, layers and
-> variants with `CrolComposer`, provenance, and `crol check`, `eval`,
-> `explain` and `fingerprint`. Next are the tree-sitter grammar and the
-> Zed extension. See the [milestones](SPEC.md#143-milestones).
+> 1.0. Milestones 1 to 7 are done: the parser and formatter, single
+> documents, layers and variants with `CrolComposer`, provenance, the
+> tree-sitter grammar and the Zed extension (syntax), and schemas with
+> `#[derive(crol::Schema)]`, `crol::check`, `&default` and project files.
+> Next is the language server. See the
+> [milestones](SPEC.md#143-milestones).
 
 ## Crates
 
 | Crate | Contents | Status |
 |---|---|---|
-| [`crol`](crates/crol) | the library: `CrolComposer`, serde `Deserializer` and `Serializer`, `from_str`, `to_string` | layers, variants |
-| [`crol-syntax`](crates/crol-syntax) | lexer, error-recovering parser, lossless syntax tree, typed AST, formatter | usable |
+| [`crol`](crates/crol) | the library: `CrolComposer`, serde `Deserializer` and `Serializer`, `from_str`, `to_string` | done |
+| [`crol-syntax`](crates/crol-syntax) | lexer, error-recovering parser, lossless syntax tree, typed AST, formatter | done |
 | [`crol-eval`](crates/crol-eval) | layers, chains, the evaluator, variants, fingerprints | done |
-| [`crol-derive`](crates/crol-derive) | `#[derive(Schema)]` and `#[derive(VariantName)]` | planned |
+| [`crol-derive`](crates/crol-derive) | `#[derive(Schema)]` and `#[derive(VariantName)]` | done |
 | [`crol-lsp`](crates/crol-lsp) | the language server, as a library | planned |
-| [`crol-cli`](crates/crol-cli) | the `crol` command-line tool | `check`, `eval`, `explain`, `fingerprint`, `fmt`, `from-ron` |
+| [`crol-cli`](crates/crol-cli) | the `crol` command-line tool | all but `lsp` |
+| [`tree-sitter-crol`](tree-sitter-crol) | the tree-sitter grammar and queries | done |
+| [`editors/zed`](editors/zed) | the Zed extension | syntax |
 
 ## Development
 

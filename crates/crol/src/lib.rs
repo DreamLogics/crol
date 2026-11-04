@@ -42,6 +42,7 @@ mod de;
 mod error;
 mod id;
 mod module_path;
+pub mod project;
 mod raw;
 pub mod schema;
 mod ser;
@@ -49,7 +50,7 @@ mod ser;
 use crol_eval::evaluate_value;
 use serde::{Deserialize, Serialize};
 
-pub use check::{CheckOptions, check};
+pub use check::{CheckOptions, DataView, check, check_view};
 pub use compose::{
     CrolComposer, CrolConfig, CrolContext, CrolData, CrolLayer, CrolVariants, LayerSource, Variant,
     VariantName,
@@ -103,6 +104,17 @@ fn from_value_with_ids<T: for<'de> Deserialize<'de>>(
 
 /// Deserializes `value`, which is at the root key `key` if given, for the
 /// paths in errors.
+/// Resolves a module path (`SPEC.md` 4.2) to the file or directory it names.
+/// `here` is the directory of the document it is written in; `None` starts
+/// relative paths from `root`.
+pub fn resolve_module_path(
+    module_path: &str,
+    root: &std::path::Path,
+    here: Option<&std::path::Path>,
+) -> Result<std::path::PathBuf> {
+    module_path::resolve(module_path, root, here)
+}
+
 pub(crate) fn deserialize<T: for<'de> Deserialize<'de>>(
     value: &Value,
     sources: &Sources,

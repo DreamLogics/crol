@@ -181,3 +181,63 @@ fn explain_prints_the_history_of_a_value() {
         "{stdout}"
     );
 }
+
+#[test]
+fn project_files_give_the_layers_and_the_schema() {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("project");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("data/base")).unwrap();
+    std::fs::create_dir_all(dir.join("crol")).unwrap();
+    std::fs::write(
+        dir.join("project.crol"),
+        r#"Project {
+            layers: List([{ name: "base", dir: "data::base", .. }]),
+            variants: [Grouped(["dev", "prod"])],
+            schema: Some("crol::schema"),
+            ..
+        }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("data/base/a.crol"),
+        "+web: Service { replicas: 1 },\n<prod> { web.replicas: -4 },",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("crol/schema.crol"),
+        r#"Schema {
+            format: 1,
+            root: "app::Service",
+            types: {
+                "app::Service": Struct {
+                    name: "Service",
+                    source: ("src/lib.rs", 1),
+                    fields: { replicas: { ty: U32, .. } },
+                    ..
+                },
+            },
+        }"#,
+    )
+    .unwrap();
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_crol"))
+            .args(args)
+            .current_dir(dir.join("data"))
+            .output()
+            .unwrap()
+    };
+    let output = run(&["check", "--color", "never"]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("in {prod}: expected u32, found -4"),
+        "{stderr}"
+    );
+
+    let output = run(&["eval", "--context", "dev"]);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "web: Service { replicas: 1 },\n"
+    );
+}

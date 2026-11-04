@@ -72,6 +72,8 @@ pub(crate) fn lower_data(documents: &[DataDocument<'_>]) -> (LoweredData, Vec<Di
         lifted: Vec::new(),
         lift_floor: None,
         position: (0, 0),
+        default_target: DefaultTarget::default(),
+        block_target: DefaultTarget::default(),
     };
 
     // Templates are visible in every document of every layer, so they are
@@ -178,6 +180,11 @@ struct Lowerer {
     lift_floor: Option<usize>,
     /// The layer and document position of the document being lowered.
     position: (usize, usize),
+    /// Whose default a `&default` here is.
+    default_target: DefaultTarget,
+    /// The `&default` target of the block being lowered, for its value binds
+    /// and lifted entries.
+    block_target: DefaultTarget,
 }
 
 /// A block whose location is fixed: an entry's value, the right side of
@@ -214,6 +221,16 @@ impl FixedBlock {
             conditions,
         }
     }
+}
+
+/// The field names of a path, for a `&default` target.
+fn field_names(path: &[Selector]) -> Vec<Rc<str>> {
+    path.iter()
+        .filter_map(|s| match &s.kind {
+            SelectorKind::Field(name) => Some(name.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 fn key_selector(key: &Key, span: Span) -> Selector {
@@ -300,6 +317,8 @@ pub(crate) fn lower_value_document(
         lifted: Vec::new(),
         lift_floor: None,
         position: (0, 0),
+        default_target: DefaultTarget::default(),
+        block_target: DefaultTarget::default(),
     };
     let type_name = lowerer.attributes(document);
     let root = match document.expr() {
@@ -445,7 +464,13 @@ impl Lowerer {
             outer: Vec::new(),
             conditions: alternatives.clone(),
         });
+        // A root value's type is the schema's root type (`SPEC.md` 4.1).
+        self.default_target = DefaultTarget {
+            type_name: None,
+            path: field_names(&path),
+        };
         let value = value.map(|value| self.expr(&value));
+        self.default_target = DefaultTarget::default();
         self.fixed = None;
         self.reach = Reach::default();
         for condition in alternatives {
@@ -528,11 +553,18 @@ impl Lowerer {
 
         let saved_floor = self.lift_floor.replace(self.scopes.len());
         let saved_reach = std::mem::take(&mut self.reach);
+        let mut entry_target = self.block_target.clone();
+        if let Key::Str(key) = &key {
+            entry_target.path.push(Rc::from(key.as_str()));
+        }
+        entry_target.path.extend(field_names(&path));
+        let saved_target = std::mem::replace(&mut self.default_target, entry_target);
         self.fixed = Some(fixed.child(&key, &path, span, alternatives.clone()));
         let value = value.map(|value| self.expr(&value));
         self.fixed = None;
         self.reach = saved_reach;
         self.lift_floor = saved_floor;
+        self.default_target = saved_target;
         for condition in alternatives {
             self.lifted.push(RootOp {
                 key: fixed.key.clone(),
@@ -723,6 +755,17 @@ impl Lowerer {
         entries: impl Iterator<Item = ast::AnyEntry>,
     ) -> BlockId {
         let fixed = self.fixed.take();
+        // The block's own `&default` target: its type name, or the field
+        // path it is at from the nearest enclosing one.
+        let outer_target = std::mem::take(&mut self.default_target);
+        let block_target = match &name {
+            Some(name) => DefaultTarget {
+                type_name: Some(name.clone()),
+                path: Vec::new(),
+            },
+            None => outer_target.clone(),
+        };
+        let outer_block_target = std::mem::replace(&mut self.block_target, block_target.clone());
         let entries: Vec<_> = entries.collect();
         let id = self.ir.blocks.len();
         self.ir.blocks.push(Block {
@@ -825,6 +868,12 @@ impl Lowerer {
                         continue;
                     };
                     let target_span = self.span(target.syntax());
+                    let mut entry_target = block_target.clone();
+                    if let Key::Str(key) = &key {
+                        entry_target.path.push(Rc::from(key.as_str()));
+                    }
+                    entry_target.path.extend(field_names(&path));
+                    self.default_target = entry_target;
                     self.fixed = fixed.as_ref().map(|f| {
                         let conditions = f.conditions.clone();
                         f.child(&key, &path, target_span, conditions)
@@ -863,6 +912,8 @@ impl Lowerer {
                             below: outer.below,
                             outer: false,
                         };
+                        // `..&default` is the block's own default.
+                        self.default_target = block_target.clone();
                         spreads.push(self.expr(&operand));
                     }
                 }
@@ -873,6 +924,7 @@ impl Lowerer {
         }
         let bind_ids = value_binds.iter().map(|(id, _)| *id).collect();
         self.reach = Reach::default();
+        self.default_target = block_target.clone();
         for (bind_id, bind) in value_binds {
             let expr = match bind.value() {
                 Some(value) => self.expr(&value),
@@ -881,6 +933,8 @@ impl Lowerer {
             self.ir.value_binds[bind_id].expr = expr;
         }
         self.reach = outer;
+        self.default_target = outer_target;
+        self.block_target = outer_block_target;
         self.scopes.pop();
 
         let block = &mut self.ir.blocks[id];
@@ -1250,7 +1304,7 @@ impl Lowerer {
             ast::ReferenceKind::SelfValue => RefKind::SelfValue,
             ast::ReferenceKind::Parent(n) => RefKind::Parent(n),
             ast::ReferenceKind::Root => RefKind::Root,
-            ast::ReferenceKind::Default => RefKind::Default,
+            ast::ReferenceKind::Default => RefKind::Default(self.default_target.clone()),
             ast::ReferenceKind::Bind(name) => {
                 let name = name.text();
                 let innermost = self.scopes.len();

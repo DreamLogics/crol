@@ -6,20 +6,20 @@ use crate::diagnostics::Reporter;
 #[derive(Debug, clap::Args)]
 pub(crate) struct Args {
     /// The layers, lowest first: each `name=source` or a source, where a
-    /// source is a module path or a file system path.
+    /// source is a module path or a file system path. Default: the project
+    /// file's.
     layers: Vec<String>,
 
     #[command(flatten)]
-    variants: crate::layers::VariantArgs,
+    inputs: crate::layers::InputArgs,
 }
 
 /// Returns whether there were no errors.
 pub(crate) fn run(args: &Args, reporter: &mut Reporter) -> bool {
-    let Some((sources, evaluation)) =
-        crate::layers::evaluate(&args.layers, &args.variants, None, reporter)
-    else {
+    let Some(inputs) = crate::layers::inputs(&args.layers, &args.inputs, None, reporter) else {
         return false;
     };
-    reporter.diagnostics(&sources, &evaluation.diagnostics);
+    let evaluation = crate::layers::evaluate(&inputs);
+    reporter.diagnostics(&inputs.sources, &evaluation.diagnostics);
     !evaluation.has_errors()
 }
