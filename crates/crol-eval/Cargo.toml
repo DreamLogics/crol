@@ -24,5 +24,9 @@ expect-test.workspace = true
 name = "big"
 harness = false
 
+[[bench]]
+name = "game"
+harness = false
+
 [lints]
 workspace = true
