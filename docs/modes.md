@@ -2,17 +2,18 @@
 
 A CROL file is one of two things, and its extension tells you which:
 
-- **`.crov`** is a _value document_: the whole file is one value, like a JSON or
-  RON file.
+- **`.crol`** is a _value document_: the whole file is one value, like a JSON or
+  RON file. This is the default, and where you start.
 - **`.crod`** is a _data document_: the file holds operations on data shared by
-  every file of a composition, in layers.
+  every file of a composition, in layers. You move to it when you want layers and
+  the more advanced features that come with them.
 
 Look at a file's name and you know how it behaves. This page explains both, and
 when to use each. The other pages link here rather than repeating it.
 
 ## The short version
 
-|                         | `.crov`, value mode              | `.crod`, data mode                        |
+|                         | `.crol`, value mode              | `.crod`, data mode                        |
 | ----------------------- | -------------------------------- | ----------------------------------------- |
 | You read it with        | `crol::from_str`                 | `CrolComposer`                            |
 | A file is               | one value                        | a list of operations on shared data       |
@@ -20,11 +21,12 @@ when to use each. The other pages link here rather than repeating it.
 | Good for                | a single settings file           | data split over files, sources or environments |
 | The `crol` command line | [one file at a time](#tools-and-modes) | all commands                        |
 
-If you have one file and always will, write a `.crov` file. If you want
-overrides, environments or more than one file, write `.crod` files.
+Start with a `.crol` file: unless you specifically need more, it is all you need.
+When you want overrides, environments or more than one file, move to `.crod`
+files.
 
-Project files and schema files are single values, so they are `.crov` files:
-`project.crov`, `crol/schema.crov`.
+Project files and schema files are single values, so they are `.crol` files:
+`project.crol`, `crol/schema.crol`.
 
 There are two modes because they serve different purposes, and not everything
 fits one shape: a settings file wants to be a value with a type, and layered data
@@ -53,7 +55,7 @@ these deserialize to the same `Config`, and the name is checked against your
 Rust type:
 
 ```crol
-// config.crov
+// config.crol
 Config {
     port: 8080,
     workers: 4,
@@ -61,7 +63,7 @@ Config {
 ```
 
 ```crol
-// config.crov
+// config.crol
 #![type(Config)]
 
 port: 8080
@@ -72,7 +74,7 @@ Because the file is one value, it can use everything a block can, such as `..`
 to leave fields out, and a spread at the top:
 
 ```crol
-// config.crov
+// config.crol
 #![type(Config)]
 
 defaults := { workers: 4 }
@@ -154,7 +156,7 @@ web: port 80
 
 ## Side by side
 
-| You write                      | `.crov`, value mode        | `.crod`, data mode                        |
+| You write                      | `.crol`, value mode        | `.crod`, data mode                        |
 | ------------------------------ | -------------------------- | ----------------------------------------- |
 | `port: 80, name: "x"`          | works                      | works                                     |
 | `{ port: 80 }`                 | works                      | works; the braces are dropped             |
@@ -178,22 +180,21 @@ and `&root` are the same thing, and `&` has nothing below it.
 A file whose extension is wrong for how it is loaded is an error, never a silent
 skip:
 
-- A `.crov` file cannot be a layer. This includes a `.crov` file in a layer's
+- A `.crol` file cannot be a layer. This includes a `.crol` file in a layer's
   directory, so a layer never quietly lacks a file. The one exception is the
   [project file](projects.md#how-it-is-found) itself, which may lie there.
 - A `.crod` file cannot be a project or schema file.
-- `.crol`, the extension from before the two were separated, is an error
-  everywhere, with the name to rename the file to. There is no fallback.
 
 ```console
 $ printf '+port: 80\n' > base.crod
-$ printf '40 + 2\n' > answer.crov
-$ crol check base.crod answer.crov
-error: answer.crov: a `.crov` file is a value document and cannot be a layer; move it out of the layer, or rename it to `answer.crod` if it is data
+$ printf '40 + 2\n' > answer.crol
+$ crol check base.crod answer.crol
+error: answer.crol: a `.crol` file is a value document and cannot be a layer; move it out of the layer, or rename it to `answer.crod` if it is data
 ```
 
 Other files in a layer's directory, such as a `README.md`, are not documents and
-are ignored.
+are ignored. Given by path, a file with any other extension follows what loads it:
+`crol check notes.txt` reads it as a layer.
 
 ## Text has no extension
 
@@ -202,8 +203,8 @@ Text does not come with a name, so the function you call states the mode.
 also for [`CrolLayer::from_sources`](layers.md#what-a-layer-can-be).
 
 A [file loader](recipes.md#loading-documents-from-somewhere-else) of your own
-names its documents. A name that ends in `.crod`, `.crov` or `.crol` follows the
-same rules as a file. Any other name states nothing, and the call that loaded it
+names its documents. A name that ends in `.crod` or `.crol` follows the same rules
+as a file. Any other name states nothing, and the call that loaded it
 decides.
 
 ## Moving a file between modes
@@ -211,20 +212,20 @@ decides.
 A file of plain entries, with no `#![type]`, no top-level spread and each key set
 once, reads the same in both modes. So when one settings file grows into several,
 as in [getting started](getting-started.md), all it takes is a new name:
-`config.crov` becomes `config.crod`. If you think your program might grow, this
+`config.crol` becomes `config.crod`. If you think your program might grow, this
 is the style to write in.
 
 ## Tools and modes
 
 Because the file states its mode, tools need no flags:
 
-- `crol check`, `crol eval` and `crol fingerprint` read one `.crov` file as a
+- `crol check`, `crol eval` and `crol fingerprint` read one `.crol` file as a
   value document, and `.crod` files and directories as layers. With a schema they
   check a value document against it: `--schema`, or the file's
-  [`#![schema(...)]`](schemas.md#the-schema-attribute). A `.crov` file among
+  [`#![schema(...)]`](schemas.md#the-schema-attribute). A `.crol` file among
   other layers is an error.
-- `crol explain` follows a value through layers, so it does not take a `.crov`
-  file. `crol eval file.crov key` prints the value.
+- `crol explain` follows a value through layers, so it does not take a `.crol`
+  file. `crol eval file.crol key` prints the value.
 - `crol fmt` handles both, and they format the same.
 - The [language server](editors.md) goes by the extension too, whether a file is
   in your project's layers or not.

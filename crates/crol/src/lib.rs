@@ -35,7 +35,7 @@
 //!
 //! ## Reading one document
 //!
-//! If your program reads a single settings file, a `.crov` file, [`from_str`]
+//! If your program reads a single settings file, a `.crol` file, [`from_str`]
 //! is all you need. The file is evaluated first, so it can compute values, and
 //! your type only sees the result:
 //!
@@ -218,12 +218,12 @@
 //!
 //! // In a test. It fails if the file is out of date;
 //! // `CROL_UPDATE_SCHEMA=1 cargo test` updates it.
-//! crol::schema::check_file::<Definition>("crol/schema.crov").unwrap();
+//! crol::schema::check_file::<Definition>("crol/schema.crol").unwrap();
 //! ```
 //!
 //! The [`schema`] module has the model and functions, and [`check()`] applies
 //! a schema to evaluated data from Rust. The [`project`] module reads
-//! `project.crov`, the file that tells tools about your layers. The guide's
+//! `project.crol`, the file that tells tools about your layers. The guide's
 //! pages on [schemas][schema-guide] and [projects][project-guide] explain how
 //! it all fits together.
 //!
@@ -298,7 +298,7 @@ pub use id::{Id, IdUse};
 pub use loader::{
     FileLoader, FileLoaders, FsLoader, Loaded, LoaderError, ModulePath, ResolvedSource, SourceId,
 };
-pub use mode::{Mode, is_retired};
+pub use mode::Mode;
 pub use raw::RawValue;
 pub use schema::Schema;
 

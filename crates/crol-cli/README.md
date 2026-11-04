@@ -30,7 +30,7 @@ cargo install --git https://github.com/DreamLogics/crol crol-cli
 crol eval data/base data/local          # the layers, lowest first
 crol eval --context prod data/base data/local web.port
 crol explain data/base data/local web.port
-crol check                              # the layers of project.crov
+crol check                              # the layers of project.crol
 ```
 
 Schemas named by URL or crate are fetched by default. Build without default

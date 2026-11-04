@@ -14,7 +14,7 @@
 //! #     fn describe(_: &mut crol::schema::Registry) -> crol::schema::TypeRef { crol::schema::TypeRef::Any }
 //! # }
 //! // In a test: `#[test] fn crol_schema() { ... }`
-//! crol::schema::check_file::<Definition>("crol/schema.crov").unwrap();
+//! crol::schema::check_file::<Definition>("crol/schema.crol").unwrap();
 //! ```
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
@@ -484,8 +484,8 @@ impl SchemaFile {
         }
     }
 
-    /// Reads a schema file. It is a value document, so a `.crod` or `.crol`
-    /// file is an error (`SPEC.md` 4).
+    /// Reads a schema file. It is a value document, so a `.crod` file is an
+    /// error (`SPEC.md` 4).
     pub fn read(path: impl AsRef<Path>) -> Result<Self, Error> {
         let path = path.as_ref();
         Mode::Value.check_path(path)?;

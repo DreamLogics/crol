@@ -53,7 +53,7 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   one operation (`SPEC.md` 12.5).
 - A schema file now has a real schema: `crate:crol` describes `Schema` and every
   type below it, with docs, instead of taking `types` as `Any`, and
-  `#![schema("crate:crol@...")]` makes a `.crov` document a schema file, which
+  `#![schema("crate:crol@...")]` makes a `.crol` document a schema file, which
   `crol check` and the language server check against the schema built in, with no
   lookup, cache or network (`SPEC.md` 10.10). So a schema file with a mistake below
   `types` that went unnoticed in `crol check` is now reported. The format and what
@@ -61,33 +61,32 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   and the docs in `build::<Project>()` are what changed.
 - The language server's `max_contexts_in_hover` setting is no longer documented; it
   never did anything, and is still accepted.
-- A file's extension now states its mode (`SPEC.md` 4): `.crod` is data mode and
-  `.crov` is value mode, so the name of a file tells how it behaves. Two modes
-  stay, as they serve different purposes. `.crol` is retired: rename layers to
-  `.crod`, and single values, schema files and the project file to `.crov`.
-  A `.crol` file is an error that names the extension to use, everywhere and with
-  no fallback.
+- A file's extension now states its mode (`SPEC.md` 4): `.crol` is value mode, the
+  plain default, and `.crod` is data mode, the opt-in for layers and the more
+  advanced features, so the name of a file tells how it behaves. Two modes stay,
+  as they serve different purposes. Rename layers to `.crod`; single values, schema
+  files and the project file stay `.crol`.
+  Value documents named `.crov` on the way here are `.crol` again: rename them,
+  as `.crov` is now an extension like any other, with no hint or fallback.
 - A file whose extension is wrong for how it is loaded is an error, never a
-  silent skip: a `.crov` file given as a layer or found in a layer's directory,
+  silent skip: a `.crol` file given as a layer or found in a layer's directory,
   and a `.crod` file read as a project or schema file. File loaders' sources are
   held to the same rules when their names have one of these extensions; other
   names follow the API that loaded them. `crol::from_str` is always value mode
   and the composer always data mode, also for `CrolLayer::from_sources`.
-- The project file is `project.crov`. A leftover `project.crol` is a rename
-  error, not "no project". `Project::find` returns a `Result`.
 - Module paths resolve by what they are for: `data::base` and `extends` find
   `.crod` files and directories, and `schema` attributes and `Project.schema` find
-  `.crov` files. `crol::resolve_module_path` takes a `Mode`, `ModulePath::mode()`
+  `.crol` files. `crol::resolve_module_path` takes a `Mode`, `ModulePath::mode()`
   tells a file loader which is looked for, and `FileLoaders::resolve_value`
   resolves a value document.
-- `crol check`, `crol eval` and `crol fingerprint` read one `.crov` file in value
+- `crol check`, `crol eval` and `crol fingerprint` read one `.crol` file in value
   mode, with its schema. `crol explain` refuses one, and points to `crol eval`.
-- `crol fmt` takes `.crod` and `.crov` files, and refuses a `.crol` file.
+- `crol fmt` takes `.crod` and `.crol` files.
 - The language server chooses the mode by the extension, in a project or not. A
   `.crod` file outside the layers is evaluated as data, with its variants and
   patches, and its own variants are completed. A problem with the project is now
   shown on the file to blame.
-- `crol --init` writes `project.crov` and `data/base/main.crod`.
+- `crol --init` writes `project.crol` and `data/base/main.crod`.
 - `crol eval` and `crol explain` tell a key from a layer by the form of the last
   argument, not by what exists on disk (`SPEC.md` 11), so `crol eval web.port` and
   `crol explain web.port` work in a project. A bare name in the last place is now
@@ -103,15 +102,15 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   `CrolComposer::load_layer_tolerant`, `FileLoaders::with_file_reader` and
   `FileLoaders::resolve_path` are what it uses.
 - A layer that does not load no longer stops the language server loading the
-  ones after it. A stray `.crov` or `.crol` file is left out of its layer and has
+  ones after it. A stray `.crol` file is left out of its layer and has
   the error; a layer that cannot be loaded adds nothing, and has the error on the
   file to blame. Errors above what is missing are warnings that say why, and every
   problem is shown, not only the first (`SPEC.md` 12.5).
-- `Project.files` now does what it says: a `.crov` file that a glob matches is
+- `Project.files` now does what it says: a `.crol` file that a glob matches is
   checked as a value of that type against the project's schema, by `crol check`,
   `crol eval`, `crol fingerprint` and the language server, with completion and
   hover to match. Its globs are specified (`SPEC.md` 12.4), and one with a wrong
-  form is an error in the project file. A `.crov` file that names a schema or that
+  form is an error in the project file. A `.crol` file that names a schema or that
   no glob matches is treated as before.
 - A document on its own keeps its last good evaluation while it does not evaluate,
   as layers did, so accepting a field fills in its value and hover shows one, saying
@@ -124,14 +123,14 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   `CrolComposer::schema`: they read defaults from the schema they check against
   (`SPEC.md` 6.1.3). `SchemaFile::defaults` gives them to a tool of your own.
 - `CrolLayer::without_file` is gone: `FileLoaders::with_project_file` names the
-  one `.crov` file a layer's directory may hold.
+  one `.crol` file a layer's directory may hold.
 
 ### Added
 
 - Language server: completion and hover at every level of a schema file, and the
   paths in `types` offered in `root` and `Named("...")`, in the quotes too.
 - `crol::schema::is_schema_file` and `crol::schema::SCHEMA_PATH`.
-- `crol::Mode`, `crol::is_retired`, `crol::value_type`, and
+- `crol::Mode`, `crol::value_type`, and
   `crol_eval::fingerprint::fingerprint_value`.
 - A line break separates entries, in addition to the comma (`SPEC.md` 5.3).
   An entry goes on across lines until the next line begins an entry; lists
@@ -247,7 +246,7 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 - `crol_eval::parse_path` refuses text that only holds a path, such as `+a`.
 - A bare file name is in the working directory: `crol check x.crod` finds a
   `crate:` schema as `./x.crod` does, also from below the Cargo package, and so
-  does `--project project.crov`, whose layer command runs too. `super::` works
+  does `--project project.crol`, whose layer command runs too. `super::` works
   from a relative path, such as `crol check sub/x.crod`. `crol::directory_of` is
   new.
 - A step of a path entry that does not exist says so as a key does: `web.nope.x:
@@ -256,7 +255,7 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 - Errors in a project file or a schema file point at that file, not at
   `<string>:1:1`, and errors in what a layer command prints at `<output>`.
 - `crol --init` says to add `crol` from the repository, as it is not on crates.io
-  yet, and its project file suggests `crol/schema.crov`, as the guide does.
+  yet, and its project file suggests `crol/schema.crol`, as the guide does.
 - ``unexpected `:` after an entry`` says what to look for: a key was read as part
   of the value before it, as in `+a: 1 +b: 2`.
 - `SPEC.md` 10.9 now shows the four arguments of `crol::check`, says that

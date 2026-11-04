@@ -47,7 +47,7 @@ fn a_layer_directory_holds_crod_files_and_ignores_what_is_no_document() {
             ("data/a.crod", "+a: 1,"),
             ("data/sub/b.crod", "+b: 2,"),
             ("data/README.md", "not a document"),
-            ("data/.hidden.crov", "1"),
+            ("data/.hidden.crol", "1"),
             ("data/.git/x.crol", "1"),
         ],
     );
@@ -60,10 +60,10 @@ fn a_layer_directory_holds_crod_files_and_ignores_what_is_no_document() {
 }
 
 #[test]
-fn a_crov_file_in_a_layer_directory_is_an_error() {
+fn a_crol_file_in_a_layer_directory_is_an_error() {
     let dir = tree(
-        "layer-crov",
-        &[("data/a.crod", "+a: 1,"), ("data/sub/b.crov", "2")],
+        "layer-crol",
+        &[("data/a.crod", "+a: 1,"), ("data/sub/b.crol", "2")],
     );
     for error in [
         composer(&dir).load("::data").map(|_| ()).unwrap_err(),
@@ -76,23 +76,11 @@ fn a_crov_file_in_a_layer_directory_is_an_error() {
             .unwrap_err(),
     ] {
         let message = error.to_string();
-        assert!(message.contains("b.crov"), "{message}");
+        assert!(message.contains("b.crol"), "{message}");
         assert!(message.contains("cannot be a layer"), "{message}");
+        assert!(message.contains("rename it to `b.crod`"), "{message}");
         assert!(error.source_id().is_some());
     }
-}
-
-#[test]
-fn a_crol_file_in_a_layer_directory_names_the_extension_to_use() {
-    let dir = tree(
-        "layer-crol",
-        &[("data/a.crod", "+a: 1,"), ("data/old.crol", "+b: 2,")],
-    );
-    let error = composer(&dir).load("::data").map(|_| ()).unwrap_err();
-    assert!(
-        error.to_string().contains("rename it to `old.crod`"),
-        "{error}"
-    );
 }
 
 #[test]
@@ -101,18 +89,15 @@ fn a_file_given_as_a_layer_must_not_state_another_mode() {
         "direct",
         &[
             ("a.crod", "+a: 1,"),
-            ("b.crov", "2"),
-            ("c.crol", "+c: 3,"),
+            ("b.crol", "2"),
             ("d.conf", "+d: 4,"),
             ("e", "+e: 5,"),
         ],
     );
     let load = |name: &str| composer(&dir).load(dir.join(name)).map(|_| ());
     load("a.crod").unwrap();
-    let message = load("b.crov").unwrap_err().to_string();
+    let message = load("b.crol").unwrap_err().to_string();
     assert!(message.contains("cannot be a layer"), "{message}");
-    let message = load("c.crol").unwrap_err().to_string();
-    assert!(message.contains("rename it to `c.crod`"), "{message}");
 
     // Without an extension that states one, the API does: data mode.
     for name in ["d.conf", "e"] {
@@ -131,7 +116,7 @@ fn text_has_no_extension_so_the_call_states_the_mode() {
     assert_eq!(crol::from_str::<i32>("40 + 2").unwrap(), 42);
 
     // The composer is data mode, whatever a document in memory is called.
-    for name in ["a.crod", "a.crov", "a.crol", "a"] {
+    for name in ["a.crod", "a.crol", "a.txt", "a"] {
         let layer = CrolLayer::from_sources("base", [(name, "+a: 1,")]);
         let data = CrolComposer::new()
             .load_layer(layer)
@@ -155,8 +140,7 @@ fn a_module_path_names_a_crod_file_or_a_directory() {
         &[
             ("data/file.crod", "+a: 1,"),
             ("data/dir/x.crod", "+b: 2,"),
-            ("data/value.crov", "1"),
-            ("data/old.crol", "+c: 3,"),
+            ("data/value.crol", "1"),
         ],
     );
     composer(&dir).load("data::file").unwrap();
@@ -166,11 +150,6 @@ fn a_module_path_names_a_crod_file_or_a_directory() {
         error("data::value")
             .to_string()
             .contains("cannot be a layer")
-    );
-    assert!(
-        error("data::old")
-            .to_string()
-            .contains("rename it to `old.crod`")
     );
     assert!(error("data::none").to_string().contains("names nothing"));
     assert!(error("super::x").to_string().contains("above the root"));
@@ -183,10 +162,8 @@ fn extends_is_data_mode() {
         &[
             ("base.crod", "+port: 80,"),
             ("good.crod", "#![extends(base)]\n\nport: & + 1,"),
-            ("value.crov", "{ port: 80 }"),
+            ("value.crol", "{ port: 80 }"),
             ("wrong.crod", "#![extends(value)]\n\nport: & + 1,"),
-            ("old.crol", "+port: 80,"),
-            ("stale.crod", "#![extends(old)]\n\nport: & + 1,"),
         ],
     );
     let load = |path: &str| {
@@ -201,22 +178,19 @@ fn extends_is_data_mode() {
     assert_eq!(data.get::<u16>("port").unwrap(), 81);
     let message = load("wrong").map(|_| ()).unwrap_err().to_string();
     assert!(message.contains("cannot be a layer"), "{message}");
-    let message = load("stale").map(|_| ()).unwrap_err().to_string();
-    assert!(message.contains("rename it to `old.crod`"), "{message}");
 }
 
 #[test]
-fn a_project_file_is_a_crov_file() {
+fn a_project_file_is_a_crol_file() {
     let dir = tree(
         "project-file",
         &[
-            ("project.crov", PROJECT),
+            ("project.crol", PROJECT),
             ("data.crod", PROJECT),
-            ("old.crol", PROJECT),
             ("plain", PROJECT),
         ],
     );
-    Project::read(&dir.join("project.crov")).unwrap();
+    Project::read(&dir.join("project.crol")).unwrap();
     Project::read(&dir.join("plain")).unwrap();
     let message = Project::read(&dir.join("data.crod"))
         .unwrap_err()
@@ -225,48 +199,34 @@ fn a_project_file_is_a_crov_file() {
         message.contains("cannot be read as a value document"),
         "{message}"
     );
-    let message = Project::read(&dir.join("old.crol"))
-        .unwrap_err()
-        .to_string();
-    assert!(message.contains("rename it to `old.crov`"), "{message}");
+    assert!(message.contains("rename it to `data.crol`"), "{message}");
 }
 
 #[test]
-fn a_leftover_project_crol_says_to_rename_it() {
-    let dir = tree("project-find", &[("a/project.crov", PROJECT)]);
-    let found = Project::find(&dir.join("a")).unwrap().unwrap();
-    assert_eq!(found, dir.join("a/project.crov"));
-
+fn a_project_file_is_found_by_its_name_alone() {
     let dir = tree(
-        "project-leftover",
-        &[("project.crol", PROJECT), ("a/b.crod", "")],
+        "project-find",
+        &[("a/project.crol", PROJECT), ("a/b/c", "")],
     );
-    let error = Project::find(&dir.join("a")).unwrap_err();
-    assert!(
-        error.to_string().contains("rename it to `project.crov`"),
-        "{error}"
-    );
+    let found = Project::find(&dir.join("a/b")).unwrap();
+    assert_eq!(found, dir.join("a/project.crol"));
 
-    // Also next to the new one: it is not silently passed over.
+    // Only `project.crol` is looked for: another name is not a project.
     let dir = tree(
-        "project-both",
-        &[("project.crol", PROJECT), ("project.crov", PROJECT)],
+        "project-other-names",
+        &[("project.crod", PROJECT), ("project.conf", PROJECT)],
     );
-    assert!(Project::find(&dir).is_err());
+    assert_eq!(Project::find(&dir), None);
 }
 
 #[test]
-fn a_schema_file_is_a_crov_file() {
+fn a_schema_file_is_a_crol_file() {
     let text = schema_text();
     let dir = tree(
         "schema-file",
-        &[
-            ("schema.crov", &text),
-            ("data.crod", &text),
-            ("old.crol", &text),
-        ],
+        &[("schema.crol", &text), ("data.crod", &text)],
     );
-    SchemaFile::read(dir.join("schema.crov")).unwrap();
+    SchemaFile::read(dir.join("schema.crol")).unwrap();
     let message = SchemaFile::read(dir.join("data.crod"))
         .unwrap_err()
         .to_string();
@@ -274,43 +234,33 @@ fn a_schema_file_is_a_crov_file() {
         message.contains("cannot be read as a value document"),
         "{message}"
     );
-    let message = SchemaFile::read(dir.join("old.crol"))
-        .unwrap_err()
-        .to_string();
-    assert!(message.contains("rename it to `old.crov`"), "{message}");
 
     // Writing one is the same.
-    schema::write::<Project>(dir.join("written.crov")).unwrap();
+    schema::write::<Project>(dir.join("written.crol")).unwrap();
     assert!(schema::write::<Project>(dir.join("written.crod")).is_err());
-    assert!(schema::check_file::<Project>(dir.join("schema.crov")).is_ok());
+    assert!(schema::check_file::<Project>(dir.join("schema.crol")).is_ok());
     assert!(schema::check_file::<Project>(dir.join("data.crod")).is_err());
 }
 
 #[test]
-fn schema_paths_name_crov_files() {
+fn schema_paths_name_crol_files() {
     let text = schema_text();
     let dir = tree(
         "schema-paths",
-        &[
-            ("good.crov", &text),
-            ("data.crod", &text),
-            ("old.crol", &text),
-        ],
+        &[("good.crol", &text), ("data.crod", &text)],
     );
     let attribute = |name: &str| {
         let document = format!("#![schema(::{name})]\n\n1");
-        schema::attribute_path(&document, &dir.join("a.crov"), &dir, false)
+        schema::attribute_path(&document, &dir.join("a.crol"), &dir, false)
             .unwrap()
             .1
     };
-    assert_eq!(attribute("good").unwrap(), dir.join("good.crov"));
+    assert_eq!(attribute("good").unwrap(), dir.join("good.crol"));
     let message = attribute("data").unwrap_err().to_string();
     assert!(
         message.contains("cannot be read as a value document"),
         "{message}"
     );
-    let message = attribute("old").unwrap_err().to_string();
-    assert!(message.contains("rename it to `old.crov`"), "{message}");
 
     let project = |name: &str| {
         let text = format!("Project {{ layers: List([]), schema: Some(\"{name}\"), .. }}");
@@ -318,21 +268,20 @@ fn schema_paths_name_crov_files() {
             .unwrap()
             .schema_path(&dir, false)
     };
-    assert_eq!(project("good").unwrap().unwrap(), dir.join("good.crov"));
+    assert_eq!(project("good").unwrap().unwrap(), dir.join("good.crol"));
     assert!(project("data").is_err());
-    assert!(project("old").is_err());
 }
 
 #[test]
-fn the_project_file_is_the_one_crov_file_a_layer_may_hold() {
+fn the_project_file_is_the_one_crol_file_a_layer_may_hold() {
     let dir = tree(
         "project-in-layer",
-        &[("project.crov", PROJECT), ("a.crod", "+a: 1,")],
+        &[("project.crol", PROJECT), ("a.crod", "+a: 1,")],
     );
     // Not named as the project file, it is any other value document.
     assert!(CrolLayer::from_path("base", &dir).is_err());
 
-    let loaders = FileLoaders::new().with_project_file(dir.join("project.crov"));
+    let loaders = FileLoaders::new().with_project_file(dir.join("project.crol"));
     let data = CrolComposer::with_cfg(CrolConfig::<String> {
         file_loaders: loaders.clone(),
         ..Default::default()
@@ -344,7 +293,7 @@ fn the_project_file_is_the_one_crov_file_a_layer_may_hold() {
     assert_eq!(data.keys(), ["a"]);
 
     // Named, it does not excuse another.
-    std::fs::write(dir.join("other.crov"), "1").unwrap();
+    std::fs::write(dir.join("other.crol"), "1").unwrap();
     let error = CrolComposer::with_cfg(CrolConfig::<String> {
         file_loaders: loaders,
         ..Default::default()
@@ -352,7 +301,7 @@ fn the_project_file_is_the_one_crov_file_a_layer_may_hold() {
     .load(dir.clone())
     .map(|_| ())
     .unwrap_err();
-    assert!(error.to_string().contains("other.crov"), "{error}");
+    assert!(error.to_string().contains("other.crol"), "{error}");
 }
 
 /// Documents by name, as a custom loader would have them: the source's name
@@ -421,14 +370,14 @@ fn custom_composer(loader: impl FileLoader + 'static) -> CrolComposer {
 
 #[test]
 fn a_loader_is_told_what_it_is_looked_for_as() {
-    let custom = Custom::new(&[("a.crod", "+a: 1,"), ("a.crov", "1"), ("plain", "+p: 1,")]);
+    let custom = Custom::new(&[("a.crod", "+a: 1,"), ("a.crol", "1"), ("plain", "+p: 1,")]);
     let loaders = FileLoaders::new().with(custom).without_file_system();
     let root = Path::new("");
     let data = loaders.resolve("::a", root).unwrap();
     assert_eq!(data.id().to_string(), "custom:a.crod");
     assert_eq!(data.text().unwrap(), "+a: 1,");
     let value = loaders.resolve_value("::a", root).unwrap();
-    assert_eq!(value.id().to_string(), "custom:a.crov");
+    assert_eq!(value.id().to_string(), "custom:a.crol");
     assert_eq!(value.text().unwrap(), "1");
 
     // A name without a recognised extension follows the API: either.
@@ -458,16 +407,11 @@ fn a_custom_source_with_a_recognised_extension_is_held_to_it() {
             .map(|_| ())
             .unwrap_err()
     };
-    let wrong = error("embedded:data/base.crov");
+    let wrong = error("embedded:data/base.crol");
     assert!(wrong.to_string().contains("cannot be a layer"), "{wrong}");
     assert_eq!(
         wrong.source_id(),
-        Some(&SourceId::new("embedded:data/base.crov"))
-    );
-    let retired = error("embedded:data/base.crol");
-    assert!(
-        retired.to_string().contains("rename it to `base.crod`"),
-        "{retired}"
+        Some(&SourceId::new("embedded:data/base.crol"))
     );
 
     let loaders = |name| {
@@ -477,7 +421,7 @@ fn a_custom_source_with_a_recognised_extension_is_held_to_it() {
             .resolve_value("::schema", Path::new(""))
             .unwrap()
     };
-    assert!(loaders("embedded:schema.crov").text().is_ok());
+    assert!(loaders("embedded:schema.crol").text().is_ok());
     assert!(loaders("embedded:schema").text().is_ok());
     let error = loaders("embedded:schema.crod").text().unwrap_err();
     assert!(
@@ -486,7 +430,6 @@ fn a_custom_source_with_a_recognised_extension_is_held_to_it() {
             .contains("cannot be read as a value document"),
         "{error}"
     );
-    assert!(loaders("embedded:schema.crol").text().is_err());
 }
 
 #[test]
@@ -494,7 +437,7 @@ fn what_a_custom_directory_lists_is_held_to_it_in_path_order() {
     let documents = [
         ("a.crod", "+a: 1,"),
         ("b", "+b: 2,"),
-        ("c.crov", "1"),
+        ("c.crol", "1"),
         ("d.crol", "+d: 4,"),
     ];
     let mut good = Custom::new(&documents);
@@ -508,8 +451,8 @@ fn what_a_custom_directory_lists_is_held_to_it_in_path_order() {
 
     // The same error whatever order the loader lists them in.
     for listed in [
-        vec!["d.crol", "c.crov", "a.crod"],
-        vec!["a.crod", "c.crov", "d.crol"],
+        vec!["d.crol", "c.crol", "a.crod"],
+        vec!["a.crod", "c.crol", "d.crol"],
     ] {
         let mut bad = Custom::new(&documents);
         bad.listed = listed;
@@ -517,16 +460,15 @@ fn what_a_custom_directory_lists_is_held_to_it_in_path_order() {
             .load("::listed")
             .map(|_| ())
             .unwrap_err();
-        assert!(error.to_string().contains("custom:c.crov"), "{error}");
+        assert!(error.to_string().contains("custom:c.crol"), "{error}");
     }
 }
 
 #[test]
 fn modes_are_named_by_their_extensions() {
     assert_eq!(Mode::Data.extension(), "crod");
-    assert_eq!(Mode::Value.extension(), "crov");
-    assert_eq!(Mode::of("a.crov"), Some(Mode::Value));
+    assert_eq!(Mode::Value.extension(), "crol");
+    assert_eq!(Mode::of("a.crol"), Some(Mode::Value));
     assert_eq!(Mode::of_path(Path::new("a.crod")), Some(Mode::Data));
-    assert!(crol::is_retired("a.crol"));
-    assert!(!crol::is_retired("a.crod"));
+    assert_eq!(Mode::of("a.txt"), None);
 }

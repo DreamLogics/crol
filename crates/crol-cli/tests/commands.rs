@@ -120,12 +120,12 @@ const FLEET: &[(&str, &str)] = &[
     (
         "Cargo.toml",
         "[package]\nname = \"fleet\"\nversion = \"1.2.0\"\nedition = \"2021\"\n\n\
-         [lib]\npath = \"lib.rs\"\n\n[package.metadata.crol]\nschema = \"fleet.crov\"\n\n\
+         [lib]\npath = \"lib.rs\"\n\n[package.metadata.crol]\nschema = \"fleet.crol\"\n\n\
          [workspace]\n",
     ),
     ("lib.rs", ""),
     (
-        "fleet.crov",
+        "fleet.crol",
         r#"Schema {
             format: 1,
             root: "app::Service",
@@ -180,14 +180,14 @@ fn a_crate_schema_of_a_project_given_by_its_bare_file_name() {
     std::fs::create_dir(dir.join("data")).unwrap();
     std::fs::write(dir.join("data/a.crod"), "+web: Service { replicas: -2 }\n").unwrap();
     std::fs::write(
-        dir.join("project.crov"),
+        dir.join("project.crol"),
         "Project { layers: List([{ name: \"base\", dir: \"data\", .. }]), \
          schema: Some(\"crate:fleet\"), .. }",
     )
     .unwrap();
     let output = crol(
         &dir,
-        &["check", "--offline", "--project", "project.crov", "./data"],
+        &["check", "--offline", "--project", "project.crol", "./data"],
     );
     assert!(schema_error(&output), "{output:?}");
 }
@@ -198,14 +198,14 @@ fn a_layer_command_runs_for_a_project_given_by_its_bare_file_name() {
         "command-project",
         &[
             (
-                "project.crov",
-                "Project { layers: Command([\"cat\", \"layers.crov\"]), .. }",
+                "project.crol",
+                "Project { layers: Command([\"cat\", \"layers.crol\"]), .. }",
             ),
-            ("layers.crov", "[{ name: \"base\", dir: \"data\", .. }]"),
+            ("layers.crol", "[{ name: \"base\", dir: \"data\", .. }]"),
             ("data/a.crod", "+a: 1\n"),
         ],
     );
-    let output = crol(&dir, &["eval", "--project", "project.crov"]);
+    let output = crol(&dir, &["eval", "--project", "project.crol"]);
     assert_eq!(stdout(&output).trim(), "a: 1", "{output:?}");
 }
 
@@ -273,11 +273,11 @@ fn errors_in_a_project_file_point_at_the_file() {
         // A syntax error.
         ("Project {\n    layers: ,\n}\n", ":2:"),
     ] {
-        let dir = tree("project-errors", &[("project.crov", text)]);
+        let dir = tree("project-errors", &[("project.crol", text)]);
         let output = crol(&dir, &["check"]);
         assert!(failed(&output), "{output:?}");
         let message = stderr(&output);
-        assert!(message.contains("project.crov"), "{message}");
+        assert!(message.contains("project.crol"), "{message}");
         assert!(message.contains(place), "{message}");
         assert!(!message.contains("<string>"), "{message}");
     }
@@ -288,14 +288,14 @@ fn errors_in_a_schema_file_point_at_the_file() {
     let dir = tree(
         "schema-file-errors",
         &[
-            ("s.crov", "Schema {\n    format: \"one\",\n}\n"),
+            ("s.crol", "Schema {\n    format: \"one\",\n}\n"),
             ("a.crod", "+a: 1\n"),
         ],
     );
-    let output = crol(&dir, &["check", "a.crod", "--schema", "s.crov"]);
+    let output = crol(&dir, &["check", "a.crod", "--schema", "s.crol"]);
     assert!(failed(&output), "{output:?}");
     let message = stderr(&output);
-    assert!(message.contains("s.crov"), "{message}");
+    assert!(message.contains("s.crol"), "{message}");
     assert!(!message.contains("<string>"), "{message}");
 }
 
@@ -332,11 +332,11 @@ fn schema_tree(name: &str) -> PathBuf {
     tree(
         name,
         &[
-            ("schema.crov", SERVICE_SCHEMA),
+            ("schema.crol", SERVICE_SCHEMA),
             ("good.crod", "+web: Service { replicas: 2 }\n"),
             ("bad.crod", "+web: Service { replicas: -2 }\n"),
-            ("good.crov", "Service { replicas: 2 }\n"),
-            ("bad.crov", "Service { replicas: -2 }\n"),
+            ("good.crol", "Service { replicas: 2 }\n"),
+            ("bad.crol", "Service { replicas: -2 }\n"),
             ("warned/a.crod", "+web: { port: 1, tag: \"a\" }\n"),
             ("warned/b.crod", "web.port: 2\n"),
             ("warned/c.crod", "web.tag: \"c\"\nweb.port: 3\n"),
@@ -347,9 +347,9 @@ fn schema_tree(name: &str) -> PathBuf {
 #[test]
 fn every_command_fails_on_schema_errors_and_prints_no_data() {
     let dir = schema_tree("schema-errors");
-    for file in ["bad.crod", "bad.crov"] {
+    for file in ["bad.crod", "bad.crol"] {
         for command in ["check", "eval", "fingerprint"] {
-            let args = [command, file, "--schema", "schema.crov"];
+            let args = [command, file, "--schema", "schema.crol"];
             let output = crol(&dir, &args);
             assert!(failed(&output), "{args:?}: {output:?}");
             assert_eq!(stdout(&output), "", "{args:?}");
@@ -367,12 +367,12 @@ fn every_command_fails_on_schema_errors_and_prints_no_data() {
     }
     let output = crol(
         &dir,
-        &["eval", "bad.crod", "web", "--schema", "schema.crov"],
+        &["eval", "bad.crod", "web", "--schema", "schema.crol"],
     );
     assert!(failed(&output), "{output:?}");
     assert_eq!(stdout(&output), "");
     let args = ["eval", "--all-contexts", "bad.crod"];
-    let output = crol(&dir, &[&args[..], &["--schema", "schema.crov"]].concat());
+    let output = crol(&dir, &[&args[..], &["--schema", "schema.crol"]].concat());
     assert!(failed(&output), "{output:?}");
     assert_eq!(stdout(&output), "");
 }
@@ -380,9 +380,9 @@ fn every_command_fails_on_schema_errors_and_prints_no_data() {
 #[test]
 fn every_command_passes_data_the_schema_accepts() {
     let dir = schema_tree("schema-good");
-    for file in ["good.crod", "good.crov"] {
+    for file in ["good.crod", "good.crol"] {
         for command in ["check", "eval", "fingerprint"] {
-            let output = crol(&dir, &[command, file, "--schema", "schema.crov"]);
+            let output = crol(&dir, &[command, file, "--schema", "schema.crol"]);
             assert!(output.status.success(), "{command} {file}: {output:?}");
         }
     }
@@ -408,7 +408,7 @@ fn project(name: &str) -> PathBuf {
     tree(
         name,
         &[
-            ("project.crov", PROJECT),
+            ("project.crol", PROJECT),
             ("data/a.crod", "+web: { port: 80, tags: [\"x\"] }\n"),
         ],
     )
@@ -468,7 +468,7 @@ fn a_key_without_layers_says_how_to_name_a_layer() {
     let dir = tree("key-no-project", &[("base/a.crod", "+a: 1\n")]);
     let output = crol(&dir, &["eval", "base"]);
     assert!(failed(&output), "{output:?}");
-    assert!(stderr(&output).contains("no project.crov"), "{output:?}");
+    assert!(stderr(&output).contains("no project.crol"), "{output:?}");
     assert!(stderr(&output).contains("`./base`"), "{output:?}");
     let output = crol(&dir, &["eval", "./base"]);
     assert_eq!(stdout(&output).trim(), "a: 1", "{output:?}");
@@ -488,13 +488,13 @@ fn a_missing_key_that_is_also_a_path_says_how_to_name_the_layer() {
 #[test]
 fn a_key_of_a_value_document() {
     let dir = project("value-key");
-    std::fs::write(dir.join("v.crov"), "web: { port: 80 }\n..\n").unwrap();
-    let output = crol(&dir, &["eval", "v.crov", "web.port"]);
+    std::fs::write(dir.join("v.crol"), "web: { port: 80 }\n..\n").unwrap();
+    let output = crol(&dir, &["eval", "v.crol", "web.port"]);
     assert_eq!(stdout(&output).trim(), "80", "{output:?}");
-    let output = crol(&dir, &["eval", "v.crov"]);
+    let output = crol(&dir, &["eval", "v.crol"]);
     assert!(stdout(&output).contains("web:"), "{output:?}");
     // Among other sources it is a layer, wherever the key is.
-    let output = crol(&dir, &["eval", "./data", "v.crov", "web.port"]);
+    let output = crol(&dir, &["eval", "./data", "v.crol", "web.port"]);
     assert!(failed(&output), "{output:?}");
     assert!(stderr(&output).contains("cannot be a layer"), "{output:?}");
 }
@@ -512,7 +512,7 @@ fn explain_reads_the_project_for_a_lone_key() {
 #[test]
 fn explain_needs_a_key() {
     let dir = project("explain-no-key");
-    for argument in ["./data", "data/a.crod", "base=data", "a.crov"] {
+    for argument in ["./data", "data/a.crod", "base=data", "a.crol"] {
         let output = crol(&dir, &["explain", argument]);
         assert!(failed(&output), "{argument}: {output:?}");
         assert!(stderr(&output).contains("no key"), "{argument}: {output:?}");

@@ -277,8 +277,8 @@ impl CrolLayer {
     }
 
     /// A layer of one file, or of every `.crod` file below a directory
-    /// (`SPEC.md` 7.1). Hidden files and directories are skipped. A `.crov`
-    /// or `.crol` file, given or in the directory, is an error (`SPEC.md` 4).
+    /// (`SPEC.md` 7.1). Hidden files and directories are skipped. A `.crol`
+    /// file, given or in the directory, is an error (`SPEC.md` 4).
     pub fn from_path(name: impl Into<String>, path: &Path) -> Result<Self, Error> {
         Self::from_path_except(name.into(), path, None)
     }

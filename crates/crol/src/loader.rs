@@ -25,8 +25,8 @@ pub type LoaderError = Box<dyn std::error::Error + Send + Sync>;
 /// identifies its source among those of every loader, so it starts with
 /// something of the loader's own: `embedded:data/base.crod`,
 /// `https://example.org/base.crod`. Its extension states the document's mode
-/// as a file's does (`SPEC.md` 4); without `.crod`, `.crov` or `.crol`, the
-/// API that loads it does.
+/// as a file's does (`SPEC.md` 4); without `.crod` or `.crol`, the API that
+/// loads it does.
 #[derive(Debug, Clone)]
 pub struct SourceId(Repr);
 
@@ -233,17 +233,17 @@ pub trait FileLoader: Send + Sync {
     /// which must be documents. The error is reported with the source; a
     /// [`crol::Error`](crate::Error) is reported as it is.
     ///
-    /// A source whose name ends in `.crov` or `.crol` is refused as a
-    /// layer's document, and one that ends in `.crod` or `.crol` as a value
-    /// document, however it is loaded (`SPEC.md` 4).
+    /// A source whose name ends in `.crol` is refused as a layer's document,
+    /// and one that ends in `.crod` as a value document, however it is loaded
+    /// (`SPEC.md` 4).
     fn load(&self, source: &SourceId) -> Result<Loaded, LoaderError>;
 }
 
 /// The file loader that reads the file system: module paths name
-/// `name.crod` or `name/` below its root, and `name.crov` for a value
+/// `name.crod` or `name/` below its root, and `name.crol` for a value
 /// document (`SPEC.md` 4.2), and a directory holds every `.crod` file below
-/// it (`SPEC.md` 7.1). It lists `.crov` and `.crol` files as well, which
-/// then fail: a directory never hides a document in it.
+/// it (`SPEC.md` 7.1). It lists `.crol` files as well, which then fail: a
+/// directory never hides a document in it.
 ///
 /// One for [`CrolConfig::root_path`](crate::CrolConfig::root_path) is the
 /// default, after every registered loader. Register another for a second
@@ -436,7 +436,7 @@ impl FileLoaders {
         self.file_system
     }
 
-    /// Names the project file (`SPEC.md` 12.4). It is the one `.crov` file a
+    /// Names the project file (`SPEC.md` 12.4). It is the one `.crol` file a
     /// layer's directory may hold: it is left out of the layer, where any
     /// other is an error.
     pub fn with_project_file(mut self, path: impl Into<PathBuf>) -> Self {
@@ -456,7 +456,7 @@ impl FileLoaders {
         self.resolve_from(module_path, root, Origin::CODE, Mode::Data)
     }
 
-    /// [`resolve`](Self::resolve) for a value document: a `.crov` file, such
+    /// [`resolve`](Self::resolve) for a value document: a `.crol` file, such
     /// as a schema or project file (`SPEC.md` 4.2).
     pub fn resolve_value(&self, module_path: &str, root: &Path) -> Result<ResolvedSource, Error> {
         self.resolve_from(module_path, root, Origin::CODE, Mode::Value)

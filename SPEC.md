@@ -143,9 +143,8 @@ runs after the base chain is complete.
 
 - Source is UTF-8. A leading byte order mark is ignored. A file that is
   not valid UTF-8 is an error.
-- A file's name ends in `.crod` or `.crov`, which state its mode
-  (section 4). The language is CROL, but there is no `.crol` file: that
-  extension is refused.
+- A file's name ends in `.crol` or `.crod`, which state its mode
+  (section 4).
 - Line ends are `\n` or `\r\n`. Columns in diagnostics count Unicode
   scalar values from 1; tools that need UTF-16 columns convert.
 - Whitespace is space, tab, `\r` and `\n`. Whitespace separates tokens
@@ -297,20 +296,22 @@ fingerprinted.
 ## 4. Documents
 
 A document is a file or an in-memory text. It is read in one of two
-modes, and looking at a file's name tells which:
+modes, and looking at a file's name tells which. `.crol` is the plain
+default; `.crod` is what a document opts in to for layers and what comes
+with them:
 
 | Extension | Mode | A document is | Read by |
 |---|---|---|---|
+| `.crol` | value mode | one value, on its own | `crol::from_str`, project files (12.4), schema files (10.10), and tools |
 | `.crod` | data mode | operations on the root shared by a composition's layers | the composer and tools, as a layer (section 7) |
-| `.crov` | value mode | one value, on its own | `crol::from_str`, project files (12.4), schema files (10.10), and tools |
 
 The rules that decide a document's mode, in every crate and tool:
 
-1. **A file's extension states its mode.** `.crod` is data mode, `.crov`
-   is value mode. The comparison is exact, and looks at what follows the
+1. **A file's extension states its mode.** `.crol` is value mode, `.crod`
+   is data mode. The comparison is exact, and looks at what follows the
    last `.` of the name's last component.
 2. **A file whose extension is wrong for how it is loaded is an error,
-   never a silent skip.** A `.crov` file given as a layer, or found in a
+   never a silent skip.** A `.crol` file given as a layer, or found in a
    layer's directory (section 7.1), is an error; only the project file
    may lie there (12.4). A `.crod` file read as a value document, such as
    a project or schema file, is an error.
@@ -318,19 +319,14 @@ The rules that decide a document's mode, in every crate and tool:
    `crol::from_str` and its variants always mean value mode, and the
    composer always means data mode: documents given to
    `CrolLayer::from_sources` are data mode, whatever their paths say.
-4. **`.crol` is retired.** There is no third extension: it could not say
-   how a file behaves. A `.crol` file is an error that names the extension
-   to rename it to: `.crod` for a layer, `.crov` for a value document. This
-   holds wherever the extension would have been read, also in a layer's
-   directory and for a leftover `project.crol`, and there is no fallback.
-5. **A name with any other extension, or none, states nothing**, and the
+4. **A name with any other extension, or none, states nothing**, and the
    API that loads it decides, as rule 3 does for text: a `SourceId` of a
    file loader (section 10.7) with such a name, or a file given by path
    (`crol check notes.txt`, `--project my-project`). In a directory, such a
-   file is not a document and is left out, as it always was.
+   file is not a document and is left out.
 
 The rules apply to a source's identity as they do to a file's name, so
-`embedded:data/base.crov` from a file loader is refused as a layer.
+`embedded:data/base.crol` from a file loader is refused as a layer.
 
 **Data mode** (layered data, section 7). The document is a list of
 entries operating on the *root*. The outer braces may be left out:
@@ -408,7 +404,7 @@ against, as one of:
 | Form | Schema |
 |---|---|
 | `::crol::schema` | a file, by module path (section 4.2) |
-| `"https://example.org/app/v2/schema.crov"` | a file fetched over HTTPS |
+| `"https://example.org/app/v2/schema.crol"` | a file fetched over HTTPS |
 | `"crate:app@2.1"` | the schema a crate publishes, for a version requirement as in `Cargo.toml` (`@` and the requirement may be left out: any version) |
 
 A string that starts with neither `https://` nor `crate:` is an error.
@@ -418,12 +414,12 @@ naming it in its `Cargo.toml`:
 
 ```toml
 [package.metadata.crol]
-schema = "crol/schema.crov"   # the default when the table exists
+schema = "crol/schema.crol"   # the default when the table exists
 ```
 
 (This path is Cargo's, relative to the package, like `include`; it is
 not a CROL module path. A schema is a value document, so a path or URL
-ending in `.crod` or `.crol` is an error.)
+ending in `.crod` is an error.)
 
 Tools resolve `crate:app@2.1` in order: a package of that name and a
 matching version in the current Cargo workspace or its dependencies (by
@@ -434,7 +430,7 @@ with `cargo install` and libraries whose types appear in other
 programs' configuration.
 
 ```rust
-#![schema("https://example.org/app/v2/schema.crov")]
+#![schema("https://example.org/app/v2/schema.crol")]
 
 Config {
     listen: "0.0.0.0:8080",
@@ -583,15 +579,14 @@ extension: what it is resolved for says which one its last segment has.
   `services.crod` or the directory `services/` (every `.crod` file below
   it, as section 7.1 reads directories).
 - For a `schema` attribute and `Project.schema`, value mode, it names the
-  file `services.crov`. (`FileLoaders::resolve_value` does this for
+  file `services.crol`. (`FileLoaders::resolve_value` does this for
   an application, section 10.7.)
 
-`services.crod` and `services.crov` may both exist: they are found by
+`services.crod` and `services.crol` may both exist: they are found by
 different things. Errors: the file and the directory both exist; nothing
 exists; `super` above the root directory; a file of the other mode and
-nothing that fits (rule 2 of section 4, not "names nothing"); a
-`services.crol`, even beside a file that fits (rule 4). A file or directory
-whose name is not an identifier (`my-file.crod`) or is hidden cannot be
+nothing that fits (rule 2 of section 4, not "names nothing"). A file or
+directory whose name is not an identifier (`my-file.crod`) or is hidden cannot be
 named by a module path; code can still load it by a file system path.
 
 This describes the default file loader. A module path is resolved by the
@@ -1132,11 +1127,11 @@ separators. A layer is one of:
 
 - a directory: every `*.crod` file below it, recursively. Symbolic links
   are followed; hidden files and directories (name starts with `.`) are
-  skipped. A `*.crov` or `*.crol` file below it that is not hidden is an
+  skipped. A `*.crol` file below it that is not hidden is an
   error, however deep, so that a layer never quietly lacks a document
   (section 4); the project file is the exception (section 12.4). Files of
   other extensions are not documents, and are ignored;
-- one file, which must not be `.crov` or `.crol`;
+- one file, which must not be `.crol`;
 - in-memory documents, `CrolLayer::from_sources(name, [(path, text), ...])`,
   for tests, editors and embedded data, always data mode;
 - what a file loader (section 10.7) holds under a module path: one
@@ -2027,9 +2022,8 @@ let config: Config = CrolComposer::new()
   provenance (section 12.3), and it is in every error from loading:
   `cannot read embedded:data/base.crod: ...`, and `CrolError::source_id()`.
   Its name is held to section 4 as a file's is, whichever loader gave it:
-  one ending in `.crov` or `.crol` cannot be a layer's document, and one
-  ending in `.crod` or `.crol` cannot be read as a value document. A name
-  with no recognised extension follows the API that loaded it.
+  one ending in `.crol` cannot be a layer's document, and one ending in
+  `.crod` cannot be read as a value document. A name with no recognised extension follows the API that loaded it.
 - Documents of a `Directory` are ordered by relative path, whatever order
   the loader lists them in (section 7.1), so its order cannot change
   the result. Relative paths use `/`; one with an empty, `.` or `..`
@@ -2167,7 +2161,7 @@ which `cargo test` and CI run anyway:
 ```rust
 #[test]
 fn crol_schema() {
-    crol::schema::check_file::<Definition>("crol/schema.crov").unwrap();
+    crol::schema::check_file::<Definition>("crol/schema.crol").unwrap();
 }
 ```
 
@@ -2178,7 +2172,7 @@ is never silently out of date in CI. `crol::schema::build::<T>()` returns
 the schema as a value, for `CrolComposer::schema` (section 6.1.3) and
 `crol::check`. `crol::schema::write::<T>(path)`
 writes unconditionally, for an application's own `--export-schema`
-flag. The file goes into the crate (`crol/schema.crov`), where tools
+flag. The file goes into the crate (`crol/schema.crol`), where tools
 find it and from where an application ships it with its data.
 
 **Model.** A `crol::schema::Schema` is plain data: its root type (the
@@ -2210,7 +2204,7 @@ suite runs both on every case to keep them in agreement.
 
 ### 10.10 Schema file format
 
-A schema file is a value-mode CROL document, so a `.crov` file, of the type
+A schema file is a value-mode CROL document, so a `.crol` file, of the type
 `crol::schema::Schema`. Its first line names its own schema, so editors
 check schema files too (below). An excerpt, for the `Service` of section 10.9
 (the definitions of `app::Limits` and `app::Volume` are left out):
@@ -2318,7 +2312,7 @@ transparent are left out: `Box<Service>` is `Named("app::Service")`.
 The generated file writes only the fields that differ from their
 defaults and ends those blocks with `..`, so it stays readable.
 
-**A file's own schema.** A `.crov` document whose `#![schema("...")]` names
+**A file's own schema.** A `.crol` document whose `#![schema("...")]` names
 `crate:crol`, with no version, with the requirement this version of crol writes
 or with this version, is a schema file. Nothing else makes one: not its name,
 nor that a project's `schema` names it. The schema of schema files is built into
@@ -2350,9 +2344,9 @@ field, instead of checking them by other rules.
 | `crol eval [<layer>...] [--context a,b] [key[.path]]` | print evaluated data as a plain data-mode document (or one value); with a schema, struct fields that take their defaults are written out with the defaults the schema records, each marked `// default` (`--no-defaults` leaves them as the data does) |
 | `crol eval [<layer>...] --all-contexts` | print the base data, then for every other evaluated context a block `<a & b & !c & ...> { ... }` whose condition holds in that context only, with the keys whose value differs (`key: value`) or that are missing (`-key`). A `..` at the root is written in the base, or in the block of a context that has it where the base does not; for a root struct, a removed field as `key: (), -key`. The output is valid CROL and evaluates back to the same data |
 | `crol explain [<layer>...] [--context a,b] key[.path]` | print the operations that produced a value (section 12.3) |
-| `crol fmt [--check] <file>...` | format `.crod` and `.crov` files in place (or check). Formatting does not depend on the mode (section 12.2). A `.crol` file is an error that offers both extensions; it takes files, so a directory is an error too |
+| `crol fmt [--check] <file>...` | format `.crod` and `.crol` files in place (or check). Formatting does not depend on the mode (section 12.2). It takes files, so a directory is an error |
 | `crol fingerprint [<layer>...]` | print the fingerprint in hex |
-| `crol from-ron <file>` | convert a RON value file to a CROL value document, on standard output, to keep in a `.crov` file |
+| `crol from-ron <file>` | convert a RON value file to a CROL value document, on standard output, to keep in a `.crol` file |
 | `crol --init`, `crol init` | set up the Cargo project around the working directory for CROL (below) |
 | `crol lsp` | run the language server on standard input and output (section 12.5) |
 
@@ -2374,8 +2368,8 @@ find a mistake, so it does not check the schema.
 their last argument is told apart by its form alone, never by what exists
 on disk, and a command means the same wherever it is run. It is a key if
 it has the form of a key with its path (section 5.1: `web`, `web.port`,
-`web.tags[0]`, `web["a b"]`) and does not end in `.crod`, `.crov` or
-`.crol`. Anything else, such as `data::base`, `./base`, `data/base`,
+`web.tags[0]`, `web["a b"]`) and does not end in `.crod` or `.crol`.
+Anything else, such as `data::base`, `./base`, `data/base`,
 `a.crod` or `base=data/base`, is a layer. Every argument before the last is
 a layer. So:
 
@@ -2391,9 +2385,9 @@ a layer. So:
 
 **Modes.** Commands choose the mode by the rules of section 4:
 
-- With one source that is a `.crov` file, `check`, `eval` and `fingerprint`
+- With one source that is a `.crol` file, `check`, `eval` and `fingerprint`
   read it in value mode. It is checked against `--schema`, else, for a
-  file called `project.crov` or given with `--project`, the schema `crol`
+  file called `project.crol` or given with `--project`, the schema `crol`
   provides, else its `#![schema(...)]`, else the type the `files` of the
   project found, or given with `--project`, give it (section 12.4). `eval` prints the
   value, with a key and path the value there; with a schema, defaults are
@@ -2402,23 +2396,22 @@ a layer. So:
   errors, as a value document has no variants. A project's schema and
   root type are for its layers: a value document only gets them through
   `Project.files`.
-- `explain` follows a value through layers, so a `.crov` file is an error
+- `explain` follows a value through layers, so a `.crol` file is an error
   that points to `crol eval`.
-- A `.crov` file among other sources, or written `name=source`, is a layer,
+- A `.crol` file among other sources, or written `name=source`, is a layer,
   and an error.
 - Anything else is a layer, data mode. Module paths on the command line are
   layers too: a value document is given by its file.
 
 `crol --init` looks for `Cargo.toml` in the working directory, then in
 the directories above it; the nearest is the Cargo project. Next to it,
-it writes a commented, formatted project file `project.crov` (section
+it writes a commented, formatted project file `project.crol` (section
 12.4) with one layer, `base`, in `data::base`, and creates that directory
 with a document `main.crod` holding only comments, unless that file exists, so
 that every command works at once and the layer survives version control.
 It then prints what is left to do; it changes no manifest or source
 file. It is an error, exit 1, with nothing written, when there is no
-`Cargo.toml`, when `project.crov` exists there (it is never overwritten),
-when a `project.crol` exists there or above (rule 4 of section 4),
+`Cargo.toml`, when `project.crol` exists there (it is never overwritten),
 or when `data/base.crod` exists (the module path would be ambiguous,
 section 4.2). `--init` takes no command.
 
@@ -2491,14 +2484,12 @@ API must also provide:
 
 Tools that are not the application, the CLI and the language server,
 learn the layers, variants and options from a **project file**,
-`project.crov`, found by searching from the current directory (or
+`project.crol`, found by searching from the current directory (or
 the editor's workspace folder) upwards. It is a value-mode CROL document
 of the type `Project`, whose schema `crol` itself provides. The project file
 in use is never read as data, even when it lies inside a layer's
-directory, and is the one `.crov` file that is no error there; any other
-`.crov` file in a layer's directory is, also one named `project.crov`.
-A `project.crol` found on the way up is an error that says to rename it,
-not "no project", also next to a `project.crov` (section 4, rule 4).
+directory, and is the one `.crol` file that is no error there; any other
+`.crol` file in a layer's directory is, also one named `project.crol`.
 `--project` takes any name but one that states another mode.
 
 ```rust
@@ -2540,16 +2531,16 @@ Project {
 - `root` is the path of the root type of the layers' data: a struct for the
   whole document, or an enum of the application's definition kinds (section
   10.4) for each root value. The rule of section 4.1 goes by the type it names.
-  It defaults to the schema's root type. It says nothing about `.crov` files,
+  It defaults to the schema's root type. It says nothing about `.crol` files,
   which `files` gives a type. Type names in `root` and `files` are schema paths;
   a plain name is accepted when it is unambiguous.
-- `files` gives value-mode documents a type: it is how a `.crov` file
+- `files` gives value-mode documents a type: it is how a `.crol` file
   outside the layers opts in to the project's schema. A document that
   matches is checked as a value of that type, against `schema`, with the
   project's `options`, in the language server, and in `crol check`, `crol
   eval` and `crol fingerprint` given that one file. It is an error if the
   project has no `schema`, or the schema has no such type.
-- Which schema a `.crov` file gets, first what applies: `--schema` (CLI);
+- Which schema a `.crol` file gets, first what applies: `--schema` (CLI);
   for the project file, the one `crol` provides; its `#![schema(...)]`, by
   that schema's rules, whatever the globs say (section 4.1); the first glob
   in `files` that matches it; nothing, for syntax and evaluation checks
@@ -2563,7 +2554,7 @@ changes nothing. It says which files match; it is not resolved, and
 nothing lists a directory for it, so the result depends on a file's path
 alone, never on what else exists.
 
-- The last segment is matched against the file's name without `.crov`.
+- The last segment is matched against the file's name without `.crol`.
   Every other segment is matched against one directory, in order, except
   `**`, which matches any number of directories, also none.
 - In a segment, `*` matches any part of one name, also none, and every
@@ -2572,10 +2563,10 @@ alone, never on what else exists.
 - A segment holds letters, digits, `_` and `*`. `**` is a whole segment
   and not the last, `super` is not allowed, and no segment is empty. A glob
   that breaks this is an error in the project file.
-- Only `.crov` files match, by the name of the file, canonical, below the
+- Only `.crol` files match, by the name of the file, canonical, below the
   canonical project directory: one outside it never matches, also through
   a symbolic link. No name in the path may be hidden (start with `.`). A name
-  that is no identifier does match: `config::*` matches `config/my-app.crov`,
+  that is no identifier does match: `config::*` matches `config/my-app.crol`,
   which a module path could not name.
 - Entries are tried in the order written, and the first that matches
   decides.
@@ -2589,7 +2580,7 @@ editor-neutral; section 12.7 is the Zed client.
 
 **Workspace.** The extension gives a document's mode, in a project or
 not (section 4). Without a project file, it serves each open document on
-its own: syntax, evaluation (a `.crov` file as a value-mode document, a
+its own: syntax, evaluation (a `.crol` file as a value-mode document, a
 `.crod` file as a layer on its own, on top of its
 `#![extends(...)]` layers, loaded by the composer as for `crol check`,
 with open buffers over the files), and checks against its
@@ -2597,8 +2588,7 @@ with open buffers over the files), and checks against its
 document names. A project file (section 12.4) and a schema file (section
 10.10) have the schema built into crol. Hover, go to definition, completion
 and inlay hints see those layers. An open document with another extension
-is value mode, as a text with no layers, and a `.crol` file is not
-evaluated: its one diagnostic says to rename it. With a project file, an open
+is value mode, as a text with no layers. With a project file, an open
 document in none of its layers is served in the same way. At start it reads the
 project file, loads every layer and
 the schema, and evaluates every context, keeping the provenance
@@ -2613,7 +2603,7 @@ accepting a field fills in come from the latest evaluation that had a value:
 of the project's layers for a file in them, else of that document on its own,
 for as long as it stays open. A value on hover says so. Changes to files on disk, the project file
 and the schema file are watched: a client that can register watchers is
-asked for every `.crod`, `.crov` and `.crol` file in the workspace, and any
+asked for every `.crod` and `.crol` file in the workspace, and any
 change, also to an open buffer, evaluates everything again, so a document
 follows what it extends. Files outside the workspace are read again at
 each evaluation.
@@ -2637,16 +2627,15 @@ no diagnostics. Diagnostics are published for all files
 of writable layers, not only open ones, and every diagnostic that has
 secondary spans (cycles, two definitions) links to them as related
 information. A problem with the project as a whole is put on the file to
-blame, such as a leftover `project.crol`, else on the project file.
+blame, else on the project file.
 
 **A layer that does not load** stops nothing, unlike in `crol check`, for
 which it is an error. The problem is put on the file to blame, else on the
 project file, and what can be evaluated still is:
 
-- A `.crov` or `.crol` file in a layer's directory is left out, and has
-  the error. The rest of the layer loads. A `.crov` file was never data, so
-  everything else is as it would be without it. A `.crol` file may have
-  been, as for the next case.
+- A `.crol` file in a layer's directory is left out, and has the error.
+  The rest of the layer loads. A `.crol` file is not data, so everything
+  else is as it would be without it.
 - A layer that cannot be loaded at all (its `dir` names nothing, or both a
   file and a directory, or a file in it is not UTF-8) adds nothing: its
   files are not evaluated as part of the project, so an open one is served
@@ -2784,7 +2773,7 @@ with the others. `crol lsp` is that library with no extra checks.
 `tree-sitter-crol` is a tree-sitter grammar of section 9, for editors'
 highlighting, folding, indentation and structural selection, which work
 without the language server and before a project file exists. It
-is registered for `.crod` and `.crov` files, and has one grammar for both,
+is registered for `.crod` and `.crol` files, and has one grammar for both,
 as the parser does, since the modes differ in what a document may mean and
 not in its syntax. It accepts exactly what the Rust parser accepts: the conformance suite's
 syntax cases are run through both, and CI fails when one accepts what
@@ -2801,7 +2790,7 @@ The Zed extension lives in `editors/zed/`:
 - `extension.toml`: id `crol`, the grammar (`tree-sitter-crol` from
   `https://github.com/DreamLogics/crol`, pinned to a commit; moved to a
   repository of its own if Zed's grammar loading needs one), and the language server for the language `CROL`.
-- `languages/crol/config.toml`: the language (`.crod` and `.crov` files, `//` line
+- `languages/crol/config.toml`: the language (`.crod` and `.crol` files, `//` line
   comments and `/* */` block comments, brackets `{}`, `[]`, `()`, `<>`
   for conditions, auto-closing quotes), and the queries from 12.6:
   `highlights.scm`, `brackets.scm`, `indents.scm`, `outline.scm` (used
@@ -2832,12 +2821,11 @@ after `&` or `@`, `1u8`, `1.`, a
 type name on the outer braces of a data-mode document; an identifier in
 brackets (`[port]`); `.&parent` other than after `&parent`.
 
-**Files**: a `.crov` file given as a layer, or in a layer's directory
+**Files**: a `.crol` file given as a layer, or in a layer's directory
 other than the project file; a `.crod` file read as a value document (a
 project or schema file, by path, module path, URL or crate); a module path
-that finds only the other mode's file; a `.crol` file, anywhere it would be
-read, with the extension to rename it to; a leftover `project.crol`; a
-`SourceId` that states any of these (section 4).
+that finds only the other mode's file; a `SourceId` that states any of
+these (section 4).
 
 **Reading**: an unknown document attribute, one after the first
 entry, or more than one `schema` or `type`; `type` in data mode, with a
@@ -2912,7 +2900,7 @@ raised only in minor releases. `#![forbid(unsafe_code)]` in every crate.
 ### 14.2 Tests
 
 - **Conformance suite** in `tests/cases/<name>/`: `layers/<n>-<name>/`
-  directories of `.crod` files, optional `options.crov` (the `CrolConfig`
+  directories of `.crod` files, optional `options.crol` (the `CrolConfig`
   fields, itself in CROL value mode), and either `expected.crod` (the
   evaluated data as `crol eval --all-contexts` prints it, which is
   data-mode) or
@@ -2922,7 +2910,7 @@ raised only in minor releases. `#![forbid(unsafe_code)]` in every crate.
   about files rather than values, so they are tested on the file system
   and through file loaders (`crates/crol/tests/modes.rs`,
   `crates/crol-cli/tests/modes.rs`), and in the language server.
-  `tests/syntax/` holds cases for the parser alone, `.crov` where a case
+  `tests/syntax/` holds cases for the parser alone, `.crol` where a case
   only parses as a value document and `.crod` otherwise.
 - **Round trips**: parse → print gives the input back byte for byte;
   `fmt` is idempotent; `to_string` → `from_str` gives back the value,
@@ -3019,17 +3007,21 @@ where it is not obvious.
 - Decided: the file shows its behaviour. There are still two modes, as they
   serve different purposes: a value document is one value, and a data
   document is operations on data shared by layers. A single mode was
-  considered because it was hard to reason about what a given `.crol` file
-  would do, as the caller chose the mode. A file's extension now says it,
-  `.crod` or `.crov`, so looking at its name is enough, and everything that
-  reads it, the CLI and the language server included, agrees without being
-  told. Extensions were chosen over a `#![layer(...)]` directive because
-  layer assignment already lives in the project file, and a directive
-  would be a second source of truth. `.crol` is retired, with no
-  compatibility fallback before 1.0: a third extension would be the
-  ambiguity again. A wrong extension is an error and never a skip, since
-  the failure that matters is a layer quietly missing a document. Text has
-  no extension, so `from_str` and the composer state the mode (section 4).
+  considered because it was hard to reason about what a given file would
+  do, as the caller chose the mode. A file's extension now says it, `.crol`
+  or `.crod`, so looking at its name is enough, and everything that reads
+  it, the CLI and the language server included, agrees without being told.
+  Extensions were chosen over a `#![layer(...)]` directive because layer
+  assignment already lives in the project file, and a directive would be a
+  second source of truth. Value mode has the plain extension, named after
+  the language, because that is the more predictable choice, and a sensible
+  default when a file does not specifically need the more advanced
+  features; data mode is the opt-in, under a name of its own. A third
+  extension would be the ambiguity again, so there is none, and before 1.0
+  there is no compatibility fallback for names used earlier. A wrong
+  extension is an error and never a skip, since the failure that matters
+  is a layer quietly missing a document. Text has no extension, so
+  `from_str` and the composer state the mode (section 4).
 - Chars, `0o`/`0b` literals, `.0` tuple selectors.
 - `self`, `parent`, `root` and `default` are keywords only after `&`.
 - A line break separates entries, but not by ending expressions, as in
@@ -3067,7 +3059,7 @@ where it is not obvious.
 - Layer and file ordering, and the fingerprint's encoding (7, appendix B).
 - Serde mapping, including the newtype-variant rule for mixed-type root
   maps, `crol::Id`, and id use reporting (10).
-- Decided: the name is CROL (Composable Rust Object Language), the extensions `.crod` and `.crov`.
+- Decided: the name is CROL (Composable Rust Object Language), the extensions `.crod` and `.crol`.
 - Decided: variant parents, declared by the application only (8.1, 8.3).
   This lets one variant's patch extend another's for the same key;
   applying another *key's* patch stays out.
@@ -3102,7 +3094,7 @@ where it is not obvious.
   `CrolConfig`, that loads layers, chooses a context and composes
   straight into a Rust type (10.7).
 - Decided: `&default` refers to a target's Rust default, recorded in the
-  schema (6.1.3). The project file is `project.crov` (12.4). Licence
+  schema (6.1.3). The project file is `project.crol` (12.4). Licence
   MIT/Apache-2.0; the format is versioned with the crates (14.5, 14.6).
 - Decided: no operator for removing several keys; a patch does it
   (`& ~ { -a, -b }`).

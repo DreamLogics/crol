@@ -120,8 +120,8 @@ fn main() -> Result<(), crol::Error> {
 
 - **A directory**: every `.crod` file below it, recursively. Hidden files and
   directories (starting with `.`) are skipped, and symbolic links are followed.
-  A `.crov` file or a retired `.crol` file there is [an
-  error](modes.md#when-the-extension-does-not-fit), and other files are ignored.
+  A `.crol` file there is [an error](modes.md#when-the-extension-does-not-fit),
+  and other files are ignored.
 - **One file**.
 - **Documents in memory**, for tests and data embedded in your binary:
   `CrolLayer::from_sources("base", [("web.crod", text)])`. These are always data

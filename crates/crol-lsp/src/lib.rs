@@ -256,7 +256,7 @@ impl Server {
     /// Asks the client to report changes to files on disk (`SPEC.md` 12.5):
     /// a file that is not open may be a layer, or extended.
     fn watch_files(&mut self) {
-        let watchers = ["crod", "crov", "crol"]
+        let watchers = ["crod", "crol"]
             .map(|extension| lsp_types::FileSystemWatcher {
                 glob_pattern: lsp_types::GlobPattern::String(format!("**/*.{extension}")),
                 kind: None,

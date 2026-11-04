@@ -33,7 +33,7 @@ struct Cli {
     message_format: MessageFormat,
 
     /// Set up the Cargo project around the current directory: write
-    /// `project.crov` and a first layer. The same as `crol init`.
+    /// `project.crol` and a first layer. The same as `crol init`.
     #[arg(long)]
     init: bool,
 
@@ -57,25 +57,25 @@ enum MessageFormat {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Read and evaluate layers, or a `.crov` value document, and print the
+    /// Read and evaluate layers, or a `.crol` value document, and print the
     /// diagnostics.
     Check(check::Args),
-    /// Print evaluated layers as a data-mode document, a `.crov` value
+    /// Print evaluated layers as a data-mode document, a `.crol` value
     /// document as a value, or one value of either.
     Eval(eval::Args),
     /// Print the operations that produced a value, with the value after each.
     Explain(explain::Args),
-    /// Print the fingerprint of the evaluated data, or of a `.crov` value
+    /// Print the fingerprint of the evaluated data, or of a `.crol` value
     /// document, in hex.
     Fingerprint(fingerprint::Args),
-    /// Format `.crod` and `.crov` files in place, or check that they are
+    /// Format `.crod` and `.crol` files in place, or check that they are
     /// formatted.
     Fmt(fmt::Args),
-    /// Convert a RON value file to a CROL value document (a `.crov` file), on
+    /// Convert a RON value file to a CROL value document (a `.crol` file), on
     /// standard output.
     FromRon(from_ron::Args),
     /// Set up the Cargo project around the current directory: write
-    /// `project.crov` and a first layer.
+    /// `project.crol` and a first layer.
     Init,
     /// Run the language server on standard input and output.
     Lsp,

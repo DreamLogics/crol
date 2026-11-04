@@ -1,20 +1,21 @@
 # CROL for Zed
 
 Syntax highlighting, brackets, indentation, the outline and text objects for
-[CROL](https://github.com/DreamLogics/crol) files (`.crod` and `.crov`), from the
+[CROL](https://github.com/DreamLogics/crol) files (`.crod` and `.crol`), from the
 tree-sitter grammar in `tree-sitter-crol/`, and the `crol lsp` language
 server (`SPEC.md` 12.7).
 
 The extension runs, in order: the `binary.path` from your settings, a `crol`
 on the worktree's `PATH`, or the release binary for your platform from the
 latest GitHub release, downloaded and cached. Settings go under
-`lsp.crol` in Zed's settings:
+`lsp.crol` in Zed's settings. With `binary.path` set, Zed starts that binary with
+the `arguments` beside it and none of the extension's, so they have to say `lsp`:
 
 ```json
 {
   "lsp": {
     "crol": {
-      "binary": { "path": "/path/to/crol" },
+      "binary": { "path": "/path/to/crol", "arguments": ["lsp"] },
       "initialization_options": { "context": ["prod"], "debounce_ms": 150 }
     }
   }

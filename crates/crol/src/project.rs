@@ -1,4 +1,4 @@
-//! The project file, `project.crov` (`SPEC.md` 12.4): what tools that are
+//! The project file, `project.crol` (`SPEC.md` 12.4): what tools that are
 //! not the application (the CLI, the language server) need to know to
 //! evaluate its data.
 
@@ -10,14 +10,14 @@ use serde::{Deserialize, Serialize};
 use crate::compose::Variant;
 use crate::error::Error;
 use crate::loader::SourceId;
-use crate::mode::{Mode, RETIRED};
+use crate::mode::Mode;
 use crate::schema::{
     FieldDefault, Registry, Repr, Schema, TypeDef, TypeExpr, TypeRef, VariantDef, VariantShape,
     field, recorded_default, struct_def,
 };
 
 /// The file name tools look for.
-pub const FILE_NAME: &str = "project.crov";
+pub const FILE_NAME: &str = "project.crol";
 
 /// A project file: what tools that are not the application need to know to
 /// evaluate its data (`SPEC.md` 12.4).
@@ -166,7 +166,7 @@ impl FilePattern {
         Ok(())
     }
 
-    /// Whether the glob matches the `.crov` file `stem` in `directories`
+    /// Whether the glob matches the `.crol` file `stem` in `directories`
     /// below the project's directory (`SPEC.md` 12.4).
     fn matches(&self, directories: &[String], stem: &str) -> bool {
         let segments = self.segments();
@@ -226,27 +226,17 @@ fn wildcard<P, T>(
 }
 
 impl Project {
-    /// The project file in `start` or the nearest directory above it. A
-    /// `project.crol` where it is sought is an error that says to rename it,
-    /// also next to a `project.crov` (`SPEC.md` 12.4).
-    pub fn find(start: &Path) -> Result<Option<PathBuf>, Error> {
-        for dir in start.ancestors() {
-            let retired = dir.join(format!("project.{RETIRED}"));
-            if retired.is_file() {
-                Mode::Value
-                    .check_path(&retired)
-                    .map_err(|error| error.with_source_id(SourceId::from_path(&retired)))?;
-            }
-            let candidate = dir.join(FILE_NAME);
-            if candidate.is_file() {
-                return Ok(Some(candidate));
-            }
-        }
-        Ok(None)
+    /// The project file in `start` or the nearest directory above it
+    /// (`SPEC.md` 12.4).
+    pub fn find(start: &Path) -> Option<PathBuf> {
+        start
+            .ancestors()
+            .map(|dir| dir.join(FILE_NAME))
+            .find(|candidate| candidate.is_file())
     }
 
-    /// Reads a project file. It is a value document, so a `.crod` or `.crol`
-    /// file is an error (`SPEC.md` 4).
+    /// Reads a project file. It is a value document, so a `.crod` file is an
+    /// error (`SPEC.md` 4).
     pub fn read(path: &Path) -> Result<Self, Error> {
         Mode::Value
             .check_path(path)
@@ -280,7 +270,7 @@ impl Project {
             .map(|c| c.as_os_str().to_string_lossy().into_owned())
             .collect();
         let file = names.pop()?;
-        let stem = file.strip_suffix(".crov")?;
+        let stem = file.strip_suffix(".crol")?;
         let mut hidden = names.iter().map(String::as_str).chain([stem]);
         if stem.is_empty() || hidden.any(|name| name.starts_with('.')) {
             return None;
@@ -648,37 +638,36 @@ mod tests {
                 .is_some()
         };
         for (glob, file) in [
-            ("config::*", "config/app.crov"),
-            ("::config::*", "config/app.crov"),
-            ("config::app", "config/app.crov"),
-            ("config::a*p", "config/app.crov"),
-            ("config::*p*", "config/app.crov"),
-            ("*", "app.crov"),
-            ("**::*", "app.crov"),
-            ("**::*", "a/b/c/app.crov"),
-            ("a::**::*", "a/app.crov"),
-            ("a::**::c::*", "a/b/b/c/app.crov"),
-            ("**::b::**::*", "a/b/c/app.crov"),
-            ("c*::*", "config/app.crov"),
+            ("config::*", "config/app.crol"),
+            ("::config::*", "config/app.crol"),
+            ("config::app", "config/app.crol"),
+            ("config::a*p", "config/app.crol"),
+            ("config::*p*", "config/app.crol"),
+            ("*", "app.crol"),
+            ("**::*", "app.crol"),
+            ("**::*", "a/b/c/app.crol"),
+            ("a::**::*", "a/app.crol"),
+            ("a::**::c::*", "a/b/b/c/app.crol"),
+            ("**::b::**::*", "a/b/c/app.crol"),
+            ("c*::*", "config/app.crol"),
             // Matched by name, not resolved: this cannot be a module path.
-            ("config::*", "config/my-app.crov"),
+            ("config::*", "config/my-app.crol"),
         ] {
             assert!(matched(glob, file), "{glob} {file}");
         }
         for (glob, file) in [
-            ("config::*", "app.crov"),
-            ("config::*", "config/deep/app.crov"),
-            ("config::*", "other/app.crov"),
+            ("config::*", "app.crol"),
+            ("config::*", "config/deep/app.crol"),
+            ("config::*", "other/app.crol"),
             ("config::*", "config/app.crod"),
-            ("config::*", "config/app.crol"),
             ("config::*", "config/app.txt"),
-            ("config::app", "config/app2.crov"),
-            ("config::App", "config/app.crov"),
-            ("*", "../app.crov"),
-            ("**::*", "/elsewhere/app.crov"),
-            ("*", ".hidden.crov"),
-            ("**::*", ".git/app.crov"),
-            ("a::**::c::*", "a/app.crov"),
+            ("config::app", "config/app2.crol"),
+            ("config::App", "config/app.crol"),
+            ("*", "../app.crol"),
+            ("**::*", "/elsewhere/app.crol"),
+            ("*", ".hidden.crol"),
+            ("**::*", ".git/app.crol"),
+            ("a::**::c::*", "a/app.crol"),
         ] {
             assert!(!matched(glob, file), "{glob} {file}");
         }
@@ -689,7 +678,7 @@ mod tests {
         let project = project_with(&["config::**::*", "config::app"]);
         let dir = Path::new("/p");
         assert_eq!(
-            project.file_type(dir, &dir.join("config/app.crov")),
+            project.file_type(dir, &dir.join("config/app.crol")),
             Some("config::**::*")
         );
     }
@@ -709,7 +698,7 @@ mod tests {
             "a::***",
             "a/b",
             "a.b",
-            "a::b.crov",
+            "a::b.crol",
         ] {
             let error = project_with(&[glob]).files[0].check().unwrap_err();
             assert!(error.to_string().contains("invalid glob"), "{glob}");
@@ -722,7 +711,7 @@ mod tests {
     #[test]
     fn a_glob_with_many_stars_stays_quick() {
         let glob = format!("{}x", "*a".repeat(40));
-        let file = format!("{}.crov", "a".repeat(4000));
+        let file = format!("{}.crol", "a".repeat(4000));
         let dir = Path::new("/p");
         let project = project_with(&[&glob]);
         assert_eq!(project.file_type(dir, &dir.join(file)), None);

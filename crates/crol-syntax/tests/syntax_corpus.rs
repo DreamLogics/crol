@@ -15,7 +15,7 @@ fn files(dir: &str) -> Vec<(String, String)> {
     };
     let mut files: Vec<(String, String)> = entries
         .map(|e| e.unwrap().path())
-        .filter(|p| p.extension().is_some_and(|e| e == "crod" || e == "crov"))
+        .filter(|p| p.extension().is_some_and(|e| e == "crod" || e == "crol"))
         .map(|p| {
             let name = p.file_name().unwrap().to_string_lossy().into_owned();
             (name, std::fs::read_to_string(&p).unwrap())

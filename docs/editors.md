@@ -38,7 +38,7 @@ Most of this works better with a [schema](schemas.md). Without one, you still ge
 syntax errors, evaluation errors and references, but no type checks and no
 field names from your types.
 
-`project.crov` and generated schema files need no schema from you. Both have one
+`project.crol` and generated schema files need no schema from you. Both have one
 built into `crol`, so hover and completion work at every level of them, offline:
 in a schema file, also for type expressions such as `ty: List(Named("..."))`,
 and the paths in `types` are offered in `root` and `Named("...")`. A file is a
@@ -55,9 +55,9 @@ writable layers, not only the ones you have open, and `read_only` layers get non
 
 **Other open files**, and all open files if there is no project, are evaluated on
 their own, and checked against their `#![schema(...)]` if they have one. The
-[extension](modes.md) gives the mode: a `.crov` file is a value document, and a
+[extension](modes.md) gives the mode: a `.crol` file is a value document, and a
 `.crod` file is data, as a layer of its own, with its variants and patches. A
-`.crov` file in a project gets the project's schema only through
+`.crol` file in a project gets the project's schema only through
 [`files`](projects.md#value-documents-in-a-project), which give it a type.
 
 A `.crod` file is evaluated on top of what its `#![extends(...)]` names, as with
@@ -67,23 +67,21 @@ file evaluates the document again. Errors in an extended file are not shown as i
 they were yours: the first one, an `extends` that names nothing and a cycle appear
 on the `extends` itself. A `.crod` file with no `extends` only knows itself, so a
 patch to a key from another file has nothing below it. Name what it builds on, or
-list your layers in `project.crov`.
+list your layers in `project.crol`.
 
 While a file does not evaluate, as in the middle of an edit, hover and completion
 use the last evaluation that did. A value on hover says so.
 
 A layer that does not load does not stop the others, as it does for `crol check`.
-A wrong file in a layer, such as a `.crov` or a `.crol` file, is reported on that
-file and left out, and the rest of the layer loads. A layer that cannot be read at
+A wrong file in a layer, such as a `.crol` file, is reported on that file and
+left out, and the rest of the layer loads. A layer that cannot be read at
 all, such as one whose `dir` names nothing, is reported on the file to blame or on
-`project.crov`, and adds nothing: its keys have no values, and the layers after it
+`project.crol`, and adds nothing: its keys have no values, and the layers after it
 are evaluated without it. Errors in those layers are then warnings that say so,
 since what is missing may be why. Hover and completion keep working, from the last
 evaluation that succeeded or else from the layers below.
 
-The server shows a `.crol` file only an error that says to rename it.
-
-`project.crov` itself is checked against the schema of project files.
+`project.crol` itself is checked against the schema of project files.
 
 ## Zed
 
@@ -105,13 +103,15 @@ The extension uses the first of these it finds:
 3. the binary from the latest GitHub release, which it downloads. There are no
    releases yet, so for now one of the first two is required.
 
-Settings go in Zed's `settings.json`, under `lsp.crol`:
+Settings go in Zed's `settings.json`, under `lsp.crol`. With `binary.path` set,
+Zed starts that binary with the `arguments` beside it and none of the extension's,
+so they have to say `lsp`:
 
 ```json
 {
   "lsp": {
     "crol": {
-      "binary": { "path": "/path/to/crol" },
+      "binary": { "path": "/path/to/crol", "arguments": ["lsp"] },
       "initialization_options": {
         "context": ["prod"],
         "inlay_hints": true
@@ -126,7 +126,7 @@ Settings go in Zed's `settings.json`, under `lsp.crol`:
 Any LSP client can use the server. Configure it to:
 
 - run `crol lsp`, which talks over standard input and output;
-- use it for files ending in `.crod` and `.crov`;
+- use it for files ending in `.crod` and `.crol`;
 - pass the [settings](#settings) below as `initializationOptions`.
 
 For highlighting, indentation and folding, there is a

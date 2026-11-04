@@ -192,7 +192,7 @@ fn project_files_give_the_layers_and_the_schema() {
     std::fs::create_dir_all(dir.join("data/base")).unwrap();
     std::fs::create_dir_all(dir.join("crol")).unwrap();
     std::fs::write(
-        dir.join("project.crov"),
+        dir.join("project.crol"),
         r#"Project {
             layers: List([{ name: "base", dir: "data::base", .. }]),
             variants: [Grouped(["dev", "prod"])],
@@ -207,7 +207,7 @@ fn project_files_give_the_layers_and_the_schema() {
     )
     .unwrap();
     std::fs::write(
-        dir.join("crol/schema.crov"),
+        dir.join("crol/schema.crol"),
         r#"Schema {
             format: 1,
             root: "app::Services",
@@ -257,13 +257,13 @@ fn documents_in_a_project_should_name_its_schema() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("base")).unwrap();
     std::fs::write(
-        dir.join("project.crov"),
+        dir.join("project.crol"),
         r#"Project { layers: List([{ name: "base", dir: "base", .. }]), schema: Some("schema"), .. }"#,
     )
     .unwrap();
     let schema = r#"Schema { format: 1, root: "app::Service", types: {} }"#;
-    std::fs::write(dir.join("schema.crov"), schema).unwrap();
-    std::fs::write(dir.join("other.crov"), schema).unwrap();
+    std::fs::write(dir.join("schema.crol"), schema).unwrap();
+    std::fs::write(dir.join("other.crol"), schema).unwrap();
     std::fs::write(dir.join("base/a.crod"), "#![schema(::schema)]\n+a: 1,\n").unwrap();
     std::fs::write(
         dir.join("base/b.crod"),
@@ -293,7 +293,7 @@ fn check_uses_the_schema_a_document_names() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
-        dir.join("schema.crov"),
+        dir.join("schema.crol"),
         r#"Schema {
             format: 1,
             root: "app::Services",
@@ -350,7 +350,7 @@ fn eval_shows_the_defaults_fields_take() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
-        dir.join("schema.crov"),
+        dir.join("schema.crol"),
         r#"Schema {
             format: 1,
             root: "app::Services",
@@ -383,7 +383,7 @@ fn eval_shows_the_defaults_fields_take() {
          db: & ~ { -replicas },\n",
     )
     .unwrap();
-    let schema = dir.join("schema.crov");
+    let schema = dir.join("schema.crol");
     let eval = |extra: &[&str]| {
         let mut args = vec![
             "eval",

@@ -38,29 +38,29 @@ const PROJECT: &str = "Project { layers: List([{ name: \"base\", dir: \"data\", 
 
 /// `#![type]`, a top-level `..` and a typed block are what data mode rejects.
 const VALUE_DOCUMENTS: &[(&str, &str)] = &[
-    ("typed.crov", "#![type(Config)]\n\nport: 80\n"),
-    ("marker.crov", "port: 80\n..\n"),
-    ("block.crov", "Config { port: 80 }\n"),
-    ("expression.crov", "40 + 2\n"),
+    ("typed.crol", "#![type(Config)]\n\nport: 80\n"),
+    ("marker.crol", "port: 80\n..\n"),
+    ("block.crol", "Config { port: 80 }\n"),
+    ("expression.crol", "40 + 2\n"),
 ];
 
 #[test]
-fn check_reads_a_crov_file_in_value_mode() {
+fn check_reads_a_crol_file_in_value_mode() {
     let dir = tree("check-value", VALUE_DOCUMENTS);
     for (name, _) in VALUE_DOCUMENTS {
         let output = crol(&dir, &["check", name]);
         assert!(output.status.success(), "{name}: {output:?}");
     }
-    std::fs::write(dir.join("broken.crov"), "a: 1 / 0\n").unwrap();
-    let output = crol(&dir, &["check", "broken.crov"]);
+    std::fs::write(dir.join("broken.crol"), "a: 1 / 0\n").unwrap();
+    let output = crol(&dir, &["check", "broken.crol"]);
     assert!(!output.status.success());
     assert!(stderr(&output).contains("zero"), "{output:?}");
 }
 
 #[test]
 fn value_mode_errors_are_value_mode_errors() {
-    let dir = tree("check-variants", &[("a.crov", "<prod> { a: 1 }\n")]);
-    let output = crol(&dir, &["check", "a.crov"]);
+    let dir = tree("check-variants", &[("a.crol", "<prod> { a: 1 }\n")]);
+    let output = crol(&dir, &["check", "a.crol"]);
     assert!(!output.status.success(), "{output:?}");
 }
 
@@ -69,36 +69,36 @@ fn eval_prints_a_value_document() {
     let dir = tree(
         "eval-value",
         &[
-            ("number.crov", "40 + 2\n"),
+            ("number.crol", "40 + 2\n"),
             (
-                "typed.crov",
+                "typed.crol",
                 "#![type(Config)]\n\nport: 80\nname: \"web\"\n",
             ),
         ],
     );
-    let output = crol(&dir, &["eval", "number.crov"]);
+    let output = crol(&dir, &["eval", "number.crol"]);
     assert!(output.status.success(), "{output:?}");
     assert_eq!(stdout(&output), "42\n");
-    let output = crol(&dir, &["eval", "typed.crov"]);
+    let output = crol(&dir, &["eval", "typed.crol"]);
     assert!(output.status.success(), "{output:?}");
     assert!(stdout(&output).contains("Config {"), "{output:?}");
 
     // One value of it, as of layers.
-    let output = crol(&dir, &["eval", "typed.crov", "name"]);
+    let output = crol(&dir, &["eval", "typed.crol", "name"]);
     assert!(output.status.success(), "{output:?}");
     assert_eq!(stdout(&output), "\"web\"\n");
-    let output = crol(&dir, &["eval", "typed.crov", "missing"]);
+    let output = crol(&dir, &["eval", "typed.crol", "missing"]);
     assert!(!output.status.success());
     assert!(stderr(&output).contains("no value at"), "{output:?}");
 }
 
 #[test]
 fn a_value_document_has_no_contexts() {
-    let dir = tree("no-contexts", &[("a.crov", "1\n")]);
+    let dir = tree("no-contexts", &[("a.crol", "1\n")]);
     for args in [
-        &["eval", "a.crov", "--context", "prod"][..],
-        &["eval", "a.crov", "--all-contexts"],
-        &["check", "a.crov", "--discrete", "cache"],
+        &["eval", "a.crol", "--context", "prod"][..],
+        &["eval", "a.crol", "--all-contexts"],
+        &["check", "a.crol", "--discrete", "cache"],
     ] {
         let output = crol(&dir, args);
         assert!(!output.status.success(), "{args:?}");
@@ -107,15 +107,15 @@ fn a_value_document_has_no_contexts() {
 }
 
 #[test]
-fn fingerprint_reads_a_crov_file_in_value_mode() {
+fn fingerprint_reads_a_crol_file_in_value_mode() {
     let dir = tree(
         "fingerprint",
         &[
-            ("a.crov", "{ a: 1, b: [2] }\n"),
-            ("b.crov", "a: 1\nb: [1 + 1]\n"),
-            ("c.crov", "a: 2\n"),
-            ("number.crov", "1\n"),
-            ("other.crov", "2\n"),
+            ("a.crol", "{ a: 1, b: [2] }\n"),
+            ("b.crol", "a: 1\nb: [1 + 1]\n"),
+            ("c.crol", "a: 2\n"),
+            ("number.crol", "1\n"),
+            ("other.crol", "2\n"),
         ],
     );
     let print = |name: &str| {
@@ -123,16 +123,16 @@ fn fingerprint_reads_a_crov_file_in_value_mode() {
         assert!(output.status.success(), "{output:?}");
         stdout(&output)
     };
-    assert_eq!(print("a.crov"), print("b.crov"));
-    assert_ne!(print("a.crov"), print("c.crov"));
+    assert_eq!(print("a.crol"), print("b.crol"));
+    assert_ne!(print("a.crol"), print("c.crol"));
     // Not only keyed values have one.
-    assert_ne!(print("number.crov"), print("other.crov"));
+    assert_ne!(print("number.crol"), print("other.crol"));
 }
 
 #[test]
 fn explain_says_a_value_has_no_layers() {
-    let dir = tree("explain", &[("a.crov", "port: 80\n")]);
-    let output = crol(&dir, &["explain", "a.crov", "port"]);
+    let dir = tree("explain", &[("a.crol", "port: 80\n")]);
+    let output = crol(&dir, &["explain", "a.crol", "port"]);
     assert!(!output.status.success());
     assert!(
         stderr(&output).contains("no layers to explain"),
@@ -155,12 +155,12 @@ fn a_crod_file_is_read_in_data_mode() {
 }
 
 #[test]
-fn a_crov_file_among_layers_is_an_error() {
-    let dir = tree("among", &[("a.crod", "+port: 80\n"), ("b.crov", "1\n")]);
+fn a_crol_file_among_layers_is_an_error() {
+    let dir = tree("among", &[("a.crod", "+port: 80\n"), ("b.crol", "1\n")]);
     for args in [
-        &["check", "a.crod", "b.crov"][..],
-        &["check", "b.crov", "a.crod"],
-        &["check", "base=b.crov"],
+        &["check", "a.crod", "b.crol"][..],
+        &["check", "b.crol", "a.crod"],
+        &["check", "base=b.crol"],
     ] {
         let output = crol(&dir, args);
         assert!(!output.status.success(), "{args:?}");
@@ -169,13 +169,13 @@ fn a_crov_file_among_layers_is_an_error() {
 }
 
 #[test]
-fn a_crov_file_in_a_layer_directory_fails_loudly() {
+fn a_crol_file_in_a_layer_directory_fails_loudly() {
     let dir = tree(
         "layer",
         &[
-            ("project.crov", PROJECT),
+            ("project.crol", PROJECT),
             ("data/a.crod", "+a: 1\n"),
-            ("data/stray.crov", "1\n"),
+            ("data/stray.crol", "1\n"),
         ],
     );
     for args in [
@@ -186,7 +186,7 @@ fn a_crov_file_in_a_layer_directory_fails_loudly() {
     ] {
         let output = crol(&dir, args);
         assert!(!output.status.success(), "{args:?}");
-        assert!(stderr(&output).contains("stray.crov"), "{output:?}");
+        assert!(stderr(&output).contains("stray.crol"), "{output:?}");
         assert!(stderr(&output).contains("cannot be a layer"), "{output:?}");
     }
 }
@@ -196,7 +196,7 @@ fn the_project_file_may_lie_in_a_layer_directory() {
     let dir = tree(
         "project-in-layer",
         &[
-            ("project.crov", PROJECT),
+            ("project.crol", PROJECT),
             ("data/a.crod", "+a: 1\n"),
             ("b.crod", "+b: 2\n"),
         ],
@@ -206,55 +206,10 @@ fn the_project_file_may_lie_in_a_layer_directory() {
     assert_eq!(stdout(&output), "b: 2\na: 1\n");
 
     // Any other value document there is not excused.
-    std::fs::write(dir.join("schema.crov"), "1\n").unwrap();
+    std::fs::write(dir.join("schema.crol"), "1\n").unwrap();
     let output = crol(&dir, &["eval", "."]);
     assert!(!output.status.success(), "{output:?}");
-    assert!(stderr(&output).contains("schema.crov"), "{output:?}");
-}
-
-#[test]
-fn a_crol_file_names_the_extension_to_use() {
-    let dir = tree(
-        "retired",
-        &[
-            ("project.crov", PROJECT),
-            ("data/a.crod", "+a: 1\n"),
-            ("data/old.crol", "+b: 2\n"),
-            ("direct.crol", "+c: 3\n"),
-        ],
-    );
-    let output = crol(&dir, &["check"]);
-    assert!(!output.status.success());
-    assert!(
-        stderr(&output).contains("rename it to `old.crod`"),
-        "{output:?}"
-    );
-
-    let output = crol(&dir, &["check", "direct.crol"]);
-    assert!(!output.status.success());
-    assert!(
-        stderr(&output).contains("rename it to `direct.crod`"),
-        "{output:?}"
-    );
-}
-
-#[test]
-fn a_leftover_project_crol_is_not_no_project() {
-    let dir = tree(
-        "leftover",
-        &[("project.crol", PROJECT), ("data/a.crod", "+a: 1\n")],
-    );
-    let output = crol(&dir, &["check"]);
-    assert!(!output.status.success());
-    let message = stderr(&output);
-    assert!(message.contains("rename it to `project.crov`"), "{message}");
-    assert!(!message.contains("no layers given"), "{message}");
-
-    let output = crol(&dir.join("data"), &["check"]);
-    assert!(
-        stderr(&output).contains("rename it to `project.crov`"),
-        "{output:?}"
-    );
+    assert!(stderr(&output).contains("schema.crol"), "{output:?}");
 }
 
 #[test]
@@ -286,12 +241,12 @@ fn a_project_file_can_be_checked_as_a_value_document() {
     let dir = tree(
         "check-project",
         &[
-            ("project.crov", PROJECT),
-            ("wrong/project.crov", "Project { layers: 1, .. }\n"),
+            ("project.crol", PROJECT),
+            ("wrong/project.crol", "Project { layers: 1, .. }\n"),
         ],
     );
-    assert!(crol(&dir, &["check", "project.crov"]).status.success());
-    let output = crol(&dir, &["check", "wrong/project.crov"]);
+    assert!(crol(&dir, &["check", "project.crol"]).status.success());
+    let output = crol(&dir, &["check", "wrong/project.crol"]);
     assert!(!output.status.success(), "{output:?}");
 }
 
@@ -303,57 +258,66 @@ fn a_value_document_is_checked_against_its_schema() {
     let dir = tree(
         "value-schema",
         &[
-            ("schema.crov", &schema),
-            ("good.crov", &format!("#![schema(schema)]\n\n{PROJECT}\n")),
+            ("schema.crol", &schema),
+            ("good.crol", &format!("#![schema(schema)]\n\n{PROJECT}\n")),
             (
-                "bad.crov",
+                "bad.crol",
                 "#![schema(schema)]\n\nProject { layers: 1, .. }\n",
             ),
-            ("given.crov", "Project { layers: 1, .. }\n"),
+            ("given.crol", "Project { layers: 1, .. }\n"),
         ],
     );
-    assert!(crol(&dir, &["check", "good.crov"]).status.success());
-    assert!(!crol(&dir, &["check", "bad.crov"]).status.success());
-    assert!(crol(&dir, &["check", "given.crov"]).status.success());
-    let args = ["check", "given.crov", "--schema", "schema.crov"];
+    assert!(crol(&dir, &["check", "good.crol"]).status.success());
+    assert!(!crol(&dir, &["check", "bad.crol"]).status.success());
+    assert!(crol(&dir, &["check", "given.crol"]).status.success());
+    let args = ["check", "given.crol", "--schema", "schema.crol"];
     assert!(!crol(&dir, &args).status.success());
 
     // With the schema, fields that take their defaults are shown.
-    let output = crol(&dir, &["eval", "good.crov"]);
+    let output = crol(&dir, &["eval", "good.crol"]);
     assert!(stdout(&output).contains("// default"), "{output:?}");
-    let output = crol(&dir, &["eval", "good.crov", "--no-defaults"]);
+    let output = crol(&dir, &["eval", "good.crol", "--no-defaults"]);
     assert!(!stdout(&output).contains("// default"), "{output:?}");
 }
 
 #[test]
-fn fmt_takes_both_extensions_and_refuses_crol() {
+fn a_file_with_another_extension_follows_what_loads_it() {
+    let dir = tree(
+        "other-extension",
+        &[
+            ("notes.txt", "+a: 1\n"),
+            ("value.txt", "40 + 2\n"),
+            ("data/a.crod", "+b: 2\n"),
+            ("data/ignored.txt", "not { a document\n"),
+        ],
+    );
+    // Given by path, it is a layer, so data mode's rules hold.
+    assert!(crol(&dir, &["check", "notes.txt"]).status.success());
+    assert!(!crol(&dir, &["check", "value.txt"]).status.success());
+    // In a directory it is no document, and nobody reads it.
+    let output = crol(&dir, &["check", "./data"]);
+    assert!(output.status.success(), "{output:?}");
+}
+
+#[test]
+fn fmt_takes_both_extensions() {
     let dir = tree(
         "fmt",
         &[
             ("a.crod", "+a:1,\n"),
-            ("b.crov", "#![type(Config)]\n\nport:80\n"),
-            ("c.crol", "a:1\n"),
+            ("b.crol", "#![type(Config)]\n\nport:80\n"),
             ("d.txt", "a:1\n"),
         ],
     );
-    let output = crol(&dir, &["fmt", "a.crod", "b.crov", "d.txt"]);
+    let output = crol(&dir, &["fmt", "a.crod", "b.crol", "d.txt"]);
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
         std::fs::read_to_string(dir.join("a.crod")).unwrap(),
         "+a: 1\n"
     );
     assert_eq!(
-        std::fs::read_to_string(dir.join("b.crov")).unwrap(),
+        std::fs::read_to_string(dir.join("b.crol")).unwrap(),
         "#![type(Config)]\n\nport: 80\n"
-    );
-
-    let output = crol(&dir, &["fmt", "c.crol"]);
-    assert!(!output.status.success());
-    assert!(stderr(&output).contains("`.crod`"), "{output:?}");
-    assert!(stderr(&output).contains("`.crov`"), "{output:?}");
-    assert_eq!(
-        std::fs::read_to_string(dir.join("c.crol")).unwrap(),
-        "a:1\n"
     );
 
     // It takes files; a directory is refused rather than walked.
@@ -366,26 +330,8 @@ fn from_ron_writes_a_value_document() {
     let dir = tree("from-ron", &[("a.ron", "Config(port: 80)\n")]);
     let output = crol(&dir, &["from-ron", "a.ron"]);
     assert!(output.status.success(), "{output:?}");
-    std::fs::write(dir.join("a.crov"), &output.stdout).unwrap();
-    assert!(crol(&dir, &["check", "a.crov"]).status.success());
-}
-
-#[test]
-fn init_refuses_a_project_crol() {
-    let dir = tree(
-        "init",
-        &[
-            ("Cargo.toml", "[package]\nname = \"app\"\n"),
-            ("project.crol", PROJECT),
-        ],
-    );
-    let output = crol(&dir, &["--init"]);
-    assert!(!output.status.success());
-    assert!(
-        stderr(&output).contains("rename it to `project.crov`"),
-        "{output:?}"
-    );
-    assert!(!dir.join("project.crov").exists());
+    std::fs::write(dir.join("a.crol"), &output.stdout).unwrap();
+    assert!(crol(&dir, &["check", "a.crol"]).status.success());
 }
 
 const DEFAULTS_SCHEMA: &str = r#"Schema {
@@ -419,17 +365,17 @@ fn default_reads_the_schema_tools_have() {
     let dir = tree(
         "default",
         &[
-            ("schema.crov", DEFAULTS_SCHEMA),
+            ("schema.crol", DEFAULTS_SCHEMA),
             ("given.crod", data),
             ("named.crod", &format!("#![schema(schema)]\n\n{data}")),
             (
-                "project.crov",
+                "project.crol",
                 "Project { layers: List([{ name: \"d\", dir: \"data\", .. }]), schema: Some(\"schema\"), .. }",
             ),
             ("data/a.crod", data),
         ],
     );
-    let args = ["eval", "given.crod", "--schema", "schema.crov"];
+    let args = ["eval", "given.crod", "--schema", "schema.crol"];
     let output = crol(&dir, &args);
     assert!(stdout(&output).contains("replicas: 6"), "{output:?}");
     let output = crol(&dir, &["eval", "named.crod"]);
@@ -460,49 +406,49 @@ fn files_give_value_documents_a_type() {
     let dir = tree(
         "files",
         &[
-            ("project.crov", FILES_PROJECT),
-            ("schema.crov", DEFAULTS_SCHEMA),
+            ("project.crol", FILES_PROJECT),
+            ("schema.crol", DEFAULTS_SCHEMA),
             ("data/a.crod", "+web: Service { .. }\n"),
-            ("config/good.crov", "{ port: 80, .. }\n"),
-            ("config/deep/er/bad.crov", "{ port: \"x\", .. }\n"),
-            ("config/special.crov", "{ port: 80, .. }\n"),
-            ("other/plain.crov", "{ port: \"not checked\" }\n"),
+            ("config/good.crol", "{ port: 80, .. }\n"),
+            ("config/deep/er/bad.crol", "{ port: \"x\", .. }\n"),
+            ("config/special.crol", "{ port: 80, .. }\n"),
+            ("other/plain.crol", "{ port: \"not checked\" }\n"),
             (
-                "other/own.crov",
+                "other/own.crol",
                 "#![schema(::schema)]\n\nConfig { port: \"x\", .. }\n",
             ),
         ],
     );
-    let output = crol(&dir, &["check", "config/good.crov"]);
+    let output = crol(&dir, &["check", "config/good.crol"]);
     assert!(output.status.success(), "{output:?}");
-    let output = crol(&dir, &["check", "config/deep/er/bad.crov"]);
+    let output = crol(&dir, &["check", "config/deep/er/bad.crol"]);
     assert!(!output.status.success(), "{output:?}");
     assert!(stderr(&output).contains("found \"x\""), "{output:?}");
 
     // The first glob that matches decides.
-    let output = crol(&dir, &["check", "config/special.crov"]);
+    let output = crol(&dir, &["check", "config/special.crol"]);
     assert!(!output.status.success(), "{output:?}");
 
     // A file no glob matches is not checked, and one that names a schema
     // goes by that.
-    assert!(crol(&dir, &["check", "other/plain.crov"]).status.success());
-    let output = crol(&dir, &["check", "other/own.crov"]);
+    assert!(crol(&dir, &["check", "other/plain.crol"]).status.success());
+    let output = crol(&dir, &["check", "other/own.crol"]);
     assert!(stderr(&output).contains("found \"x\""), "{output:?}");
 
     // `eval` fills in the defaults of the type, and `fingerprint` reads it.
-    let output = crol(&dir, &["eval", "config/good.crov"]);
+    let output = crol(&dir, &["eval", "config/good.crol"]);
     assert!(stdout(&output).contains("host: \"h\""), "{output:?}");
-    let output = crol(&dir, &["fingerprint", "config/deep/er/bad.crov"]);
+    let output = crol(&dir, &["fingerprint", "config/deep/er/bad.crol"]);
     assert!(!output.status.success(), "{output:?}");
 
     // From elsewhere, `--project` says which project it is.
-    let args = ["check", "deep/er/bad.crov", "--project", "../project.crov"];
+    let args = ["check", "deep/er/bad.crol", "--project", "../project.crol"];
     assert!(!crol(&dir.join("config"), &args).status.success());
 
     // A project given by its bare file name is in the working directory,
     // both for `files` and for the `::` paths of a document's own schema.
-    for file in ["config/deep/er/bad.crov", "other/own.crov"] {
-        let output = crol(&dir, &["check", file, "--project", "project.crov"]);
+    for file in ["config/deep/er/bad.crol", "other/own.crol"] {
+        let output = crol(&dir, &["check", file, "--project", "project.crol"]);
         assert!(stderr(&output).contains("found \"x\""), "{output:?}");
     }
 }
@@ -513,9 +459,9 @@ fn files_need_a_schema_and_a_type_it_has() {
         "Project { layers: List([]), files: [{ glob: \"*\", type: \"app::Config\" }], .. }";
     let dir = tree(
         "files-no-schema",
-        &[("project.crov", no_schema), ("a.crov", "{ port: 80 }\n")],
+        &[("project.crol", no_schema), ("a.crol", "{ port: 80 }\n")],
     );
-    let output = crol(&dir, &["check", "a.crov"]);
+    let output = crol(&dir, &["check", "a.crol"]);
     assert!(!output.status.success(), "{output:?}");
     assert!(stderr(&output).contains("no schema"), "{output:?}");
 
@@ -523,21 +469,21 @@ fn files_need_a_schema_and_a_type_it_has() {
     let dir = tree(
         "files-unknown-type",
         &[
-            ("project.crov", unknown),
-            ("schema.crov", DEFAULTS_SCHEMA),
-            ("a.crov", "{ port: 80 }\n"),
+            ("project.crol", unknown),
+            ("schema.crol", DEFAULTS_SCHEMA),
+            ("a.crol", "{ port: 80 }\n"),
         ],
     );
-    let output = crol(&dir, &["check", "a.crov"]);
+    let output = crol(&dir, &["check", "a.crol"]);
     assert!(!output.status.success(), "{output:?}");
     assert!(stderr(&output).contains("app::Nothing"), "{output:?}");
 
     let bad_glob = "Project { layers: List([]), files: [{ glob: \"a::**\", type: \"T\" }], .. }";
     let dir = tree(
         "files-bad-glob",
-        &[("project.crov", bad_glob), ("a.crov", "1\n")],
+        &[("project.crol", bad_glob), ("a.crol", "1\n")],
     );
-    let output = crol(&dir, &["check", "a.crov"]);
+    let output = crol(&dir, &["check", "a.crol"]);
     assert!(!output.status.success(), "{output:?}");
     assert!(stderr(&output).contains("a::**"), "{output:?}");
 }
@@ -581,13 +527,13 @@ Schema {
 fn check_validates_a_schema_file_against_the_built_in_schema() {
     let run = |dir: &Path| {
         Command::new(env!("CARGO_BIN_EXE_crol"))
-            .args(["--color", "never", "check", "crol/schema.crov", "--offline"])
+            .args(["--color", "never", "check", "crol/schema.crol", "--offline"])
             .current_dir(dir)
             .env("CROL_CACHE_DIR", dir.join("cache"))
             .output()
             .expect("crol runs")
     };
-    let dir = tree("schema-file", &[("crol/schema.crov", GENERATED_SCHEMA)]);
+    let dir = tree("schema-file", &[("crol/schema.crol", GENERATED_SCHEMA)]);
     let output = run(&dir);
     assert!(output.status.success(), "{}", stderr(&output));
     // It needs nothing from the cache.
@@ -606,7 +552,7 @@ fn check_validates_a_schema_file_against_the_built_in_schema() {
         ("Struct {", "Strukt {", "has no variant `Strukt`"),
     ] {
         let text = GENERATED_SCHEMA.replacen(from, to, 1);
-        let dir = tree("schema-file-wrong", &[("crol/schema.crov", &text)]);
+        let dir = tree("schema-file-wrong", &[("crol/schema.crol", &text)]);
         let output = run(&dir);
         assert!(!output.status.success(), "{to}");
         assert!(stderr(&output).contains(says), "{to}: {}", stderr(&output));

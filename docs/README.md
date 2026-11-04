@@ -11,7 +11,7 @@ New here? Start with [getting started](getting-started.md).
 1. [Getting started](getting-started.md): install the tools, write a file, load
    it into a Rust struct, stack a second file on top.
 2. [The language by example](language.md): everything you can write in a file.
-3. [Data mode and value mode](modes.md): what `.crov` and `.crod` files are, and
+3. [Data mode and value mode](modes.md): what `.crol` and `.crod` files are, and
    which one you want.
 4. [Layers](layers.md): what they are, why they exist, how to use them.
 5. [Variants](variants.md): differences per environment, region or feature.

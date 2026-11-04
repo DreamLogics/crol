@@ -2,7 +2,7 @@
 //! both by deserializing into the test types below and by `crol::check`,
 //! and both must give the same errors.
 //!
-//! A case has a schema when its `options.crov` has `schema: "services"`,
+//! A case has a schema when its `options.crol` has `schema: "services"`,
 //! whose root type is an enum, the type of each root value, or `schema:
 //! "config"`, whose root type is a struct, the whole document (`SPEC.md` 4.1).
 //! The errors `crol::check` reports are in `expected.schema-errors`, one
@@ -133,9 +133,9 @@ fn crol_files(dir: &Path, base: &Path, out: &mut Vec<(String, PathBuf)>) {
 /// The schema a case names in its options, if any; `crol-eval`'s test
 /// reads the other options.
 fn schema_of(case: &Path) -> Option<String> {
-    let text = fs::read_to_string(case.join("options.crov")).ok()?;
+    let text = fs::read_to_string(case.join("options.crol")).ok()?;
     let mut sources = crol_eval::Sources::new();
-    let file = sources.add("options.crov", text);
+    let file = sources.add("options.crol", text);
     let value = crol_eval::evaluate_value(&sources, file).value?;
     let crol_eval::ValueKind::Keyed(keyed) = value.kind else {
         return None;

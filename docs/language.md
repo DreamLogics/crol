@@ -511,4 +511,4 @@ predictable: the same files give the same data, on every machine.
 
 ## Next
 
-[Data mode and value mode](modes.md) explains `.crod` and `.crov` files.
+[Data mode and value mode](modes.md) explains `.crod` and `.crol` files.

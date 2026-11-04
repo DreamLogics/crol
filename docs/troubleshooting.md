@@ -139,7 +139,7 @@ These appear when what a file holds does not fit its [extension](modes.md).
 **``a data-mode document holds entries (`key: value,`), not one value``**
 
 The file holds one value, but it is read as data. If it is a single value, name
-it `.crov` and read it with `crol::from_str`. If it is meant to be a layer, remove
+it `.crol` and read it with `crol::from_str`. If it is meant to be a layer, remove
 what data mode does not allow.
 
 **`variants need layered data: a value-mode document is evaluated in no context`**
@@ -164,27 +164,21 @@ give one [a parent](variants.md#declaring-variants).
 
 ## Finding files and schemas
 
-**`` a `.crov` file is a value document and cannot be a layer ``**
+**`` a `.crol` file is a value document and cannot be a layer ``**
 
-A `.crov` file was given as a layer, or lies in a layer's directory. Move it out,
-or rename it to `.crod` if it is data. On the command line, a `.crov` file is read
+A `.crol` file was given as a layer, or lies in a layer's directory. Move it out,
+or rename it to `.crod` if it is data. On the command line, a `.crol` file is read
 as a value document only when it is the one file given.
 
 **`` a `.crod` file is a data document and cannot be read as a value document ``**
 
-A project or schema file has to be a `.crov` file. Rename it.
-
-**`` the `.crol` extension is retired ``**
-
-Files used to end in `.crol`, whatever their mode. Rename the file to the name in
-the message: `.crod` for a layer, `.crov` for a single value, a project file or a
-schema file. A `project.crol` becomes `project.crov`.
+A project or schema file has to be a `.crol` file. Rename it.
 
 **`` a value document has no variants, so `--context` does not apply ``**
 
 Variants need layers. If the file is data, name it `.crod`.
 
-**`no layers given, and no project.crov in this directory or above`**
+**`no layers given, and no project.crol in this directory or above`**
 
 Name the layers on the command line, or [add a project
 file](projects.md#the-project-file). If the message goes on to say that `base` is
@@ -214,16 +208,16 @@ the document, or make it agree.
 **`` no Cargo.toml in /some/dir or above; run this in a Rust project ``**
 
 `crol init` sets up a Cargo project. Run `cargo init` first, or write a
-[`project.crov`](projects.md#the-project-file) by hand.
+[`project.crol`](projects.md#the-project-file) by hand.
 
-**`project.crov already exists; it was left as it is`**
+**`project.crol already exists; it was left as it is`**
 
 `crol init` never overwrites a project file. Edit the one you have.
 
 **`&default: defaults come from a schema, and no schema is given`**
 
 There is no schema to read the default from. Give your program the schema with
-`CrolComposer::schema`, and tools one with `--schema`, `schema` in `project.crov`
+`CrolComposer::schema`, and tools one with `--schema`, `schema` in `project.crol`
 or `#![schema(...)]`. A value-mode document never has defaults. See
 [the limits](schemas.md#using-default).
 
@@ -248,7 +242,7 @@ them.
 ## In your editor
 
 **No completion of field names, and no type errors.** There is no schema. Check
-that `schema` is set in `project.crov`, or that the file has a `#![schema(...)]`.
+that `schema` is set in `project.crol`, or that the file has a `#![schema(...)]`.
 Run `crol check` in the same directory: if that sees no type errors either, the
 problem is not in the editor.
 
@@ -258,20 +252,20 @@ project's folder, not a directory next to it, or set `project`.
 
 **Errors about keys that exist in another file.** A `.crod` file that is not in
 any layer only knows itself and what its `#![extends(...)]` names. Add an `extends`,
-or add the file's directory to the `layers` in `project.crov`.
+or add the file's directory to the `layers` in `project.crol`.
 
 **An error on `#![extends(...)]`.** It names nothing, forms a cycle, or what it
 names has errors of its own, of which the message shows the first. Other errors in
 the document are then warnings when the `extends` cannot be followed at all, since
 what is missing may be why.
 
-**A `project.crov` or a `project.crol` has one error, and the rest shows nothing.**
+**A `project.crol` has one error, and the rest shows nothing.**
 A problem with the project file itself stops the server from loading the layers,
 and is shown on the file to blame. Fix that one first.
 
 **Warnings that end in `which may be why`.** A layer or an `extends` did not load,
 and this may only be a result of that. Fix the error on the file it names, or on
-`project.crov`; what is still wrong then shows as an error again.
+`project.crol`; what is still wrong then shows as an error again.
 
 **Zed cannot start the server.** Zed looks for `crol` in your settings and on the
 `PATH`. With no `crol` there, it tries to download a release, and none exists yet.

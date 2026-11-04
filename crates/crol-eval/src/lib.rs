@@ -9,7 +9,7 @@
 //! use crol_eval::{Sources, ValueKind, evaluate_value};
 //!
 //! let mut sources = Sources::new();
-//! let file = sources.add("config.crov", "port := 8080, listen: \"0.0.0.0:\" + &port");
+//! let file = sources.add("config.crol", "port := 8080, listen: \"0.0.0.0:\" + &port");
 //! let evaluation = evaluate_value(&sources, file);
 //! let value = evaluation.value.unwrap();
 //! let ValueKind::Keyed(keyed) = &value.kind else { panic!() };

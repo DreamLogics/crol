@@ -40,7 +40,7 @@ arguments. `crol --init` is the same thing.
 
 ```console
 $ crol init
-Created /path/to/project/project.crov
+Created /path/to/project/project.crol
 Created /path/to/project/data/base/main.crod
 
 Next:
@@ -52,14 +52,13 @@ Next:
 It looks for `Cargo.toml` in the current directory and then in each directory
 above, and writes next to the nearest one:
 
-- `project.crov`, a commented [project file](projects.md#starting-a-project) with
+- `project.crol`, a commented [project file](projects.md#starting-a-project) with
   one layer, `base`;
 - `data/base/main.crod`, holding only comments, unless that file exists.
 
 It changes no manifest or source file. It exits with status 1, writing nothing, if
-there is no `Cargo.toml`, if `project.crov` exists there, if a leftover
-`project.crol` does, or if `data/base.crod` exists, since the module path
-`data::base` would then be ambiguous.
+there is no `Cargo.toml`, if `project.crol` exists there, or if `data/base.crod`
+exists, since the module path `data::base` would then be ambiguous.
 
 ## Naming layers
 
@@ -85,30 +84,29 @@ project.
 
 ## Value documents
 
-[The extension says how a file is read](modes.md). One `.crov` file, on its own,
+[The extension says how a file is read](modes.md). One `.crol` file, on its own,
 is read by `check`, `eval` and `fingerprint` as a value document instead of as a
 layer:
 
 ```console
-$ printf 'workers: 2 * 2\n..\n' > settings.crov
-$ crol check settings.crov
-$ crol eval settings.crov
+$ printf 'workers: 2 * 2\n..\n' > settings.crol
+$ crol check settings.crol
+$ crol eval settings.crol
 workers: 4
 ..
-$ crol eval settings.crov workers
+$ crol eval settings.crol workers
 4
 ```
 
 It is checked against `--schema`, else its own
-[`#![schema(...)]`](schemas.md#the-schema-attribute). `project.crov` gets the
-schema of project files, so `crol check project.crov` checks your project file. A
+[`#![schema(...)]`](schemas.md#the-schema-attribute). `project.crol` gets the
+schema of project files, so `crol check project.crol` checks your project file. A
 file that the project's [`files`](projects.md#value-documents-in-a-project) match
 is checked as the type they give it.
 A value document has no variants, so `--context`, `--all-contexts` and the options
 that declare variants are errors.
 
-`crol explain` takes layers only. A `.crov` file among layers is an error, and so
-is a `.crol` file anywhere.
+`crol explain` takes layers only, so a `.crol` file is an error there.
 
 ## Common options
 
@@ -180,7 +178,7 @@ data.
 In a project, the key can come alone: the layers are the project's.
 
 ```crol
-// project.crov
+// project.crol
 Project {
     layers: List([{ name: "base", dir: "data::base", .. }]),
     ..,
@@ -195,14 +193,14 @@ $ crol eval web.port
 To name other layers and keep the project's variants and schema, add `--project`:
 
 ```console
-$ crol eval --project project.crov data::base data::local web.port
+$ crol eval --project project.crol data::base data::local web.port
 9090
 ```
 
 `crol` tells a key from a layer by how the last argument is written, not by what
 is on disk: anything that reads as a key or path, such as `web`, `web.port` or
-`web.tags[0]`, is a key, unless it ends in `.crod`, `.crov` or `.crol`. So a layer
-in the last place cannot be a bare name: write `crol eval ./base` or
+`web.tags[0]`, is a key, unless it ends in `.crod` or `.crol`. So a layer in the
+last place cannot be a bare name: write `crol eval ./base` or
 `crol eval ::base`, as `crol eval base` asks for the key `base`. Before the last
 argument, a bare name is a layer as usual.
 
@@ -240,8 +238,7 @@ machines that print the same fingerprint have the same data.
 ## `crol fmt`
 
 Formats files in place. Unlike the commands above, it takes files, not layers or
-directories, and formats `.crod` and `.crov` [files](modes.md) the same way. A
-`.crol` file is an error, with both names to choose from.
+directories, and formats `.crod` and `.crol` [files](modes.md) the same way.
 
 ```console
 $ crol fmt data/base/services.crod
@@ -265,7 +262,7 @@ split an entry in two.
 ## `crol from-ron`
 
 Converts a RON file to a CROL value document, on standard output, so give the
-file you keep it in a `.crov` name. `--max-width <n>` sets the line width. See
+file you keep it in a `.crol` name. `--max-width <n>` sets the line width. See
 [moving from RON](recipes.md#moving-from-ron).
 
 ## `crol lsp`

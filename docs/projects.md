@@ -12,7 +12,7 @@ In a Cargo project, `crol init` writes a project file and a first layer:
 
 ```console
 $ crol init
-Created /path/to/project/project.crov
+Created /path/to/project/project.crol
 Created /path/to/project/data/base/main.crod
 
 Next:
@@ -25,7 +25,7 @@ It looks for the nearest `Cargo.toml`, from the current directory upwards, and
 writes next to that. The result is ready to use, and explains itself in comments:
 
 ```console
-$ cat project.crov
+$ cat project.crol
 // What `crol` and the language server need to know about this project's data.
 Project {
     // The data, lowest layer first: each layer patches the ones before it.
@@ -36,7 +36,7 @@ Project {
     variants: [],
 
     // The schema file your application writes, to check the data's types:
-    // `Some("crol::schema")` is `crol/schema.crov` next to this file.
+    // `Some("crol::schema")` is `crol/schema.crol` next to this file.
     schema: None,
     ..,
 }
@@ -50,7 +50,7 @@ has to exist, and an empty directory would not survive version control.
 
 ```console
 $ crol init
-error: /path/to/project/project.crov already exists; it was left as it is
+error: /path/to/project/project.crol already exists; it was left as it is
 ```
 
 The dependency on `crol` is yours to add. Until the crate is on crates.io, use the
@@ -59,10 +59,10 @@ command prints.
 
 ## The project file
 
-`project.crov` lives at the top of your project:
+`project.crol` lives at the top of your project:
 
 ```crol
-// project.crov
+// project.crol
 Project {
     layers: List(
         [
@@ -126,7 +126,7 @@ is written as a string here: `"NoNewKeys"`.
 
 ### Value documents in a project
 
-A `.crov` file gets nothing from the project on its own: not the schema, and not
+A `.crol` file gets nothing from the project on its own: not the schema, and not
 the root type. `files` opts it in, by giving it a type:
 
 ```rust
@@ -141,7 +141,7 @@ Project {
 }
 ```
 
-`crol check config/web.crov` and your editor now check that file as an
+`crol check config/web.crol` and your editor now check that file as an
 `app::Config`, against the project's schema and with its `options`, and the editor
 completes its fields. `crol eval` fills in its defaults. The project must have a
 `schema`, with that type in it. `type` is a schema path, or a plain name that one
@@ -152,10 +152,10 @@ of the project file:
 
 | Glob              | Matches                                             |
 | ----------------- | --------------------------------------------------- |
-| `config::web`     | `config/web.crov`                                   |
-| `config::*`       | every `.crov` file directly in `config`             |
+| `config::web`     | `config/web.crol`                                   |
+| `config::*`       | every `.crol` file directly in `config`             |
 | `config::web_*`   | those whose names start with `web_`                 |
-| `config::**::*`   | every `.crov` file in `config` or a directory below |
+| `config::**::*`   | every `.crol` file in `config` or a directory below |
 
 The first entry that matches decides. Case counts, hidden files never match, and
 neither do files outside the project's directory. A file that matches no glob only
@@ -165,7 +165,7 @@ the globs say, and so does `--schema`.
 
 ### How it is found
 
-`crol` looks for `project.crov` in the current directory and then in each
+`crol` looks for `project.crol` in the current directory and then in each
 directory above it. The language server starts from your workspace folder. You
 can also be explicit, with `--project <file>`, or the `project`
 [setting](editors.md#settings) of the language server.
@@ -185,12 +185,9 @@ A project file is used only when you do not name layers yourself. With layers on
 the command line, the project file is ignored, unless you pass `--project`.
 
 The project file itself is never read as data, even if it lies inside a layer's
-directory. It is the only `.crov` file that may be there: any other one, also one
-called `project.crov` that is not _the_ project file, is [an
+directory. It is the only `.crol` file that may be there: any other one, also one
+called `project.crol` that is not _the_ project file, is [an
 error](modes.md#when-the-extension-does-not-fit).
-
-A leftover `project.crol`, where `project.crov` is looked for, is an error that
-says to rename it, rather than a project that is not found.
 
 ### Layers from a command
 
@@ -214,7 +211,7 @@ Project {
 
 ## Keeping your program and tools in step
 
-**Your program does not read `project.crov` by itself**, and tools do not know
+**Your program does not read `project.crol` by itself**, and tools do not know
 about [file loaders](recipes.md#loading-documents-from-somewhere-else) in your
 program. `CrolComposer` loads what you tell it to. If the two disagree, your editor will show you one thing
 and your program will load another.
@@ -238,7 +235,7 @@ struct Web {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let file = Project::find(&std::env::current_dir()?)?.ok_or("no project.crov")?;
+    let file = Project::find(&std::env::current_dir()?).ok_or("no project.crol")?;
     let project = Project::read(&file)?;
     let dir = file.parent().ok_or("no parent directory")?;
 
@@ -292,7 +289,7 @@ The last segment names either the file `services.crod` or the directory
 
 A module path has no extension, because what it is used for already says which
 one it has: a layer or an `extends` is `.crod`, and a `schema` is the file
-`services.crov`. A file of the other kind is an error that says so.
+`services.crol`. A file of the other kind is an error that says so.
 
 The **root directory** depends on who is asking:
 
@@ -311,13 +308,13 @@ program can still load it by file system path. Prefer `my_file.crod`.
 ### One settings file
 
 If your program reads one file, you need no project file. Make it a
-[`.crov` file](modes.md), and if you have a schema, name it in the file with
+[`.crol` file](modes.md), and if you have a schema, name it in the file with
 `#![schema(...)]`.
 
 ```text
 my-app/
 ├── Cargo.toml
-├── config.crov
+├── config.crol
 └── src/
     └── main.rs
 ```
@@ -325,14 +322,14 @@ my-app/
 ### An application with layered data
 
 This is the layout to start from for most applications with real data.
-[`crol init`](#starting-a-project) gives you `project.crov` and `data/base`:
+[`crol init`](#starting-a-project) gives you `project.crol` and `data/base`:
 
 ```text
 my-app/
 ├── Cargo.toml
-├── project.crov            what tools need to know
+├── project.crol            what tools need to know
 ├── crol/
-│   └── schema.crov         generated by the test below; commit it
+│   └── schema.crol         generated by the test below; commit it
 ├── data/
 │   ├── base/               one directory per layer
 │   │   ├── templates.crod
@@ -350,7 +347,7 @@ my-app/
 A few things to keep in mind:
 
 - **One directory per layer.** Every `.crod` file below a layer directory is
-  part of it, and a `.crov` file there is an error, so keep `crol/schema.crov`
+  part of it, and a `.crol` file there is an error, so keep `crol/schema.crol`
   out of the layers. A directory that is not listed in the project is not loaded.
 - **Split a layer by subject.** Each key can be defined only once per layer, so
   put a key's definition and its patches in the same file, and avoid the
@@ -366,14 +363,14 @@ A few things to keep in mind:
 
 If others add to your data, ship your data as a `read_only` layer, and let each
 extension be a layer of its own, perhaps through a
-[layer command](#layers-from-a-command). Ship `crol/schema.crov` as well, or
+[layer command](#layers-from-a-command). Ship `crol/schema.crol` as well, or
 publish it, so that people editing the data get the same checks without your
 source.
 
 ```text
 my-game/
-├── project.crov
-├── crol/schema.crov
+├── project.crol
+├── crol/schema.crol
 ├── data/
 │   └── base/               read_only: true
 └── extensions/

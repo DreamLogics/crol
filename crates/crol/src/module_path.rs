@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::Error;
 use crate::loader::SourceId;
-use crate::mode::{Mode, RETIRED};
+use crate::mode::Mode;
 
 /// A module path taken apart: its form, checked, not yet applied to anything.
 pub(crate) struct Parsed<'a> {
@@ -75,7 +75,7 @@ pub fn directory_of(path: &Path) -> &Path {
     current_if_empty(path.parent().unwrap_or(Path::new("")))
 }
 
-/// Resolves a module path to the file (`name.crod`, or `name.crov` for a
+/// Resolves a module path to the file (`name.crod`, or `name.crol` for a
 /// value document) or directory (`name/`) it names. `here` is the directory
 /// of the document the path is written in; code passes `None`, and relative
 /// paths then start from `root`.
@@ -116,15 +116,15 @@ pub(crate) fn resolve(
 /// mode: what [`named`] then accepts or refuses, rather than says is not
 /// there.
 pub(crate) fn exists(base: &Path, last: &str) -> bool {
-    [Mode::Data.extension(), Mode::Value.extension(), RETIRED]
+    [Mode::Data.extension(), Mode::Value.extension()]
         .iter()
         .any(|extension| base.join(format!("{last}.{extension}")).is_file())
         || base.join(last).is_dir()
 }
 
 /// The file or directory `last` names in the directory `base`. A file of the
-/// other mode is not what the path names, and a `.crol` file is retired;
-/// both are errors that say so, rather than a path that names nothing.
+/// other mode is not what the path names: an error that says so, rather
+/// than a path that names nothing.
 pub(crate) fn named(
     module_path: &str,
     base: &Path,
@@ -137,10 +137,6 @@ pub(crate) fn named(
             Error::new(format!("the module path `{module_path}`: {error}")).with_source_id(id)
         })
     };
-    let retired = base.join(format!("{last}.{RETIRED}"));
-    if retired.is_file() {
-        refused(&retired)?;
-    }
     let file = base.join(format!("{last}.{}", mode.extension()));
     let directory = base.join(last);
     match (file.is_file(), directory.is_dir()) {
@@ -232,27 +228,21 @@ mod tests {
         let root = std::env::temp_dir().join(format!("crol-module-mode-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("dir")).unwrap();
-        for name in [
-            "both.crod",
-            "both.crov",
-            "data.crod",
-            "value.crov",
-            "old.crol",
-        ] {
+        for name in ["both.crod", "both.crol", "data.crod", "value.crol"] {
             std::fs::write(root.join(name), "").unwrap();
         }
         let error = |path, mode| resolve(path, &root, None, mode).unwrap_err().to_string();
 
         // One name may have a file of each mode.
         let found = resolve("::both", &root, None, Mode::Value).unwrap();
-        assert_eq!(found, root.join("both.crov"));
+        assert_eq!(found, root.join("both.crol"));
         let found = resolve("::both", &root, None, Mode::Data).unwrap();
         assert_eq!(found, root.join("both.crod"));
 
         assert!(error("::value", Mode::Data).contains("cannot be a layer"));
         assert!(error("::data", Mode::Value).contains("cannot be read as a value document"));
-        assert!(error("::old", Mode::Data).contains("rename it to `old.crod`"));
-        assert!(error("::old", Mode::Value).contains("rename it to `old.crov`"));
+        assert!(error("::value", Mode::Data).contains("rename it to `value.crod`"));
+        assert!(error("::data", Mode::Value).contains("rename it to `data.crol`"));
         let _ = std::fs::remove_dir_all(&root);
     }
 }

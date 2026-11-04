@@ -1,4 +1,4 @@
-//! A value document on the command line: a `.crov` file given alone is read
+//! A value document on the command line: a `.crol` file given alone is read
 //! in value mode (`SPEC.md` 4, 11). It has no layers, variants or contexts.
 
 use std::path::{Path, PathBuf};
@@ -30,7 +30,7 @@ struct Expected {
     options: CheckOptions,
 }
 
-/// The value document the arguments give: one `.crov` file. Among other
+/// The value document the arguments give: one `.crol` file. Among other
 /// sources, or as `name=source`, it is a layer, which fails as one.
 pub(crate) fn argument(arguments: &[String]) -> Option<&Path> {
     match arguments {
@@ -128,7 +128,7 @@ fn expected(path: &Path, text: &str, args: &InputArgs) -> Result<Expected, Strin
     if crol::schema::is_schema_file(text) {
         return Ok(schema_only(crol::schema::build::<SchemaFile>()));
     }
-    let project_path = project_path(args)?;
+    let project_path = project_path(args);
     let working = std::env::current_dir().unwrap_or_default();
     let root = project_path
         .as_deref()
@@ -185,13 +185,10 @@ fn project_files(project_path: &Path, path: &Path, args: &InputArgs) -> Result<E
 /// The project file: `--project`, else the one found from the working
 /// directory (`SPEC.md` 12.4). `::` module paths start from its directory,
 /// else the working directory (`SPEC.md` 4.2).
-fn project_path(args: &InputArgs) -> Result<Option<PathBuf>, String> {
+fn project_path(args: &InputArgs) -> Option<PathBuf> {
     match args.project() {
-        Some(project) => Ok(Some(project.to_path_buf())),
-        None => {
-            let working = std::env::current_dir().unwrap_or_default();
-            Project::find(&working).map_err(|e| e.to_string())
-        }
+        Some(project) => Some(project.to_path_buf()),
+        None => Project::find(&std::env::current_dir().unwrap_or_default()),
     }
 }
 

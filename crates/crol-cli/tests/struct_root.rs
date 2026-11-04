@@ -59,8 +59,8 @@ fn project(name: &str, base: &str, local: &str) -> PathBuf {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("base")).unwrap();
     std::fs::create_dir_all(dir.join("local")).unwrap();
-    std::fs::write(dir.join("project.crov"), PROJECT).unwrap();
-    std::fs::write(dir.join("schema.crov"), SCHEMA).unwrap();
+    std::fs::write(dir.join("project.crol"), PROJECT).unwrap();
+    std::fs::write(dir.join("schema.crol"), SCHEMA).unwrap();
     std::fs::write(dir.join("base/a.crod"), base).unwrap();
     std::fs::write(dir.join("local/a.crod"), local).unwrap();
     dir
@@ -210,7 +210,7 @@ fn a_removed_key_leaves_no_mark_where_the_root_is_no_struct() {
         "schema: Some(\"schema\"),",
         "schema: Some(\"schema\"), root: Some(\"app::Definition\"),",
     );
-    std::fs::write(dir.join("project.crov"), project_file).unwrap();
+    std::fs::write(dir.join("project.crol"), project_file).unwrap();
     let output = crol(&dir, &["eval"]);
     assert!(output.status.success(), "{output:?}");
     assert!(!stdout(&output).contains('b'), "{output:?}");
@@ -225,7 +225,7 @@ fn the_project_root_chooses_the_kind() {
         "schema: Some(\"schema\"),",
         "schema: Some(\"schema\"), root: Some(\"app::Definition\"),",
     );
-    std::fs::write(dir.join("project.crov"), project_file).unwrap();
+    std::fs::write(dir.join("project.crol"), project_file).unwrap();
     let output = crol(&dir, &["check"]);
     assert!(!output.status.success(), "{output:?}");
     assert!(

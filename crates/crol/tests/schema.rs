@@ -197,14 +197,14 @@ fn variant_names() {
 fn schema_files_read_back() {
     let schema = schema::build::<Definition>();
     let text = schema.to_text().unwrap();
-    expect_test::expect_file!["schema.expected.crov"].assert_eq(&text);
+    expect_test::expect_file!["schema.expected.crol"].assert_eq(&text);
     let read = SchemaFile::from_text(&text).unwrap();
     assert_eq!(read, schema);
 }
 
 #[test]
 fn check_file_writes_then_compares() {
-    let path = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("schema/check.crov");
+    let path = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("schema/check.crol");
     let _ = std::fs::remove_file(&path);
     schema::check_file::<Definition>(&path).unwrap();
     schema::check_file::<Definition>(&path).unwrap();
@@ -1082,7 +1082,7 @@ fn schema_files_say_so_themselves() {
         "#![schema(crol::schema)]\n\n1\n",
         "#![schema(\"crate:crol-eval\")]\n\n1\n",
         "#![schema(\"crate:crol@999\")]\n\n1\n",
-        "#![schema(\"https://example.com/crate:crol.crov\")]\n\n1\n",
+        "#![schema(\"https://example.com/crate:crol.crol\")]\n\n1\n",
     ] {
         assert!(!schema::is_schema_file(text), "{text}");
     }

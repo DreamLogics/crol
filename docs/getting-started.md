@@ -47,10 +47,10 @@ serde = { version = "1", features = ["derive"] }
 
 ## Your first file
 
-Create `config.crov` next to `Cargo.toml`:
+Create `config.crol` next to `Cargo.toml`:
 
 ```crol
-// config.crov
+// config.crol
 port: 8080
 listen: "0.0.0.0:" + &root.port
 admin: "127.0.0.1:" + (&root.port + 1)
@@ -63,12 +63,13 @@ that gives a key a value. Two things are new:
 - `&root.port` is a _reference_: it reads the value of `port`.
 - `+` works on values: strings concatenate, and numbers add up.
 
-The extension matters. `.crov` says that this file is one _value_, on its own.
+The extension matters. `.crol` is the plain default: it says that this file is
+one _value_, on its own. That is all you need until you want layers.
 
 Ask `crol` what the file evaluates to:
 
 ```console
-$ crol eval config.crov
+$ crol eval config.crol
 port: 8080
 listen: "0.0.0.0:8080"
 admin: "127.0.0.1:8081"
@@ -96,7 +97,7 @@ struct Config {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let text = std::fs::read_to_string("config.crov")?;
+    let text = std::fs::read_to_string("config.crol")?;
     let config: Config = crol::from_str(&text)?;
     println!(
         "{} and {} (port {}), workers: {}",
@@ -133,13 +134,14 @@ workers: & - 3
 `workers: & - 3` uses `&` on its own, which means _the value below_: whatever
 `workers` was before this entry. `port: 9000` simply replaces the old value.
 
-Files stacked like this are called [_layers_](layers.md). A layer is another
-kind of file than a value: it holds operations on data that all layers share.
-Those files end in `.crod`, so rename yours. It can stay as it is, since [plain
-entries work in both](modes.md#moving-a-file-between-modes):
+Files stacked like this are called [_layers_](layers.md). This is the point to
+move from `.crol` to `.crod`, the extension you opt in to for layers: a layer is
+another kind of file than a value, as it holds operations on data that all layers
+share. So rename yours. It can stay as it is, since [plain entries work in
+both](modes.md#moving-a-file-between-modes):
 
 ```console
-$ mv config.crov config.crod
+$ mv config.crol config.crod
 ```
 
 Give `crol eval` both, lowest first:
@@ -256,7 +258,7 @@ bigger, tell the tools about your layers once, in a _project file_. `crol init`
 
 ```console
 $ crol init
-Created /path/to/project/project.crov
+Created /path/to/project/project.crol
 Created /path/to/project/data/base/main.crod
 
 Next:
@@ -267,7 +269,7 @@ Next:
 
 You already have the dependency, from the repository, so skip the first step.
 `crol init` changes neither your manifest nor your code. It wrote a commented
-`project.crov` with one layer, `base`, in the directory `data/base`, and a
+`project.crol` with one layer, `base`, in the directory `data/base`, and a
 `main.crod` there that holds only comments.
 
 Move your settings into the layer:
@@ -291,7 +293,7 @@ admin: "127.0.0.1:8081"
 workers: 4
 ```
 
-To add a layer, create a directory and list it in `project.crov`, lowest first:
+To add a layer, create a directory and list it in `project.crol`, lowest first:
 
 ```crol
 // data/local/overrides.crod
@@ -299,7 +301,7 @@ port: 9000
 ```
 
 ```crol
-// project.crov
+// project.crol
 Project {
     layers: List(
         [{ name: "base", dir: "data::base", .. }, { name: "local", dir: "data::local", .. }],
@@ -355,7 +357,7 @@ $ cargo run
 ## Where to go next
 
 - [The language by example](language.md): everything you can write in a file.
-- [Data mode and value mode](modes.md): what `.crov` and `.crod` mean, and why
+- [Data mode and value mode](modes.md): what `.crol` and `.crod` mean, and why
   `from_str` and `CrolComposer` read a file differently.
 - [Layers](layers.md) and [variants](variants.md): the two ways of combining
   data, by stacking files and by environment.

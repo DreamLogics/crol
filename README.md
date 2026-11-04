@@ -26,8 +26,8 @@ with fixed rules, and load into your Rust types through
 
 ## Overview
 
-A file's extension says how it behaves: a `.crov` file is one value, and a
-`.crod` file is data that [stacks in layers](docs/modes.md).
+A file's extension says how it behaves: a `.crol` file, the default, is one value,
+and a `.crod` file is data that [stacks in layers](docs/modes.md).
 
 CROL looks like [RON](https://github.com/ron-rs/ron), but a document holds
 _operations_ as well as values: it can declare, replace, patch and remove

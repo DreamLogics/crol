@@ -12,7 +12,7 @@ use crate::diagnostics::Reporter;
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct Args {
-    /// The layers, lowest first, or one `.crov` file, then optionally a key
+    /// The layers, lowest first, or one `.crol` file, then optionally a key
     /// and path to print only that value: `web.limits.cpu`. Without layers,
     /// the project file's. A last argument of the form of a key is a key:
     /// write a layer `./base` or `::base` there.

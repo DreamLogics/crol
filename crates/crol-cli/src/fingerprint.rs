@@ -6,7 +6,7 @@ use crate::diagnostics::Reporter;
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct Args {
-    /// The layers, lowest first; or one `.crov` file, a value document.
+    /// The layers, lowest first; or one `.crol` file, a value document.
     layers: Vec<String>,
 
     #[command(flatten)]

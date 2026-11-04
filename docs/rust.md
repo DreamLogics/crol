@@ -8,7 +8,7 @@ to use what you get back.
 
 | You have                              | Use                                                 |
 | ------------------------------------- | --------------------------------------------------- |
-| one document (`.crov`)                | [`crol::from_str`](modes.md#value-mode-a-file-is-a-value) |
+| one document (`.crol`)                | [`crol::from_str`](modes.md#value-mode-a-file-is-a-value) |
 | one document and a [schema](schemas.md) | `crol::from_str_with_schema`                      |
 | layers, variants or several files (`.crod`) | `CrolComposer`, then `compose` or `compose_data` |
 
@@ -474,7 +474,7 @@ without stopping, use [`crol::check`](schemas.md#checking-from-rust).
 ## Writing CROL
 
 `crol::to_string` and `crol::to_string_pretty` write any `Serialize` value as a
-plain value document, for a `.crov` file. The output has no operators, and reads back to the
+plain value document, for a `.crol` file. The output has no operators, and reads back to the
 same value:
 
 ```rust

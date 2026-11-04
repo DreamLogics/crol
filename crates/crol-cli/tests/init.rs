@@ -48,7 +48,7 @@ fn sets_up_a_cargo_project_that_the_tools_can_load() {
     assert_eq!(std::fs::read(dir.join("Cargo.toml")).unwrap(), manifest);
 
     // The application's and the language server's view of the file.
-    let path = dir.join("project.crov");
+    let path = dir.join("project.crol");
     let project = Project::read(&path).unwrap();
     let ProjectLayers::List(layers) = &project.layers else {
         panic!("{project:?}")
@@ -68,7 +68,7 @@ fn sets_up_a_cargo_project_that_the_tools_can_load() {
     // The tools work at once, on formatted files.
     let output = crol(
         &dir,
-        &["fmt", "--check", "project.crov", "data/base/main.crod"],
+        &["fmt", "--check", "project.crol", "data/base/main.crod"],
     );
     assert!(output.status.success(), "{output:?}");
     for command in ["check", "eval", "fingerprint"] {
@@ -94,8 +94,8 @@ fn the_subcommand_does_the_same() {
     assert!(crol(&flag, &["--init"]).status.success());
     assert!(crol(&subcommand, &["init"]).status.success());
     assert_eq!(
-        std::fs::read(flag.join("project.crov")).unwrap(),
-        std::fs::read(subcommand.join("project.crov")).unwrap()
+        std::fs::read(flag.join("project.crol")).unwrap(),
+        std::fs::read(subcommand.join("project.crol")).unwrap()
     );
 }
 
@@ -106,22 +106,22 @@ fn finds_the_cargo_project_from_a_directory_below_it() {
     std::fs::create_dir_all(&below).unwrap();
     let output = crol(&below, &["--init"]);
     assert!(output.status.success(), "{output:?}");
-    assert!(dir.join("project.crov").is_file());
-    assert!(!below.join("project.crov").exists());
+    assert!(dir.join("project.crol").is_file());
+    assert!(!below.join("project.crol").exists());
     assert!(crol(&below, &["check"]).status.success());
 }
 
 #[test]
 fn never_overwrites_a_project_file() {
     let dir = cargo_project("exists");
-    std::fs::write(dir.join("project.crov"), "mine").unwrap();
+    std::fs::write(dir.join("project.crol"), "mine").unwrap();
     for args in [&["--init"], &["init"]] {
         let output = crol(&dir, args);
         assert_eq!(output.status.code(), Some(1), "{output:?}");
         assert!(stderr(&output).contains("already exists"), "{output:?}");
     }
     assert_eq!(
-        std::fs::read_to_string(dir.join("project.crov")).unwrap(),
+        std::fs::read_to_string(dir.join("project.crol")).unwrap(),
         "mine"
     );
     assert!(!dir.join("data").exists());
@@ -148,7 +148,7 @@ fn refuses_to_make_the_layer_path_ambiguous() {
     let output = crol(&dir, &["--init"]);
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert!(stderr(&output).contains("in the way"), "{output:?}");
-    assert!(!dir.join("project.crov").exists());
+    assert!(!dir.join("project.crol").exists());
     assert!(!dir.join("data/base").exists());
 }
 
@@ -156,7 +156,7 @@ fn refuses_to_make_the_layer_path_ambiguous() {
 fn says_when_another_project_file_is_above() {
     let dir = cargo_project("nested");
     std::fs::write(
-        dir.join("project.crov"),
+        dir.join("project.crol"),
         r#"Project { layers: List([]), .. }"#,
     )
     .unwrap();
@@ -165,7 +165,7 @@ fn says_when_another_project_file_is_above() {
     std::fs::write(member.join("Cargo.toml"), "[package]\nname = \"member\"\n").unwrap();
     let output = crol(&member, &["--init"]);
     assert!(output.status.success(), "{output:?}");
-    assert!(member.join("project.crov").is_file());
+    assert!(member.join("project.crol").is_file());
     assert!(stderr(&output).contains("exists too"), "{output:?}");
 }
 
@@ -186,7 +186,7 @@ fn needs_a_cargo_project() {
 #[test]
 fn errors_follow_the_message_format() {
     let dir = cargo_project("json");
-    std::fs::write(dir.join("project.crov"), "mine").unwrap();
+    std::fs::write(dir.join("project.crol"), "mine").unwrap();
     let output = crol(&dir, &["--init", "--message-format", "json"]);
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -198,7 +198,7 @@ fn the_flag_goes_alone_and_commands_still_take_global_options() {
     let dir = cargo_project("usage");
     let output = crol(&dir, &["--init", "check"]);
     assert_eq!(output.status.code(), Some(2), "{output:?}");
-    assert!(!dir.join("project.crov").exists());
+    assert!(!dir.join("project.crol").exists());
 
     let output = crol(&dir, &["--color", "never"]);
     assert_eq!(output.status.code(), Some(2), "{output:?}");
@@ -212,7 +212,7 @@ fn the_flag_goes_alone_and_commands_still_take_global_options() {
 
     let output = crol(&dir, &["--color", "never", "init"]);
     assert!(output.status.success(), "{output:?}");
-    assert!(dir.join("project.crov").is_file());
+    assert!(dir.join("project.crol").is_file());
 }
 
 #[test]
@@ -225,18 +225,18 @@ fn says_what_the_guide_says() {
     assert!(stderr(&output).contains(dependency), "{output:?}");
 
     // The schema where `crol::schema::check_file` puts it (`docs/schemas.md`).
-    let project = std::fs::read_to_string(dir.join("project.crov")).unwrap();
+    let project = std::fs::read_to_string(dir.join("project.crol")).unwrap();
     assert!(project.contains("`Some(\"crol::schema\")`"), "{project}");
-    assert!(project.contains("`crol/schema.crov`"), "{project}");
+    assert!(project.contains("`crol/schema.crol`"), "{project}");
 
     // What the comment suggests works.
     std::fs::create_dir(dir.join("crol")).unwrap();
     let schema = "Schema { format: 1, root: \"t::T\", types: { \"t::T\": Struct { name: \"T\", \
                   source: (\"lib.rs\", 1), fields: {}, .. } } }";
-    std::fs::write(dir.join("crol/schema.crov"), schema).unwrap();
+    std::fs::write(dir.join("crol/schema.crol"), schema).unwrap();
     let edited = project.replace("schema: None", "schema: Some(\"crol::schema\")");
     assert_ne!(edited, project);
-    std::fs::write(dir.join("project.crov"), edited).unwrap();
+    std::fs::write(dir.join("project.crol"), edited).unwrap();
     let output = crol(&dir, &["check"]);
     assert!(output.status.success(), "{output:?}");
 }
@@ -246,12 +246,11 @@ fn writes_a_value_document_and_a_data_document() {
     let dir = cargo_project("extensions");
     let output = crol(&dir, &["--init"]);
     assert!(output.status.success(), "{output:?}");
-    assert!(dir.join("project.crov").is_file());
+    assert!(dir.join("project.crol").is_file());
     assert!(dir.join("data/base/main.crod").is_file());
-    assert!(!dir.join("project.crol").exists());
 
     // Both load: the project with the composer's layer, the layer as data.
-    assert!(crol(&dir, &["check", "project.crov"]).status.success());
+    assert!(crol(&dir, &["check", "project.crol"]).status.success());
     assert!(crol(&dir, &["check", "data::base"]).status.success());
     std::fs::write(dir.join("data/base/main.crod"), "+port: 8080\n").unwrap();
     let output = crol(&dir, &["eval"]);

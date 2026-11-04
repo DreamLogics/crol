@@ -90,7 +90,7 @@ happen in `build.rs`, and the usual way is a test:
 // tests/schema.rs
 #[test]
 fn crol_schema() {
-    crol::schema::check_file::<fleet::Definition>("crol/schema.crov").unwrap();
+    crol::schema::check_file::<fleet::Definition>("crol/schema.crol").unwrap();
 }
 ```
 
@@ -105,7 +105,7 @@ $ CROL_UPDATE_SCHEMA=1 cargo test
 Commit the result. It is a CROL file, sorted so that it gives small diffs:
 
 ```console
-$ head -n 12 crol/schema.crov
+$ head -n 12 crol/schema.crol
 #![schema("crate:crol@0.1")]
 
 Schema {
@@ -166,7 +166,7 @@ Hand the schema to `crol check` with `--schema`:
 ```
 
 ```console
-$ crol check --schema crol/schema.crov data
+$ crol check --schema crol/schema.crol data
 error: `Service` has no field `replica`; its fields are `image`, `port`, `replicas`, `depends_on`, `env`
   ┌─ /path/to/project/data/services.crod:5:14
   │
@@ -201,7 +201,7 @@ each marked with a comment, so you can see what your program will get:
 ```
 
 ```console
-$ crol eval --schema crol/schema.crov ./data
+$ crol eval --schema crol/schema.crol ./data
 web: Service {
     image: "web:1.4",
     port: 80,
@@ -247,7 +247,7 @@ or a crate:
 | `#![schema(::crol::schema)]`                    | a file, by [module path](projects.md#module-paths), from the root directory |
 | `#![schema(crol::schema)]`                      | the same, from the document's own directory                 |
 | `#![schema(super::schema)]`                     | the same, from the parent directory                         |
-| `#![schema("https://example.org/v2/schema.crov")]` | a file [over HTTPS](#remote-schemas)                     |
+| `#![schema("https://example.org/v2/schema.crol")]` | a file [over HTTPS](#remote-schemas)                     |
 | `#![schema("crate:fleet@2.1")]`                 | the schema a [crate publishes](#remote-schemas)             |
 
 ```crol
@@ -274,11 +274,11 @@ error: expected u16, found "80"
 
 ### In a project file
 
-The same forms work in `project.crov`, written as a string. A module path there
+The same forms work in `project.crol`, written as a string. A module path there
 always starts at the project's directory:
 
 ```crol
-// project.crov
+// project.crol
 Project {
     layers: List([{ name: "base", dir: "data", .. }]),
     schema: Some("crol::schema"),
@@ -303,7 +303,7 @@ get completion and checks from nothing but the file.
 path, and name it:
 
 ```crol
-#![schema("https://example.org/fleet/v2/schema.crov")]
+#![schema("https://example.org/fleet/v2/schema.crol")]
 
 +web: Service {
     image: "web:1.4",
@@ -313,11 +313,11 @@ path, and name it:
 ```
 
 **From a crate.** Include the file in your package and say where it is. It is
-`crol/schema.crov` by default, so the table can be empty:
+`crol/schema.crol` by default, so the table can be empty:
 
 ```toml
 [package.metadata.crol]
-schema = "crol/schema.crov"
+schema = "crol/schema.crol"
 ```
 
 Then `#![schema("crate:fleet@2.1")]` names it, with a version requirement as in
@@ -390,7 +390,7 @@ unambiguous.
 
 In value mode, the root type is the type of the whole document, unless the
 document has a top-level type name, which then chooses it. `crol check` on a
-`.crov` file and your editor both do this.
+`.crol` file and your editor both do this.
 
 ### Types with the same name
 
@@ -465,7 +465,7 @@ With a struct as the root type, a root key is a field like any other, so
 `retries: &default + 1` is one more than the default of that field.
 
 **Limits.** `&default` works in layered data only. In a value-mode document it is
-an error, with `crol::from_str`, `crol::from_str_with_schema`, a `.crov` file given
+an error, with `crol::from_str`, `crol::from_str_with_schema`, a `.crol` file given
 to `crol` and in the language server alike. There, and in data with no schema at
 all, it reports `defaults come from a schema, and no schema is given`.
 
@@ -551,7 +551,7 @@ pub struct Service {
 
 ```console
 $ CROL_UPDATE_SCHEMA=1 cargo test
-$ crol check --schema crol/schema.crov ./retry.crod
+$ crol check --schema crol/schema.crol ./retry.crod
 error: `Service` is missing the field `replicas`; write it, or end the block with `..` to leave out fields that have defaults
   ┌─ ./retry.crod:3:7
   │
@@ -591,7 +591,7 @@ pub enum Definition {
 
 ```console
 $ CROL_UPDATE_SCHEMA=1 cargo test
-$ grep cpu crol/schema.crov
+$ grep cpu crol/schema.crol
             fields: { cpu: { ty: F64, default: Unrecorded, .. } },
 ```
 

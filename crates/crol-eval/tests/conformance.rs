@@ -5,7 +5,7 @@
 //!
 //! - `layers/<n>-<name>/`: the layers, in the order of `<n>`, each holding
 //!   `.crod` files at any depth;
-//! - `options.crov` (optional): options, as a value-mode document:
+//! - `options.crol` (optional): options, as a value-mode document:
 //!   `variants: [Grouped(["dev", "prod"]), Discrete("cache")]`, `parents: {
 //!   prod_eu: "prod" }`, `contexts: [["prod", "cache"]]`, `variant_keys:
 //!   NoNewKeys`, `max_contexts: 16`, `warn_cross_file_patches: false`, and
@@ -67,24 +67,24 @@ fn strings(value: &Value) -> Vec<String> {
 
 fn options(case: &Path) -> DataOptions {
     let mut options = DataOptions::default();
-    let path = case.join("options.crov");
+    let path = case.join("options.crol");
     let Ok(text) = fs::read_to_string(&path) else {
         return options;
     };
     let mut sources = Sources::new();
-    let file = sources.add("options.crov", text);
+    let file = sources.add("options.crol", text);
     let evaluation = evaluate_value(&sources, file);
     let value = evaluation
         .value
-        .unwrap_or_else(|| panic!("options.crov: {:?}", evaluation.diagnostics));
+        .unwrap_or_else(|| panic!("options.crol: {:?}", evaluation.diagnostics));
     let ValueKind::Keyed(keyed) = value.kind else {
-        panic!("options.crov is not a keyed value")
+        panic!("options.crol is not a keyed value")
     };
     let mut variants = Variants::new();
     let mut parents = Vec::new();
     for (key, value) in keyed.entries {
         let Key::Str(key) = key else {
-            panic!("integer key in options.crov")
+            panic!("integer key in options.crol")
         };
         match (key.as_str(), &value.kind) {
             ("warn_cross_file_patches", ValueKind::Bool(b)) => options.warn_cross_file_patches = *b,

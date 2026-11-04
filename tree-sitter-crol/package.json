@@ -16,7 +16,7 @@
   "tree-sitter": [
     {
       "scope": "source.crol",
-      "file-types": ["crod", "crov"],
+      "file-types": ["crod", "crol"],
       "highlights": "queries/highlights.scm"
     }
   ]

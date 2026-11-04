@@ -6,7 +6,7 @@
       "camelcase": "Crol",
       "scope": "source.crol",
       "path": ".",
-      "file-types": ["crod", "crov"],
+      "file-types": ["crod", "crol"],
       "highlights": "queries/highlights.scm",
       "injection-regex": "^crol$"
     }

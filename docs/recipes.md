@@ -254,11 +254,11 @@ port 8080
 `super` and the document's directory already applied, so `super::defaults` in
 `data/base/web.crod` is `["data", "defaults"]`. A loader cannot be led above the
 root. A module path has no extension: if your loader also serves schema files,
-`path.mode().extension()` gives `crod` or `crov`, whichever is looked for.
+`path.mode().extension()` gives `crod` or `crol`, whichever is looked for.
 
 The source's name appears in messages, so start it with something of your own,
 like `memory:` here. Its extension [counts as a file's
-does](modes.md#text-has-no-extension): a layer called `memory:base.crov` is an
+does](modes.md#text-has-no-extension): a layer called `memory:base.crol` is an
 error, and one called `memory:base` follows the call that loaded it. To hold a directory of documents, return `Loaded::Directory`
 with the relative path and source of each: CROL orders them by path itself.
 `crol::Error::source_id()` tells you which source an error from loading is about.
@@ -374,11 +374,11 @@ limit: Some(3)
 ```
 
 The result goes to standard output. It is a value document, so keep it in a
-`.crov` file and read it with `crol::from_str`:
+`.crol` file and read it with `crol::from_str`:
 
 ```console
-$ crol from-ron settings.ron > settings.crov
-$ crol check settings.crov
+$ crol from-ron settings.ron > settings.crol
+$ crol check settings.crol
 ```
 
 The `..` it adds means that fields left out take their defaults, as RON assumes.

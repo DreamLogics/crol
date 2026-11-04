@@ -14,7 +14,7 @@ use crol::{
 type Asked = (Vec<String>, String);
 
 /// Documents in memory, by path, as a file system would have them: a module
-/// path names `name.crod`, `name.crov` for a value document, or the directory
+/// path names `name.crod`, `name.crol` for a value document, or the directory
 /// `name`.
 #[derive(Default, Clone)]
 struct Memory {
@@ -455,9 +455,9 @@ fn schemas_and_project_files_read_through_loaders() {
         .to_text()
         .unwrap();
     let memory = Memory::new(&[
-        ("schema.crov", &schema),
+        ("schema.crol", &schema),
         (
-            "app.crov",
+            "app.crol",
             "Project { layers: List([{ name: \"base\", dir: \"data\", .. }]), .. }",
         ),
         ("data/a.crod", "+a: 1,"),

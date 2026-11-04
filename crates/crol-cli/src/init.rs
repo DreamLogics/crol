@@ -22,7 +22,7 @@ Project {
     variants: [],
 
     // The schema file your application writes, to check the data's types:
-    // `Some("crol::schema")` is `crol/schema.crov` next to this file.
+    // `Some("crol::schema")` is `crol/schema.crol` next to this file.
     schema: None,
     ..
 }
@@ -67,8 +67,7 @@ fn init(reporter: &mut Reporter) -> Result<(), String> {
                 current.display()
             )
         })?;
-    // A `project.crol` here or above has to be renamed first.
-    let other_project = Project::find(&current).map_err(|e| e.to_string())?;
+    let other_project = Project::find(&current);
     let project_file = root.join(FILE_NAME);
     // `symlink_metadata` also sees a dangling link.
     if project_file.symlink_metadata().is_ok() {

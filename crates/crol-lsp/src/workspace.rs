@@ -39,15 +39,7 @@ struct BufferLoader {
 }
 
 /// What was left out of the directories read.
-type LeftOut = Arc<Mutex<Vec<Stray>>>;
-
-/// A file left out of a directory.
-struct Stray {
-    problem: Problem,
-    /// Whether it may be data that is now missing, as a `.crol` file that
-    /// was not renamed. A `.crov` file never was any.
-    lost_data: bool,
-}
+type LeftOut = Arc<Mutex<Vec<Problem>>>;
 
 impl BufferLoader {
     /// The loaders that read below `root`, with the buffers over the files,
@@ -90,15 +82,14 @@ impl FileLoader for BufferLoader {
             let refused = Mode::Data.check(&entry.to_string());
             match refused {
                 Err(error) if self.project_file.as_ref() != Some(&entry) => {
-                    let lost_data = crol::is_retired(&entry.to_string());
                     let problem = Problem {
                         message: error.to_string(),
                         file: entry.as_path().map(Path::to_path_buf),
                     };
                     // A directory may be read twice: as a layer, and for an
                     // `extends`.
-                    if left_out.iter().all(|s| s.problem.file != problem.file) {
-                        left_out.push(Stray { problem, lost_data });
+                    if left_out.iter().all(|p| p.file != problem.file) {
+                        left_out.push(problem);
                     }
                 }
                 _ => kept.push((relative, entry)),
@@ -500,17 +491,10 @@ struct Loading {
 }
 
 impl Loading {
-    /// Notes what was left out of the directories read while `layer` was
-    /// loaded.
-    fn left_out(&mut self, left_out: &LeftOut, layer: usize) {
+    /// Notes what was left out of the directories read.
+    fn left_out(&mut self, left_out: &LeftOut) {
         let mut strays = left_out.lock().unwrap_or_else(|e| e.into_inner());
-        for stray in strays.drain(..) {
-            if stray.lost_data {
-                let why = "a file of this layer or a lower one was left out";
-                self.gap.get_or_insert((layer, why.to_owned()));
-            }
-            self.problems.push(stray.problem);
-        }
+        self.problems.append(&mut strays);
     }
 }
 
@@ -541,7 +525,7 @@ fn load_chain(
         followed: snapshot.followed(loads, &layers),
         ..Default::default()
     };
-    loading.left_out(&left_out, 0);
+    loading.left_out(&left_out);
     Ok((layers, loading))
 }
 
@@ -643,10 +627,7 @@ pub(crate) fn evaluate(
     let mut problems = Vec::new();
     let project_path = match (&settings.project, root) {
         (Some(project), _) => Some(project.clone()),
-        (None, Some(root)) => Project::find(root).unwrap_or_else(|error| {
-            problems.push(Problem::from(error));
-            None
-        }),
+        (None, Some(root)) => Project::find(root),
         (None, None) => None,
     };
     let mut check = CheckOptions::default();
@@ -755,15 +736,6 @@ pub(crate) fn evaluate(
             continue;
         }
         let file = snapshot.intern(&path.display().to_string(), text);
-        // A retired file is not evaluated: it states no mode (`SPEC.md` 4).
-        if crol::is_retired(&path.to_string_lossy()) {
-            let message = "the `.crol` extension is retired; \
-                           rename it to `.crod` if it is data, or to `.crov` if it is a value document";
-            let span = crol_eval::Span::new(file, Default::default());
-            snapshot.extra.push(Diagnostic::error(span, message));
-            snapshot.documents.push((file, Evaluation::default()));
-            continue;
-        }
         let mode = Mode::of_path(path).unwrap_or(Mode::Value);
         // The project file has the schema `crol` provides (`SPEC.md` 12.4).
         let is_project_file = project_path
@@ -1026,7 +998,7 @@ fn load_project(
                 loading.gap.get_or_insert((index, why));
             }
         }
-        loading.left_out(&left_out, index);
+        loading.left_out(&left_out);
     }
     snapshot.layers = snapshot.intern_layers(composer.layers());
     let layer_files = |snapshot: &Snapshot, index: usize| -> Vec<FileId> {
@@ -1133,7 +1105,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("data")).unwrap();
         std::fs::write(
-            root.join("project.crov"),
+            root.join("project.crol"),
             "Project { layers: List([{ name: \"base\", dir: \"data\", .. }]), .. }",
         )
         .unwrap();
@@ -1202,10 +1174,10 @@ mod tests {
             Vec::<String>::new()
         );
         assert_eq!(
-            errors(&root, &root.join("a.crov"), VALUE),
+            errors(&root, &root.join("a.crol"), VALUE),
             Vec::<String>::new()
         );
-        assert!(!errors(&root, &root.join("a.crov"), DATA).is_empty());
+        assert!(!errors(&root, &root.join("a.crol"), DATA).is_empty());
         assert!(!errors(&root, &root.join("a.crod"), VALUE).is_empty());
         // Nothing to go by: a document on its own is value mode.
         assert_eq!(
@@ -1223,7 +1195,7 @@ mod tests {
             Vec::<String>::new()
         );
         assert_eq!(
-            errors(&root, &root.join("other.crov"), VALUE),
+            errors(&root, &root.join("other.crol"), VALUE),
             Vec::<String>::new()
         );
         let _ = std::fs::remove_dir_all(&root);
@@ -1251,7 +1223,7 @@ mod tests {
     #[test]
     fn a_problem_with_the_project_lands_on_the_file_to_blame() {
         let root = project("stray");
-        std::fs::write(root.join("data/stray.crov"), "1").unwrap();
+        std::fs::write(root.join("data/stray.crol"), "1").unwrap();
         let snapshot = evaluate(
             Some(&root),
             &Settings::default(),
@@ -1260,7 +1232,7 @@ mod tests {
             &RemoteStatus::new(),
         );
         assert!(snapshot.problem.is_some());
-        let file = snapshot.file_of(&root.join("data/stray.crov")).unwrap();
+        let file = snapshot.file_of(&root.join("data/stray.crol")).unwrap();
         assert!(snapshot.extra.iter().any(|d| d.span.file == file));
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1269,7 +1241,7 @@ mod tests {
     fn the_project_file_may_lie_in_a_layer() {
         let root = directory("project-in-layer");
         std::fs::write(
-            root.join("project.crov"),
+            root.join("project.crol"),
             "Project { layers: List([{ name: \"base\", dir: \"data\", .. }]), .. }",
         )
         .unwrap();
@@ -1277,7 +1249,7 @@ mod tests {
         std::fs::create_dir_all(&data).unwrap();
         std::fs::write(data.join("web.crod"), "+port: 80,").unwrap();
         std::fs::write(
-            data.join("project.crov"),
+            data.join("project.crol"),
             "Project { layers: List([{ name: \"base\", dir: \"sub\", .. }]), .. }",
         )
         .unwrap();

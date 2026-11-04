@@ -12,7 +12,7 @@ while IFS= read -r file; do
     echo "the grammar rejects a valid file: $file"
     status=1
   fi
-done < <(find ../tests/syntax/valid ../tests/cases \( -name '*.crod' -o -name '*.crov' \) | sort)
+done < <(find ../tests/syntax/valid ../tests/cases \( -name '*.crod' -o -name '*.crol' \) | sort)
 for file in ../tests/syntax/invalid/*.cro[dv]; do
   if "$TREE_SITTER" parse --quiet "$file" >/dev/null 2>&1; then
     echo "the grammar accepts an invalid file: $file"

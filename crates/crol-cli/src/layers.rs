@@ -26,7 +26,7 @@ pub(crate) struct InputArgs {
     #[arg(long, value_name = "CHILD=PARENT")]
     parent: Vec<String>,
 
-    /// The project file; default: `project.crov` in the current directory or
+    /// The project file; default: `project.crol` in the current directory or
     /// above, used when no layers are given.
     #[arg(long, value_name = "FILE")]
     project: Option<PathBuf>,
@@ -103,16 +103,14 @@ fn is_module_path(text: &str) -> bool {
 /// of a key or path, and does not end like a document (`SPEC.md` 11). Only the
 /// form counts, so that a command means the same whatever files exist.
 pub(crate) fn is_key(argument: &str) -> bool {
-    crol_eval::parse_path(argument).is_ok()
-        && Mode::of(argument).is_none()
-        && !crol::is_retired(argument)
+    crol_eval::parse_path(argument).is_ok() && Mode::of(argument).is_none()
 }
 
 /// The error for `key` when there is nothing to read it from: no layers were
 /// given, and no project file is found. `None` if there is one.
 pub(crate) fn no_layers_for(key: &str, args: &InputArgs) -> Option<String> {
     let dir = std::env::current_dir().ok()?;
-    let none = args.project.is_none() && matches!(Project::find(&dir), Ok(None));
+    let none = args.project.is_none() && Project::find(&dir).is_none();
     none.then(|| {
         format!(
             "no layers given, and no {FILE_NAME} in this directory or above; `{key}` is read as a key, so write `./{key}` to name a layer"
@@ -135,11 +133,9 @@ pub(crate) fn inputs(
     };
     let project_path = match &args.project {
         Some(path) => Some(path.clone()),
-        None => match std::env::current_dir().map(|dir| Project::find(&dir)) {
-            Ok(Ok(path)) => path,
-            Ok(Err(error)) => return fail(reporter, error.to_string()),
-            Err(_) => None,
-        },
+        None => std::env::current_dir()
+            .ok()
+            .and_then(|dir| Project::find(&dir)),
     };
     let project = match &project_path {
         Some(path) if arguments.is_empty() || args.project.is_some() => match Project::read(path) {

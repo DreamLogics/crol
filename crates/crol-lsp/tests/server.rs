@@ -131,9 +131,9 @@ fn workspace(name: &str, files: &[(&str, &str)]) -> PathBuf {
 
 #[test]
 fn diagnostics_symbols_and_formatting_for_a_document_on_its_own() {
-    let dir = workspace("lsp-single", &[("config.crov", "")]);
+    let dir = workspace("lsp-single", &[("config.crol", "")]);
     let mut client = Client::start(&dir);
-    let file = uri(&dir.join("config.crov"));
+    let file = uri(&dir.join("config.crol"));
     client.notify(
         "textDocument/didOpen",
         json!({ "textDocument": { "uri": file, "languageId": "crol", "version": 1, "text": "web: { port: 1 / 0 }" } }),
@@ -188,7 +188,7 @@ fn hover_completion_and_definition_in_a_project() {
         "lsp-project",
         &[
             (
-                "project.crov",
+                "project.crol",
                 r#"Project { layers: List([{ name: "base", dir: "base", .. }, { name: "local", dir: "local", .. }]), .. }"#,
             ),
             (
@@ -267,7 +267,7 @@ fn references_rename_and_workspace_symbols() {
         "lsp-navigate",
         &[
             (
-                "project.crov",
+                "project.crol",
                 r#"Project { layers: List([{ name: "base", dir: "base", .. }, { name: "local", dir: "local", .. }]), .. }"#,
             ),
             (
@@ -438,7 +438,7 @@ fn inlay_hints_show_what_entries_compute() {
         "lsp-hints",
         &[
             (
-                "project.crov",
+                "project.crol",
                 r#"Project { layers: List([{ name: "base", dir: "base", .. }, { name: "local", dir: "local", .. }]), .. }"#,
             ),
             (
@@ -522,11 +522,11 @@ fn code_actions_fix_what_the_diagnostics_say() {
         "lsp-actions",
         &[
             (
-                "project.crov",
+                "project.crol",
                 r#"Project { layers: List([{ name: "base", dir: "base", .. }, { name: "local", dir: "local", .. }]), schema: Some("schema"), .. }"#,
             ),
             (
-                "schema.crov",
+                "schema.crol",
                 r#"Schema {
                     format: 1,
                     root: "app::Services",
@@ -686,11 +686,11 @@ fn completion_and_hover_from_the_schema() {
         "lsp-schema",
         &[
             (
-                "project.crov",
+                "project.crol",
                 r#"Project { layers: List([{ name: "base", dir: "base", .. }, { name: "local", dir: "local", .. }]), schema: Some("schema"), .. }"#,
             ),
             (
-                "schema.crov",
+                "schema.crol",
                 r#"Schema {
                     format: 1,
                     root: "app::Definition",
@@ -838,7 +838,7 @@ fn documents_on_their_own_are_checked_against_their_schema() {
         "lsp-document-schema",
         &[
             (
-                "schema.crov",
+                "schema.crol",
                 r#"Schema {
                     format: 1,
                     root: "app::Service",
@@ -852,11 +852,11 @@ fn documents_on_their_own_are_checked_against_their_schema() {
                     },
                 }"#,
             ),
-            ("config.crov", ""),
+            ("config.crol", ""),
         ],
     );
     let mut client = Client::start(&dir);
-    let config = uri(&dir.join("config.crov"));
+    let config = uri(&dir.join("config.crol"));
     let open = |client: &mut Client, version: i32, text: &str| {
         if version == 1 {
             client.notify(
@@ -905,7 +905,7 @@ fn diagnostics_follow_a_types_explicit_defaults() {
         "lsp-explicit-defaults",
         &[
             (
-                "schema.crov",
+                "schema.crol",
                 r#"Schema {
                     format: 1,
                     root: "app::Relaxed",
@@ -920,11 +920,11 @@ fn diagnostics_follow_a_types_explicit_defaults() {
                     },
                 }"#,
             ),
-            ("config.crov", ""),
+            ("config.crol", ""),
         ],
     );
     let client = Client::start(&dir);
-    let config = uri(&dir.join("config.crov"));
+    let config = uri(&dir.join("config.crol"));
     client.notify(
         "textDocument/didOpen",
         json!({ "textDocument": { "uri": config, "languageId": "crol", "version": 1, "text": "#![schema(::schema)]\n\nRelaxed { port: 1 }" } }),
@@ -950,10 +950,10 @@ fn the_project_file_is_checked_against_its_schema() {
     let project = r#"Project { layers: List([{ name: "base", dir: "base", .. }]), .. }"#;
     let dir = workspace(
         "lsp-project-file",
-        &[("project.crov", project), ("base/a.crod", "+web: 1,")],
+        &[("project.crol", project), ("base/a.crod", "+web: 1,")],
     );
     let client = Client::start(&dir);
-    let file = uri(&dir.join("project.crov"));
+    let file = uri(&dir.join("project.crol"));
     let text = r#"Project { layers: List([{ name: "base", dir: "base", .. }]), options: { max_contexts: -1, .. }, .. }"#;
     client.notify(
         "textDocument/didOpen",
@@ -972,10 +972,10 @@ fn the_project_file_is_checked_against_its_schema() {
 
 #[test]
 fn remote_schemas_are_fetched_without_blocking() {
-    let dir = workspace("lsp-remote-schema", &[("config.crov", "")]);
-    let config = uri(&dir.join("config.crov"));
+    let dir = workspace("lsp-remote-schema", &[("config.crol", "")]);
+    let config = uri(&dir.join("config.crol"));
     // Nothing listens there, so fetching fails at once.
-    let text = "#![schema(\"https://127.0.0.1:9/schema.crov\")]\n\n{ replicas: 2 }";
+    let text = "#![schema(\"https://127.0.0.1:9/schema.crol\")]\n\n{ replicas: 2 }";
     let open = |client: &Client| {
         client.notify(
             "textDocument/didOpen",
@@ -1004,7 +1004,7 @@ fn remote_schemas_are_fetched_without_blocking() {
     let diagnostics = client.diagnostics_for(&config, |d| !d.is_empty());
     assert_eq!(
         message(&diagnostics),
-        "schema: fetching `https://127.0.0.1:9/schema.crov`"
+        "schema: fetching `https://127.0.0.1:9/schema.crol`"
     );
     let diagnostics =
         client.diagnostics_for(&config, |d| message(d).starts_with("schema: cannot fetch"));
@@ -1018,7 +1018,7 @@ fn go_to_value_below() {
         "lsp-value-below",
         &[
             (
-                "project.crov",
+                "project.crol",
                 r#"Project { layers: List([{ name: "base", dir: "base", .. }, { name: "local", dir: "local", .. }]), .. }"#,
             ),
             (
@@ -1068,11 +1068,11 @@ fn layer_documents_that_name_another_schema_get_a_warning() {
         "lsp-other-schema",
         &[
             (
-                "project.crov",
+                "project.crol",
                 r#"Project { layers: List([{ name: "base", dir: "base", .. }]), schema: Some("schema"), .. }"#,
             ),
-            ("schema.crov", schema),
-            ("other.crov", schema),
+            ("schema.crol", schema),
+            ("other.crol", schema),
             ("base/a.crod", "#![schema(super::other)]\n+a: 1,"),
         ],
     );
@@ -1098,7 +1098,7 @@ fn documents_on_their_own_complete_from_their_schema() {
         "lsp-own-schema",
         &[
             (
-                "schema.crov",
+                "schema.crol",
                 r#"Schema {
                     format: 1,
                     root: "app::Config",
@@ -1121,9 +1121,9 @@ fn documents_on_their_own_complete_from_their_schema() {
                     },
                 }"#,
             ),
-            ("config.crov", ""),
+            ("config.crol", ""),
             (
-                "project.crov",
+                "project.crol",
                 r#"Project { layers: List([{ name: "base", dir: "base", .. }]), .. }"#,
             ),
             ("base/a.crod", "+a: 1,"),
@@ -1158,7 +1158,7 @@ fn documents_on_their_own_complete_from_their_schema() {
     };
 
     // The fields of the root type, and inside them.
-    let config = uri(&dir.join("config.crov"));
+    let config = uri(&dir.join("config.crol"));
     let start = "#![schema(schema)]\n\n{ listen: \"x\", limits: { cpu: 1.0 } }";
     let labels = complete(&mut client, &config, start, "#![schema(schema)]\n\n{ lim");
     assert_eq!(labels, ["listen", "limits"]);
@@ -1199,7 +1199,7 @@ fn documents_on_their_own_complete_from_their_schema() {
     assert_eq!(markdown, "Where to listen.\n\n`String`", "{hover}");
 
     // The project file: the fields of `Project` crol provides.
-    let project = uri(&dir.join("project.crov"));
+    let project = uri(&dir.join("project.crol"));
     let text = r#"Project { layers: List([{ name: "base", dir: "base", .. }]), "#;
     let labels = complete(
         &mut client,
@@ -1452,12 +1452,12 @@ fn nested_document(name: &str) -> (Client, Buffer) {
     let dir = workspace(
         name,
         &[
-            ("schema.crov", NESTED_SCHEMA),
-            ("config.crov", "#![schema(schema)]\n\n{ name: \"x\" }"),
+            ("schema.crol", NESTED_SCHEMA),
+            ("config.crol", "#![schema(schema)]\n\n{ name: \"x\" }"),
         ],
     );
     let client = Client::start(&dir);
-    let buffer = Buffer::open(&client, &dir, "config.crov");
+    let buffer = Buffer::open(&client, &dir, "config.crol");
     (client, buffer)
 }
 
@@ -1779,7 +1779,7 @@ fn completion_from_the_project_at_any_depth() {
         "lsp-nested-project",
         &[
             (
-                "project.crov",
+                "project.crol",
                 r#"Project {
                     layers: List([{ name: "base", dir: "base", .. }, { name: "local", dir: "local", .. }]),
                     variants: [Discrete("eu")],
@@ -1788,7 +1788,7 @@ fn completion_from_the_project_at_any_depth() {
                     ..
                 }"#,
             ),
-            ("schema.crov", NESTED_SCHEMA),
+            ("schema.crol", NESTED_SCHEMA),
             ("base/a.crod", base),
             ("local/a.crod", "prod.name: \"q\",\n"),
         ],
@@ -1977,10 +1977,10 @@ fn inlay_hints_at_any_depth() {
 ";
     let dir = workspace(
         "lsp-nested-hints",
-        &[("schema.crov", NESTED_SCHEMA), ("config.crov", text)],
+        &[("schema.crol", NESTED_SCHEMA), ("config.crol", text)],
     );
     let mut client = Client::start_with(&dir, json!({ "debounce_ms": 10, "inlay_hints": true }));
-    let buffer = Buffer::open(&client, &dir, "config.crov");
+    let buffer = Buffer::open(&client, &dir, "config.crol");
     assert_eq!(
         inlay_labels(&mut client, &buffer),
         [
@@ -1997,7 +1997,7 @@ fn inlay_hints_in_lists_in_a_layer() {
         "lsp-nested-layer-hints",
         &[
             (
-                "project.crov",
+                "project.crol",
                 r#"Project { layers: List([{ name: "base", dir: "base", .. }]), .. }"#,
             ),
             (
@@ -2017,10 +2017,10 @@ fn code_actions_know_the_type_of_blocks_in_lists() {
     let text = "#![schema(schema)]\n\n{ backends: [Remote { host: \"h\" }] }";
     let dir = workspace(
         "lsp-nested-actions",
-        &[("schema.crov", NESTED_SCHEMA), ("config.crov", text)],
+        &[("schema.crol", NESTED_SCHEMA), ("config.crol", text)],
     );
     let mut client = Client::start(&dir);
-    let file = uri(&dir.join("config.crov"));
+    let file = uri(&dir.join("config.crol"));
     client.notify(
         "textDocument/didOpen",
         json!({ "textDocument": { "uri": file, "languageId": "crol", "version": 1, "text": text } }),
@@ -2046,7 +2046,7 @@ fn code_actions_know_the_type_of_blocks_in_lists() {
 
 #[test]
 fn completion_is_triggered_where_fields_and_values_start() {
-    let dir = workspace("lsp-triggers", &[("config.crov", "")]);
+    let dir = workspace("lsp-triggers", &[("config.crol", "")]);
     let (server_side, client_side) = Connection::memory();
     let server = thread::spawn(move || {
         let server = crol_lsp::Server::start(server_side, None).unwrap();
@@ -2215,12 +2215,12 @@ fn completion_answers_at_the_end_of_every_prefix() {
 fn a_document_just_opened_is_answered_at_once() {
     let dir = workspace(
         "lsp-just-opened",
-        &[("schema.crov", NESTED_SCHEMA), ("config.crov", "")],
+        &[("schema.crol", NESTED_SCHEMA), ("config.crol", "")],
     );
     // An evaluation after a pause would come too late.
     let mut client = Client::start_with(&dir, json!({ "debounce_ms": 60000 }));
     let (text, position) = at_marker("#![schema(schema)]\n\n{ server: { tls: { | } } }");
-    let file = uri(&dir.join("config.crov"));
+    let file = uri(&dir.join("config.crol"));
     client.notify(
         "textDocument/didOpen",
         json!({ "textDocument": { "uri": file, "languageId": "crol", "version": 1, "text": text } }),
@@ -2283,11 +2283,11 @@ fn a_standalone_crod_file_completes_its_own_variants() {
 }
 
 #[test]
-fn a_standalone_crov_file_is_value_mode() {
+fn a_standalone_crol_file_is_value_mode() {
     let text = "<prod> { port: 443 }\n";
-    let dir = workspace("lsp-standalone-value", &[("value.crov", text)]);
+    let dir = workspace("lsp-standalone-value", &[("value.crol", text)]);
     let client = Client::start(&dir);
-    let file = uri(&dir.join("value.crov"));
+    let file = uri(&dir.join("value.crol"));
     client.notify(
         "textDocument/didOpen",
         json!({ "textDocument": { "uri": file, "languageId": "crol", "version": 1, "text": text } }),
@@ -2298,63 +2298,23 @@ fn a_standalone_crov_file_is_value_mode() {
 }
 
 #[test]
-fn a_crov_file_in_a_layer_directory_is_reported_on_it() {
+fn a_crol_file_in_a_layer_directory_is_reported_on_it() {
     let dir = workspace(
-        "lsp-crov-in-layer",
-        &[
-            (
-                "project.crov",
-                "Project { layers: List([{ name: \"base\", dir: \"base\", .. }]), .. }",
-            ),
-            ("base/a.crod", "+a: 1\n"),
-            ("base/stray.crov", "1\n"),
-        ],
-    );
-    let client = Client::start(&dir);
-    client.diagnostics_for(&uri(&dir.join("base/stray.crov")), |d| {
-        d.iter()
-            .any(|d| d["message"].as_str().unwrap().contains("cannot be a layer"))
-    });
-    client.stop();
-}
-
-#[test]
-fn a_leftover_project_crol_is_reported_on_it() {
-    let dir = workspace(
-        "lsp-leftover",
+        "lsp-crol-in-layer",
         &[
             (
                 "project.crol",
                 "Project { layers: List([{ name: \"base\", dir: \"base\", .. }]), .. }",
             ),
             ("base/a.crod", "+a: 1\n"),
+            ("base/stray.crol", "1\n"),
         ],
     );
     let client = Client::start(&dir);
-    client.diagnostics_for(&uri(&dir.join("project.crol")), |d| {
-        d.iter().any(|d| {
-            d["message"]
-                .as_str()
-                .unwrap()
-                .contains("rename it to `project.crov`")
-        })
+    client.diagnostics_for(&uri(&dir.join("base/stray.crol")), |d| {
+        d.iter()
+            .any(|d| d["message"].as_str().unwrap().contains("cannot be a layer"))
     });
-    client.stop();
-}
-
-#[test]
-fn an_open_crol_file_says_to_rename_it() {
-    let dir = workspace("lsp-retired", &[("old.crol", "+a: 1\n")]);
-    let client = Client::start(&dir);
-    let file = uri(&dir.join("old.crol"));
-    client.notify(
-        "textDocument/didOpen",
-        json!({ "textDocument": { "uri": file, "languageId": "crol", "version": 1, "text": "+a: 1\n" } }),
-    );
-    let diagnostics = client.diagnostics_for(&file, |d| !d.is_empty());
-    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-    let message = diagnostics[0]["message"].as_str().unwrap();
-    assert!(message.contains("`.crod`") && message.contains("`.crov`"));
     client.stop();
 }
 
@@ -2571,7 +2531,7 @@ fn a_layer_of_a_project_is_evaluated_on_what_it_extends() {
         "lsp-extends-project",
         &[
             (
-                "project.crov",
+                "project.crol",
                 r#"Project { layers: List([{ name: "local", dir: "local", .. }]), .. }"#,
             ),
             ("shared/base.crod", "+web: { port: 80 }\n"),
@@ -2631,15 +2591,15 @@ fn files_give_value_documents_a_type() {
     let dir = workspace(
         "lsp-files",
         &[
-            ("project.crov", project),
-            ("schema.crov", DEFAULTS_SCHEMA),
+            ("project.crol", project),
+            ("schema.crol", DEFAULTS_SCHEMA),
             ("data/a.crod", "+web: Service { .. }\n"),
-            ("config/app.crov", "{ port: 80 }\n"),
-            ("other/app.crov", "{ port: \"not checked\" }\n"),
+            ("config/app.crol", "{ port: 80 }\n"),
+            ("other/app.crol", "{ port: \"not checked\" }\n"),
         ],
     );
     let mut client = Client::start(&dir);
-    let mut buffer = Buffer::open(&client, &dir, "config/app.crov");
+    let mut buffer = Buffer::open(&client, &dir, "config/app.crol");
     let items = buffer.complete(&mut client, "{ po| }\n");
     assert!(labels(&items).contains(&"port"), "{items:?}");
     buffer.change(&client, "{ port: \"x\" }\n");
@@ -2647,7 +2607,7 @@ fn files_give_value_documents_a_type() {
     assert!(says(&diagnostics, "found \"x\""), "{diagnostics:?}");
 
     // A document that matches no glob is not given the project's schema.
-    let other = uri(&dir.join("other/app.crov"));
+    let other = uri(&dir.join("other/app.crol"));
     open_text(&client, &other, "{ port: \"not checked\" }\n");
     client.diagnostics_for(&other, |d| d.is_empty());
     client.stop();
@@ -2664,14 +2624,14 @@ fn a_type_the_schema_does_not_have_is_reported() {
     let dir = workspace(
         "lsp-files-unknown",
         &[
-            ("project.crov", project),
-            ("schema.crov", DEFAULTS_SCHEMA),
+            ("project.crol", project),
+            ("schema.crol", DEFAULTS_SCHEMA),
             ("data/a.crod", "+web: Service { .. }\n"),
-            ("config/app.crov", "{ port: 80 }\n"),
+            ("config/app.crol", "{ port: 80 }\n"),
         ],
     );
     let client = Client::start(&dir);
-    let file = uri(&dir.join("config/app.crov"));
+    let file = uri(&dir.join("config/app.crol"));
     open_text(&client, &file, "{ port: 80 }\n");
     let diagnostics = client.diagnostics_for(&file, |d| !d.is_empty());
     assert!(says(&diagnostics, "app::Nothing"), "{diagnostics:?}");
@@ -2688,7 +2648,7 @@ fn three_layers(name: &str, middle: &[(&str, &str)], middle_dir: &str) -> PathBu
         ]), .. }}"#
     );
     let mut files = vec![
-        ("project.crov", project.as_str()),
+        ("project.crol", project.as_str()),
         ("base/a.crod", "+web: { port: 80 }\n"),
         ("top/a.crod", "web.port: & + 1\n+db: 2\n"),
     ];
@@ -2702,12 +2662,12 @@ fn a_stray_file_leaves_the_rest_of_its_layer_and_the_layers_after_it() {
         "lsp-failed-file",
         &[
             ("middle/a.crod", "+cache: 1\n"),
-            ("middle/stray.crov", "1\n"),
+            ("middle/stray.crol", "1\n"),
         ],
         "middle",
     );
     let mut client = Client::start(&dir);
-    client.diagnostics_for(&uri(&dir.join("middle/stray.crov")), |d| {
+    client.diagnostics_for(&uri(&dir.join("middle/stray.crol")), |d| {
         says(d, "cannot be a layer")
     });
     let mut buffer = Buffer::open(&client, &dir, "top/a.crod");
@@ -2726,7 +2686,7 @@ fn a_stray_file_leaves_the_rest_of_its_layer_and_the_layers_after_it() {
 fn a_layer_that_cannot_be_found_leaves_the_layers_after_it() {
     let dir = three_layers("lsp-failed-layer", &[], "nothing");
     let mut client = Client::start(&dir);
-    client.diagnostics_for(&uri(&dir.join("project.crov")), |d| {
+    client.diagnostics_for(&uri(&dir.join("project.crol")), |d| {
         says(d, "layer `middle`")
     });
     let mut buffer = Buffer::open(&client, &dir, "top/a.crod");
@@ -2767,8 +2727,8 @@ fn default_reads_the_project_schema() {
     let dir = workspace(
         "lsp-default-project",
         &[
-            ("project.crov", project),
-            ("schema.crov", DEFAULTS_SCHEMA),
+            ("project.crol", project),
+            ("schema.crol", DEFAULTS_SCHEMA),
             ("data/a.crod", text),
         ],
     );
@@ -2788,7 +2748,7 @@ fn default_reads_the_schema_of_a_document_on_its_own() {
     let dir = workspace(
         "lsp-default-alone",
         &[
-            ("schema.crov", DEFAULTS_SCHEMA),
+            ("schema.crol", DEFAULTS_SCHEMA),
             ("a.crod", text),
             ("b.crod", ""),
         ],
@@ -2810,7 +2770,7 @@ fn a_document_on_its_own_keeps_its_last_good_evaluation() {
     let text = "#![schema(schema)]\n\n+web: Service { replicas: 7, name: \"w\" }\n";
     let dir = workspace(
         "lsp-last-good",
-        &[("schema.crov", DEFAULTS_SCHEMA), ("a.crod", text)],
+        &[("schema.crol", DEFAULTS_SCHEMA), ("a.crod", text)],
     );
     let mut client = Client::start(&dir);
     let mut buffer = Buffer::open(&client, &dir, "a.crod");
@@ -2832,26 +2792,11 @@ fn a_document_on_its_own_keeps_its_last_good_evaluation() {
 
 #[test]
 fn a_value_document_keeps_its_last_good_evaluation() {
-    let dir = workspace("lsp-last-good-value", &[("a.crov", "{ port: 80 }\n")]);
+    let dir = workspace("lsp-last-good-value", &[("a.crol", "{ port: 80 }\n")]);
     let mut client = Client::start(&dir);
-    let mut buffer = Buffer::open(&client, &dir, "a.crov");
+    let mut buffer = Buffer::open(&client, &dir, "a.crol");
     let hover = buffer.hover(&mut client, "{ port: 1 / 0, copy: &root.po|rt }\n");
     assert!(hover.contains("`80`"), "{hover}");
-    client.stop();
-}
-
-#[test]
-fn a_leftover_crol_file_in_a_layer_may_be_what_is_missing() {
-    let dir = three_layers(
-        "lsp-failed-crol",
-        &[("middle/old.crol", "+cache: 1\n")],
-        "middle",
-    );
-    std::fs::write(dir.join("top/a.crod"), "cache.size: 1\n").unwrap();
-    let client = Client::start(&dir);
-    let diagnostics = client.diagnostics_for(&uri(&dir.join("top/a.crod")), |d| !d.is_empty());
-    assert_eq!(diagnostics[0]["severity"], 2, "{diagnostics:?}");
-    client.diagnostics_for(&uri(&dir.join("middle/old.crol")), |d| says(d, "retired"));
     client.stop();
 }
 
@@ -2861,14 +2806,14 @@ fn a_stray_file_in_an_extended_directory_is_reported_on_it() {
         "lsp-extends-stray",
         &[
             ("shared/a.crod", "+web: 1\n"),
-            ("shared/stray.crov", "1\n"),
+            ("shared/stray.crol", "1\n"),
             ("local.crod", "#![extends(shared)]\n\nweb: 2\n"),
         ],
     );
     let client = Client::start(&dir);
     let local = uri(&dir.join("local.crod"));
     open_text(&client, &local, "#![extends(shared)]\n\nweb: 2\n");
-    client.diagnostics_for(&uri(&dir.join("shared/stray.crov")), |d| {
+    client.diagnostics_for(&uri(&dir.join("shared/stray.crol")), |d| {
         says(d, "cannot be a layer")
     });
     client.stop();
@@ -2955,12 +2900,12 @@ fn enums_without_a_name_offer_their_fields() {
     let dir = workspace(
         "lsp-tagged",
         &[
-            ("schema.crov", TAGGED_SCHEMA),
-            ("a.crov", "#![schema(schema)]\n\n{ .. }\n"),
+            ("schema.crol", TAGGED_SCHEMA),
+            ("a.crol", "#![schema(schema)]\n\n{ .. }\n"),
         ],
     );
     let mut client = Client::start(&dir);
-    let mut buffer = Buffer::open(&client, &dir, "a.crov");
+    let mut buffer = Buffer::open(&client, &dir, "a.crol");
     let cases: &[Case<'_>] = &[
         ("{ internal: { | } }", &["kind", "path", "size"], &[]),
         ("{ internal: { kind: \"Disk\", | } }", &["path"], &["kind"]),
@@ -2978,10 +2923,10 @@ fn hover_on_a_dotted_target_is_about_the_segment_under_it() {
     let text = "#![schema(schema)]\n\n{ server: { tls: { cert: { path: \"a\" } } } }\n";
     let dir = workspace(
         "lsp-hover-segment",
-        &[("schema.crov", NESTED_SCHEMA), ("config.crov", text)],
+        &[("schema.crol", NESTED_SCHEMA), ("config.crol", text)],
     );
     let mut client = Client::start(&dir);
-    let mut buffer = Buffer::open(&client, &dir, "config.crov");
+    let mut buffer = Buffer::open(&client, &dir, "config.crol");
     let text = |marked: &str| format!("#![schema(schema)]\n\n{{ {marked}: \"a\" }}\n");
     for (marked, wanted) in [
         ("ser|ver.tls.cert.path", "`Server`"),
@@ -3004,14 +2949,14 @@ fn inlay_hints_on_elements() {
         "lsp-element-hints",
         &[
             (
-                "project.crov",
+                "project.crol",
                 r#"Project { layers: List([{ name: "base", dir: "base", .. }]), .. }"#,
             ),
             (
                 "base/a.crod",
                 "+a: [1 + 1, 2, 3 * 3]\n+b: (2 + 2, \"x\")\n+c: Some(1 + 4)\n+d: [1] + [2 + 4]\n",
             ),
-            ("value.crov", "{ a: [1 + 1, { b: [2 + 2] }] }\n"),
+            ("value.crol", "{ a: [1 + 1, { b: [2 + 2] }] }\n"),
         ],
     );
     let mut client = Client::start_with(&dir, json!({ "debounce_ms": 10, "inlay_hints": true }));
@@ -3020,7 +2965,7 @@ fn inlay_hints_on_elements() {
         inlay_labels(&mut client, &buffer),
         ["= 2", "= 9", "= 4", "= 5", "= [1, 6]"]
     );
-    let buffer = Buffer::open(&client, &dir, "value.crov");
+    let buffer = Buffer::open(&client, &dir, "value.crol");
     assert_eq!(inlay_labels(&mut client, &buffer), ["= 2", "= 4"]);
     client.stop();
 }
@@ -3148,14 +3093,14 @@ fn hover_in_a_project_file_shows_the_doc_of_the_field() {
     let dir = workspace(
         "lsp-hover-project-file",
         &[
-            ("project.crov", GENERATED_PROJECT),
-            ("crol/schema.crov", &generated_schema()),
+            ("project.crol", GENERATED_PROJECT),
+            ("crol/schema.crol", &generated_schema()),
             ("base/a.crod", ""),
             ("local/a.crod", ""),
         ],
     );
     let mut client = Client::start(&dir);
-    let mut buffer = Buffer::open(&client, &dir, "project.crov");
+    let mut buffer = Buffer::open(&client, &dir, "project.crol");
     let layer = "The layer's name.\n\n`String`";
     check_hovers(
         &mut client,
@@ -3199,9 +3144,9 @@ fn hover_in_a_project_file_shows_the_doc_of_the_field() {
 #[test]
 fn hover_in_a_schema_file_shows_the_doc_of_the_field() {
     let text = generated_schema();
-    let dir = workspace("lsp-hover-schema-file", &[("crol/schema.crov", &text)]);
+    let dir = workspace("lsp-hover-schema-file", &[("crol/schema.crol", &text)]);
     let mut client = Client::start(&dir);
-    let mut buffer = Buffer::open(&client, &dir, "crol/schema.crov");
+    let mut buffer = Buffer::open(&client, &dir, "crol/schema.crol");
     let ty = "The type of the field.";
     let fields = "The fields, by the name data writes them with.";
     check_hovers(
@@ -3281,7 +3226,7 @@ fn hover_in_data_shows_the_doc_of_the_field() {
     let dir = workspace(
         "lsp-hover-data",
         &[
-            ("crol/schema.crov", &generated_data_schema()),
+            ("crol/schema.crol", &generated_data_schema()),
             ("a.crod", text),
         ],
     );
@@ -3338,8 +3283,8 @@ fn hover_shows_the_layers_only_when_there_are_several_operations() {
     let dir = workspace(
         "lsp-hover-history",
         &[
-            ("project.crov", project),
-            ("crol/schema.crov", &generated_data_schema()),
+            ("project.crol", project),
+            ("crol/schema.crol", &generated_data_schema()),
             ("base/a.crod", &base),
             ("top/a.crod", "web.limits.memory: 2\n"),
         ],
@@ -3379,7 +3324,7 @@ fn hover_on_a_reference_has_what_it_names_after_the_doc() {
     let dir = workspace(
         "lsp-hover-reference",
         &[
-            ("crol/schema.crov", &generated_data_schema()),
+            ("crol/schema.crol", &generated_data_schema()),
             ("a.crod", &text),
         ],
     );
@@ -3399,7 +3344,7 @@ fn hover_keeps_to_values_and_keys() {
     let dir = workspace(
         "lsp-hover-elsewhere",
         &[
-            ("crol/schema.crov", &generated_data_schema()),
+            ("crol/schema.crol", &generated_data_schema()),
             ("a.crod", text),
         ],
     );
@@ -3422,9 +3367,9 @@ fn hover_keeps_to_values_and_keys() {
 
 #[test]
 fn hover_says_nothing_where_nothing_is_known() {
-    let dir = workspace("lsp-hover-nothing", &[("a.crov", "{ port: 80 }\n")]);
+    let dir = workspace("lsp-hover-nothing", &[("a.crol", "{ port: 80 }\n")]);
     let mut client = Client::start(&dir);
-    let mut buffer = Buffer::open(&client, &dir, "a.crov");
+    let mut buffer = Buffer::open(&client, &dir, "a.crol");
     for marked in [
         "{ po|rt: 80, tags: [\"a\"], nested: { on: true } }\n",
         "{ port: 8|0, tags: [\"a\"], nested: { on: true } }\n",
@@ -3440,9 +3385,9 @@ fn hover_says_nothing_where_nothing_is_known() {
 #[test]
 fn completion_at_every_level_of_a_schema_file() {
     let text = generated_schema();
-    let dir = workspace("lsp-complete-schema-file", &[("crol/schema.crov", &text)]);
+    let dir = workspace("lsp-complete-schema-file", &[("crol/schema.crol", &text)]);
     let mut client = Client::start(&dir);
-    let mut buffer = Buffer::open(&client, &dir, "crol/schema.crov");
+    let mut buffer = Buffer::open(&client, &dir, "crol/schema.crol");
     let head = "#![schema(\"crate:crol@0.1\")]\n\n";
     let cases: &[Case<'_>] = &[
         ("Schema { | }", &["format", "root", "types"], &[]),
@@ -3564,9 +3509,9 @@ fn completion_at_every_level_of_a_schema_file() {
 #[test]
 fn completion_names_the_types_of_a_schema_file() {
     let text = generated_schema();
-    let dir = workspace("lsp-complete-type-paths", &[("crol/schema.crov", &text)]);
+    let dir = workspace("lsp-complete-type-paths", &[("crol/schema.crol", &text)]);
     let mut client = Client::start(&dir);
-    let mut buffer = Buffer::open(&client, &dir, "crol/schema.crov");
+    let mut buffer = Buffer::open(&client, &dir, "crol/schema.crol");
     let wanted = "server::generated::Limits";
     let named = "Named(\"server::generated::Limits\")";
     let root = "root: \"server::generated::Config\"";
@@ -3596,10 +3541,10 @@ fn completion_names_the_types_of_a_schema_file() {
 fn completion_at_every_level_of_a_project_file() {
     let dir = workspace(
         "lsp-complete-project-file",
-        &[("project.crov", GENERATED_PROJECT)],
+        &[("project.crol", GENERATED_PROJECT)],
     );
     let mut client = Client::start(&dir);
-    let mut buffer = Buffer::open(&client, &dir, "project.crov");
+    let mut buffer = Buffer::open(&client, &dir, "project.crol");
     let cases: &[Case<'_>] = &[
         (
             "Project { | }",
@@ -3632,9 +3577,9 @@ fn completion_at_every_level_of_a_project_file() {
 #[test]
 fn a_schema_file_is_checked_against_the_built_in_schema() {
     let text = generated_schema();
-    let dir = workspace("lsp-schema-file-checked", &[("crol/schema.crov", &text)]);
+    let dir = workspace("lsp-schema-file-checked", &[("crol/schema.crol", &text)]);
     let client = Client::start(&dir);
-    let file = uri(&dir.join("crol/schema.crov"));
+    let file = uri(&dir.join("crol/schema.crol"));
     open_text(&client, &file, &text);
     client.diagnostics_for(&file, |d| d.is_empty());
     client.notify(
@@ -3699,8 +3644,8 @@ fn struct_root_project(name: &str, base: &str, local: &str) -> PathBuf {
     workspace(
         name,
         &[
-            ("project.crov", STRUCT_ROOT_PROJECT),
-            ("schema.crov", STRUCT_ROOT_SCHEMA),
+            ("project.crol", STRUCT_ROOT_PROJECT),
+            ("schema.crol", STRUCT_ROOT_SCHEMA),
             ("base/a.crod", base),
             ("local/a.crod", local),
         ],
@@ -3888,7 +3833,7 @@ fn a_read_only_top_layer_passes_the_missing_field_to_a_writable_one() {
         "lsp-struct-root-read-only",
         &[
             (
-                "project.crov",
+                "project.crol",
                 r#"Project {
     layers: List([
         { name: "base", dir: "base", .. },
@@ -3898,7 +3843,7 @@ fn a_read_only_top_layer_passes_the_missing_field_to_a_writable_one() {
     ..
 }"#,
             ),
-            ("schema.crov", STRUCT_ROOT_SCHEMA),
+            ("schema.crol", STRUCT_ROOT_SCHEMA),
             ("base/a.crod", "name: \"x\"\n"),
             ("vendored/a.crod", "items: []\n"),
         ],
@@ -3914,7 +3859,7 @@ fn a_standalone_crod_file_is_its_own_whole() {
     let dir = workspace(
         "lsp-struct-root-standalone",
         &[
-            ("schema.crov", STRUCT_ROOT_SCHEMA),
+            ("schema.crol", STRUCT_ROOT_SCHEMA),
             ("one.crod", "#![schema(::schema)]\n\nname: \"x\"\n"),
         ],
     );
@@ -3951,8 +3896,8 @@ fn an_enum_root_stays_the_type_of_each_root_value() {
     let dir = workspace(
         "lsp-enum-root",
         &[
-            ("project.crov", STRUCT_ROOT_PROJECT),
-            ("schema.crov", &schema),
+            ("project.crol", STRUCT_ROOT_PROJECT),
+            ("schema.crol", &schema),
             ("base/a.crod", "web: Options { fast: true, quiet: true }\n"),
             ("local/a.crod", ""),
         ],

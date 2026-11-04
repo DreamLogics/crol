@@ -7,7 +7,7 @@ use crate::diagnostics::Reporter;
 pub(crate) struct Args {
     /// The layers, lowest first: each `name=source` or a source, where a
     /// source is a module path or a file system path. Default: the project
-    /// file's. One `.crov` file is read as a value document instead.
+    /// file's. One `.crol` file is read as a value document instead.
     layers: Vec<String>,
 
     #[command(flatten)]
