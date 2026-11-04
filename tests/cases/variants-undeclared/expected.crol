@@ -1,13 +1,13 @@
-x: 1,
+x: 1
 
 <!debug & fast> {
     x: 10,
-},
+}
 
 <debug & !fast> {
     x: 2,
-},
+}
 
 <debug & fast> {
     x: 20,
-},
+}

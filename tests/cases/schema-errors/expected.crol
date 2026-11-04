@@ -1,11 +1,11 @@
-wrong_kind: Service { replicas: "two", image: "a", .. },
-unknown_field: Service { replicas: 1, image: "a", colour: 1, .. },
-missing: Service { replicas: 1 },
-bad_variant: Service { replicas: 1, image: "a", mode: Medium, .. },
-not_a_definition: Limits { cpu: 1.0, memory_mb: 1 },
-bad_id: Service { replicas: 1, image: "a", depends_on: [@nothing], .. },
-in_prod: Service { replicas: 1, image: "a", .. },
+wrong_kind: Service { replicas: "two", image: "a", .. }
+unknown_field: Service { replicas: 1, image: "a", colour: 1, .. }
+missing: Service { replicas: 1 }
+bad_variant: Service { replicas: 1, image: "a", mode: Medium, .. }
+not_a_definition: Limits { cpu: 1.0, memory_mb: 1 }
+bad_id: Service { replicas: 1, image: "a", depends_on: [@nothing], .. }
+in_prod: Service { replicas: 1, image: "a", .. }
 
 <prod> {
     in_prod: Service { replicas: -1, image: "a", .. },
-},
+}

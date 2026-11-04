@@ -384,7 +384,7 @@ fn defaults_are_filled_in_as_serde_fills_them() {
     assert_eq!(
         text,
         "web: Service {\n    replicas: 2,\n    depends_on: [],\n    url: None,\n    \
-         tags: [], // default\n    limits: Limits { cpu: 1.0, memory_mb: 512 }, // default\n},\n\
-         db: Volume { size_gb: 1 },\n"
+         tags: [], // default\n    limits: Limits { cpu: 1.0, memory_mb: 512 }, // default\n}\n\
+         db: Volume { size_gb: 1 }\n"
     );
 }

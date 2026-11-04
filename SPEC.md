@@ -147,7 +147,8 @@ runs after the base chain is complete.
   scalar values from 1; tools that need UTF-16 columns convert.
 - Whitespace is space, tab, `\r` and `\n`. Whitespace separates tokens
   and is otherwise meaningless, except where section 2.5 says a token
-  must follow another directly.
+  must follow another directly, and where a line break separates two
+  entries (section 5.3).
 
 ### 2.2 Comments
 
@@ -325,7 +326,10 @@ The parser decides between entries and an expression by the first
 tokens: a document is entries when it is empty or begins with `+`,
 `?`, `..`, `<`, an identifier followed by `=` or `:=` (a bind), `-`
 followed by an identifier, string or `[`, or a target followed by `:`.
-Otherwise it is an expression.
+Otherwise it is an expression. An expression document ends with its
+expression: a line break separates entries, not expressions, so `1`
+and `2` on two lines are an error, and line breaks inside the
+expression mean nothing, as inside brackets (section 5.3).
 
 ### 4.1 Document attributes
 
@@ -588,8 +592,100 @@ value's name.
 
 ### 5.3 Separators
 
-Entries and elements are separated by commas. A trailing comma is
-allowed. A missing comma between two entries is an error.
+Entries are separated by a comma, a line break, or both. A trailing
+comma is allowed. Two entries on one line with no comma between them
+are an error.
+
+```rust
+name: "web"
+port: 80,
+limits: { cpu: 1.0, memory_mb: 512 }
+env: {
+    LOG_LEVEL: "info"
+    PORT: &root.port
+}
+```
+
+This holds wherever entries are: at the top level, in any block (so a
+document means the same with and without its outer braces, section 4)
+and in a variant block. Elements of a list or tuple, and attribute
+arguments, are separated by commas only, and a line break inside `(...)`
+or `[...]` means nothing, except in a block there. An element has no
+shape that tells it from the expression before it: in a list, `1` with
+`-2` on the next line could be two elements or one, and it stays one,
+the value `-1`.
+
+Two tokens have a **line break** between them when a `\n` lies between
+them, in whitespace or in a comment, so `\r\n` counts, a `// comment`
+at the end of a line changes nothing, and a line break inside a string
+does not count.
+
+Expressions read as far as they can, across lines: a value may continue
+on the next line, with the operator at the end of a line or the start
+of the next. A line break ends the entry only when the next line
+**begins an entry**. Only four tokens can both continue a value and
+start an entry; what follows them, on that same line, decides:
+
+| Line starts with | Begins an entry when | Otherwise it continues the value |
+|---|---|---|
+| `+` | a target and `:` follow: `+b: 2` | `+ 2`, `+ b`, `+ "text"` |
+| `-` | an identifier or string follows: `-b`, `-"odd key"` | `- 2`, `- &x`, `- ["x"]` |
+| `[` | it is an accessor, with any selectors, and `:` follows: `["a b"]: 1` | `[0]`, `["key"].name` |
+| `<` | it is a variant and `{` follows: `<prod> {` | `<prod>`, `<prod>.name` |
+
+Any other line needs no such look: `?`, `..`, a key or a bind can only
+start an entry, and `.`, `*`, `/`, `%`, `~`, `|` can only continue a
+value. A `(` or `{` continues a bare name, as a named tuple or a block's
+type name, and otherwise is an error. A value also goes on when what is
+before the line break needs it: a line that ends with a binary operator,
+`:` or `:=`. After a `:`, a line that begins an entry is an error for
+the missing value, except that `-x` there is the value, negated.
+
+```rust
+a: 1
++b: 2                 // two entries
+total: &root.base
+    + &root.extra     // one entry: the line after is no entry
+    - 2
+text: "a"
+    + "b"             // one entry
+c: &root.x
+    .name             // one entry: `.name` continues the path
+d: &root.x
+["odd key"]: 3        // two entries
+e: Rgb
+    (1, 2, 3)         // one entry, a named tuple
+f: 1 +
+    2                 // one entry
+g: &
+-h                    // two entries: `&`, then a remove
+```
+
+The same goes for a remove's target and the operand of a spread:
+`-a` then `[0]: 1` on the next line are two entries, and so are `..`
+then a line that begins an entry; `..` then `&x` is a spread of `&x`.
+
+A line that does not begin an entry stays with the value, so a mistake
+is an error rather than a different document: `a: 1`, then `+b`, then
+`.c: 2` reads `1 + b.c`, and the `:` is an error. So is `a: 1 +` then
+`b: 2`, and a line that starts with `@`, or with `(` after anything but
+a name. An entry's start, up to its `:` or `{`, must be on one line for
+a line break alone to separate it; with a comma before it, it may
+spread over lines as before.
+
+**A remove of an integer or accessor key needs its comma**, since
+`-12` and `-[0]` on a line of their own always continue the value, as
+subtraction: a number from a number, a list from a list. After `a: 5`,
+`-12` on the next line is the value `-7`. Write `a: 5,` to remove key
+`12`; after a remove or a variant block, where there is no value to
+continue, a missing comma here is an error.
+
+A file whose entries were all separated by commas means what it always
+did, with one exception: `a: &x`, then `-b` or `-"b"` on the next line,
+used to be a subtraction of a unit name or a string. That is an error
+whenever it is evaluated, so only a value that was never read, or
+whose left side was missing under a `|`, ever got past it; it is now
+a remove.
 
 ---
 
@@ -1346,7 +1442,8 @@ use_path     ::= identifier ( "::" identifier )* type_args? ( "as" identifier )?
 type_args    ::= "<" type_expr ( "," type_expr )* ">"   (* section 10.10's type expressions *)
 
 block        ::= identifier? "{" entries "}"
-entries      ::= ( entry ( "," entry )* ","? )?
+entries      ::= ( entry ( separator entry )* ","? )?
+separator    ::= "," | line_break                    (* section 5.3 *)
 entry        ::= "-" target
                | bind? ( "+" | "?" )? target ":" expr
                | identifier ":=" expr                (* value bind, 6.1.2 *)
@@ -1409,6 +1506,9 @@ Notes:
 - In `key`, an `integer` has no sign; a negative key needs the
   `accessor` form (section 5.1).
 - A `[` at the start of an entry is an accessor key, never a list.
+- `line_break` is no token: it stands where section 5.3 says a line
+  break ends an entry. That rule also decides, where `expr` or `target`
+  could go on, whether they stop there.
 
 ---
 
@@ -1881,7 +1981,7 @@ the variants and options, from the project file.
 The parser produces a **lossless concrete syntax tree**: every byte of
 the input, including whitespace, comments and invalid text, is in the
 tree, and printing the tree gives the input back. The parser recovers
-from errors (a missing comma, an unclosed brace) and keeps parsing, so an
+from errors (a missing separator, an unclosed brace) and keeps parsing, so an
 editor gets a tree and all syntax errors for a half-written file. A
 typed AST layer gives access to entries, targets and expressions over the
 tree.
@@ -1896,6 +1996,16 @@ tree.
   written with a line break directly after its `{` stays broken, so
   authors can keep a short block on several lines; lists and tuples
   always reflow;
+- top-level entries go one per line with no comma after them; so do the
+  entries of a document's outer braces, since these are removed. Nested
+  blocks, variant blocks at the top level and a typed outer block count
+  as nested, and keep their commas; a variant block's own `}` at the top
+  level has none. A comma stays where a line break would not separate
+  two entries (section 5.3): before a top-level `-12` or `-[key]`, and
+  before an entry that starts with `+`, `-`, `<` or `[` and is kept as
+  written because of a comment inside it;
+- a binary operator stays at the end of the line it follows, and never
+  starts one, so wrapping cannot split an entry in two;
 - spaces around binary operators and after `:` and `,`; none inside
   `&name`, `@id`, selectors or `..&x`; binds have a space before and
   after `=` and `:=`;
@@ -2097,7 +2207,8 @@ highlighting, folding, indentation and structural selection, which work
 without the language server and before a project file exists. It
 accepts exactly what the Rust parser accepts: the conformance suite's
 syntax cases are run through both, and CI fails when one accepts what
-the other rejects. Its node names follow the AST's (`entry`, `target`,
+the other rejects. Its external scanner applies section 5.3, with a
+hidden zero-width token for a line break that ends an entry. Its node names follow the AST's (`entry`, `target`,
 `block`, `reference`, `bind`, `condition`, ...). Queries for
 highlights, brackets, indents, outline, folds and text objects are
 kept with the grammar, so every editor can use them.
@@ -2132,8 +2243,10 @@ small configurations, which can follow later.
 
 ## 13. Errors at a glance
 
-**Syntax**: invalid token, unterminated string or comment, missing
-comma, unbalanced brackets, a file that is not UTF-8, `...`, a space
+**Syntax**: invalid token, unterminated string or comment, a missing
+comma or line break between entries, a missing comma before `-12` or
+`-[key]` after a remove or a variant block, or between elements,
+unbalanced brackets, a file that is not UTF-8, `...`, a space
 after `&` or `@`, `1u8`, `1.`, a
 type name on the outer braces of a data-mode document; an identifier in
 brackets (`[port]`); `.&parent` other than after `&parent`.
@@ -2309,6 +2422,13 @@ where it is not obvious.
   single config files.
 - Chars, `0o`/`0b` literals, `.0` tuple selectors.
 - `self`, `parent`, `root` and `default` are keywords only after `&`.
+- A line break separates entries, but not by ending expressions, as in
+  Go or JavaScript's automatic semicolons (5.3). CROL's lines may start
+  with an operator, and every file written with commas had to keep its
+  meaning, so a line ends an entry only when the next one has the shape
+  of an entry, which no expression could be followed by. That shape is
+  read on one line, so the rule stays local to the eye and to the
+  parser. Lists stay comma-only because elements have no such shape.
 - One notation for structs and maps: keys are strings or integers,
   written bare (`port`, `"cache url"`, `12`), with `[key]` as the
   accessor in paths. Unit-variant, id, boolean and char keys are gone;

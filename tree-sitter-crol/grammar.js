@@ -43,7 +43,9 @@ function commaSep(rule) {
 module.exports = grammar({
   name: 'crol',
 
-  externals: $ => [$.raw_string, $.block_comment],
+  // `_line_break` is a line break that ends an entry (SPEC.md 5.3): empty,
+  // and only produced where the next line begins one. See src/scanner.c.
+  externals: $ => [$.raw_string, $.block_comment, $._line_break],
 
   extras: $ => [/\s/, $.line_comment, $.block_comment],
 
@@ -97,7 +99,11 @@ module.exports = grammar({
 
     // ---- Entries (SPEC.md 5) ----
 
-    _entries: $ => commaSep1($._entry),
+    _entries: $ => seq(
+      $._entry,
+      repeat(seq(choice(',', $._line_break), $._entry)),
+      optional(','),
+    ),
 
     _entry: $ => choice(
       $.entry,

@@ -26,7 +26,7 @@ fn spacing() {
     check(
         "+web:Service{replicas:&+1*2,url:\"x\"+&self.port,ids:[@a,@\"b c\"],t:(1,),u:()}",
         expect![[r#"
-            +web: Service { replicas: & + 1 * 2, url: "x" + &self.port, ids: [@a, @"b c"], t: (1,), u: () },
+            +web: Service { replicas: & + 1 * 2, url: "x" + &self.port, ids: [@a, @"b c"], t: (1,), u: () }
         "#]],
     );
 }
@@ -36,9 +36,9 @@ fn binds_spreads_and_references() {
     check(
         "t:={p=port:80,..&base,x:&parent.&parent.y<a&!b>},-web<dev>.limits,c:-&",
         expect![[r#"
-            t := { p = port: 80, ..&base, x: &parent.&parent.y<a & !b> },
-            -web<dev>.limits,
-            c: -&,
+            t := { p = port: 80, ..&base, x: &parent.&parent.y<a & !b> }
+            -web<dev>.limits
+            c: -&
         "#]],
     );
 }
@@ -54,7 +54,7 @@ fn long_blocks_break() {
                 image: "web:1.4",
                 depends_on: [@database, @cache],
                 ..,
-            },
+            }
         "#]],
     );
 }
@@ -71,32 +71,48 @@ fn nested_breaking_is_innermost_last() {
                     CACHE: "redis://cache",
                 },
                 n: Rgb(1, 2, 3),
-            },
+            }
         "#]],
     );
 }
 
 #[test]
 fn width_counts_the_trailing_comma() {
-    // 19 characters with the comma: fits at 19, breaks at 18.
+    // 23 characters with the indentation and the comma.
+    let text = "B {\n    a: [1, 2, 3, 4, 5],\n}";
     check_with(
-        &FormatConfig::default().with_max_width(19),
-        "a: [1, 2, 3, 4, 5],",
+        &FormatConfig::default().with_max_width(23),
+        text,
         expect![[r#"
-            a: [1, 2, 3, 4, 5],
+            B {
+                a: [1, 2, 3, 4, 5],
+            }
         "#]],
     );
+    check_with(
+        &FormatConfig::default().with_max_width(22),
+        text,
+        expect![[r#"
+            B {
+                a: [
+                    1,
+                    2,
+                    3,
+                    4,
+                    5,
+                ],
+            }
+        "#]],
+    );
+}
+
+#[test]
+fn width_has_no_comma_to_count_at_the_top_level() {
     check_with(
         &FormatConfig::default().with_max_width(18),
         "a: [1, 2, 3, 4, 5],",
         expect![[r#"
-            a: [
-                1,
-                2,
-                3,
-                4,
-                5,
-            ],
+            a: [1, 2, 3, 4, 5]
         "#]],
     );
 }
@@ -116,8 +132,8 @@ fn outer_braces_are_removed() {
     check(
         "{ +a: 1, b: 2 }",
         expect![[r#"
-            +a: 1,
-            b: 2,
+            +a: 1
+            b: 2
         "#]],
     );
     // A typed block is a value, and keeps its braces.
@@ -141,12 +157,12 @@ fn string_keys_are_written_bare() {
     check(
         r#""port": 1, "cache url": 2, "true": 3, x["a"]["b c"][0]: 4, ["k"]: 5, y: &root["web"],"#,
         expect![[r#"
-            port: 1,
-            "cache url": 2,
-            "true": 3,
-            x.a["b c"][0]: 4,
-            k: 5,
-            y: &root.web,
+            port: 1
+            "cache url": 2
+            "true": 3
+            x.a["b c"][0]: 4
+            k: 5
+            y: &root.web
         "#]],
     );
 }
@@ -157,7 +173,7 @@ fn comments_and_blank_lines() {
         "\n\n// leading\n+a: 1, // trailing\n\n\n\n/* own line */\nb: { // first\n  c: 1,\n\n  // last\n},\n\n",
         expect![[r#"
             // leading
-            +a: 1, // trailing
+            +a: 1 // trailing
 
             /* own line */
             b: {
@@ -165,7 +181,7 @@ fn comments_and_blank_lines() {
                 c: 1,
 
                 // last
-            },
+            }
         "#]],
     );
 }
@@ -178,7 +194,7 @@ fn comments_force_a_break() {
             a: [
                 1, /* one */
                 2,
-            ],
+            ]
         "#]],
     );
 }
@@ -189,8 +205,8 @@ fn entries_with_interior_comments_are_kept_as_written() {
         "a: 1 + // why\n    2, b:{c:1}",
         expect![[r#"
             a: 1 + // why
-                2,
-            b: { c: 1 },
+                2
+            b: { c: 1 }
         "#]],
     );
 }
@@ -200,8 +216,8 @@ fn variant_blocks() {
     check(
         "<prod&!cache>{web.replicas:&*4},<a+(b|c)>{x:1}",
         expect![[r#"
-            <prod & !cache> { web.replicas: & * 4 },
-            <a + (b | c)> { x: 1 },
+            <prod & !cache> { web.replicas: & * 4 }
+            <a + (b | c)> { x: 1 }
         "#]],
     );
 }
@@ -214,7 +230,7 @@ fn attributes() {
             #![use(a::B, c::D<u32, List(String)> as E)]
             #![schema("crate:app")]
 
-            x: 1,
+            x: 1
         "##]],
     );
 }
@@ -242,10 +258,10 @@ fn a_comment_moves_with_its_defaults_marker() {
     check(
         "{ .., // the rest\n a: 1, .., // dropped\n b: 2 }",
         expect![[r#"
-            a: 1,
+            a: 1
             // dropped
-            b: 2,
-            .., // the rest
+            b: 2
+            .. // the rest
         "#]],
     );
 }
@@ -260,11 +276,11 @@ fn broken_blocks_stay_broken() {
             <prod> {
                 web.replicas: 4,
                 web.env: { A: 1 },
-            },
+            }
             +db: Service {
                 port: 1,
                 ..,
-            },
+            }
         "#]],
     );
 }
@@ -274,8 +290,8 @@ fn lists_reflow_to_the_width() {
     check(
         "a: [\n    1,\n    2,\n], b: (\n 1, 2),",
         expect![[r#"
-            a: [1, 2],
-            b: (1, 2),
+            a: [1, 2]
+            b: (1, 2)
         "#]],
     );
 }
@@ -286,10 +302,167 @@ fn integers_keep_a_space_before_a_dot() {
     check(
         "1  .16:7,a:1 .0,b:-1  .0,c:x.0",
         expect![[r#"
-            1 .16: 7,
-            a: 1 .0,
-            b: -1 .0,
-            c: x.0,
+            1 .16: 7
+            a: 1 .0
+            b: -1 .0
+            c: x.0
+        "#]],
+    );
+}
+
+#[test]
+fn top_level_entries_lose_their_commas_and_nested_ones_keep_them() {
+    check(
+        "a: 1, +b: { c: 1, d: 2 }, -e, ?f: [1, 2], g := 3, <prod> { h: 1, i: 2 }, ..&t, j: Foo {\n k: 1\n l: 2\n}",
+        expect![[r#"
+            a: 1
+            +b: { c: 1, d: 2 }
+            -e
+            ?f: [1, 2]
+            g := 3
+            <prod> { h: 1, i: 2 }
+            ..&t
+            j: Foo {
+                k: 1,
+                l: 2,
+            }
+        "#]],
+    );
+}
+
+#[test]
+fn outer_braces_count_as_the_top_level_unless_they_stay() {
+    check(
+        "{\n    a: 1,\n    b: 2,\n}",
+        expect![[r#"
+            a: 1
+            b: 2
+        "#]],
+    );
+    check(
+        "Config {\n    a: 1\n    b: 2\n}",
+        expect![[r#"
+            Config {
+                a: 1,
+                b: 2,
+            }
+        "#]],
+    );
+}
+
+#[test]
+fn a_comma_stays_where_a_line_break_would_not_separate() {
+    check(
+        "a: 5, -12, b: [1], -[0], c: 1, -\"odd key\", d: 2, -[\"plain\"]",
+        expect![[r#"
+            a: 5,
+            -12
+            b: [1],
+            -[0]
+            c: 1
+            -"odd key"
+            d: 2
+            -plain
+        "#]],
+    );
+    // A comment or a blank line in between changes nothing.
+    check(
+        "a: 5, // five\n\n// then\n-12",
+        expect![[r#"
+            a: 5, // five
+
+            // then
+            -12
+        "#]],
+    );
+    // An entry kept as written may not begin on one line.
+    check(
+        "a: 5, + // plus\n b: 1",
+        expect![[r#"
+            a: 5,
+            + // plus
+             b: 1
+        "#]],
+    );
+}
+
+#[test]
+fn the_entries_of_a_comma_free_file_stay_apart() {
+    check(
+        "a: &x\n+b: 1\nc: &y\n-d\ne: &z\n[\"f g\"]: 2\nh: &w\n<prod> { i: 1 }\nj: &\nk: 1 // end\n-l\n[\"m n\"]: 3",
+        expect![[r#"
+            a: &x
+            +b: 1
+            c: &y
+            -d
+            e: &z
+            ["f g"]: 2
+            h: &w
+            <prod> { i: 1 }
+            j: &
+            k: 1 // end
+            -l
+            ["m n"]: 3
+        "#]],
+    );
+}
+
+#[test]
+fn continued_expressions_join_their_line() {
+    check(
+        "a: 1\n  + 2\n  - 3\nb: \"x\"\n  + \"y\"\nc: &x\n  .y\n  [0]\nd: Foo\n  (1)\ne: &\n  ~ { f: 1 }",
+        expect![[r#"
+            a: 1 + 2 - 3
+            b: "x" + "y"
+            c: &x.y[0]
+            d: Foo(1)
+            e: & ~ { f: 1 }
+        "#]],
+    );
+}
+
+#[test]
+fn wrapping_never_starts_a_line_with_an_operator() {
+    let text = "a: [1, 2, 3] + [4, 5, 6] - [7, 8, 9]\nb: { c: 1, d: 2 } ~ { e: 3, f: 4 }\ng: 1";
+    check_with(
+        &FormatConfig::default().with_max_width(12),
+        text,
+        expect![[r#"
+            a: [
+                1,
+                2,
+                3,
+            ] + [
+                4,
+                5,
+                6,
+            ] - [
+                7,
+                8,
+                9,
+            ]
+            b: {
+                c: 1,
+                d: 2,
+            } ~ {
+                e: 3,
+                f: 4,
+            }
+            g: 1
+        "#]],
+    );
+}
+
+#[test]
+fn crlf_and_block_comments_separate_too() {
+    check(
+        "a: 1\r\n+b: 2\r\nc: 3 /* x\ny */ d: 4",
+        expect![[r#"
+            a: 1
+            +b: 2
+            c: 3 /* x
+            y */
+            d: 4
         "#]],
     );
 }

@@ -1,32 +1,32 @@
-x: { n: 0, m: 0 },
+x: { n: 0, m: 0 }
 
 <!a & !b & c> {
     only_in_c: 1,
-},
+}
 
 <!a & b & !c> {
     x: { n: 1, m: 1 },
-},
+}
 
 <!a & b & c> {
     x: { n: 1, m: 1 },
     only_in_c: 1,
-},
+}
 
 <a & !b & !c> {
     x: { n: 1, m: 1 },
-},
+}
 
 <a & !b & c> {
     x: { n: 1, m: 1 },
     only_in_c: 1,
-},
+}
 
 <a & b & !c> {
     x: { n: 1, m: 2, both: true },
-},
+}
 
 <a & b & c> {
     -x,
     only_in_c: 1,
-},
+}

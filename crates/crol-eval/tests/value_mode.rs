@@ -38,17 +38,17 @@ fn literals() {
     check(
         r##"a: 0x1F, b: -170141183460469231731687303715884105728, c: 2.5e-3, d: 'é', e: "x\ty", f: r#"raw "q""#, g: true, h: (), i: (1,), j: @web, k: @"odd id""##,
         expect![[r#"
-            a: 31,
-            b: -170141183460469231731687303715884105728,
-            c: 0.0025,
-            d: 'é',
-            e: "x\ty",
-            f: "raw \"q\"",
-            g: true,
-            h: (),
-            i: (1,),
-            j: @web,
-            k: @"odd id",
+            a: 31
+            b: -170141183460469231731687303715884105728
+            c: 0.0025
+            d: 'é'
+            e: "x\ty"
+            f: "raw \"q\""
+            g: true
+            h: ()
+            i: (1,)
+            j: @web
+            k: @"odd id"
         "#]],
     );
 }
@@ -58,15 +58,15 @@ fn arithmetic_and_concatenation() {
     check(
         r#"a: 7 / 2, b: -7 % 3, c: 1 + 0.5, d: "port " + 8080, e: 'x' + "y" + true, f: [1, 2] + [3], g: [1, 2, 1, 3] - [1], h: 1.0 + 2, i: -(3)"#,
         expect![[r#"
-            a: 3,
-            b: -1,
-            c: 1.5,
-            d: "port 8080",
-            e: "xytrue",
-            f: [1, 2, 3],
-            g: [2, 3],
-            h: 3.0,
-            i: -3,
+            a: 3
+            b: -1
+            c: 1.5
+            d: "port 8080"
+            e: "xytrue"
+            f: [1, 2, 3]
+            g: [2, 3]
+            h: 3.0
+            i: -3
         "#]],
     );
 }
@@ -116,8 +116,8 @@ fn templates_rebind_through_spreads() {
 web: Service { ..&service_defaults, port: 8080, .. },
 template_url: &service_defaults.url,"#,
         expect![[r#"
-            web: Service { port: 8080, url: "http://localhost:8080", .. },
-            template_url: "http://localhost:80",
+            web: Service { port: 8080, url: "http://localhost:8080", .. }
+            template_url: "http://localhost:80"
         "#]],
     );
 }
@@ -132,7 +132,7 @@ fn binds_follow_spreads() {
 },
 web: Service { ..&service_defaults, port: 8080, .. },"#,
         expect![[r#"
-            web: Service { port: 8080, health: { probe: { url: "http://localhost:8080" } }, .. },
+            web: Service { port: 8080, health: { probe: { url: "http://localhost:8080" } }, .. }
         "#]],
     );
 }
@@ -145,8 +145,8 @@ fn block_steps_and_value_below() {
 x: { a: 10, ..&base, b: & + 100, +d: 4, ?c: 99, -a },
 y: { n: 1, n: & * 5, m: [&self.n] },"#,
         expect![[r#"
-            x: { b: 102, c: 3, d: 4, a: (), -a },
-            y: { n: 5, m: [5] },
+            x: { b: 102, c: 3, d: 4, a: (), -a }
+            y: { n: 5, m: [5] }
         "#]],
     );
 }
@@ -161,11 +161,11 @@ c: Some(1) ~ Some(2),
 d: (&limits ~ { cpu: 4.0 }).cpu,
 e: [10, 20][1],"#,
         expect![[r#"
-            a: Limits { cpu: 2.0, memory_mb: 512 },
-            b: { l: Limits { cpu: 1.0, memory_mb: 1024 }, t: (1, 3), xs: [20, 3] },
-            c: Some(2),
-            d: 4.0,
-            e: 20,
+            a: Limits { cpu: 2.0, memory_mb: 512 }
+            b: { l: Limits { cpu: 1.0, memory_mb: 1024 }, t: (1, 3), xs: [20, 3] }
+            c: Some(2)
+            d: 4.0
+            e: 20
         "#]],
     );
 }
@@ -268,10 +268,10 @@ fn defaults_flag_and_defaulted_fields() {
     check(
         r#"a: S { x: 1, .. }, b: { ..&root.a, -x }, c: { ..&root.b, x: 2 }"#,
         expect![[r#"
-        a: S { x: 1, .. },
-        b: { x: (), -x, .. },
-        c: { x: 2, .. },
-    "#]],
+            a: S { x: 1, .. }
+            b: { x: (), -x, .. }
+            c: { x: 2, .. }
+        "#]],
     );
 }
 

@@ -16,8 +16,9 @@ TREE_SITTER=tree-sitter ./check-corpus.sh
 ```
 
 `src/` holds the generated parser, committed so that editors can build the
-grammar without generating it; `src/scanner.c` is hand-written and lexes
-raw strings and nested block comments.
+grammar without generating it; `src/scanner.c` is hand-written. It lexes raw
+strings and nested block comments, and decides where a line break ends an
+entry (`SPEC.md` 5.3).
 
 Licensed under either of Apache License, Version 2.0 or MIT licence at your
 option.

@@ -1,0 +1,33 @@
+// A line break separates entries (SPEC.md 5.3).
+a: 1
++b: 2 // a comment
+?c: &root.a
+    + 2
+    - &root.b
+-d
+-"odd key"
+["e f"]: 3
+g: &root.c
+    .h
+    [0]
+<prod> {
+    i: 1
+    j: 2
+}
+k := 1 +
+    2
+l = m: "x"
+    + "y"
+n: Foo {
+    o: 1
+    p: [
+        1,
+        2
+        - 3,
+    ]
+}
+q: &
+r: &
+    ~ { s: 1 }
+t: 5,
+-12

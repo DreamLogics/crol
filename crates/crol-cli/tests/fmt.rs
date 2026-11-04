@@ -26,13 +26,13 @@ fn formats_in_place() {
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
         std::fs::read_to_string(&path).unwrap(),
-        "+web: { port: 80 },\n"
+        "+web: { port: 80 }\n"
     );
 }
 
 #[test]
 fn check_reports_unformatted_files_without_changing_them() {
-    let formatted = file("check_ok.crol", "a: 1,\n");
+    let formatted = file("check_ok.crol", "a: 1\n");
     let unformatted = file("check_bad.crol", "a:1");
     let output = crol(&["fmt", "--check", formatted.to_str().unwrap()]);
     assert!(output.status.success(), "{output:?}");
@@ -49,7 +49,10 @@ fn syntax_errors_fail_and_leave_the_file_alone() {
     let output = crol(&["fmt", "--color", "never", path.to_str().unwrap()]);
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("expected `,` between entries"), "{stderr}");
+    assert!(
+        stderr.contains("expected `,` or a line break between entries"),
+        "{stderr}"
+    );
     assert!(stderr.contains("syntax_error.crol:1:5"), "{stderr}");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "a: 1 b: 2");
 }
@@ -101,7 +104,7 @@ fn check_and_eval_read_layers() {
     let output = crol(&["eval", base, local]);
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "web: { port: 81, url: \"x:81\" },\n"
+        "web: { port: 81, url: \"x:81\" }\n"
     );
     let output = crol(&["eval", base, local, "web.url"]);
     assert_eq!(String::from_utf8_lossy(&output.stdout), "\"x:81\"\n");
@@ -134,7 +137,7 @@ fn variants_contexts_and_fingerprints() {
     args.extend(declared);
     assert_eq!(
         String::from_utf8_lossy(&crol(&args).stdout),
-        "web: { replicas: 1 },\n\n<!dev & prod> {\n    web: { replicas: 4 },\n},\n"
+        "web: { replicas: 1 }\n\n<!dev & prod> {\n    web: { replicas: 4 },\n}\n"
     );
 
     let mut args = vec!["fingerprint", layer];
@@ -238,7 +241,7 @@ fn project_files_give_the_layers_and_the_schema() {
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "web: Service { replicas: 1 },\n"
+        "web: Service { replicas: 1 }\n"
     );
 }
 
@@ -378,12 +381,12 @@ fn eval_shows_the_defaults_fields_take() {
     // A default the schema does not record stays left out, with `..`.
     assert_eq!(
         eval(&[]),
-        "web: Service {\n    image: \"w\",\n    replicas: 1, // default\n    ..,\n},\n\
-         db: Service {\n    image: \"d\",\n    tags: [],\n    replicas: 1, // default\n},\n"
+        "web: Service {\n    image: \"w\",\n    replicas: 1, // default\n    ..,\n}\n\
+         db: Service {\n    image: \"d\",\n    tags: [],\n    replicas: 1, // default\n}\n"
     );
     assert_eq!(
         eval(&["--no-defaults"]),
-        "web: Service { image: \"w\", .. },\n\
-         db: Service { image: \"d\", tags: [], replicas: (), -replicas },\n"
+        "web: Service { image: \"w\", .. }\n\
+         db: Service { image: \"d\", tags: [], replicas: (), -replicas }\n"
     );
 }

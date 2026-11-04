@@ -177,7 +177,7 @@ fn diagnostics_symbols_and_formatting_for_a_document_on_its_own() {
     );
     assert_eq!(
         edits[0]["newText"],
-        "+web: Service { port: 80, limits: { cpu: 1 } },\nweb.port: 443,\n"
+        "+web: Service { port: 80, limits: { cpu: 1 } }\nweb.port: 443\n"
     );
     client.stop();
 }
@@ -1128,6 +1128,14 @@ fn documents_on_their_own_complete_from_their_schema() {
         &config,
         entries,
         "#![schema(schema)]\n\nlisten: \"x\",\nl",
+    );
+    assert_eq!(labels, ["limits"]);
+    // The same with a line break as the only separator.
+    let labels = complete(
+        &mut client,
+        &config,
+        entries,
+        "#![schema(schema)]\n\nlisten: \"x\"\nl",
     );
     assert_eq!(labels, ["limits"]);
     client.notify(

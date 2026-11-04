@@ -195,6 +195,44 @@ fn run(case: &Path) -> (Option<String>, Option<String>, String) {
     (data, fingerprint, errors)
 }
 
+fn copy_formatted(from: &Path, to: &Path) {
+    fs::create_dir_all(to).unwrap();
+    for entry in fs::read_dir(from).unwrap() {
+        let path = entry.unwrap().path();
+        let target = to.join(path.file_name().unwrap());
+        if path.is_dir() {
+            copy_formatted(&path, &target);
+        } else if path.extension().is_some_and(|e| e == "crol") {
+            let text = fs::read_to_string(&path).unwrap();
+            let config = crol_syntax::format::FormatConfig::default();
+            let text = crol_syntax::format::format(&text, &config).unwrap_or(text);
+            fs::write(target, text).unwrap();
+        } else {
+            fs::copy(&path, target).unwrap();
+        }
+    }
+}
+
+/// Formatting changes no document's meaning (`SPEC.md` 12.2), now that it
+/// leaves out commas: every case has the same data and fingerprint after it.
+#[test]
+fn formatting_keeps_data_and_fingerprints() {
+    let formatted = Path::new(env!("CARGO_TARGET_TMPDIR")).join("conformance-formatted");
+    let _ = fs::remove_dir_all(&formatted);
+    for entry in fs::read_dir(cases_dir()).unwrap() {
+        let case = entry.unwrap().path();
+        if !case.is_dir() {
+            continue;
+        }
+        let copy = formatted.join(case.file_name().unwrap());
+        copy_formatted(&case, &copy);
+        let (data, fingerprint, _) = run(&case);
+        let (data_after, fingerprint_after, _) = run(&copy);
+        assert_eq!(data, data_after, "{}", case.display());
+        assert_eq!(fingerprint, fingerprint_after, "{}", case.display());
+    }
+}
+
 #[test]
 fn conformance() {
     let update = std::env::var_os("UPDATE_EXPECT").is_some();

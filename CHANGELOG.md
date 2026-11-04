@@ -11,6 +11,12 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Added
 
+- A line break separates entries, in addition to the comma (`SPEC.md` 5.3).
+  An entry goes on across lines until the next line begins an entry; lists
+  and tuples stay comma-separated. `crol fmt` and `to_string_pretty` leave
+  out the commas after top-level entries and keep them in nested structures.
+  One change of reading: `a: &x` then `-b` on the next line, a subtraction
+  that could only fail, is now two entries.
 - `crol-syntax`: lexer, error-recovering parser producing a lossless rowan
   syntax tree, typed AST, and line/column index.
 - `crol-syntax`: the formatter (`SPEC.md` 12.2).

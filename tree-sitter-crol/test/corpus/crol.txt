@@ -94,3 +94,55 @@ Config { tags: ["a", r#"b"#], pair: (1,), id: @web }
           (identifier)))
       (id_expr
         (id)))))
+
+==================
+Line breaks between entries
+==================
+
+a: 1 // one
++b: 2 /* two */
+-c
+d: 3
+  + 4
+e: f
+  .g
+
+---
+
+(document
+  (entry
+    (target
+      (key
+        (identifier)))
+    (literal
+      (integer)))
+  (line_comment)
+  (entry
+    (target
+      (key
+        (identifier)))
+    (literal
+      (integer)))
+  (block_comment)
+  (remove_entry
+    (target
+      (key
+        (identifier))))
+  (entry
+    (target
+      (key
+        (identifier)))
+    (binary_expr
+      (literal
+        (integer))
+      (literal
+        (integer))))
+  (entry
+    (target
+      (key
+        (identifier)))
+    (path_expr
+      (unit_name
+        (identifier))
+      (field_selector
+        (identifier)))))

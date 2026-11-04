@@ -1,2 +1,2 @@
-database: { host: "db", port: 6543 },
-web: { url: "postgres://db:6543" },
+database: { host: "db", port: 6543 }
+web: { url: "postgres://db:6543" }

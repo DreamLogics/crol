@@ -6,6 +6,8 @@
 //! - a block, list or tuple goes on one line if it fits and has no comments,
 //!   else one entry per line with a trailing comma; a block written with a
 //!   line break after its `{` stays broken;
+//! - top-level entries are separated by line breaks alone, with a comma only
+//!   where the line break would not separate them (`SPEC.md` 5.3);
 //! - spaces around binary operators and after `:` and `,`, none inside
 //!   references, ids and selectors;
 //! - blank lines between entries are kept, but at most one;
@@ -54,7 +56,7 @@ impl FormatConfig {
 /// let text = "{ +web:Service{port:80,..,replicas:&+1} }";
 /// assert_eq!(
 ///     format(text, &FormatConfig::default()).unwrap(),
-///     "+web: Service { port: 80, replicas: & + 1, .. },\n",
+///     "+web: Service { port: 80, replicas: & + 1, .. }\n",
 /// );
 /// ```
 pub fn format(text: &str, config: &FormatConfig) -> Result<String, Vec<SyntaxError>> {
@@ -128,6 +130,21 @@ fn child_token(node: &SyntaxNode, kinds: &[SyntaxKind]) -> Option<SyntaxToken> {
     node.children_with_tokens()
         .filter_map(|it| it.into_token())
         .find(|t| kinds.contains(&t.kind()))
+}
+
+/// Whether a top-level entry needs a comma after it when `next` is the entry
+/// that follows: a line break does not separate them (`SPEC.md` 5.3).
+fn needs_comma_before(next: &SyntaxNode, formatter: &Formatter) -> bool {
+    if has_interior_comment(next) {
+        // Written as it was, so its start may not be on one line.
+        return significant_tokens(next)
+            .next()
+            .is_some_and(|t| matches!(t.kind(), PLUS | MINUS | L_ANGLE | L_BRACK));
+    }
+    next.kind() == REMOVE_ENTRY
+        && formatter
+            .flat(next)
+            .is_some_and(|text| text.starts_with("-[") || text[1..].starts_with(char::is_numeric))
 }
 
 /// What goes between a base and its selectors: nothing, except after an
@@ -398,10 +415,11 @@ impl Formatter {
         })
     }
 
-    /// Writes items one per line at `indent`, entries followed by a comma.
+    /// Writes items one per line at `indent`. Entries and elements are
+    /// followed by a comma, except at the top level.
     fn write_items(&self, items: &[Item], indent: usize, out: &mut String) {
         let pad = INDENT.repeat(indent);
-        for item in items {
+        for (i, item) in items.iter().enumerate() {
             match item {
                 Item::Blank => out.push('\n'),
                 Item::Comment(comment) => {
@@ -410,10 +428,13 @@ impl Formatter {
                     out.push('\n');
                 }
                 Item::Element(node, trailing) => {
-                    // Attributes and a document's expression take no comma;
-                    // an element of a list or tuple is an expression too, but
-                    // always comes with one (`in_container`).
-                    let comma = is_entry(node.kind()) || is_expr(node.kind()) && indent > 0;
+                    let comma = if indent > 0 {
+                        is_entry(node.kind()) || is_expr(node.kind())
+                    } else {
+                        // Attributes and a document's expression never take
+                        // one.
+                        is_entry(node.kind()) && self.comma_at_top_level(&items[i + 1..])
+                    };
                     out.push_str(&pad);
                     out.push_str(&self.item(
                         node,
@@ -432,6 +453,15 @@ impl Formatter {
                 }
             }
         }
+    }
+
+    /// Whether the top-level entry before `rest` keeps its comma.
+    fn comma_at_top_level(&self, rest: &[Item]) -> bool {
+        let next = rest.iter().find_map(|item| match item {
+            Item::Element(node, _) => Some(node),
+            _ => None,
+        });
+        next.is_some_and(|next| needs_comma_before(next, self))
     }
 
     /// An entry or element at the start of a line.

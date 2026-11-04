@@ -638,30 +638,30 @@ fn attributes() {
 // ---- Errors and recovery ----
 
 #[test]
-fn missing_comma_between_entries() {
+fn missing_separator_between_entries() {
     check(
-        "a: 1\nb: 2",
+        "a: 1 b: 2",
         expect![[r#"
-        DOCUMENT@0..9
-          ENTRY@0..4
-            TARGET@0..1
-              KEY@0..1
-                IDENT@0..1 "a"
-            COLON@1..2 ":"
-            WHITESPACE@2..3 " "
-            LITERAL@3..4
-              INT@3..4 "1"
-          WHITESPACE@4..5 "\n"
-          ENTRY@5..9
-            TARGET@5..6
-              KEY@5..6
-                IDENT@5..6 "b"
-            COLON@6..7 ":"
-            WHITESPACE@7..8 " "
-            LITERAL@8..9
-              INT@8..9 "2"
-        error 4..4: expected `,` between entries
-    "#]],
+            DOCUMENT@0..9
+              ENTRY@0..4
+                TARGET@0..1
+                  KEY@0..1
+                    IDENT@0..1 "a"
+                COLON@1..2 ":"
+                WHITESPACE@2..3 " "
+                LITERAL@3..4
+                  INT@3..4 "1"
+              WHITESPACE@4..5 " "
+              ENTRY@5..9
+                TARGET@5..6
+                  KEY@5..6
+                    IDENT@5..6 "b"
+                COLON@6..7 ":"
+                WHITESPACE@7..8 " "
+                LITERAL@8..9
+                  INT@8..9 "2"
+            error 4..4: expected `,` or a line break between entries
+        "#]],
     );
 }
 

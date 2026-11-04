@@ -85,7 +85,12 @@ pub(crate) fn complete(
     if previous.ends_with(':') && !previous.ends_with("::") {
         return completer.values();
     }
-    if previous.ends_with(['{', ',', '+', '?']) {
+    // A line break separates entries too (`SPEC.md` 5.3), unless an operator
+    // before it needs what comes next.
+    let own_line = lead.trim().is_empty() && !previous.is_empty();
+    if previous.ends_with(['{', ',', '+', '?'])
+        || own_line && !previous.ends_with(['-', '*', '/', '%', '~', '|', '(', '[', '=', '.'])
+    {
         return completer.fields();
     }
     Vec::new()

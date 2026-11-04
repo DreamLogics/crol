@@ -29,12 +29,22 @@ pub(crate) fn parse(text: &str) -> (GreenNode, Vec<SyntaxError>) {
     }
     starts.push(offset);
 
-    let significant = (0..tokens.len())
-        .filter(|&i| !tokens[i].kind.is_trivia())
-        .collect();
+    let mut significant = Vec::with_capacity(tokens.len());
+    let mut starts_line = Vec::with_capacity(tokens.len());
+    let mut line_break = false;
+    for (i, token) in tokens.iter().enumerate() {
+        if token.kind.is_trivia() {
+            let range = TextRange::new(starts[i], starts[i + 1]);
+            line_break |= text[range].contains('\n');
+        } else {
+            significant.push(i);
+            starts_line.push(std::mem::take(&mut line_break));
+        }
+    }
     let mut p = Parser {
         text,
         significant,
+        starts_line,
         next_significant: 0,
         tokens,
         starts,
@@ -44,6 +54,7 @@ pub(crate) fn parse(text: &str) -> (GreenNode, Vec<SyntaxError>) {
         errors: Vec::new(),
         depth: 0,
         reported_depth: false,
+        among_entries: false,
     };
     p.document();
     errors.append(&mut p.errors);
@@ -61,6 +72,9 @@ struct Parser<'t> {
     /// The indices of the tokens that are not trivia, for constant-time
     /// lookahead.
     significant: Vec<usize>,
+    /// For each token in `significant`, whether a line break lies between it
+    /// and the token before it, in whitespace or in a comment.
+    starts_line: Vec<bool>,
     /// The index in `significant` of the first token at or after `pos`.
     next_significant: usize,
     /// The end of the last token that was not trivia.
@@ -71,6 +85,10 @@ struct Parser<'t> {
     depth: usize,
     /// Whether "nested too deeply" has been reported; it is reported once.
     reported_depth: bool,
+    /// Whether the innermost bracket around the current token is a block's
+    /// (or the document's entries), so that a line break can end an entry
+    /// (`SPEC.md` 5.3). In `(...)` and `[...]` it cannot.
+    among_entries: bool,
 }
 
 /// Tokens that may start an expression.
@@ -135,6 +153,14 @@ impl Parser<'_> {
     /// trivia in between.
     fn current_is_adjacent(&self) -> bool {
         self.pos < self.tokens.len() && !self.tokens[self.pos].kind.is_trivia()
+    }
+
+    /// Whether the `n`-th token from `pos` is the first on its line.
+    fn nth_starts_line(&self, n: usize) -> bool {
+        self.starts_line
+            .get(self.next_significant + n)
+            .copied()
+            .unwrap_or(false)
     }
 
     /// The range of the current token, or an empty range at the end.
@@ -260,6 +286,10 @@ impl Parser<'_> {
         loop {
             let kind = self.current();
             if kind == EOF || depth == 0 && stop.contains(&kind) {
+                break;
+            }
+            // Without commas to stop at, the next entry is where to resume.
+            if depth == 0 && !first && self.at_next_entry() {
                 break;
             }
             match kind {
@@ -562,6 +592,12 @@ impl Parser<'_> {
     /// Entries up to `end` (`R_BRACE` or the end of the input), which is not
     /// consumed.
     fn entries(&mut self, end: SyntaxKind) {
+        let outer = std::mem::replace(&mut self.among_entries, true);
+        self.entries_inner(end);
+        self.among_entries = outer;
+    }
+
+    fn entries_inner(&mut self, end: SyntaxKind) {
         loop {
             let kind = self.current();
             if kind == end || kind == EOF {
@@ -594,7 +630,16 @@ impl Parser<'_> {
                 continue;
             }
             if self.at_entry_start() {
-                self.error_missing("expected `,` between entries");
+                if !self.nth_starts_line(0) {
+                    self.error_missing("expected `,` or a line break between entries");
+                } else if kind == MINUS && !self.has_entry_shape(0) {
+                    self.error_missing(
+                        "expected `,`: a line break does not separate entries before `-` \
+                         and an integer or `[`",
+                    );
+                }
+                // Else the line break separates them. A line that is not a
+                // whole entry gets its error from `entry`.
             } else {
                 self.error(format!("unexpected `{}` after an entry", self.nth_text(0)));
                 self.recover_until(&[COMMA, end, R_BRACE]);
@@ -607,6 +652,91 @@ impl Parser<'_> {
         match self.current() {
             MINUS | PLUS | QUESTION | DOT2 | L_ANGLE | POUND => true,
             kind => starts_key(kind),
+        }
+    }
+
+    /// Whether the current token starts a line that begins a new entry, so
+    /// that a value or path before it ends (`SPEC.md` 5.3).
+    fn at_next_entry(&self) -> bool {
+        self.among_entries && self.nth_starts_line(0) && self.has_entry_shape(0)
+    }
+
+    /// Whether the tokens from the `n`-th on have the shape of an entry, on
+    /// one line (`SPEC.md` 5.3). Each call looks at one line at most, so the
+    /// parser stays linear however many lines ask.
+    fn has_entry_shape(&self, n: usize) -> bool {
+        let same_line = |n: usize| !self.nth_starts_line(n);
+        match self.nth(n) {
+            QUESTION | DOT2 => true,
+            PLUS => same_line(n + 1) && self.has_target_and_colon(n + 1),
+            // Not `-12` or `-[key]`: those read as subtracting an integer or
+            // a list too, while subtracting a name or a string is an error.
+            MINUS => same_line(n + 1) && matches!(self.nth(n + 1), IDENT | STRING | RAW_STRING),
+            L_ANGLE => self
+                .after_variant(n)
+                .is_some_and(|n| same_line(n) && self.nth(n) == L_BRACE),
+            IDENT if same_line(n + 1) && matches!(self.nth(n + 1), EQ | COLON_EQ) => true,
+            _ => self.has_target_and_colon(n),
+        }
+    }
+
+    /// Whether the tokens from the `n`-th on are a target followed by `:`,
+    /// all on one line.
+    fn has_target_and_colon(&self, mut n: usize) -> bool {
+        match self.nth(n) {
+            IDENT | STRING | RAW_STRING | INT | TRUE_KW | FALSE_KW => n += 1,
+            L_BRACK => match self.after_accessor(n) {
+                Some(after) => n = after,
+                None => return false,
+            },
+            _ => return false,
+        }
+        loop {
+            if self.nth_starts_line(n) {
+                return false;
+            }
+            let after = match self.nth(n) {
+                COLON => return true,
+                DOT if !self.nth_starts_line(n + 1) && matches!(self.nth(n + 1), IDENT | INT) => {
+                    Some(n + 2)
+                }
+                L_BRACK => self.after_accessor(n),
+                L_ANGLE => self.after_variant(n),
+                _ => None,
+            };
+            match after {
+                Some(after) => n = after,
+                None => return false,
+            }
+        }
+    }
+
+    /// The token after the accessor at the `n`-th token, if it is one with a
+    /// single key, on one line.
+    fn after_accessor(&self, n: usize) -> Option<usize> {
+        let key = if self.nth(n + 1) == MINUS {
+            n + 2
+        } else {
+            n + 1
+        };
+        let close = key + 1;
+        ((n + 1..=close).all(|i| !self.nth_starts_line(i)) && self.nth(close) == R_BRACK)
+            .then_some(close + 1)
+    }
+
+    /// The token after the `<...>` at the `n`-th token, if it holds only what
+    /// a condition can hold, on one line.
+    fn after_variant(&self, mut n: usize) -> Option<usize> {
+        loop {
+            n += 1;
+            if self.nth_starts_line(n) {
+                return None;
+            }
+            match self.nth(n) {
+                R_ANGLE => return Some(n + 1),
+                IDENT | BANG | AMP | PIPE | CARET | PLUS | L_PAREN | R_PAREN => {}
+                _ => return None,
+            }
         }
     }
 
@@ -648,19 +778,25 @@ impl Parser<'_> {
             MINUS => {
                 self.start_at(checkpoint, REMOVE_ENTRY);
                 self.bump();
-                self.target();
+                self.start(TARGET);
+                self.key();
+                self.selectors(true);
+                self.finish();
                 self.finish();
             }
             PLUS | QUESTION => {
                 self.start_at(checkpoint, ENTRY);
                 self.bump();
                 self.target();
-                self.expect(COLON, "`:`");
-                self.expr();
+                self.entry_value();
                 self.finish();
             }
             DOT2 => {
-                if matches!(self.nth(1), COMMA | R_BRACE | EOF) {
+                // With a line break after `..`, `&x` is still its operand,
+                // but a whole entry is not.
+                if matches!(self.nth(1), COMMA | R_BRACE | EOF)
+                    || self.nth_starts_line(1) && self.has_entry_shape(1)
+                {
                     self.start_at(checkpoint, DEFAULTS);
                     self.bump();
                 } else {
@@ -683,8 +819,7 @@ impl Parser<'_> {
             TRUE_KW | FALSE_KW => {
                 self.start_at(checkpoint, ENTRY);
                 self.target();
-                self.expect(COLON, "`:`");
-                self.expr();
+                self.entry_value();
                 self.finish();
             }
             kind if starts_key(kind) => {
@@ -693,13 +828,29 @@ impl Parser<'_> {
                 if self.at(COLON_EQ) {
                     self.error("a value bind is written `name := value`, with a plain name");
                     self.bump();
+                    self.expr();
                 } else {
-                    self.expect(COLON, "`:`");
+                    self.entry_value();
                 }
-                self.expr();
                 self.finish();
             }
             _ => {}
+        }
+    }
+
+    /// `: expr`. A line that stops without its value, or without its `:` (a
+    /// key being typed), does not take in the entry on the next line.
+    fn entry_value(&mut self) {
+        let colon = self.expect(COLON, "`:`");
+        if !self.nth_starts_line(0) {
+            self.expr();
+        } else if colon {
+            // `-x` here negates, as it always did.
+            if self.at_next_entry() && !self.at(MINUS) {
+                self.error_missing("expected a value after `:`");
+            } else {
+                self.expr();
+            }
         }
     }
 
@@ -717,7 +868,7 @@ impl Parser<'_> {
     fn target(&mut self) {
         self.start(TARGET);
         self.key();
-        self.selectors();
+        self.selectors(false);
         self.finish();
     }
 
@@ -738,9 +889,14 @@ impl Parser<'_> {
         self.finish();
     }
 
-    /// Selectors after a key or an expression (`SPEC.md` 5.1).
-    fn selectors(&mut self) {
+    /// Selectors after a key or an expression (`SPEC.md` 5.1). A key before
+    /// its `:` takes any selectors; after a value or in a remove,
+    /// `stop_at_entry` leaves the next entry alone (`SPEC.md` 5.3).
+    fn selectors(&mut self, stop_at_entry: bool) {
         loop {
+            if stop_at_entry && self.at_next_entry() {
+                break;
+            }
             match self.current() {
                 DOT => self.dot_selector(),
                 L_BRACK => self.accessor(),
@@ -913,7 +1069,7 @@ impl Parser<'_> {
         self.binary(level + 1);
         // Each operator in a chain nests the tree one level deeper.
         let mut chain = 0;
-        while ops.contains(&self.current()) {
+        while ops.contains(&self.current()) && !self.at_next_entry() {
             if self.depth + chain >= MAX_NESTING {
                 if !self.reported_depth {
                     self.reported_depth = true;
@@ -950,9 +1106,9 @@ impl Parser<'_> {
     fn postfix_expr(&mut self) {
         let checkpoint = self.checkpoint();
         self.primary();
-        if matches!(self.current(), DOT | L_BRACK | L_ANGLE) {
+        if matches!(self.current(), DOT | L_BRACK | L_ANGLE) && !self.at_next_entry() {
             self.start_at(checkpoint, PATH_EXPR);
-            self.selectors();
+            self.selectors(true);
             self.finish();
         }
     }
@@ -965,7 +1121,18 @@ impl Parser<'_> {
         self.leave();
     }
 
+    /// A primary. Inside its `(` or `[`, a line break means nothing.
     fn primary_inner(&mut self) {
+        let outer = self.among_entries;
+        let kind = self.current();
+        if matches!(kind, L_BRACK | L_PAREN) || kind == IDENT && self.nth(1) == L_PAREN {
+            self.among_entries = false;
+        }
+        self.primary_kinds();
+        self.among_entries = outer;
+    }
+
+    fn primary_kinds(&mut self) {
         match self.current() {
             INT | FLOAT | STRING | RAW_STRING | CHAR | TRUE_KW | FALSE_KW => {
                 self.start(LITERAL);
@@ -1100,9 +1267,9 @@ impl Parser<'_> {
         if self.at(IDENT) {
             if self.current_is_adjacent() {
                 self.reference_name();
-            } else if !matches!(self.nth(1), COLON | COLON_EQ | EQ) {
+            } else if !matches!(self.nth(1), COLON | COLON_EQ | EQ) && !self.at_next_entry() {
                 // `& port`; unless it looks like the next entry after a
-                // missing comma, take the name in anyway.
+                // missing separator, take the name in anyway.
                 self.error("a reference name must follow `&` directly");
                 self.reference_name();
             }

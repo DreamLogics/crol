@@ -1,1 +1,1 @@
-web: { replicas: 1, name: "web" },
+web: { replicas: 1, name: "web" }

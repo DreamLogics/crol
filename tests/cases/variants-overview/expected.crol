@@ -7,7 +7,7 @@ web: Service {
     image: "web:1.4",
     depends_on: [@database, @cache],
     url: "http://web:8080",
-},
+}
 database: Service {
     replicas: 1,
     port: 5432,
@@ -17,7 +17,7 @@ database: Service {
     image: "postgres:17",
     depends_on: [],
     ..,
-},
+}
 cache: Service {
     replicas: 1,
     port: 6379,
@@ -27,7 +27,7 @@ cache: Service {
     image: "valkey:8",
     depends_on: [],
     ..,
-},
+}
 
 <dev & !prod> {
     web: Service {
@@ -41,7 +41,7 @@ cache: Service {
         limits: (),
         -limits,
     },
-},
+}
 
 <!dev & prod> {
     web: Service {
@@ -64,4 +64,4 @@ cache: Service {
         depends_on: [],
         ..,
     },
-},
+}
