@@ -27,6 +27,9 @@ pub struct Snapshot {
     pub options: DataOptions,
     /// The project's evaluation; empty without a project.
     pub evaluation: Evaluation,
+    /// While the layers do not evaluate (as while a document is being
+    /// typed): the latest evaluation of them that did, for completion.
+    pub last_good: Option<Evaluation>,
     /// Documents evaluated on their own, as value-mode documents.
     pub documents: Vec<(FileId, Evaluation)>,
     /// Diagnostics from the schema and the application's checks.
@@ -161,6 +164,7 @@ pub(crate) fn evaluate(
         layers: Vec::new(),
         options: DataOptions::default(),
         evaluation: Evaluation::default(),
+        last_good: None,
         documents: Vec::new(),
         extra: Vec::new(),
         schema: None,

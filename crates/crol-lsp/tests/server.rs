@@ -661,3 +661,158 @@ fn code_actions_fix_what_the_diagnostics_say() {
     );
     client.stop();
 }
+
+#[test]
+fn completion_and_hover_from_the_schema() {
+    let dir = workspace(
+        "lsp-schema",
+        &[
+            (
+                "project.crol",
+                r#"Project { layers: List([{ name: "base", dir: "base", .. }, { name: "local", dir: "local", .. }]), schema: Some("schema"), .. }"#,
+            ),
+            (
+                "schema.crol",
+                r#"Schema {
+                    format: 1,
+                    root: "app::Definition",
+                    types: {
+                        "app::Definition": Enum {
+                            name: "Definition",
+                            source: ("src/lib.rs", 1),
+                            variants: {
+                                Service: { shape: Newtype(Named("app::Service")), .. },
+                                Volume: { shape: Newtype(Named("app::Volume")), .. },
+                            },
+                            ..
+                        },
+                        "app::Service": Struct {
+                            name: "Service",
+                            source: ("src/lib.rs", 5),
+                            fields: {
+                                replicas: { ty: U32, doc: "Number of copies to run.", .. },
+                                port: { ty: U16, .. },
+                                limits: { ty: Named("app::Limits"), .. },
+                                mode: { ty: Named("app::Mode"), .. },
+                                url: { ty: Option(String), .. },
+                                depends_on: { ty: List(Id(["app::Service"])), .. },
+                            },
+                            ..
+                        },
+                        "app::Limits": Struct {
+                            name: "Limits",
+                            source: ("src/lib.rs", 9),
+                            fields: { cpu: { ty: F64, .. }, memory_mb: { ty: U32, .. } },
+                            ..
+                        },
+                        "app::Mode": Enum {
+                            name: "Mode",
+                            source: ("src/lib.rs", 12),
+                            variants: {
+                                Fast: { shape: Unit, .. },
+                                Slow: { shape: Newtype(U32), doc: "Slowly.", .. },
+                            },
+                            ..
+                        },
+                        "app::Volume": Struct {
+                            name: "Volume",
+                            source: ("src/lib.rs", 15),
+                            fields: { size_gb: { ty: U32, .. } },
+                            ..
+                        },
+                    },
+                }"#,
+            ),
+            (
+                "base/a.crol",
+                "+web: Service { replicas: 2, port: 80, limits: Limits { cpu: 1.0, memory_mb: 512 }, mode: Fast, url: None, depends_on: [] },\n+data: Volume { size_gb: 10 },",
+            ),
+            ("local/a.crol", "web.port: 81,"),
+        ],
+    );
+    let mut client = Client::start(&dir);
+    let base = uri(&dir.join("base/a.crol"));
+    let local = uri(&dir.join("local/a.crol"));
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": local, "languageId": "crol", "version": 1, "text": "web.port: 81," } }),
+    );
+    client.diagnostics_for(&local, |d| d.is_empty());
+    let mut version = 1;
+    // The completions at the end of `text`: (label, insert text, detail).
+    let mut complete = |client: &mut Client, text: &str| {
+        version += 1;
+        client.notify(
+            "textDocument/didChange",
+            json!({
+                "textDocument": { "uri": local, "version": version },
+                "contentChanges": [{ "text": text }],
+            }),
+        );
+        let items = client.request(
+            "textDocument/completion",
+            json!({
+                "textDocument": { "uri": local },
+                "position": { "line": 0, "character": text.len() },
+            }),
+        );
+        items
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| {
+                (
+                    i["label"].as_str().unwrap().to_owned(),
+                    i["insertText"].as_str().unwrap_or("").to_owned(),
+                    i["detail"].as_str().unwrap_or("").to_owned(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let has = |items: &[(String, String, String)], label: &str, insert: &str| {
+        items.iter().any(|(l, i, _)| l == label && i == insert)
+    };
+
+    // Fields not written yet, filled with the value they have now.
+    let items = complete(&mut client, "web: Service { ..&, rep");
+    assert!(has(&items, "replicas", "replicas: 2"), "{items:?}");
+    assert!(has(&items, "port", "port: 81"), "{items:?}");
+    assert!(
+        items.iter().any(|(l, _, d)| l == "replicas" && d == "u32"),
+        "{items:?}"
+    );
+
+    // Values of the field's type.
+    let items = complete(&mut client, "web.mode: S");
+    assert!(
+        has(&items, "Fast", "") && has(&items, "Slow", "Slow(0)"),
+        "{items:?}"
+    );
+    let items = complete(&mut client, "web.url: N");
+    assert!(
+        has(&items, "None", "") && has(&items, "Some", "Some(\"\")"),
+        "{items:?}"
+    );
+
+    // Ids, of the types the field may refer to.
+    let items = complete(&mut client, "web.depends_on: [@");
+    let labels: Vec<&str> = items.iter().map(|(l, _, _)| l.as_str()).collect();
+    assert_eq!(labels, ["web"]);
+
+    // The keys of `&self`, while the text does not parse.
+    let items = complete(&mut client, "web.limits: Limits { ..&, cpu: &self.");
+    let labels: Vec<&str> = items.iter().map(|(l, _, _)| l.as_str()).collect();
+    assert_eq!(labels, ["cpu", "memory_mb"]);
+
+    // Hover: the type and doc.
+    let hover = client.request(
+        "textDocument/hover",
+        json!({ "textDocument": { "uri": base }, "position": { "line": 0, "character": 18 } }),
+    );
+    let markdown = hover["contents"]["value"].as_str().unwrap();
+    assert!(
+        markdown.contains("`u32` — Number of copies to run."),
+        "{markdown}"
+    );
+    client.stop();
+}

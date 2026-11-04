@@ -338,7 +338,7 @@ impl Document<'_> {
         if !snapshot.in_layers(file) {
             return None;
         }
-        let (key, path) = block_path(block)?;
+        let (key, path) = features::block_path(block)?;
         let steps = crol_eval::explain(
             &snapshot.sources,
             &snapshot.layers,
@@ -427,12 +427,6 @@ fn target_key(node: &SyntaxNode, name: &str) -> Option<SyntaxToken> {
         .filter_map(|t| t.key())
         .find(|k| features::key_text(k).as_deref() == Some(name))
         .and_then(|k| k.token())
-}
-
-/// The root key and path of the entry a block is the value of.
-fn block_path(block: &ast::Block) -> Option<(String, Vec<crol_eval::PathStep>)> {
-    let entry = block.syntax().ancestors().find_map(ast::Entry::cast)?;
-    features::target_path(&entry.target()?.key()?.token()?)
 }
 
 fn key_name(name: &str) -> String {

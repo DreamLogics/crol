@@ -46,7 +46,7 @@ fn bind_name(token: &SyntaxToken) -> Option<SyntaxToken> {
 
 /// The name a block or document declares directly, as an entry bind or a
 /// value bind.
-fn declared_in(container: &SyntaxNode, name: &str) -> Option<SyntaxToken> {
+pub(crate) fn declared_in(container: &SyntaxNode, name: &str) -> Option<SyntaxToken> {
     container.children().find_map(|entry| {
         let token = match entry.kind() {
             SyntaxKind::VALUE_BIND => ast::ValueBind::cast(entry)?.name(),

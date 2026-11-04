@@ -14,6 +14,7 @@
 #![forbid(unsafe_code)]
 
 mod actions;
+mod completion;
 mod convert;
 mod features;
 mod hints;
@@ -364,12 +365,20 @@ impl Server {
     /// Evaluates everything and publishes the diagnostics.
     fn evaluate(&mut self) {
         self.dirty_since = None;
-        let snapshot = workspace::evaluate(
+        let mut snapshot = workspace::evaluate(
             self.root.as_deref(),
             &self.settings,
             &self.open,
             self.checks.as_ref(),
         );
+        if snapshot.evaluation.value.is_none()
+            && let Some(previous) = self.snapshot.take()
+        {
+            snapshot.last_good = match previous.evaluation.value {
+                Some(_) => Some(previous.evaluation),
+                None => previous.last_good,
+            };
+        }
         let by_file = snapshot.diagnostics(self.encoding);
         let mut published = HashSet::new();
         for (uri, diagnostics) in by_file {
@@ -461,11 +470,13 @@ impl Server {
                         let uri = p.text_document_position.text_document.uri;
                         let text = self.text(&uri)?;
                         let snapshot = self.snapshot.as_ref()?;
-                        Some(features::complete(
+                        Some(completion::complete(
                             snapshot,
+                            &uri,
                             &text,
                             p.text_document_position.position,
                             encoding,
+                            &self.settings,
                         ))
                     });
                 self.respond(id, result.map(lsp_types::CompletionResponse::Array));
