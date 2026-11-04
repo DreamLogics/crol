@@ -331,16 +331,19 @@ fn in_workspace(name: &str, req: &VersionReq, dir: &Path) -> Option<Result<PathB
         return None;
     }
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let output = Command::new(cargo)
-        .args(["metadata", "--format-version", "1", "--offline"])
-        .current_dir(dir)
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
+    let metadata = |extra: &[&str]| {
+        let output = Command::new(&cargo)
+            .args(["metadata", "--format-version", "1", "--offline"])
+            .args(extra)
+            .current_dir(dir)
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        output.status.success().then_some(output)
+    };
+    // Without every dependency downloaded, at least the workspace's own.
+    let output = metadata(&[]).or_else(|| metadata(&["--no-deps"]))?;
     let metadata: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
     let (version, package) = metadata["packages"]
         .as_array()?
