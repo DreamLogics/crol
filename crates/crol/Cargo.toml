@@ -7,6 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+authors.workspace = true
 keywords = ["crol", "configuration", "config", "serde", "ron"]
 categories = ["config", "encoding", "parser-implementations"]
 readme = "README.md"
@@ -16,13 +17,13 @@ readme = "README.md"
 derive = ["dep:crol-derive"]
 # Schemas from URLs and crates (`SPEC.md` 4.1), for tools.
 remote-schemas = [
-    "dep:blake3",
-    "dep:flate2",
-    "dep:semver",
-    "dep:serde_json",
-    "dep:tar",
-    "dep:toml",
-    "dep:ureq",
+  "dep:blake3",
+  "dep:flate2",
+  "dep:semver",
+  "dep:serde_json",
+  "dep:tar",
+  "dep:toml",
+  "dep:ureq",
 ]
 
 [dependencies]

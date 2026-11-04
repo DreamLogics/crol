@@ -7,6 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+authors.workspace = true
 keywords = ["crol", "configuration", "cli"]
 categories = ["command-line-utilities", "config"]
 readme = "README.md"

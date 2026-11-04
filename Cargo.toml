@@ -6,6 +6,7 @@ members = ["crates/*"]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.99"
+authors = ["Sanne Ladage"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/DreamLogics/crol"
 homepage = "https://github.com/DreamLogics/crol"
@@ -28,7 +29,11 @@ serde = "1.0.228"
 flate2 = "1.1"
 semver = "1.0.28"
 tar = { version = "0.4.46", default-features = false }
-toml = { version = "1.2", default-features = false, features = ["std", "parse", "serde"] }
+toml = { version = "1.2", default-features = false, features = [
+  "std",
+  "parse",
+  "serde",
+] }
 ureq = { version = "3.5", default-features = false, features = ["rustls"] }
 
 # crol-derive only.
