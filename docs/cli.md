@@ -271,6 +271,9 @@ $ crol check --message-format json data/base bad.crod
 {"severity":"error","message":"nope.x: `nope` does not exist, so it cannot be patched","file":"bad.crod","line":1,"column":1,"end_line":1,"end_column":7,"context":null,"related":[]}
 ```
 
+A problem that is about no place in a file, such as a key that is not a path, has
+`null` for `file`, `line` and the columns.
+
 ## Exit status
 
 `crol check`, `crol fmt --check` and all other commands exit with status 1 when

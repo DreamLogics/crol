@@ -1,0 +1,3 @@
+1-base/a.crod:2:10: cycle: this value depends on itself
+1-base/a.crod:3:10: cycle: this value depends on itself
+1-base/a.crod:4:5: cycle: this value contains itself

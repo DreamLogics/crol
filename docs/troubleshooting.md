@@ -79,10 +79,6 @@ A value needs itself to be computed, and the message lists the references
 involved. Late references read final values, so `a: &root.a + 1` does not mean
 "add one to the old `a`". For that, use `&`: `a: & + 1`.
 
-Currently, some cycles between whole root keys, as in `+a: &root.b, +b: &root.a`,
-make `crol check` exit with status 1 without a message. If `crol` fails silently,
-look for such a pair.
-
 ## Types
 
 **`` `Service` is missing the field `port`; write it, or end the block with `..` to leave out fields that have defaults ``**

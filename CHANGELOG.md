@@ -147,6 +147,14 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Fixed
 
+- A cycle between root keys (`+a: &root.b`, `+b: &root.a`) and a root key that
+  holds the root (`+a: &root`) are reported with their spans. `crol` exited with
+  status 1 and no message, and panicked with `--message-format json`.
+- No diagnostic is lost or panics because it is about no place in a file, such as
+  a path that is not one given to `crol explain`: it has no snippet, and in JSON
+  its `file`, `line` and `column` are `null` (`SPEC.md` 7.7). `Sources::get` is
+  new, and `Sources::location` and `Diagnostic::display` accept a detached span.
+- `crol_eval::parse_path` refuses text that only holds a path, such as `+a`.
 - The documents of a directory layer, and so the order of the `extends`
   they load, no longer depend on the order the platform lists files in
   (`SPEC.md` 7.1).

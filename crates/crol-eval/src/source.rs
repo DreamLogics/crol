@@ -100,9 +100,15 @@ impl Sources {
     ///
     /// # Panics
     ///
-    /// If `id` is not from these sources, or is a detached span's.
+    /// If `id` is not from these sources, or is a detached span's. What
+    /// reports diagnostics uses [`get`](Self::get): a span may be detached.
     pub fn file(&self, id: FileId) -> &SourceFile {
         &self.files[id.0 as usize]
+    }
+
+    /// A file, if `id` is from these sources; a detached span's is not.
+    pub fn get(&self, id: FileId) -> Option<&SourceFile> {
+        self.files.get(id.0 as usize)
     }
 
     /// Every file, in the order added.
@@ -113,12 +119,18 @@ impl Sources {
             .map(|(i, file)| (FileId(i as u32), file))
     }
 
-    /// Where a span starts, for messages: `name:line:col`.
+    /// Where a span starts, for messages: `name:line:col`. A detached span
+    /// is in no file, and gets the name `<unknown>`.
     pub fn location(&self, span: Span) -> Location<'_> {
-        let file = self.file(span.file);
-        Location {
-            name: file.name(),
-            line_col: file.line_col(span.range.start()),
+        match self.get(span.file) {
+            Some(file) => Location {
+                name: file.name(),
+                line_col: file.line_col(span.range.start()),
+            },
+            None => Location {
+                name: "<unknown>",
+                line_col: LineCol { line: 1, col: 1 },
+            },
         }
     }
 }

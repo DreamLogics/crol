@@ -64,11 +64,16 @@ impl Reporter {
             let range = |span: crol_eval::Span| {
                 usize::from(span.range.start())..usize::from(span.range.end())
             };
-            let mut labels = vec![Label::primary(
-                diagnostic.span.file.index(),
-                range(diagnostic.span),
-            )];
-            for related in &diagnostic.related {
+            // A detached span is in no file, so it gets no snippet.
+            let in_a_file = |span: crol_eval::Span| sources.get(span.file).is_some();
+            let mut labels = Vec::new();
+            if in_a_file(diagnostic.span) {
+                labels.push(Label::primary(
+                    diagnostic.span.file.index(),
+                    range(diagnostic.span),
+                ));
+            }
+            for related in diagnostic.related.iter().filter(|r| in_a_file(r.span)) {
                 labels.push(
                     Label::secondary(related.span.file.index(), range(related.span))
                         .with_message(&related.message),
@@ -84,9 +89,13 @@ impl Reporter {
             if let Some(context) = &diagnostic.context {
                 rendered = rendered.with_notes(vec![format!("while evaluating {context}")]);
             }
-            // Failing to write to standard error leaves nowhere to report it.
-            let _ =
+            let emitted =
                 term::emit_to_write_style(&mut self.stderr.lock(), &self.config, &files, &rendered);
+            // No diagnostic is lost because its snippet cannot be rendered.
+            // If standard error itself fails, there is nowhere to report it.
+            if emitted.is_err() {
+                self.note(&diagnostic.display(sources).to_string());
+            }
         }
     }
 
@@ -115,7 +124,13 @@ impl Reporter {
 /// A diagnostic as one line of JSON.
 fn json(sources: &Sources, diagnostic: &crol_eval::Diagnostic) -> String {
     let place = |span: crol_eval::Span| {
-        let file = sources.file(span.file);
+        // A detached span is in no file.
+        let Some(file) = sources.get(span.file) else {
+            let none = "null";
+            return format!(
+                "\"file\":{none},\"line\":{none},\"column\":{none},\"end_line\":{none},\"end_column\":{none}"
+            );
+        };
         let start = file.line_col(span.range.start());
         let end = file.line_col(span.range.end());
         format!(
@@ -134,6 +149,7 @@ fn json(sources: &Sources, diagnostic: &crol_eval::Diagnostic) -> String {
     let related: Vec<String> = diagnostic
         .related
         .iter()
+        .filter(|r| sources.get(r.span.file).is_some())
         .map(|r| {
             format!(
                 "{{{},\"message\":{}}}",

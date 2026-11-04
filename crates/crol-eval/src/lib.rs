@@ -278,6 +278,11 @@ pub fn parse_path(text: &str) -> Result<(String, Vec<PathStep>), String> {
         _ => return Err(invalid()),
     };
     let target = entry.target().ok_or_else(invalid)?;
+    // The whole text is the path: not `+a`, or `a: 1, b`, which hold one.
+    let range = crol_syntax::ast::AstNode::syntax(&target).text_range();
+    if usize::from(range.start()) != 0 || usize::from(range.end()) != text.len() {
+        return Err(invalid());
+    }
     let key = target.key().and_then(|k| k.token()).ok_or_else(invalid)?;
     let key = match key.kind() {
         crol_syntax::SyntaxKind::IDENT => key.text().to_owned(),

@@ -1,0 +1,6 @@
++a: &root.b
++b: &root.a
++c: &root.c
++d: &root
++e: 1
++f: &root.e + 1

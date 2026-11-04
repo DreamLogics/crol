@@ -73,7 +73,8 @@ impl Diagnostic {
         self.severity == Severity::Error
     }
 
-    /// The diagnostic on one line, as `file:line:col: message`.
+    /// The diagnostic on one line, as `file:line:col: message`, or the
+    /// message alone if it is about no place in a file.
     pub fn display<'a>(&'a self, sources: &'a Sources) -> impl fmt::Display + 'a {
         DisplayDiagnostic {
             diagnostic: self,
@@ -93,10 +94,34 @@ impl fmt::Display for DisplayDiagnostic<'_> {
         if d.severity == Severity::Warning {
             write!(f, "warning: ")?;
         }
-        write!(f, "{}: {}", self.sources.location(d.span), d.message)?;
+        if self.sources.get(d.span.file).is_some() {
+            write!(f, "{}: ", self.sources.location(d.span))?;
+        }
+        write!(f, "{}", d.message)?;
         if let Some(context) = &d.context {
             write!(f, " (while evaluating {context})")?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_detached_span_is_displayed_without_a_place() {
+        let mut sources = Sources::new();
+        let file = sources.add("a.crod", "+a: 1");
+        let placed = Diagnostic::error(Span::new(file, Default::default()), "here");
+        assert_eq!(placed.display(&sources).to_string(), "a.crod:1:1: here");
+
+        let detached = Diagnostic::error(Span::detached(), "nowhere");
+        assert_eq!(detached.display(&sources).to_string(), "nowhere");
+        assert_eq!(
+            sources.location(Span::detached()).to_string(),
+            "<unknown>:1:1"
+        );
+        assert!(sources.get(Span::detached().file).is_none());
     }
 }

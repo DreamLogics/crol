@@ -1911,7 +1911,9 @@ impl Evaluator<'_> {
         for (_, through) in &self.stack[start + 1..] {
             diagnostic = diagnostic.with_related(*through, "through this reference");
         }
-        if let Some((_, first)) = self.stack.get(start) {
+        if let Some((_, first)) = self.stack.get(start)
+            && !first.is_detached()
+        {
             diagnostic = diagnostic.with_related(*first, "which is evaluated here");
         }
         diagnostic.context = cell.location.as_ref().map(Location::describe);
@@ -2482,6 +2484,14 @@ impl Evaluator<'_> {
         }
     }
 
+    /// Where a cell's value is written, if it has a place of its own.
+    fn own_span(&self, cell: &Lazy) -> Option<Span> {
+        cell.expr
+            .map(|expr| self.ir.exprs[expr].span)
+            .or_else(|| self.span_of(cell))
+            .filter(|span| !span.is_detached())
+    }
+
     /// The span of a value that is already computed, for related spans.
     fn span_of(&self, cell: &Lazy) -> Option<Span> {
         match &*cell.state.borrow() {
@@ -2888,6 +2898,12 @@ impl Evaluator<'_> {
         span: Span,
         visiting: &mut Vec<(*const Cell, Option<ExprId>)>,
     ) -> Result<Value, Poisoned> {
+        // The root is in no file, so what it holds speaks for itself.
+        let span = if span.is_detached() {
+            self.own_span(cell).unwrap_or(span)
+        } else {
+            span
+        };
         let ptr = Rc::as_ptr(cell);
         if visiting.len() >= MAX_VALUE_DEPTH {
             // Spreading a value into itself (`x: { ..&root }`) makes a copy

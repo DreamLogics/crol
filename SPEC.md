@@ -1227,7 +1227,9 @@ independent error once. Each diagnostic has:
 
 - a message, starting with the operator or entry that failed:
   `+: cannot add a string to a list`;
-- a primary span (file, line, column, layer);
+- a primary span (file, line, column, layer), or none for a diagnostic
+  about no place in a file, which is shown without one (in JSON, its
+  `file`, `line` and `column` are `null`);
 - secondary spans (the entry that created a key that a `+` collides
   with, every reference in a cycle, both definitions in a layer);
 - the evaluation context: `while evaluating web<prod>.limits.memory_mb`.
