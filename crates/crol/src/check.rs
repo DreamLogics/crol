@@ -87,6 +87,32 @@ pub fn check<T: VariantName>(
     check_view(data.view(), schema, root, options)
 }
 
+/// Checks the value of a value-mode document against the type at `root`
+/// (`None`: the schema's root type), with the rules of the deserializer
+/// (`SPEC.md` 4.1). Ids name the value's own keys.
+pub fn check_value(
+    value: &Value,
+    schema: &SchemaFile,
+    root: Option<&str>,
+    options: &CheckOptions,
+) -> Vec<Diagnostic> {
+    let variants = Variants::default();
+    let mut checker = Checker {
+        schema,
+        options,
+        data: DataView {
+            base: value,
+            contexts: &[],
+            variants: &variants,
+        },
+        context: None,
+        found: Vec::new(),
+    };
+    let root_type = TypeExpr::Named(root.unwrap_or(&schema.root).to_owned());
+    checker.value(value, &root_type, "", None);
+    checker.found
+}
+
 /// [`check`], on a [`DataView`].
 pub fn check_view(
     data: DataView<'_>,

@@ -50,7 +50,7 @@ mod ser;
 use crol_eval::evaluate_value;
 use serde::{Deserialize, Serialize};
 
-pub use check::{CheckOptions, DataView, check, check_view};
+pub use check::{CheckOptions, DataView, check, check_value, check_view};
 pub use compose::{
     CrolComposer, CrolConfig, CrolContext, CrolData, CrolLayer, CrolVariants, LayerSource, Variant,
     VariantName,

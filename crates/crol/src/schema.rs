@@ -391,6 +391,43 @@ impl SchemaFile {
     }
 }
 
+/// The schema file a document names with `#![schema(...)]` (`SPEC.md`
+/// 4.1), with the attribute's range: `None` without the attribute. A module
+/// path is resolved with the document's directory as the root; schemas
+/// from URLs and crates are not supported yet, and are an error.
+pub fn attribute_path(
+    text: &str,
+    document: &Path,
+) -> Option<(crol_syntax::TextRange, Result<PathBuf, Error>)> {
+    use crol_syntax::ast::{AstNode, AttributeKind};
+    let parse = crol_syntax::parse(text);
+    let attr = parse.document().attributes().find_map(|a| match a.kind() {
+        Some(AttributeKind::Schema(attr)) => Some(attr),
+        _ => None,
+    })?;
+    let range = attr.syntax().text_range();
+    let Some(module_path) = attr.module_path() else {
+        return Some((
+            range,
+            Err(Error::new(
+                "schema: schemas from URLs and crates are not supported yet",
+            )),
+        ));
+    };
+    let module_path: String = module_path
+        .syntax()
+        .text()
+        .to_string()
+        .split_whitespace()
+        .collect();
+    let dir = document.parent().unwrap_or(Path::new("."));
+    Some((
+        range,
+        crate::resolve_module_path(&module_path, dir, Some(document))
+            .map_err(|e| Error::new(format!("schema: {e}"))),
+    ))
+}
+
 /// Builds the schema of `T` and every type it uses.
 pub fn build<T: Schema + ?Sized>() -> SchemaFile {
     let mut registry = Registry::new();
