@@ -31,6 +31,10 @@ pub struct Snapshot {
     pub documents: Vec<(FileId, Evaluation)>,
     /// Diagnostics from the schema and the application's checks.
     pub extra: Vec<Diagnostic>,
+    /// The project's schema, if it names one.
+    pub schema: Option<SchemaFile>,
+    /// The type path of the project's root type, with the schema.
+    pub root_type: Option<String>,
     /// The path of each file, by its id.
     paths: Vec<PathBuf>,
     /// Files of read-only layers, which get no diagnostics.
@@ -60,6 +64,12 @@ impl Snapshot {
         self.layers
             .iter()
             .any(|l| l.documents.iter().any(|(_, f)| *f == file))
+    }
+
+    /// Whether the file is in a read-only layer, which gets no diagnostics
+    /// or code actions.
+    pub fn is_read_only(&self, file: FileId) -> bool {
+        self.read_only.contains(&file)
     }
 
     /// The evaluation a file belongs to.
@@ -153,6 +163,8 @@ pub(crate) fn evaluate(
         evaluation: Evaluation::default(),
         documents: Vec::new(),
         extra: Vec::new(),
+        schema: None,
+        root_type: None,
         paths: Vec::new(),
         read_only: HashSet::new(),
         problem: None,
@@ -165,14 +177,12 @@ pub(crate) fn evaluate(
         .project
         .clone()
         .or_else(|| root.and_then(Project::find));
-    let mut schema = None;
-    let mut project_root = None;
     let mut check = CheckOptions::default();
     if let Some(project_path) = &project_path {
         match load_project(&mut snapshot, project_path, &canonical_open) {
-            Ok((loaded_schema, root_type, options)) => {
-                schema = loaded_schema;
-                project_root = root_type;
+            Ok((schema, root_type, options)) => {
+                snapshot.schema = schema;
+                snapshot.root_type = root_type;
                 check = options;
             }
             Err(message) => snapshot.problem = Some(message),
@@ -181,13 +191,13 @@ pub(crate) fn evaluate(
     if !snapshot.layers.is_empty() {
         snapshot.evaluation =
             crol_eval::evaluate_data(&snapshot.sources, &snapshot.layers, &snapshot.options);
-        if let (Some(schema), Some(base)) = (&schema, &snapshot.evaluation.value) {
+        if let (Some(schema), Some(base)) = (&snapshot.schema, &snapshot.evaluation.value) {
             let view = crol::DataView {
                 base,
                 contexts: &snapshot.evaluation.contexts,
                 variants: &snapshot.evaluation.variants,
             };
-            snapshot.extra = crol::check_view(view, schema, project_root.as_deref(), &check);
+            snapshot.extra = crol::check_view(view, schema, snapshot.root_type.as_deref(), &check);
         }
     }
     // Open documents that are in no layer are evaluated on their own.

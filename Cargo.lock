@@ -310,6 +310,7 @@ dependencies = [
  "crol-eval",
  "crol-syntax",
  "crossbeam-channel",
+ "indexmap",
  "lsp-server",
  "lsp-types",
  "serde",
