@@ -47,6 +47,14 @@ impl Error {
         self
     }
 
+    /// Says in which file the error is, unless its location already does.
+    pub(crate) fn in_file(mut self, file: &str) -> Self {
+        if self.0.location.is_none() && self.0.diagnostics.is_empty() {
+            self.0.message = format!("{file}: {}", self.0.message);
+        }
+        self
+    }
+
     pub(crate) fn from_diagnostics(sources: &Sources, diagnostics: &[Diagnostic]) -> Self {
         let rendered: Vec<String> = diagnostics
             .iter()

@@ -1,0 +1,7 @@
++app: { limits: { cpu: 1 } }
+app.limits.gone.a.b: 2
++removed: { limits: { cpu: 1 } }
+-removed.gone.a
++ensured: { limits: { cpu: 1 } }
+?ensured.gone.a: 1
++other: { limits: { cpu: 1 } } ~ { limits.gone.a: 3 }

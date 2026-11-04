@@ -167,6 +167,13 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   does `--project project.crov`, whose layer command runs too. `super::` works
   from a relative path, such as `crol check sub/x.crod`. `crol::directory_of` is
   new.
+- A step of a path entry that does not exist says so as a key does: `web.nope.x:
+  `web.nope` does not exist, so it cannot be patched`, not ``:: `.nope` does not
+  exist``.
+- Errors in a project file or a schema file point at that file, not at
+  `<string>:1:1`, and errors in what a layer command prints at `<output>`.
+- ``unexpected `:` after an entry`` says what to look for: a key was read as part
+  of the value before it, as in `+a: 1 +b: 2`.
 - `SPEC.md` 10.9 now shows the four arguments of `crol::check`, says that
   `IndexMap` needs no feature, and no longer promises `Schema` implementations
   for `glam` and `chrono`, which never existed: such fields take

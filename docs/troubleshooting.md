@@ -16,6 +16,9 @@ is not defined anywhere, or the layer that defines it is not loaded, or it is
 loaded later than this one. Check the order of your layers: lowest first. To
 create the key, write `+web: { port: 80 }`.
 
+The same goes for every step of a longer path: `web.limits.cpu: 2` with no `limits`
+gives ``web.limits.cpu: `web.limits` does not exist, so it cannot be patched``.
+
 **`` +: `web` already exists ``**
 
 `+` means "this is new", and something below already wrote it. To change the
@@ -38,10 +41,11 @@ possibly in two files. Keep one, or make the second a
 
 Two entries on one line need a comma between them, or put each on its own line.
 
-**`` unexpected `:` after an entry ``**
+**`` unexpected `:` after an entry: the key before it was read as part of the value; is a `,` missing, or an operand? ``**
 
-A line that does not begin an entry continues the value above it, so this line was
-read as part of that value. Look at the end of the line before, for an operator
+The key was read as part of the value before it. On one line, a comma is missing:
+in `+a: 1 +b: 2`, the `+` adds `b` to `1`. Else, a line that does not begin an entry
+continues the value above it. Look at the end of the line before, for an operator
 with nothing after it, as in `a: 1 +`. Look at the start of this line too: an
 entry's start, up to its `:`, must be on one line. See
 [line breaks and commas](language.md#line-breaks-and-commas).
@@ -173,7 +177,9 @@ Variants need layers. If the file is data, name it `.crod`.
 **`no layers given, and no project.crov in this directory or above`**
 
 Name the layers on the command line, or [add a project
-file](projects.md#the-project-file).
+file](projects.md#the-project-file). If the message goes on to say that `base` is
+read as a key, you gave `crol eval` or `crol explain` a layer in the place of the
+key: [write it `./base`](cli.md#crol-eval).
 
 **`` the module path `data::local` names nothing ``**
 

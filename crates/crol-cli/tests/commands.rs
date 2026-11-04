@@ -251,6 +251,59 @@ fn an_extends_that_fails_is_reported() {
     }
 }
 
+// ---- Messages ----
+
+#[test]
+fn a_missing_step_of_a_path_says_what_is_missing() {
+    let dir = tree("missing-step", &[("a.crod", "+web: {}\nweb.nope.x: 1\n")]);
+    let output = crol(&dir, &["check", "a.crod"]);
+    assert!(failed(&output), "{output:?}");
+    let expected = "web.nope.x: `web.nope` does not exist, so it cannot be patched";
+    assert!(stderr(&output).contains(expected), "{output:?}");
+}
+
+#[test]
+fn errors_in_a_project_file_point_at_the_file() {
+    for (text, place) in [
+        // A value that deserializing refuses.
+        (
+            "Project {\n    layers: List([{ name: 1, dir: \"data\", .. }]),\n    ..\n}\n",
+            ":2:",
+        ),
+        // A syntax error.
+        ("Project {\n    layers: ,\n}\n", ":2:"),
+    ] {
+        let dir = tree("project-errors", &[("project.crov", text)]);
+        let output = crol(&dir, &["check"]);
+        assert!(failed(&output), "{output:?}");
+        let message = stderr(&output);
+        assert!(message.contains("project.crov"), "{message}");
+        assert!(message.contains(place), "{message}");
+        assert!(!message.contains("<string>"), "{message}");
+    }
+}
+
+#[test]
+fn errors_in_a_schema_file_point_at_the_file() {
+    let dir = tree(
+        "schema-file-errors",
+        &[("s.crov", "Schema {\n    format: \"one\",\n}\n"), ("a.crod", "+a: 1\n")],
+    );
+    let output = crol(&dir, &["check", "a.crod", "--schema", "s.crov"]);
+    assert!(failed(&output), "{output:?}");
+    let message = stderr(&output);
+    assert!(message.contains("s.crov"), "{message}");
+    assert!(!message.contains("<string>"), "{message}");
+}
+
+#[test]
+fn a_key_after_an_operator_points_at_the_missing_comma() {
+    let dir = tree("missing-comma", &[("a.crod", "+a: 1 +b: 2\n")]);
+    let output = crol(&dir, &["check", "a.crod"]);
+    assert!(failed(&output), "{output:?}");
+    assert!(stderr(&output).contains("is a `,` missing"), "{output:?}");
+}
+
 // ---- Exit status (`SPEC.md` 11) ----
 
 const SERVICE_SCHEMA: &str = r#"Schema {

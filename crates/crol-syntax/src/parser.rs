@@ -640,6 +640,15 @@ impl Parser<'_> {
                 }
                 // Else the line break separates them. A line that is not a
                 // whole entry gets its error from `entry`.
+            } else if kind == COLON {
+                // A key after an operator: `+a: 1 +b: 2`, or `a: 1 +` before
+                // the line `b: 2`.
+                self.error(
+                    "unexpected `:` after an entry: the key before it was read as part of \
+                     the value; is a `,` missing, or an operand?",
+                );
+                self.recover_until(&[COMMA, end, R_BRACE]);
+                self.eat(COMMA);
             } else {
                 self.error(format!("unexpected `{}` after an entry", self.nth_text(0)));
                 self.recover_until(&[COMMA, end, R_BRACE]);

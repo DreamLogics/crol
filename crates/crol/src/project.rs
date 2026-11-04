@@ -153,7 +153,8 @@ impl Project {
             .map_err(|error| error.with_source_id(SourceId::from_path(path)))?;
         let text = std::fs::read_to_string(path)
             .map_err(|e| Error::new(format!("cannot read {}: {e}", path.display())))?;
-        crate::from_str(&text).map_err(|e| Error::new(format!("{}: {e}", path.display())))
+        let name = path.display().to_string();
+        crate::from_named_str(&name, &text).map_err(|e| e.in_file(&name))
     }
 
     /// The layers, running the layer command if there is one. `dir` is the
@@ -178,8 +179,12 @@ impl Project {
                     )));
                 }
                 let text = String::from_utf8_lossy(&output.stdout);
-                crate::from_str(&text)
-                    .map_err(|e| Error::new(format!("project: the layer command printed {e}")))
+                crate::from_named_str("<output>", &text).map_err(|e| {
+                    Error::new(format!(
+                        "project: the output of the layer command `{}`: {e}",
+                        command.join(" ")
+                    ))
+                })
             }
         }
     }

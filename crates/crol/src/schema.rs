@@ -379,12 +379,17 @@ impl SchemaFile {
         Mode::Value.check_path(path)?;
         let text = std::fs::read_to_string(path)
             .map_err(|e| Error::new(format!("cannot read {}: {e}", path.display())))?;
-        Self::from_text(&text)
+        let name = path.display().to_string();
+        Self::from_named_text(&name, &text).map_err(|e| e.in_file(&name))
     }
 
     /// Parses a schema file's text.
     pub fn from_text(text: &str) -> Result<Self, Error> {
-        let schema: SchemaFile = crate::from_str(text)?;
+        Self::from_named_text("<string>", text)
+    }
+
+    fn from_named_text(name: &str, text: &str) -> Result<Self, Error> {
+        let schema: SchemaFile = crate::from_named_str(name, text)?;
         if schema.format != FORMAT {
             return Err(Error::new(format!(
                 "the schema has format {}, and this version of crol reads format {FORMAT}",

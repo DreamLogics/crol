@@ -360,6 +360,31 @@ fn describe_target(entry: &Entry) -> String {
     out
 }
 
+/// The error for a step of a path entry that does not exist, as for a key
+/// that does not exist: `web.nope.x: `web.nope` does not exist, so it cannot
+/// be patched`. `here` is where the step would be, and `rest` the steps after
+/// it; `op` is `None` for a removal.
+fn missing_step(
+    selector: &Selector,
+    rest: &[Selector],
+    op: Option<SetOp>,
+    here: Option<&Location>,
+) -> String {
+    let missing = here.map_or_else(
+        || describe_selector(selector).trim_start_matches('.').to_owned(),
+        Location::describe,
+    );
+    let Some(op) = op else {
+        return format!("-: `{missing}` does not exist");
+    };
+    let prefix = match op {
+        SetOp::Set => "",
+        SetOp::Declare | SetOp::Ensure => op.symbol(),
+    };
+    let rest: String = rest.iter().map(describe_selector).collect();
+    format!("{prefix}{missing}{rest}: `{missing}` does not exist, so it cannot be patched")
+}
+
 fn describe_selector(selector: &Selector) -> String {
     match &selector.kind {
         SelectorKind::Field(name) if crate::value::is_identifier(name) => format!(".{name}"),
@@ -2529,15 +2554,14 @@ impl Evaluator<'_> {
             }
         };
         let here = child_location(&here, step);
-        let symbol = recipe.op.map_or("-", SetOp::symbol);
         if rest.is_empty() {
             return self.apply_last(value, selector, recipe, chain, here, context);
         }
         let child = match self.select(value, selector) {
             Ok(child) => child,
             Err(Fail::Missing(..)) => {
-                let step = describe_selector(selector);
-                return Err(self.fail(selector.span, format!("{symbol}: `{step}` does not exist")));
+                let message = missing_step(selector, rest, recipe.op, here.as_ref());
+                return Err(self.fail(selector.span, message));
             }
             Err(fail) => return Err(fail),
         };

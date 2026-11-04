@@ -331,21 +331,28 @@ pub fn from_str_with_schema<T: for<'de> Deserialize<'de>>(
         structs: Some(std::sync::Arc::new(de::Structs::from_schema(schema))),
         ..de::Options::default()
     };
-    from_text(text, options).map(|(value, _)| value)
+    from_text("<string>", text, options).map(|(value, _)| value)
+}
+
+/// [`from_str`] for text that has a name, such as a file's, which errors
+/// then point at.
+pub(crate) fn from_named_str<T: for<'de> Deserialize<'de>>(name: &str, text: &str) -> Result<T> {
+    from_text(name, text, de::Options::default()).map(|(value, _)| value)
 }
 
 /// Like [`from_str`], and also returns every id the deserializer produced,
 /// so that the application can check what they name (`SPEC.md` 10.5).
 pub fn from_str_with_ids<T: for<'de> Deserialize<'de>>(text: &str) -> Result<(T, Vec<IdUse>)> {
-    from_text(text, de::Options::default())
+    from_text("<string>", text, de::Options::default())
 }
 
 fn from_text<T: for<'de> Deserialize<'de>>(
+    name: &str,
     text: &str,
     options: de::Options,
 ) -> Result<(T, Vec<IdUse>)> {
     let mut sources = Sources::new();
-    let file = sources.add("<string>", text);
+    let file = sources.add(name, text);
     let evaluation = evaluate_value(&sources, file);
     let Some(value) = evaluation.value else {
         return Err(Error::from_diagnostics(&sources, &evaluation.diagnostics));
