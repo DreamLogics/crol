@@ -9,6 +9,7 @@ to use what you get back.
 | You have                              | Use                                                 |
 | ------------------------------------- | --------------------------------------------------- |
 | one document                          | [`crol::from_str`](modes.md#value-mode-a-file-is-a-value) |
+| one document and a [schema](schemas.md) | `crol::from_str_with_schema`                      |
 | layers, variants or several files     | `CrolComposer`, then `compose` or `compose_data`    |
 
 [Data mode and value mode](modes.md) explains the difference. Everything below
@@ -52,6 +53,71 @@ change.
 `#[serde(flatten)]` makes serde ask for a map rather than a struct. It works,
 but these checks then do not apply to that struct.
 
+### Types that decide for themselves
+
+Whether fields can be left out without `..` is normally one setting for all your
+data, `require_complete`. Some types know better. A retry policy with sensible
+defaults should not need `..` at every use, and a critical type may want `..`
+even where you turned the check off. With the `derive` feature, a type can decide
+with `#[crol(explicit_defaults)]`:
+
+| On the type                          | Fields left out without `..`               |
+| ------------------------------------ | ------------------------------------------ |
+| nothing                              | as `require_complete` says: an error by default |
+| `#[crol(explicit_defaults)]`         | always an error                            |
+| `#[crol(explicit_defaults = false)]` | take their defaults, as with `..`          |
+
+```rust
+// src/main.rs
+use serde::Deserialize;
+
+#[derive(Deserialize, crol::Schema)]
+#[crol(explicit_defaults = false)]
+struct Retry {
+    limit: u32,
+    #[serde(default)]
+    backoff_ms: u32,
+    jitter: Option<f64>,
+}
+
+fn main() -> Result<(), crol::Error> {
+    let schema = crol::schema::build::<Retry>();
+    let retry: Retry = crol::from_str_with_schema("Retry { limit: 3 }", &schema)?;
+    println!("{} {} {:?}", retry.limit, retry.backoff_ms, retry.jitter);
+
+    // Without the schema, the deserializer cannot know.
+    if let Err(error) = crol::from_str::<Retry>("Retry { limit: 3 }") {
+        println!("{error}");
+    }
+    Ok(())
+}
+```
+
+```console
+$ cargo run
+3 0 None
+`Retry` is missing the fields `backoff_ms`, `jitter`; write them, or end the block with `..` to leave out fields that have defaults (<string>:1:1)
+```
+
+**The loader needs the schema**, because serde does not pass attributes to a
+deserializer. Use `crol::from_str_with_schema` for one document, or
+`CrolComposer::schema` for layers. Without one, only `require_complete` counts:
+loading then fails, rather than load something the tools did not check.
+
+`explicit_defaults = false` is about the type, not the data. It changes no value
+and no fingerprint, a field without a default is still an error, and `..` remains
+allowed. It does not apply to the types of the fields, which have settings of
+their own.
+
+The attribute goes on a struct with named fields, a struct variant, or an enum,
+for its struct variants that have none of their own. Elsewhere it is a compile
+error, as it is on variants of tagged and untagged enums, and
+`#[crol(explicit_defaults)]` on a struct with `#[serde(flatten)]`, because those
+do not read through a path where `..` can be asked for.
+
+For a type that needs `..`, one `..` that reaches the final value is enough, in
+any layer or template, such as a later `web: & ~ { .. }`.
+
 ### Enums
 
 External tagging, serde's default, fits CROL best, and lets you load a root of
@@ -59,8 +125,8 @@ mixed types into one map. Each type name selects the enum variant of that name:
 
 ```crol
 // fleet.crol
-+web: Service { port: 8080, image: "web:1.4" },
-+uploads: Volume { size_gb: 20 },
++web: Service { port: 8080, image: "web:1.4" }
++uploads: Volume { size_gb: 20 }
 ```
 
 ```rust
@@ -123,10 +189,39 @@ file cannot end with `..`, because the root is not a block. So every field of
 that struct must be set by some layer, even `Option` fields and fields with
 `#[serde(default)]`. The error message suggests `..`, which does not apply here.
 
-If you want optional root keys, either load into a map, or turn the check off
-for the whole data set with `require_complete: false` in
-[`CrolConfig`](#configuration). The second option applies to every struct, not
-only the root one.
+To allow optional root keys, give that struct `#[crol(explicit_defaults = false)]`,
+and give the composer its schema:
+
+```rust
+// src/main.rs
+use crol::{CrolComposer, CrolLayer};
+use serde::Deserialize;
+
+#[derive(Deserialize, crol::Schema)]
+#[crol(explicit_defaults = false)]
+struct Config {
+    port: u16,
+    workers: Option<u32>,
+}
+
+fn main() -> Result<(), crol::Error> {
+    let config: Config = CrolComposer::new()
+        .schema(crol::schema::build::<Config>())
+        .load_layer(CrolLayer::from_sources("base", [("a.crol", "port: 80")]))
+        .compose()?;
+    println!("port {}, workers {:?}", config.port, config.workers);
+    Ok(())
+}
+```
+
+```console
+$ cargo run
+port 80, workers None
+```
+
+The alternatives are to load into a map, or to turn the check off for the whole
+data set with `require_complete: false` in [`CrolConfig`](#configuration), which
+applies to every struct, not only the root one.
 
 ## Ids
 
@@ -213,13 +308,14 @@ that out when you do not set `variants`.
 | ------------------------- | ------------------ | ------------------------------------------------------------ |
 | `variants`                | none declared      | the [variants](variants.md#declaring-variants)               |
 | `root_path`               | working directory  | where `::` [module paths](projects.md#module-paths) start    |
+| `file_loaders`            | the file system    | where [documents come from](recipes.md#loading-documents-from-somewhere-else) |
 | `load_extends`            | `false`            | follow [`#![extends(...)]`](layers.md#declaring-what-a-file-builds-on) |
 | `contexts`                | `None`: all        | the contexts `compose_data` evaluates                        |
 | `max_contexts`            | `4096`             | the most contexts evaluated when `contexts` is `None`        |
 | `variant_keys`            | `Any`              | [keys per context](variants.md#keys-that-exist-only-in-some-contexts) |
 | `implicit_some`           | `true`             | accept `x` for an `Option`, as `Some(x)`                     |
 | `allow_unknown_fields`    | `false`            | ignore fields a struct does not have                         |
-| `require_complete`        | `true`             | require every field of a struct without `..`                 |
+| `require_complete`        | `true`             | require every field of a struct without `..`, unless the [type decides](#types-that-decide-for-themselves) |
 | `warn_cross_file_patches` | `true`             | warn about [patches from several files](layers.md#definitions-and-patches) of a layer |
 
 ## Inspecting the result
@@ -373,9 +469,9 @@ fn main() -> Result<(), crol::Error> {
 ```console
 $ cargo run
 Config {port: 8080, name: Some("web"), tags: ["a"]}
-port: 8080,
-name: "web",
-tags: ["a"],
+port: 8080
+name: "web"
+tags: ["a"]
 ```
 
 CROL does not edit files for you: there is no way to change a value and keep

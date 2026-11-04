@@ -15,15 +15,15 @@ each difference next to the value it changes:
 +web: {
     replicas: 2,
     log_level: "info",
-},
+}
 
 <prod> {
     web.replicas: 8,
-},
+}
 
 <dev> {
     web.log_level: "debug",
-},
+}
 ```
 
 `<prod> { ... }` holds entries that apply only when `prod` is active. The set
@@ -32,9 +32,9 @@ _base_ context:
 
 ```console
 $ crol eval --group dev,prod services.crol
-web: { replicas: 2, log_level: "info" },
+web: { replicas: 2, log_level: "info" }
 $ crol eval --group dev,prod --context prod services.crol
-web: { replicas: 8, log_level: "info" },
+web: { replicas: 8, log_level: "info" }
 ```
 
 ## Declaring variants
@@ -189,22 +189,22 @@ You can write one in several places, all meaning the same thing:
     replicas: 2,
     timeout<dev>: 600, // inside a block
     limits: { cpu: 1.0 },
-},
+}
 
-web<prod>.replicas: 8, // on an entry
-web.limits<prod>.cpu: 4.0, // anywhere in the path
+web<prod>.replicas: 8 // on an entry
+web.limits<prod>.cpu: 4.0 // anywhere in the path
 
 // Around a group of entries:
 <prod & !cache> {
     web.replicas: & + 1,
-},
+}
 ```
 
 ```console
 $ crol eval --group dev,prod --discrete cache --context prod example.crol
-web: { replicas: 9, limits: { cpu: 4.0 } },
+web: { replicas: 9, limits: { cpu: 4.0 } }
 $ crol eval --group dev,prod --discrete cache --context dev example.crol
-web: { replicas: 2, limits: { cpu: 1.0 }, timeout: 600 },
+web: { replicas: 2, limits: { cpu: 1.0 }, timeout: 600 }
 ```
 
 Nesting means _and_: `<a> { <b> { ... } }` is `<a & b>`.
@@ -233,24 +233,24 @@ two. Entries of equal specificity keep their normal order.
 
 ```crol
 // example.crol
-+web: { replicas: 2 },
++web: { replicas: 2 }
 
 <prod> {
     web.replicas: & * 4,
-},
+}
 
 <prod_eu> {
     web.replicas: & + 2,
-},
+}
 
 <prod & !cache> {
     web.replicas: & + 1,
-},
+}
 ```
 
 ```console
 $ crol eval --group prod,prod_eu --discrete cache --parent prod_eu=prod --context prod_eu example.crol
-web: { replicas: 11 },
+web: { replicas: 11 }
 ```
 
 In `{prod_eu}`, the base gives 2. `<prod>` (specificity 1) makes it 8.
@@ -277,21 +277,21 @@ or copy a value from another one:
 
 ```crol
 // example.crol
-+database: { host: "db.local" },
-database<prod>.host: "db.internal",
++database: { host: "db.local" }
+database<prod>.host: "db.internal"
 
 +report: {
     current: &root.database.host,
     production: &root.database<prod>.host,
     development: &root.database<dev>.host,
-},
+}
 ```
 
 ```console
 $ crol eval --group dev,prod --context dev example.crol report
-current: "db.local",
-production: "db.internal",
-development: "db.local",
+current: "db.local"
+production: "db.internal"
+development: "db.local"
 ```
 
 Only names, `!` and `&` are allowed there, since the reference has to name
@@ -303,11 +303,11 @@ A conditional entry can add a key that the base lacks, or remove one:
 
 ```crol
 // example.crol
-+web: { port: 80 },
++web: { port: 80 }
 
 <dev> {
     +debug_tools: { port: 9999 },
-},
+}
 ```
 
 Whether that is allowed is up to your program. `CrolConfig::variant_keys` is

@@ -34,19 +34,19 @@ service_defaults := {
     replicas: 1,
     port: 8080,
     tags: ["managed"],
-},
+}
 
 +web: {
     ..&service_defaults,
     image: "web:1.4",
     url: "http://web:" + &self.port,
-},
+}
 
 +database: {
     ..&service_defaults,
     image: "postgres:17",
     port: 5432,
-},
+}
 ```
 
 An extension layer adds a service, and changes one that it did not define.
@@ -58,17 +58,17 @@ Note that it can use the template from the layer below:
     ..&service_defaults,
     image: "valkey:8",
     port: 6379,
-},
+}
 
-web.replicas: 2,
-web.tags: & + ["cached"],
+web.replicas: 2
+web.tags: & + ["cached"]
 ```
 
 And a local layer changes one value:
 
 ```crol
 // data/local/overrides.crol
-web.port: 9090,
+web.port: 9090
 ```
 
 Give `crol eval` the layers, lowest first:
@@ -81,9 +81,9 @@ web: {
     tags: ["managed", "cached"],
     image: "web:1.4",
     url: "http://web:9090",
-},
-database: { replicas: 1, port: 5432, tags: ["managed"], image: "postgres:17" },
-cache: { replicas: 1, port: 6379, tags: ["managed"], image: "valkey:8" },
+}
+database: { replicas: 1, port: 5432, tags: ["managed"], image: "postgres:17" }
+cache: { replicas: 1, port: 6379, tags: ["managed"], image: "valkey:8" }
 ```
 
 In Rust, each `load` adds a layer on top:
@@ -123,6 +123,8 @@ fn main() -> Result<(), crol::Error> {
 - **One file**.
 - **Documents in memory**, for tests and data embedded in your binary:
   `CrolLayer::from_sources("base", [("web.crol", text)])`.
+- **Anything else**, through a [file loader](recipes.md#loading-documents-from-somewhere-else)
+  of your own.
 
 Within a layer, documents are read in order of their path, compared byte by
 byte, so the order is the same on every platform.
@@ -155,12 +157,12 @@ define a key: a higher layer's definition simply replaces what was below.
 
 ```crol
 // twice/one.crol
-+web: { port: 80 },
++web: { port: 80 }
 ```
 
 ```crol
 // twice/two.crol
-web: { port: 81 },
+web: { port: 81 }
 ```
 
 ```console
@@ -168,12 +170,12 @@ $ crol check twice
 error: `web` is defined twice in the layer `twice`; a layer may define a key once
   ┌─ /path/to/project/twice/two.crol:2:1
   │
-2 │ web: { port: 81 },
+2 │ web: { port: 81 }
   │ ^^^
   │
   ┌─ /path/to/project/twice/one.crol:2:2
   │
-2 │ +web: { port: 80 },
+2 │ +web: { port: 80 }
   │  --- the other definition
 ```
 
@@ -200,19 +202,19 @@ So in the example above, `web.url` is `"http://web:" + &self.port`, written in
 
 ```crol
 // demo/a.crol
-+memory: 512,
-+doubled: &root.memory * 2,
++memory: 512
++doubled: &root.memory * 2
 ```
 
 ```crol
 // demo/b.crol
-memory: & + 512,
+memory: & + 512
 ```
 
 ```console
 $ crol eval demo/a.crol demo/b.crol
-memory: 1024,
-doubled: 2048,
+memory: 1024
+doubled: 2048
 ```
 
 Each `&` sees the chain up to its own entry, while `&root.memory` saw the
@@ -246,19 +248,19 @@ say so, name that file with `#![extends(...)]`:
 
 ```crol
 // demo2/defaults/services.crol
-+web: { replicas: 1 },
++web: { replicas: 1 }
 ```
 
 ```crol
 // demo2/app.crol
 #![extends(defaults::services)]
 
-web.replicas: 4,
+web.replicas: 4
 ```
 
 ```console
 $ crol eval demo2/app.crol
-web: { replicas: 4 },
+web: { replicas: 4 }
 ```
 
 The path is a [module path](projects.md#module-paths), and the file or

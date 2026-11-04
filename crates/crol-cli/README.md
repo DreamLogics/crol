@@ -17,6 +17,7 @@ cargo install --git https://github.com/DreamLogics/crol crol-cli
 
 | Command            | Does                                          |
 | ------------------ | --------------------------------------------- |
+| `crol init`        | set up a project                              |
 | `crol check`       | read and evaluate layers, and report problems |
 | `crol eval`        | print evaluated data                          |
 | `crol explain`     | print the operations behind a value           |

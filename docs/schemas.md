@@ -135,6 +135,8 @@ Serde's attributes are understood: `rename`, `rename_all`, `alias`, `default`,
 | Attribute                        | On         | Means                                                       |
 | -------------------------------- | ---------- | ----------------------------------------------------------- |
 | `#[crol(defaults)]`              | a type     | record default values, for `&default` and tools             |
+| `#[crol(explicit_defaults)]`     | a type     | [fields left out always need `..`](#types-that-decide-about-)  |
+| `#[crol(explicit_defaults = false)]` | a type | [fields left out take their defaults, without `..`](#types-that-decide-about-) |
 | `#[crol(refers(Service, Volume))]` | an id field | which root types its ids may name, also in lists, options and maps |
 | `#[crol(schema = OtherType)]`    | a field    | describe it as a type with the same serialized shape        |
 | `#[crol(schema = any)]`          | a field    | accept anything here, unchecked                             |
@@ -157,7 +159,7 @@ Hand the schema to `crol check` with `--schema`:
     replica: 3,
     depends_on: [@database],
     ..,
-},
+}
 ```
 
 ```console
@@ -192,7 +194,7 @@ each marked with a comment, so you can see what your program will get:
     image: "web:1.4",
     port: 80,
     ..,
-},
+}
 ```
 
 ```console
@@ -203,7 +205,7 @@ web: Service {
     replicas: 1, // default
     depends_on: [], // default
     env: {}, // default
-},
+}
 ```
 
 Pass `--no-defaults` to print the data as it is.
@@ -253,7 +255,7 @@ or a crate:
     image: "web:1.4",
     port: "80",
     ..,
-},
+}
 ```
 
 ```console
@@ -304,7 +306,7 @@ path, and name it:
     image: "web:1.4",
     port: 80,
     ..,
-},
+}
 ```
 
 **From a crate.** Include the file in your package and say where it is. It is
@@ -382,8 +384,8 @@ a name of its own in that file:
 ```crol
 #![use(app::net::Config, app::db::Config as DbConfig)]
 
-listener: Config { port: 8080 },
-database: DbConfig { url: "postgres://db" },
+listener: Config { port: 8080 }
+database: DbConfig { url: "postgres://db" }
 ```
 
 A path is the Rust module path followed by the type's name as data writes it.
@@ -436,14 +438,20 @@ out for serde, and `..&default` copies them into the data.
 Where no default is recorded, `&default` counts as missing, so `&default | 1`
 falls back.
 
-**Limits.** `&default` works only through `CrolComposer::schema`. `crol::from_str`
-has no schema, and neither `crol check` and `crol eval` nor the language server
-hand their schema to the evaluator yet, so in those a document with `&default`
-reports `defaults come from a schema, and no schema is given`.
+**Limits.** `&default` works only through `CrolComposer::schema`, in layered data.
+In a value-mode document it is an error, with `crol::from_str` and with
+`crol::from_str_with_schema` alike. `crol check`, `crol eval` and the language
+server do not hand their schema to the evaluator yet. In all of these, a document
+with `&default` reports `defaults come from a schema, and no schema is given`.
 
-`CrolComposer::schema` has a second use: it tells the deserializer which field
-names are `#[serde(alias)]`es of one field. A field written by its alias then
-counts as present.
+## What else the loader learns from a schema
+
+serde tells a deserializer nothing about attributes, so two more things reach it
+only through a schema: which field names are `#[serde(alias)]`es of one field, so
+that a field written by its alias counts as present, and
+[`explicit_defaults`](#types-that-decide-about-). Give the loader the schema if
+you use either: `CrolComposer::schema` for layers, and
+`crol::from_str_with_schema(text, &schema)` for a single document.
 
 ## Checking from Rust
 
@@ -476,6 +484,95 @@ base/a.crol:1:61: the id `@nothing` names no root key (while evaluating web.depe
 
 The third argument names the root type by its path, and `None` uses the schema's
 own. `crol::check_value` does the same for a value-mode document.
+
+## Types that decide about `..`
+
+`#[crol(explicit_defaults)]` and `#[crol(explicit_defaults = false)]` let a type
+decide whether its fields need `..` to be left out.
+[Loading data in Rust](rust.md#types-that-decide-for-themselves) explains them. The
+setting is stored in the schema, so the tools agree with your program:
+
+```rust
+// src/lib.rs
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Deserialize, Serialize, crol::Schema)]
+pub enum Definition {
+    Retry(Retry),
+    Service(Service),
+}
+
+#[derive(Debug, Deserialize, Serialize, crol::Schema)]
+#[crol(explicit_defaults = false)]
+pub struct Retry {
+    pub limit: u32,
+    #[serde(default)]
+    pub backoff_ms: u32,
+}
+
+#[derive(Debug, Deserialize, Serialize, crol::Schema)]
+pub struct Service {
+    pub port: u16,
+    #[serde(default)]
+    pub replicas: u32,
+}
+```
+
+```crol
+// retry.crol
++fast: Retry { limit: 3 }
++web: Service { port: 80 }
+```
+
+```console
+$ CROL_UPDATE_SCHEMA=1 cargo test
+$ crol check --schema crol/schema.crol ./retry.crol
+error: `Service` is missing the field `replicas`; write it, or end the block with `..` to leave out fields that have defaults
+  ┌─ ./retry.crol:3:7
+  │
+3 │ +web: Service { port: 80 }
+  │       ^^^^^^^^^^^^^^^^^^^^
+  │
+  = while evaluating web
+```
+
+`Retry` needs no `..`, and `Service`, with no attribute, still does.
+
+Schema files that do not use the attribute look the same as before, and a tool too
+old to know it rejects a file that does, rather than check it by other rules.
+
+### Generated files and defaults
+
+Every field of a struct with `#[serde(default)]` on the struct now counts as
+having a default, so tools accept `Limits { .. }` for such a struct, as serde
+does. Fields that used to be recorded as required get `default: Unrecorded`, or
+their value:
+
+```rust
+// src/lib.rs
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Default, Deserialize, Serialize, crol::Schema)]
+#[serde(default)]
+pub struct Limits {
+    pub cpu: f64,
+}
+
+#[derive(Debug, Deserialize, Serialize, crol::Schema)]
+pub enum Definition {
+    Limits(Limits),
+}
+```
+
+```console
+$ CROL_UPDATE_SCHEMA=1 cargo test
+$ grep cpu crol/schema.crol
+            fields: { cpu: { ty: F64, default: Unrecorded, .. } },
+```
+
+If your types have such a struct, a schema file generated earlier is out of date,
+and `crol::schema::check_file` fails until you regenerate it with
+`CROL_UPDATE_SCHEMA=1 cargo test`.
 
 ## Next
 

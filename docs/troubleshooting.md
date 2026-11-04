@@ -34,10 +34,30 @@ possibly in two files. Keep one, or make the second a
 [patch](layers.md#definitions-and-patches): `web.port: 81`, or
 `web: & ~ { port: 81 }`.
 
+**`` expected `,` or a line break between entries ``**
+
+Two entries on one line need a comma between them, or put each on its own line.
+
 **`` unexpected `:` after an entry ``**
 
-Most likely a comma is missing at the end of the line before. Entries are
-separated by commas.
+A line that does not begin an entry continues the value above it, so this line was
+read as part of that value. Look at the end of the line before, for an operator
+with nothing after it, as in `a: 1 +`. Look at the start of this line too: an
+entry's start, up to its `:`, must be on one line. See
+[line breaks and commas](language.md#line-breaks-and-commas).
+
+**`` expected `,` `` inside a list or tuple**
+
+Line breaks do not separate list and tuple elements. Add the comma.
+
+**`` expected `,`: a line break does not separate entries before `-` and an integer or `[` ``**
+
+`-12` on a line of its own would read as a subtraction. To remove an integer key,
+end the line before with a comma.
+
+**A value is unexpectedly a number, such as `-7`.** The same rule, silently: after
+a value, `-12` on the next line is a subtraction, so `a: 5` then `-12` gives
+`a: -7`. Write `a: 5,` to remove key `12` instead.
 
 ## References
 
@@ -72,6 +92,10 @@ with `..` to [leave it out on purpose](language.md#leaving-fields-out).
 
 If the message names the struct you load the root into, `..` is not an option,
 since a data-mode file [has no block at the top](rust.md#a-struct-at-the-root).
+
+If the type has `#[crol(explicit_defaults = false)]`, and your program reports this
+while `crol check` does not, the loader has no schema. Use
+`CrolComposer::schema` or [`crol::from_str_with_schema`](rust.md#types-that-decide-for-themselves).
 
 **`` `Service` has no field `replica`; its fields are ... ``**
 
@@ -156,6 +180,15 @@ decide. Pass `--schema`, or make them agree.
 
 A warning: the project's schema applies to all layers. Remove the attribute from
 the document, or make it agree.
+
+**`` no Cargo.toml in /some/dir or above; run this in a Rust project ``**
+
+`crol init` sets up a Cargo project. Run `cargo init` first, or write a
+[`project.crol`](projects.md#the-project-file) by hand.
+
+**`project.crol already exists; it was left as it is`**
+
+`crol init` never overwrites a project file. Edit the one you have.
 
 **`&default: defaults come from a schema, and no schema is given`**
 

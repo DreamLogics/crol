@@ -39,6 +39,7 @@ pub enum Env {
 | Attribute                          | On           | Means                                                 |
 | ---------------------------------- | ------------ | ----------------------------------------------------- |
 | `#[crol(defaults)]`                | a type       | record default values                                 |
+| `#[crol(explicit_defaults)]`       | a type       | fields left out always need `..`; `= false`: they never do |
 | `#[crol(refers(Service, Volume))]` | an id field  | the root types its ids may name                       |
 | `#[crol(schema = OtherType)]`      | a field      | describe it as a type with the same serialized shape  |
 | `#[crol(schema = any)]`            | a field      | accept anything here                                  |

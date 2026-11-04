@@ -48,8 +48,8 @@ Config {
 ```crol
 #![type(Config)]
 
-port: 8080,
-workers: 4,
+port: 8080
+workers: 4
 ```
 
 Because the file is one value, it can use everything a block can, such as `..`
@@ -58,11 +58,11 @@ to leave fields out, and a spread at the top:
 ```crol
 #![type(Config)]
 
-defaults := { workers: 4 },
+defaults := { workers: 4 }
 
-..&defaults,
-port: 8080,
-..,
+..&defaults
+port: 8080
+..
 ```
 
 Entries apply in order, as they do in any block, so a later `port: 80`
@@ -77,8 +77,8 @@ the data". The composer gathers the operations of all files, orders them by
 
 ```crol
 // services.crol
-+web: Service { port: 8080, .. },
-+database: Service { port: 5432, .. },
++web: Service { port: 8080, .. }
++database: Service { port: 5432, .. }
 ```
 
 The root is not a value that the file builds, which explains the rules that

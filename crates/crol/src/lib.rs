@@ -52,9 +52,9 @@
 //! let config: Config = crol::from_str(r#"
 //!     #![type(Config)]
 //!
-//!     port := 8080,
-//!     listen: "0.0.0.0:" + &port,
-//!     admin: "127.0.0.1:" + (&port + 1),
+//!     port := 8080
+//!     listen: "0.0.0.0:" + &port
+//!     admin: "127.0.0.1:" + (&port + 1)
 //!     ..
 //! "#)?;
 //!
@@ -65,7 +65,9 @@
 //!
 //! Every field of a struct must be written, `Option` fields included, so that a
 //! typo cannot quietly turn into a default. The `..` at the end says that
-//! leaving out `workers` is on purpose.
+//! leaving out `workers` is on purpose. A type can also decide this for itself,
+//! with `#[crol(explicit_defaults)]`; the loader then needs its schema, through
+//! `from_str_with_schema` or [`CrolComposer::schema`].
 //!
 //! [`to_string`] and [`to_string_pretty`] write any `Serialize` value back:
 //!
@@ -103,7 +105,7 @@
 //!     +web: Service {
 //!         port: 80,
 //!         url: "http://web:" + &self.port,
-//!     },
+//!     }
 //! "#)]);
 //! let local = CrolLayer::from_sources("local", [("overrides.crol", "web.port: 8080")]);
 //!
@@ -124,6 +126,11 @@
 //! on shared data, and [`from_str`] in _value mode_, where a file is one value.
 //! [Data mode and value mode][modes] explains the difference.
 //!
+//! Documents do not have to be files: a `FileLoader`, registered with
+//! `with_file_loader`, can serve module paths from anywhere. See
+//! [the recipe][loaders], which also explains `without_file_system`, for
+//! documents you do not trust.
+//!
 //! To read more than one value, use [`compose_data`], which returns a
 //! [`CrolData`]. It also gives you warnings, a [fingerprint] of the data, and
 //! the [history][explain] of any value.
@@ -134,6 +141,7 @@
 //! [fingerprint]: CrolData::fingerprint
 //! [explain]: CrolData::explain
 //! [modes]: https://github.com/DreamLogics/crol/blob/main/docs/modes.md
+//! [loaders]: https://github.com/DreamLogics/crol/blob/main/docs/recipes.md#loading-documents-from-somewhere-else
 //!
 //! ## Variants
 //!
@@ -155,13 +163,13 @@
 //!     .add_parent("prod_eu", "prod");
 //!
 //! let layer = CrolLayer::from_sources("base", [("root.crol", r#"
-//!     replicas: 2,
+//!     replicas: 2
 //!     <prod> {
 //!         replicas: & * 4,
-//!     },
+//!     }
 //!     <prod_eu> {
 //!         replicas: & + 1,
-//!     },
+//!     }
 //! "#)]);
 //!
 //! let root: Root = CrolComposer::with_cfg(CrolConfig { variants, ..Default::default() })

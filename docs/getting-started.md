@@ -51,15 +51,14 @@ Create `config.crol` next to `Cargo.toml`:
 
 ```crol
 // config.crol
-port: 8080,
-listen: "0.0.0.0:" + &root.port,
-admin: "127.0.0.1:" + (&root.port + 1),
-workers: 4,
+port: 8080
+listen: "0.0.0.0:" + &root.port
+admin: "127.0.0.1:" + (&root.port + 1)
+workers: 4
 ```
 
 This looks like a struct literal, and it nearly is. Each line is an _entry_
-that gives a key a value, and entries are separated by commas. Two things are
-new:
+that gives a key a value. Two things are new:
 
 - `&root.port` is a _reference_: it reads the value of `port`.
 - `+` works on values: strings concatenate, and numbers add up.
@@ -68,10 +67,10 @@ Ask `crol` what the file evaluates to:
 
 ```console
 $ crol eval config.crol
-port: 8080,
-listen: "0.0.0.0:8080",
-admin: "127.0.0.1:8081",
-workers: 4,
+port: 8080
+listen: "0.0.0.0:8080"
+admin: "127.0.0.1:8081"
+workers: 4
 ```
 
 `crol eval` is the quickest way to see what a file really means. You will use
@@ -125,8 +124,8 @@ differs:
 
 ```crol
 // local.crol
-port: 9000,
-workers: & - 3,
+port: 9000
+workers: & - 3
 ```
 
 `workers: & - 3` uses `&` on its own, which means _the value below_: whatever
@@ -137,10 +136,10 @@ both, lowest first:
 
 ```console
 $ crol eval config.crol local.crol
-port: 9000,
-listen: "0.0.0.0:9000",
-admin: "127.0.0.1:9001",
-workers: 1,
+port: 9000
+listen: "0.0.0.0:9000"
+admin: "127.0.0.1:9001"
+workers: 1
 ```
 
 Look at `listen`. `local.crol` never mentions it, and yet it changed. That is
@@ -205,8 +204,8 @@ Mistakes are reported with the place they happened. Say you misspell a key in
 
 ```crol
 // local.crol
-port: 9000,
-worker.count: 1,
+port: 9000
+worker.count: 1
 ```
 
 ```console
@@ -214,7 +213,7 @@ $ crol check config.crol local.crol
 error: worker.count: `worker` does not exist, so it cannot be patched
   ┌─ local.crol:3:1
   │
-3 │ worker.count: 1,
+3 │ worker.count: 1
   │ ^^^^^^^^^^^^
 ```
 
@@ -233,6 +232,110 @@ is caught when deserializing, and with a [schema](schemas.md) also by
 ```console
 $ crol fmt config.crol local.crol
 ```
+
+## Set up a project
+
+Naming every file on the command line is fine for two files. For anything
+bigger, tell the tools about your layers once, in a _project file_. `crol init`
+(or `crol --init`, which is the same) sets one up next to your `Cargo.toml`:
+
+```console
+$ crol init
+Created /path/to/project/project.crol
+Created /path/to/project/data/base/main.crol
+
+Next:
+  - add `crol = "0.1.0"` to [dependencies] in Cargo.toml, if it is not there yet
+  - write your data in data/base/main.crol
+  - run `crol check`
+```
+
+You already have the dependency, from the repository, so skip the first step.
+`crol init` changes neither your manifest nor your code. It wrote a commented
+`project.crol` with one layer, `base`, in the directory `data/base`, and a
+`main.crol` there that holds only comments.
+
+Move your settings into the layer:
+
+```crol
+// data/base/main.crol
+port: 8080
+listen: "0.0.0.0:" + &root.port
+admin: "127.0.0.1:" + (&root.port + 1)
+workers: 4
+```
+
+Now the tools need no arguments, from any directory of the project:
+
+```console
+$ crol check
+$ crol eval
+port: 8080
+listen: "0.0.0.0:8080"
+admin: "127.0.0.1:8081"
+workers: 4
+```
+
+To add a layer, create a directory and list it in `project.crol`, lowest first:
+
+```crol
+// data/local/overrides.crol
+port: 9000
+```
+
+```crol
+// project.crol
+Project {
+    layers: List(
+        [{ name: "base", dir: "data::base", .. }, { name: "local", dir: "data::local", .. }],
+    ),
+    ..,
+}
+```
+
+```console
+$ crol eval
+port: 9000
+listen: "0.0.0.0:9000"
+admin: "127.0.0.1:9001"
+workers: 4
+```
+
+The project file is for tools. Your program still says what it loads, here by
+[module path](projects.md#module-paths):
+
+```rust
+// src/main.rs
+use crol::CrolComposer;
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize)]
+struct Config {
+    port: u16,
+    listen: String,
+    admin: String,
+    workers: u32,
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config: Config = CrolComposer::new()
+        .load("::data::base")?
+        .load("::data::local")?
+        .compose()?;
+    println!(
+        "{} and {} (port {}), workers: {}",
+        config.listen, config.admin, config.port, config.workers
+    );
+    Ok(())
+}
+```
+
+```console
+$ cargo run
+0.0.0.0:9000 and 127.0.0.1:9001 (port 9000), workers: 4
+```
+
+[Project structure](projects.md) goes on from here.
 
 ## Where to go next
 

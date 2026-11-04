@@ -10,7 +10,7 @@ For a layer that may not be there, such as overrides ignored by Git, check first
 
 ```crol
 // config.crol
-port: 8080,
+port: 8080
 ```
 
 ```rust
@@ -49,10 +49,10 @@ Rust:
 
 ```crol
 // config.crol
-port: 8080,
+port: 8080
 <prod> {
     port: 443,
-},
+}
 ```
 
 ```rust
@@ -98,8 +98,8 @@ Keep secrets out of files, and add them as an in-memory layer on top.
 
 ```crol
 // config.crol
-+database: { host: "db.internal", password: "" },
-url: "postgres://app:" + &root.database.password + "@" + &root.database.host,
++database: { host: "db.internal", password: "" }
+url: "postgres://app:" + &root.database.password + "@" + &root.database.host
 ```
 
 ```rust
@@ -149,13 +149,13 @@ Ship your defaults inside the program, and let files on disk override them:
 
 ```crol
 // src/defaults.crol
-port: 8080,
-workers: 4,
+port: 8080
+workers: 4
 ```
 
 ```crol
 // config.crol
-workers: 2,
+workers: 2
 ```
 
 ```rust
@@ -193,6 +193,151 @@ $ cargo run
 `load_layer` is also the way to test your configuration handling without
 touching the file system.
 
+## Loading documents from somewhere else
+
+By default, module paths name files. A _file loader_ lets them name anything: data
+embedded in your binary, a database, a server. Everything your program reads by
+module path goes through the loaders, the layers of `load` and the documents of
+`#![extends(...)]` alike.
+
+A loader answers two questions. `resolve` says which source a module path names,
+or `None` if it has nothing by that name. `load` returns what a source holds. This
+one keeps documents in a map:
+
+```rust
+// src/main.rs
+use std::collections::BTreeMap;
+
+use crol::{CrolComposer, FileLoader, Loaded, LoaderError, ModulePath, SourceId};
+use serde::Deserialize;
+
+struct Memory {
+    files: BTreeMap<String, String>,
+}
+
+impl FileLoader for Memory {
+    fn resolve(&self, path: &ModulePath<'_>) -> Result<Option<SourceId>, LoaderError> {
+        let name = format!("{}.crol", path.segments().join("/"));
+        let found = self.files.contains_key(&name);
+        Ok(found.then(|| SourceId::new(format!("memory:{name}"))))
+    }
+
+    fn load(&self, source: &SourceId) -> Result<Loaded, LoaderError> {
+        let name = source.as_name().and_then(|n| n.strip_prefix("memory:"));
+        let text = name.and_then(|n| self.files.get(n)).ok_or("no such document")?;
+        Ok(Loaded::Document(text.clone().into_bytes()))
+    }
+}
+
+#[derive(Deserialize)]
+struct Config {
+    port: u16,
+}
+
+fn main() -> Result<(), crol::Error> {
+    let files = BTreeMap::from([("data/base.crol".to_owned(), "port: 8080".to_owned())]);
+    let config: Config = CrolComposer::new()
+        .with_file_loader(Memory { files })
+        .load("::data::base")?
+        .compose()?;
+    println!("port {}", config.port);
+    Ok(())
+}
+```
+
+```console
+$ cargo run
+port 8080
+```
+
+`path.segments()` gives the names from the root to what the path names, with
+`super` and the document's directory already applied, so `super::defaults` in
+`data/base/web.crol` is `["data", "defaults"]`. A loader cannot be led above the
+root.
+
+The source's name appears in messages, so start it with something of your own,
+like `memory:` here. To hold a directory of documents, return `Loaded::Directory`
+with the relative path and source of each: CROL orders them by path itself.
+`crol::Error::source_id()` tells you which source an error from loading is about.
+
+Loaders are chained by order: those you register, first one first, and then the
+file system. The first to resolve a path has it, a loader that returns `None`
+falls through to the next, and one that fails stops the search. `FsLoader::new(dir)`
+adds another directory tree to the chain. A loader must give the same text for the
+same source, or your data stops being reproducible.
+
+Loaders work in your program only. The `crol` tool and language server read the
+file system.
+
+### Documents you do not trust
+
+**A path a loader does not have falls through to the file system, also when it is
+written in a document that loader loaded.** So with `load_extends` on, a document
+from a custom loader can pull in local files below `root_path`:
+
+```crol
+// local_secrets.crol
+port: 1
+```
+
+```rust
+// src/main.rs
+use std::collections::BTreeMap;
+
+use crol::{CrolComposer, CrolConfig, FileLoader, Loaded, LoaderError, ModulePath, SourceId};
+use serde::Deserialize;
+
+struct Memory {
+    files: BTreeMap<String, String>,
+}
+
+impl FileLoader for Memory {
+    fn resolve(&self, path: &ModulePath<'_>) -> Result<Option<SourceId>, LoaderError> {
+        let name = format!("{}.crol", path.segments().join("/"));
+        let found = self.files.contains_key(&name);
+        Ok(found.then(|| SourceId::new(format!("memory:{name}"))))
+    }
+
+    fn load(&self, source: &SourceId) -> Result<Loaded, LoaderError> {
+        let name = source.as_name().and_then(|n| n.strip_prefix("memory:"));
+        let text = name.and_then(|n| self.files.get(n)).ok_or("no such document")?;
+        Ok(Loaded::Document(text.clone().into_bytes()))
+    }
+}
+
+#[derive(Deserialize)]
+struct Config {
+    port: u16,
+}
+
+fn composer() -> CrolComposer {
+    let text = "#![extends(::local_secrets)]\n\nport: & + 1";
+    let files = BTreeMap::from([("remote.crol".to_owned(), text.to_owned())]);
+    CrolComposer::with_cfg(CrolConfig {
+        load_extends: true,
+        ..Default::default()
+    })
+    .with_file_loader(Memory { files })
+}
+
+fn main() {
+    let open: Result<Config, _> = composer().load("::remote").and_then(|c| c.compose());
+    println!("port {}", open.unwrap().port);
+
+    let closed = composer().without_file_system().load("::remote");
+    println!("{}", closed.unwrap_err());
+}
+```
+
+```console
+$ cargo run
+port 2
+the module path `::local_secrets` names nothing: no file loader has it
+```
+
+For documents that are not trusted with your files, call `without_file_system()`.
+It takes the file system out of the chain, and also refuses a `&Path` in `load`.
+
 ## Checks for CI
 
 These commands all exit with status 1 on failure:
@@ -218,11 +363,11 @@ CROL's values are close to [RON](https://github.com/ron-rs/ron)'s, and
 ```console
 $ printf '(name: "web", port: 8080, tags: ["a"], limit: Some(3))' > settings.ron
 $ crol from-ron settings.ron
-name: "web",
-port: 8080,
-tags: ["a"],
-limit: Some(3),
-..,
+name: "web"
+port: 8080
+tags: ["a"]
+limit: Some(3)
+..
 ```
 
 The result goes to standard output. It is a value-mode document, so read it

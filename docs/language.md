@@ -6,29 +6,123 @@ Every example here runs: save it to a file and try `crol eval` on it.
 
 ## Entries
 
-A file is a list of _entries_, separated by commas. A trailing comma is
-allowed, and a missing comma is an error. Comments are written as in Rust:
-`// to the end of the line`, or `/* like this */`, which can nest.
+A file is a list of _entries_, usually one per line. Comments are written as in
+Rust: `// to the end of the line`, or `/* like this */`, which can nest.
 
 An entry is an operation on a key. There are four, and the prefix says which
 one you mean:
 
 ```crol
 // example.crol
-+name: "web", // declare: create `name`; an error if it already exists
-port: 8080, // set: create `port`, or replace it
-?replicas: 2, // ensure: create `replicas` unless it already exists
++name: "web" // declare: create `name`; an error if it already exists
+port: 8080 // set: create `port`, or replace it
+?replicas: 2 // ensure: create `replicas` unless it already exists
 ```
 
 The fourth removes a key, and is an error if the key does not exist:
 
 ```crol
--replicas,
+-replicas
 ```
 
 Why have several ways of writing a key? Because your intent is checked. In a
 project with many files, `+web` says "I am introducing `web`", and you get an
 error if someone else already did, rather than a silent overwrite.
+
+### Line breaks and commas
+
+Entries are separated by a line break, a comma, or both, at the top level and in
+any block. A trailing comma is allowed, and two entries on one line need a comma
+between them:
+
+```crol
+// example.crol
+name: "web"
+port: 80
+limits: { cpu: 1.0, memory_mb: 512 }
+env: {
+    LOG_LEVEL: "info",
+    PORT: &root.port,
+}
+```
+
+`crol fmt` leaves out the commas after top-level entries, and keeps them in nested
+blocks, so that is the style in this guide. Both ways mean the same.
+
+**Lists and tuples only take commas.** A list element has no shape that tells it
+from the expression before it, so inside `[...]` and `(...)` a line break means
+nothing, and a missing comma is an error.
+
+**A value can go on across lines.** A line break ends an entry only when the next
+line _begins an entry_. So you can break a long expression, with the operator at
+the end of a line or at the start of the next:
+
+```crol
+// example.crol
+base: 100
+extra: 20
+total: &root.base + &root.extra - 5
+sum: 1 + 2
+```
+
+```console
+$ crol eval example.crol
+base: 100
+extra: 20
+total: 115
+sum: 3
+```
+
+Most lines are not in doubt: `?`, `..`, a key or a bind can only start an entry,
+and `.`, `*`, `/`, `%`, `~` and `|` can only continue a value. Four tokens can do
+both, and what follows them on the same line decides:
+
+| Line starts with | Begins an entry when...                       | Otherwise it continues the value |
+| ---------------- | --------------------------------------------- | -------------------------------- |
+| `+`              | a key and `:` follow: `+b: 2`                 | `+ 2`, `+ b`                     |
+| `-`              | an identifier or string follows: `-b`         | `- 2`, `- &x`, `- ["x"]`         |
+| `[`              | it is a key and `:` follows: `["a b"]: 1`     | `[0]`, `["key"].name`            |
+| `<`              | it is a condition and `{` follows: `<prod> {` | `<prod>`, `<prod>.name`          |
+
+```crol
+// example.crol
+a: 1
++b: 2 // a new entry
+c: 1 + 2 // still `c`: 3
+```
+
+```console
+$ crol eval example.crol
+a: 1
+b: 2
+c: 3
+```
+
+**When you still need a comma:**
+
+- Between two entries on one line.
+- Between list and tuple elements.
+- Before removing an integer key. `-12` on a line of its own always continues the
+  value, as a subtraction, so after `a: 5` it gives `-7`. Write the comma, and
+  `crol fmt` will keep it:
+
+```crol
+// example.crol
++ports: { 80: "http", 443: "https" }
+
+ports: & ~ {
+    name: "web",
+    -443,
+}
+```
+
+```console
+$ crol check example.crol
+```
+
+A line that does not begin an entry stays with the value. So a mistake is an
+error rather than a different document: after `a: 1 +`, the line `b: 2` gives
+``unexpected `:` after an entry``.
 
 ## Values
 
@@ -61,7 +155,7 @@ Your Rust type decides which it becomes.
     limits: Limits { cpu: 1.5, memory_mb: 512 },
     env: { LOG_LEVEL: "info", "odd key": "yes" },
     ports: { 80: "http", 443: "https" },
-},
+}
 ```
 
 The name before the braces is the _type name_. It is optional, but when you
@@ -79,11 +173,11 @@ Enum values are written as in Rust:
 
 ```crol
 // example.crol
-+mode: Fast, // a unit variant
-+colour: Rgb(255, 128, 0), // a tuple variant
-+shape: Circle { radius: 2.0 }, // a struct variant
-+cache: Some("redis://cache:6379"), // Option
-+proxy: None,
++mode: Fast // a unit variant
++colour: Rgb(255, 128, 0) // a tuple variant
++shape: Circle { radius: 2.0 } // a struct variant
++cache: Some("redis://cache:6379") // Option
++proxy: None
 ```
 
 An `Option<T>` field also accepts a plain value, so `timeout: 30` is the same
@@ -101,12 +195,12 @@ repeating the rest:
     tags: ["a", "b"],
     point: (1, 2),
     env: { "LOG LEVEL": "info" },
-},
+}
 
-web.limits.cpu: 2.0, // a field
-web.tags[0]: "first", // a list element
-web.point.1: 3, // a tuple element
-web.env["LOG LEVEL"]: "debug", // a key that needs quotes
+web.limits.cpu: 2.0 // a field
+web.tags[0]: "first" // a list element
+web.point.1: 3 // a tuple element
+web.env["LOG LEVEL"]: "debug" // a key that needs quotes
 ```
 
 ```console
@@ -116,7 +210,7 @@ web: {
     tags: ["first", "b"],
     point: (1, 3),
     env: { "LOG LEVEL": "debug" },
-},
+}
 ```
 
 Every step of the path but the last must exist, or you get an error that
@@ -128,17 +222,17 @@ left:
 
 ```crol
 // example.crol
-+web: { replicas: 1, port: 80, limits: { cpu: 1.0, memory_mb: 512 } },
++web: { replicas: 1, port: 80, limits: { cpu: 1.0, memory_mb: 512 } }
 
 web: & ~ {
     replicas: 2,
     limits.cpu: 2.0,
-},
+}
 ```
 
 ```console
 $ crol eval example.crol
-web: { replicas: 2, port: 80, limits: { cpu: 2.0, memory_mb: 512 } },
+web: { replicas: 2, port: 80, limits: { cpu: 2.0, memory_mb: 512 } }
 ```
 
 Merging is shallow. If the patch had said `limits: { cpu: 2.0 }`, it would
@@ -169,16 +263,16 @@ References read other values. They all start with `&`:
     health: {
         probe: "http://localhost:" + &parent.port,
     },
-},
+}
 +proxy: {
     upstream: &root.web.url,
-},
+}
 ```
 
 ```console
 $ crol eval example.crol
-web: { port: 8080, url: "http://web:8080", health: { probe: "http://localhost:8080" } },
-proxy: { upstream: "http://web:8080" },
+web: { port: 8080, url: "http://web:8080", health: { probe: "http://localhost:8080" } }
+proxy: { upstream: "http://web:8080" }
 ```
 
 The order of entries does not matter for these references: they read the
@@ -203,7 +297,7 @@ use it from any block nested inside:
             url: "http://localhost:" + &port,
         },
     },
-},
+}
 ```
 
 `name := value` binds a name to a value that is not stored under any key:
@@ -214,12 +308,12 @@ use it from any block nested inside:
     base := 8000,
     port: &base,
     admin_port: &base + 1,
-},
+}
 ```
 
 ```console
 $ crol eval example.crol
-web: { port: 8000, admin_port: 8001 },
+web: { port: 8000, admin_port: 8001 }
 ```
 
 ## Templates and spreads
@@ -235,23 +329,23 @@ service_defaults := {
     replicas: 1,
     port: 8080,
     url: "http://localhost:" + &self.port,
-},
+}
 
 +web: {
     ..&service_defaults,
     replicas: 3,
-},
+}
 
 +admin: {
     ..&service_defaults,
     port: 9000,
-},
+}
 ```
 
 ```console
 $ crol eval example.crol
-web: { replicas: 3, port: 8080, url: "http://localhost:8080" },
-admin: { replicas: 1, port: 9000, url: "http://localhost:9000" },
+web: { replicas: 3, port: 8080, url: "http://localhost:8080" }
+admin: { replicas: 1, port: 9000, url: "http://localhost:9000" }
 ```
 
 Look at `admin.url`. The `&self.port` in the template was evaluated where it
@@ -279,7 +373,7 @@ error.
 +web: Service {
     port: 8080,
     ..,
-},
+}
 ```
 
 A field removed with `-field` also takes its default, without `..`. Use it to
@@ -287,12 +381,12 @@ drop a value that a lower layer or a template set:
 
 ```crol
 // example.crol
-base := { port: 80, limits: { cpu: 1.0 } },
+base := { port: 80, limits: { cpu: 1.0 } }
 
 +web: {
     ..&base,
     -limits,
-},
+}
 ```
 
 `&default` reads the default itself, so you can compute with it:
@@ -302,7 +396,7 @@ base := { port: 80, limits: { cpu: 1.0 } },
     replicas: &default * 2,
     limits: &default ~ { cpu: 2.0 },
     ..,
-},
+}
 ```
 
 `&default` needs to know your types, so it works only when your program hands
@@ -323,20 +417,20 @@ Overflow and division by zero are errors, not surprises.
 
 ```crol
 // example.crol
-+memory: 512 * 4,
-+half: 7 / 2,
-+ratio: 7 / 2.0,
-+label: "port " + 8080,
-+tags: ["a", "b", "c"] - ["b"] + ["d"],
++memory: 512 * 4
++half: 7 / 2
++ratio: 7 / 2.0
++label: "port " + 8080
++tags: ["a", "b", "c"] - ["b"] + ["d"]
 ```
 
 ```console
 $ crol eval example.crol
-memory: 2048,
-half: 3,
-ratio: 3.5,
-label: "port 8080",
-tags: ["a", "c", "d"],
+memory: 2048
+half: 3
+ratio: 3.5
+label: "port 8080"
+tags: ["a", "c", "d"]
 ```
 
 Lists only combine with lists, so to append one element, write
@@ -351,18 +445,18 @@ then `~`, then `|`. Parentheses group.
 
 ```crol
 // example.crol
-+settings: { timeout: 30 },
-+timeout: &root.settings.timeout | 60,
-+retries: &root.settings.retries | 3,
-counter: & + 1 | 1,
++settings: { timeout: 30 }
++timeout: &root.settings.timeout | 60
++retries: &root.settings.retries | 3
+counter: & + 1 | 1
 ```
 
 ```console
 $ crol eval example.crol
-settings: { timeout: 30 },
-timeout: 30,
-retries: 3,
-counter: 1,
+settings: { timeout: 30 }
+timeout: 30
+retries: 3
+counter: 1
 ```
 
 The last line counts: it adds one if a lower layer wrote `counter`, and starts
@@ -378,8 +472,8 @@ definition points at another:
 
 ```crol
 // example.crol
-+database: { port: 5432 },
-+web: { depends_on: [@database] },
++database: { port: 5432 }
++web: { depends_on: [@database] }
 ```
 
 An id is not a lookup: it evaluates to the name, and your program decides what

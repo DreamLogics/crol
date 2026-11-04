@@ -8,6 +8,7 @@ $ cargo install --git https://github.com/DreamLogics/crol crol-cli
 
 | Command                             | Does                                                 |
 | ----------------------------------- | ---------------------------------------------------- |
+| [`crol init`](#crol-init)           | set up a project                                     |
 | [`crol check`](#crol-check)         | read and evaluate layers, and report problems        |
 | [`crol eval`](#crol-eval)           | print evaluated data                                 |
 | [`crol explain`](#crol-explain)     | print the operations behind a value                  |
@@ -21,16 +22,43 @@ these two layers:
 
 ```crol
 // data/base/services.crol
-+web: { replicas: 2, port: 8080 },
++web: { replicas: 2, port: 8080 }
 <prod> {
     web.replicas: 8,
-},
+}
 ```
 
 ```crol
 // data/local/overrides.crol
-web.port: 9090,
+web.port: 9090
 ```
+
+## `crol init`
+
+Sets up the Cargo project around the current directory, and takes no other
+arguments. `crol --init` is the same thing.
+
+```console
+$ crol init
+Created /path/to/project/project.crol
+Created /path/to/project/data/base/main.crol
+
+Next:
+  - add `crol = "0.1.0"` to [dependencies] in Cargo.toml, if it is not there yet
+  - write your data in data/base/main.crol
+  - run `crol check`
+```
+
+It looks for `Cargo.toml` in the current directory and then in each directory
+above, and writes next to the nearest one:
+
+- `project.crol`, a commented [project file](projects.md#starting-a-project) with
+  one layer, `base`;
+- `data/base/main.crol`, holding only comments, unless that file exists.
+
+It changes no manifest or source file. It exits with status 1, writing nothing, if
+there is no `Cargo.toml`, if `project.crol` exists there, or if `data/base.crol`
+exists, since the module path `data::base` would then be ambiguous.
 
 ## Naming layers
 
@@ -41,11 +69,11 @@ a directory. If something exists under both readings, the module path is used.
 
 ```console
 $ crol eval data/base data/local
-web: { replicas: 2, port: 9090 },
+web: { replicas: 2, port: 9090 }
 $ crol eval data::base data::local
-web: { replicas: 2, port: 9090 },
+web: { replicas: 2, port: 9090 }
 $ crol eval base=data/base local=data/local
-web: { replicas: 2, port: 9090 },
+web: { replicas: 2, port: 9090 }
 ```
 
 With no layers at all, `crol` looks for a
@@ -95,7 +123,7 @@ Prints the data as CROL. Give a key or path after the layers to print one value:
 
 ```console
 $ crol eval data/base data/local
-web: { replicas: 2, port: 9090 },
+web: { replicas: 2, port: 9090 }
 $ crol eval data/base data/local web.port
 9090
 ```
@@ -109,13 +137,13 @@ $ crol eval data/base data/local web.port
 
 ```console
 $ crol eval --context prod data/base data/local
-web: { replicas: 8, port: 9090 },
+web: { replicas: 8, port: 9090 }
 $ crol eval --group dev,prod --all-contexts data/base data/local
-web: { replicas: 2, port: 9090 },
+web: { replicas: 2, port: 9090 }
 
 <!dev & prod> {
     web: { replicas: 8, port: 9090 },
-},
+}
 ```
 
 The output of `--all-contexts` is valid CROL that evaluates back to the same
@@ -187,6 +215,12 @@ The formatter keeps your comments, and at most one blank line between entries. A
 block that fits stays on one line, unless you put a line break right after its
 `{`. It moves `..` to the end of its block, and removes the outer braces of a
 data-mode document.
+
+It writes top-level entries one per line, without commas, and keeps the commas in
+nested blocks, including top-level variant blocks and a typed outer block. A comma
+stays where a [line break would not separate](language.md#line-breaks-and-commas)
+two entries. Binary operators stay at the end of a line, so that wrapping cannot
+split an entry in two.
 
 ## `crol from-ron`
 

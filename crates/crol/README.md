@@ -27,9 +27,9 @@ struct Config {
 
 fn main() -> Result<(), crol::Error> {
     let config: Config = crol::from_str(r#"
-        port := 8080,
-        listen: "0.0.0.0:" + &port,
-        workers: 4,
+        port := 8080
+        listen: "0.0.0.0:" + &port
+        workers: 4
     "#)?;
     println!("{} workers on {}", config.workers, config.listen);
     Ok(())

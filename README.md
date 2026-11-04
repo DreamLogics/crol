@@ -48,31 +48,31 @@ and `&self.port` reads the final value of `port`, whichever file sets it:
 
 ```crol
 // data/base/services.crol
-service_defaults := { replicas: 1, port: 8080 },
+service_defaults := { replicas: 1, port: 8080 }
 
 +web: Service {
     ..&service_defaults,
     image: "web:1.4",
     url: "http://web:" + &self.port,
-},
+}
 
 +worker: Service {
     ..&service_defaults,
     image: "worker:1.4",
     url: "http://worker:" + &self.port,
-},
+}
 
 <prod> {
     web.replicas: 4,
-},
+}
 ```
 
 A second file, in a higher layer, changes what it needs to and nothing else:
 
 ```crol
 // data/local/overrides.crol
-web.port: 9090,
-web.replicas: & + 1,
+web.port: 9090
+web.replicas: & + 1
 ```
 
 Make sure you add `crol` and `serde` to your `Cargo.toml`. CROL is not on

@@ -6,6 +6,57 @@ run your program, so they need to be told the same things. That is what a
 _project file_ is for. This page explains the project file, how files name each
 other, and how to lay out a project.
 
+## Starting a project
+
+In a Cargo project, `crol init` writes a project file and a first layer:
+
+```console
+$ crol init
+Created /path/to/project/project.crol
+Created /path/to/project/data/base/main.crol
+
+Next:
+  - add `crol = "0.1.0"` to [dependencies] in Cargo.toml, if it is not there yet
+  - write your data in data/base/main.crol
+  - run `crol check`
+```
+
+It looks for the nearest `Cargo.toml`, from the current directory upwards, and
+writes next to that. The result is ready to use, and explains itself in comments:
+
+```console
+$ cat project.crol
+// What `crol` and the language server need to know about this project's data.
+Project {
+    // The data, lowest layer first: each layer patches the ones before it.
+    // `dir` is a module path from this file: `data::base` is the directory `data/base`.
+    layers: List([{ name: "base", dir: "data::base", .. }]),
+
+    // Variants of the data, such as `[Grouped(["dev", "prod"]), Discrete("cache")]`.
+    variants: [],
+
+    // The schema file your application writes, to check the data's types:
+    // `Some("schema")` is `schema.crol` next to this file.
+    schema: None,
+    ..,
+}
+$ crol check
+```
+
+`data/base/main.crol` holds only comments. It exists because a layer's directory
+has to exist, and an empty directory would not survive version control.
+
+`crol init` never overwrites anything, and leaves `Cargo.toml` and your code alone:
+
+```console
+$ crol init
+error: /path/to/project/project.crol already exists; it was left as it is
+```
+
+The dependency on `crol` is yours to add. Until the crate is on crates.io, use the
+[Git dependency](getting-started.md#install-the-tools) rather than the version the
+command prints.
+
 ## The project file
 
 `project.crol` lives at the top of your project:
@@ -28,20 +79,20 @@ Project {
 
 ```crol
 // data/base/services.crol
-+web: { port: 80 },
++web: { port: 80 }
 <prod> {
     web.port: 443,
-},
+}
 ```
 
 ```crol
 // data/extension/cache.crol
-web.cached: true,
+web.cached: true
 ```
 
 ```crol
 // data/local/overrides.crol
-web.port: & + 8000,
+web.port: & + 8000
 ```
 
 This project has three layers and two kinds of variant. Only `layers` is
@@ -83,7 +134,7 @@ Once it is found, plain commands use it, from any directory of the project:
 ```console
 $ crol check
 $ crol eval --context prod_eu
-web: { port: 443, cached: true },
+web: { port: 443, cached: true }
 ```
 
 Variants and options come from the project file too, so you do not have to
@@ -118,8 +169,9 @@ Project {
 
 ## Keeping your program and tools in step
 
-**Your program does not read `project.crol` by itself.** `CrolComposer` loads
-what you tell it to. If the two disagree, your editor will show you one thing
+**Your program does not read `project.crol` by itself**, and tools do not know
+about [file loaders](recipes.md#loading-documents-from-somewhere-else) in your
+program. `CrolComposer` loads what you tell it to. If the two disagree, your editor will show you one thing
 and your program will load another.
 
 For a small project, it is easy enough to repeat four lines. If you would rather
@@ -221,7 +273,8 @@ my-app/
 
 ### An application with layered data
 
-This is the layout to start from for most applications with real data:
+This is the layout to start from for most applications with real data.
+[`crol init`](#starting-a-project) gives you `project.crol` and `data/base`:
 
 ```text
 my-app/
