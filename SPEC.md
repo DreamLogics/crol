@@ -349,8 +349,10 @@ and
 }
 ```
 
-are the same document. A type name on the outer braces, a spread or
-`..` at the root, or a document that is not entries is an error.
+are the same document. A type name on the outer braces, a spread at the
+root, or a document that is not entries is an error. A `..` at the root,
+also in a root variant block, lets fields of a root struct take their
+defaults (sections 7.4, 10.3).
 
 **Value mode** (`crol::from_str`). The document is one expression: the
 whole file is a single value, like a RON file. If the document parses
@@ -445,7 +447,7 @@ Config {
   that users of an application edit, with nothing but the file.
 - **The root type.** A schema's root type means, in value mode, the
   type of the whole document (unless the document has a top-level type
-  name), and in data mode, the type of each root value.
+  name). In data mode what it means depends on the kind of type, below.
 - For a document in a project, it overrides the project file's schema
   for that document. In a layer, every document should agree with the
   project's schema; tools warn about one that names another.
@@ -469,6 +471,42 @@ Config {
   a fetch: it evaluates with the cache, says the schema is being
   fetched, and evaluates again when it arrives.
 - At most one `schema` attribute per document.
+
+**The root type in data mode.** The root of layered data is a keyed value
+once it is composed. A type that deserializes from a keyed value describes
+that whole value, as `compose::<T>()` reads it; any other type cannot, and
+is the type of each root value:
+
+| Root type | In data mode | A root key is |
+|---|---|---|
+| a struct | the whole document | a field of it |
+| a map (`IndexMap<String, V>`) | the whole document | a key of it, and its value a `V` |
+| an enum, of any representation, with any variants | each root value | the name of a value of that type |
+| a scalar, list, tuple, tuple struct, unit struct | each root value | the name of a value of that type |
+| a newtype, a `#[serde(transparent)]` type, `Option<T>` | what it wraps says | as for what it wraps |
+| a path no type in the schema has | nothing is checked | a name |
+
+- This goes for the type that applies, however it is chosen: the schema's
+  root, `root` of the project file (section 12.4), or the `root` of
+  `crol::check`. An alias is no type of its own: serde and the schema see
+  what it stands for.
+- Every consumer has this one rule, from `SchemaFile::data_root`: checks,
+  `fill_defaults`, `&default` and the language server.
+- `#![type(...)]`, `files` and a top-level type name are for value-mode
+  documents, where nothing of this applies: the type there is always that of
+  the whole document. `type` stays an error in data mode.
+- **Completeness is of the composed root.** Only the final value is
+  checked (section 10.2), and the final value of a whole document is the
+  root of all layers. A layer on its own is no whole: it leaves out what
+  other layers set, in `crol check` and in the editor. A `.crod` document on
+  its own, with what it extends, is its own whole. Each evaluated context is
+  checked (section 8.1), the base among them, so a field set only in a
+  variant block is missing in the base, as in a block.
+- **Where it is reported.** A root is written nowhere, so what is wrong
+  with it as a whole, such as a missing field, is reported at the start of the
+  top document: the last document of the last layer.
+- A template (`t := ...`) is no root key, and so no field. An unknown root
+  key is the unknown field of section 10.2, on the value of the key.
 
 **`type(Name)`** gives the type name of a value-mode document written as
 entries, which has no outer block to carry one:
@@ -962,7 +1000,11 @@ struct):
   the struct's default (`#[serde(default)]` on the struct). At a type
   name itself (`..&default` directly in `Service { }`), it is the
   struct's whole default value. Selectors apply as usual:
-  `&default.limits.cpu`.
+  `&default.limits.cpu`. With no type name around it, a target in data
+  starts at the root type: where that is the whole document (section 4.1), a
+  root key is the first field (`retries: &default + 1` is the default of the
+  root struct's field `retries`); where it is the type of each root value,
+  the fields start below the key.
 - **Where defaults come from.** From the schema (section 10.9), which
   records them for types with `#[crol(defaults)]`. The loader needs the
   schema for this: `CrolComposer::schema(crol::schema::build::<Definition>())`.
@@ -1171,6 +1213,25 @@ Let `v` be *missing*. Apply each operation in order:
 
 The key's final value is `v` after the last operation. If it is missing,
 the key does not exist.
+
+The root has the two marks a block has (section 5.2), for a root struct
+(sections 4.1, 10.3), found in each context apart from the chains:
+
+- **`..` at the root** sets its defaults flag. There is no operation that
+  replaces the root, so every `..` reaches the final value: the flag ORs over
+  all layers and documents. In a root variant block it holds in the contexts
+  where the condition does (`<prod> { .. }`), and a `..` outside one holds in
+  every context. It takes part in no chain, is no key, and has no order. It
+  needs a variant to be declared or found as any condition does (section 8.1).
+- **A key whose chain ends in a remove** is in the root's defaulted keys, as a
+  field removed with `-field` is in a block. An operation after it that sets
+  the key takes it out, as in a block. A key is in them per context: `<prod> {
+  -retries }` only in `prod`.
+
+Both belong to the composed root. `&root` reads keys, and a spread of it passes
+them on like any other (section 5.2); nothing else about keys changes. A `..`
+says nothing to a root type that is not the whole document, and neither mark
+is an error there.
 
 ### 7.5 Laziness and cycles
 
@@ -1651,6 +1712,17 @@ whatever it does not change.
 works, since every keyed value deserializes as a map, but the struct
 checks above then do not apply to that struct.
 
+**A struct at the root.** The root of layered data deserialized as a struct,
+with `compose::<T>()` or `deserialize_root`, is a keyed value with no type
+name, whose final value is the composed root, and every check above and in
+section 10.3 applies to it: an unknown root key, a missing field,
+`allow_unknown_fields`, `require_complete`, aliases, `#[serde(flatten)]` and
+`#[serde(deny_unknown_fields)]`, which adds nothing to what is checked
+without `allow_unknown_fields`, in a block as at the root. `+key`, `?key` and
+variants are the operations on root keys of sections 7 and 8, whatever the
+schema says: `+name` on a field a lower layer sets is the usual error, and a
+`?name` keeps it.
+
 ### 10.3 Defaults
 
 Without `..`, a struct must name every field, `Option` fields included.
@@ -1714,10 +1786,25 @@ enough, in any layer or template: a later `web: & ~ { .. }` or a
 `..&template` whose template has it. A block that replaces the whole
 value starts without the flag.
 
-`..` cannot be written at the root of a data-mode document (section 4).
-A struct that `compose::<T>()` reads from the root keys therefore writes
-every field as a root key, unless it has `explicit_defaults = false`,
-which is how such a struct leaves fields out.
+**At the root.** All of this holds for a struct that is the whole of a
+data-mode document (section 4.1), whose block is the composed root. `..` is
+written as a root entry, in any layer (section 7.4), and every layer's counts,
+since nothing replaces the root:
+
+| On the root struct | Fields no layer sets, no root `..` | With a root `..` |
+|---|---|---|
+| nothing | as `require_complete` says | take their defaults |
+| `#[crol(explicit_defaults)]` | an error that names them | take their defaults |
+| `#[crol(explicit_defaults = false)]` | take their defaults | the same; it changes nothing |
+
+- A field removed with `-key`, and set by no layer above, takes its default
+  without `..`, as with `-field`.
+- A field with no default is serde's "missing field" error in every row
+  that takes defaults, also after `-key`: removing a required field is an error
+  of the composed root, not of the layer that removes it.
+- `crol eval` shows the filled root: `fill_defaults` writes the defaults the
+  schema records, each marked `// default`, and the `..` stays only while a
+  field is left out that has no recorded default.
 
 **What can see it.** serde does not pass attributes to a deserializer,
 so the setting reaches it through the schema, as aliases do (section
@@ -1845,9 +1932,10 @@ tools:
   context is the base.
 - `compose::<T>()` evaluates every key in that context and deserializes
   the root as `T` (section 10.4): a struct whose fields are the root
-  keys, or a map such as `IndexMap<String, Definition>`. (The schema's
-  root type is still the type of each root value, here `Definition`,
-  section 4.1.) The error
+  keys, or a map such as `IndexMap<String, Definition>`. The schema to
+  go with it is `build::<T>()` for a struct, whose root type is then the
+  whole document, and `build::<Definition>()` or `build::<IndexMap<String,
+  Definition>>()` for the map, which mean the same (section 4.1). The error
   carries every diagnostic; warnings are dropped (`compose_data` keeps
   them).
 - `compose_data()` evaluates every key in every evaluated context
@@ -2095,7 +2183,11 @@ find it and from where an application ships it with its data.
 
 **Model.** A `crol::schema::Schema` is plain data: its root type (the
 `T` it was built for) and the named types it uses. Section 10.10 gives
-its file format.
+its file format. `root` is the path of a named type, so a `T` with no name
+of its own, such as a map, is entered in `types` as a transparent type with
+an empty `name`, under a path that data never writes
+(`Map(String, app::Definition)`). What the root type means in data mode depends
+on its kind (section 4.1).
 
 **Names.** Data refers to types by name (`Service { ... }`), and the
 deserializer checks names, not paths (section 10.2). Two schema types
@@ -2104,11 +2196,13 @@ must say which type it means with `#![use(...)]` (section 4.1), and
 tools report an ambiguous name without one.
 
 **Checking without the types.** `crol::check(&data, &schema, root, &options)`
-(`root`: the path of the root values' type, or `None` for the schema's
-root type; `options`: a `CheckOptions`, with the `implicit_some`,
+(`root`: the path of the root type, or `None` for the schema's;
+`options`: a `CheckOptions`, with the `implicit_some`,
 `allow_unknown_fields` and `require_complete` of `CrolConfig`) applies the
 deserializer's rules (sections 10.1 to 10.5) to evaluated
-data using only the schema, and checks ids: every id must name a root
+data using only the schema: to the composed root of each context where the
+root type is the whole document, else to each root value (section 4.1). It
+checks ids: every id must name a root
 key in the same context, whose type is one of the allowed ones. It gives
 the same errors, with the same spans, as deserializing would, and is
 what the language server and `crol check --schema` use. The conformance
@@ -2254,7 +2348,7 @@ field, instead of checking them by other rules.
 |---|---|
 | `crol check [<layer>...]` | read and evaluate the layers (each `name=source` or a source, named after it, where a source is a module path (section 4.2) or a file system path, the module path if both name something; without any, those of the project file, section 12.4), or one value document (below); check them against the schema if one is given or configured; print diagnostics; exit 1 on errors |
 | `crol eval [<layer>...] [--context a,b] [key[.path]]` | print evaluated data as a plain data-mode document (or one value); with a schema, struct fields that take their defaults are written out with the defaults the schema records, each marked `// default` (`--no-defaults` leaves them as the data does) |
-| `crol eval [<layer>...] --all-contexts` | print the base data, then for every other evaluated context a block `<a & b & !c & ...> { ... }` whose condition holds in that context only, with the keys whose value differs (`key: value`) or that are missing (`-key`). The output is valid CROL and evaluates back to the same data |
+| `crol eval [<layer>...] --all-contexts` | print the base data, then for every other evaluated context a block `<a & b & !c & ...> { ... }` whose condition holds in that context only, with the keys whose value differs (`key: value`) or that are missing (`-key`). A `..` at the root is written in the base, or in the block of a context that has it where the base does not; for a root struct, a removed field as `key: (), -key`. The output is valid CROL and evaluates back to the same data |
 | `crol explain [<layer>...] [--context a,b] key[.path]` | print the operations that produced a value (section 12.3) |
 | `crol fmt [--check] <file>...` | format `.crod` and `.crov` files in place (or check). Formatting does not depend on the mode (section 12.2). A `.crol` file is an error that offers both extensions; it takes files, so a directory is an error too |
 | `crol fingerprint [<layer>...]` | print the fingerprint in hex |
@@ -2418,7 +2512,7 @@ Project {
     parents: { prod_eu: "prod" },
     options: { implicit_some: true, allow_unknown_fields: false, .. },
     schema: Some("crol::schema"),
-    root: Some("app::Definition"),     // the type of every root value
+    root: Some("app::Definition"),     // the root type (section 4.1)
     files: [                           // value-mode documents and their types
         { glob: "config::*", type: "app::Config" },
     ],
@@ -2443,9 +2537,11 @@ Project {
   editing the data without the source get the same checks. Without a
   schema, tools check syntax, evaluation and ids' existence, but not
   types.
-- `root` is the path of the type of root values, typically an enum of
-  the application's definition kinds (section 10.4). It defaults to the
-  schema's root type. Type names in `root` and `files` are schema paths;
+- `root` is the path of the root type of the layers' data: a struct for the
+  whole document, or an enum of the application's definition kinds (section
+  10.4) for each root value. The rule of section 4.1 goes by the type it names.
+  It defaults to the schema's root type. It says nothing about `.crov` files,
+  which `files` gives a type. Type names in `root` and `files` are schema paths;
   a plain name is accepted when it is unambiguous.
 - `files` gives value-mode documents a type: it is how a `.crov` file
   outside the layers opts in to the project's schema. A document that
@@ -2533,7 +2629,11 @@ fields, wrong kinds, missing fields, type names), ids that name nothing
 or the wrong type, and warnings. An error that occurs only in some
 contexts says in which (`in {prod_eu, cache}: ...`), listing at most a
 few and a count. Fields left out of a patch block or path entry are never an error, since
-only final values are checked. Diagnostics are published for all files
+only final values are checked. For the same reason a document of a layered
+project with a struct as its root type has no error for the fields other layers
+set: fields missing from the composed root are reported on the start of the top
+document (section 4.1), or of the top writable one, since a read-only layer gets
+no diagnostics. Diagnostics are published for all files
 of writable layers, not only open ones, and every diagnostic that has
 secondary spans (cycles, two definitions) links to them as related
 information. A problem with the project as a whole is put on the file to
@@ -2573,8 +2673,10 @@ values are for inlay hints, `crol eval` and `crol explain`.
   other payloads hold, at any depth. The type is that of the value there.
 - On an enum variant's name, as a value or the name of a block or payload: the
   variant's doc, else the field's, and the type as `Enum::Variant`. On a type
-  name: the field's doc, else the type's. A root entry, or the document as a
-  whole, is in no field, and has the doc of its type.
+  name: the field's doc, else the type's. The document as a whole is in no
+  field, and has the doc of its type, and so does a root entry where the root
+  type is that of each root value. Where it is the whole document (section
+  4.1), a root entry is a field like any other.
 - A field with no doc shows its type alone. Where the schema knows nothing, as
   without one or in what `Any` holds, and on what is no key or value, as a bind's
   name or an attribute, there is no hover.
@@ -2590,7 +2692,11 @@ an entry or an element of a list, tuple or `Name(...)`, in the
 context chosen with the `context` setting.
 
 **Completion.** The type expected at the cursor is found from the
-root, one bracket at a time, at any depth: through struct fields, map
+root, one bracket at a time, at any depth. The root of a value document, and of
+a data document whose root type is the whole document (section 4.1), is a value
+of the root type; in other data a root value is. That is decided in one place,
+and everything below follows from it, at the top of a document as in a block:
+through struct fields, map
 values, list and tuple elements, `Some(...)` and other payloads, struct
 variants, `Type { ... }` values, dotted targets and variant blocks. An
 enum in a dotted target or an unnamed block is taken as the variant of
@@ -2602,7 +2708,10 @@ trigger completion, as do `.`, `&`, `<` and `@`.
 
 - Keys: in a block of a known type and after a `.` in a target, the
   fields not written yet (in that block, not one around a variant
-  block), with those of flattened fields, each with its doc. A block of a
+  block), with those of flattened fields, each with its doc. At the top of a
+  data document with a struct root, those are the root's fields not written in
+  that document; a field set by a lower layer is still offered, as a field of
+  a patch is, with the value below to fill in. A block of a
   tagged or untagged enum (section 10.4) has no name to say the variant, so
   it offers the tag and the fields of every variant, and an adjacently tagged
   one its tag and content. Accepting
@@ -2644,7 +2753,8 @@ trigger completion, as do `.`, `&`, `<` and `@`.
   value below that the entry does not set, inserted as `// field: value`
   lines.
 - Add the missing fields of a struct, filled from the value below or
-  with placeholders; or add `..`.
+  with placeholders; or add `..`. For a root struct, at the end of the
+  document the diagnostic is on.
 - Quick fixes from diagnostics: a misspelt field or id (by edit
   distance), `+x` on an existing key to a patch, `&name` without a bind
   to `&self.name`.
@@ -2732,7 +2842,7 @@ read, with the extension to rename it to; a leftover `project.crol`; a
 **Reading**: an unknown document attribute, one after the first
 entry, or more than one `schema` or `type`; `type` in data mode, with a
 top-level type name, or on an expression; an alias that is a reserved
-word; a spread or `..` at the data-mode root, or a data-mode document
+word; a spread at the data-mode root, or a data-mode document
 that is not entries; `extends` in value mode; a `schema` string that
 is not a URL or crate; a module path that names nothing, both a file and
 a directory, or goes above the root directory; a file loader that fails,
@@ -2766,7 +2876,7 @@ of another kind or group.
 
 **Application** (deserializer and options): an integer key in a struct;
 unknown fields; missing
-fields; a type name that does not match; a value of the wrong kind or
+fields, of a root struct on the composed root (4.1); a type name that does not match; a value of the wrong kind or
 out of range; a plain string where `crol::Id` is required; variant key
 rules (8.5). And the application's own checks, such as ids naming
 nothing.
@@ -3030,5 +3140,13 @@ by its sorted list of chosen variant names (ancestors left out): that
 list (count, names), the count of keys that differ from the base or
 exist only on one side, and each such key with a byte `0x00` (removed in
 the context) or `0x01` and its value, in root order with context-only
-keys after. The value of a value document, which has no root keys or
-contexts, is encoded as: the byte string `CROLV1`, then the value.
+keys after.
+
+Data with a `..` at the root in any evaluated context (section 7.4) is
+encoded the same way, with three changes: the byte string is `CROLR1`; a flag
+byte for the base's root follows it; and a flag byte for the context's root
+follows each context's keys. Data without one is unchanged by this, so a
+fingerprint changes only when such a `..` is written, and one written in another
+layer gives the same fingerprint. A root's removed keys are not encoded: they
+are the keys it does not have. The value of a value document, which has no root
+keys or contexts, is encoded as: the byte string `CROLV1`, then the value.

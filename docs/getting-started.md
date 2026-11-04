@@ -204,6 +204,11 @@ $ cargo run
 0.0.0.0:9000 and 127.0.0.1:9001 (port 9000), workers: 1
 ```
 
+`Config` here describes the two files together: each root key is one of its
+fields, and only the result has to be complete, so a layer writes just what it
+changes. That is [a struct at the root](rust.md#a-struct-at-the-root), the plain way
+to use layers.
+
 `load` also takes a directory, in which case every `.crod` file below it is
 part of the layer. Real projects usually have a directory per layer.
 

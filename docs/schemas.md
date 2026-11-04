@@ -120,10 +120,11 @@ Schema {
                 Service: { shape: Newtype(Named("fleet::Service")), .. },
 ```
 
-The type you pass (`Definition` here) is the schema's _root type_: the type of
-each root value in layered data, or of the whole document in value mode. For
-layered data that is normally an [enum of everything the data can
-define](rust.md#enums).
+The type you pass (`Definition` here) is the schema's _root type_. In layered data,
+an [enum of everything the data can define](rust.md#enums) is the type of each
+root value, and [a struct](rust.md#a-struct-at-the-root) is the whole document, so
+each root key is one of its fields. In value mode it is the type of the whole
+document.
 
 If you would rather have a flag than a test, `crol::schema::write::<T>(path)`
 writes the file unconditionally, for an `--export-schema` option of your own.
@@ -360,18 +361,32 @@ Templates are not root values, so they are not checked as data.
 
 ### Which type a document has
 
-In layered data, every root value is checked against the root type. With
-`Definition` as the root, `+web: Service { ... }` picks the `Service` variant.
+In layered data, the kind of the root type says what it describes:
 
-The root type therefore has to describe the _values_, not the root as a whole.
-A struct whose fields are the root keys, as in
-[getting started](getting-started.md), cannot be described today: if you build a
-schema from such a struct, `crol check` expects every root value to be that
-struct, and reports `expected Config { ... }, found 8080`. Use the map-of-enum
-shape for layered data that you want to check.
+| Root type                                  | Describes         | A root key is                 |
+| ------------------------------------------ | ----------------- | ----------------------------- |
+| a struct                                   | the whole document | a field of it                 |
+| a map, like `IndexMap<String, Service>`    | the whole document | a key, with a `Service` value |
+| an enum, or anything else that has no keys | each root value   | a name for a value of it      |
 
-A project can name another root with `root: Some("fleet::Definition")`. A plain
-type name works if it is unambiguous.
+A newtype or `#[serde(transparent)]` wrapper counts as what it wraps.
+
+With `Definition`, an enum, as the root, `+web: Service { ... }` picks the `Service`
+variant. With a struct like `Config`, `port: 8080` is its field `port`, and
+`name: "x"` in a file is checked as `Config`'s `name`.
+
+For a struct, the check runs on all the layers together, never on one file. So
+a layer can leave out what another sets, and `crol check` and your editor only
+report a missing field when the result lacks it. A missing field belongs to no
+line, so it is reported at the top of the last file of the last layer. A
+`.crod` file on its own, with what it extends, is checked as a whole.
+
+To check data whose every root value is one struct, like a map of services, build
+the schema from the map: `crol::schema::check_file::<IndexMap<String, Service>>(...)`.
+
+A project can name another root with `root: Some("fleet::Definition")`, and the
+kind of that type decides in the same way. A plain type name works if it is
+unambiguous.
 
 In value mode, the root type is the type of the whole document, unless the
 document has a top-level type name, which then chooses it. `crol check` on a
@@ -445,6 +460,9 @@ falls back.
 server read defaults from the schema they check against: `--schema`, the project's,
 or the one a document names. Generate the schema from types with
 `#[crol(defaults)]`, so that it records them.
+
+With a struct as the root type, a root key is a field like any other, so
+`retries: &default + 1` is one more than the default of that field.
 
 **Limits.** `&default` works in layered data only. In a value-mode document it is
 an error, with `crol::from_str`, `crol::from_str_with_schema`, a `.crov` file given

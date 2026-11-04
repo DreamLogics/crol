@@ -11,6 +11,39 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Changed
 
+- **Breaking:** in layered data, a struct as the schema's root type is the whole
+  document: a root key is a field of it, in `crol check`, `crol::check`,
+  `fill_defaults`, `&default` and the language server, and completeness is that of
+  the composed root, never of one file. A map is the whole document as well, its
+  keys the root keys. An enum, as `Definition` is, stays the type of each root
+  value, and so does a type with no keys; a newtype or transparent type goes by
+  what it wraps; `root` of the project file goes by the type it names; value mode
+  does not change (`SPEC.md` 4.1). So a schema built from a struct for data whose
+  every root value is that struct now reports `Service has no field web`: build
+  it from `IndexMap<String, Service>`, or a transparent wrapper of that, instead.
+  `crol::schema::build` now names a root type with no name, such as a map, with an
+  entry in `types`, so it is checked; before, nothing was. The schema file format
+  does not change.
+- **Breaking:** `ContextData` has the fields `defaults` and `defaulted`, for the
+  marks of its root, and `crol::check` gives `missing field` for a required field
+  removed with `-field`, as the deserializer always did.
+- `..` is allowed at the root of a data-mode document, also in a root variant
+  block, so `compose::<T>()` of a struct can leave fields out. One in any layer
+  counts, in the contexts its condition holds in. A spread at the root stays an
+  error. The fingerprint changes only for data that writes such a `..` (`SPEC.md`
+  7.4, 10.3, appendix B), and `crol eval` and `--all-contexts` print it, so they
+  read back.
+- `-key` at the root is as `-field` in a block for a root struct: the field takes
+  its default without `..`, and a required one is `missing field` (`SPEC.md` 7.4,
+  10.3). What it does to the data, the fingerprint, and any other root is unchanged.
+- `DefaultsProvider` has a method `root_is_document`, and `&default` at a root key
+  of a struct root is the default of that field. `SchemaFile::defaults_for` takes
+  the root type a project chooses, which `&default` did not look at before.
+- Language server: at the top of a `.crod` document with a struct root, completion
+  offers the root's fields, except those the document writes, with the value of a
+  lower layer filled in, hover shows each field's doc, on key and value, and every
+  place below the root has the right type, by one rule (`SPEC.md` 12.5). The quick
+  fixes for a missing root field add it, or `..`, at the end of the document.
 - Language server: hover shows the doc comment first, then the type on its own
   line, in Markdown that renders. A value has the doc of the field it is assigned
   to, also in a list, a map or `Some(...)`, at any depth, and a variant its own

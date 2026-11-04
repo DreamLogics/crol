@@ -102,8 +102,10 @@ The root is not a value that the file builds, which explains the rules that
 differ from value mode:
 
 - There is no type name at the top, and no `#![type(...)]`.
-- There is no `..` or spread at the top level. To share fields between root
-  keys, spread a [template](language.md#templates-and-spreads) inside each.
+- There is no spread at the top level. To share fields between root keys, spread
+  a [template](language.md#templates-and-spreads) inside each. `..` alone is allowed,
+  and lets the fields of [a struct at the root](rust.md#a-struct-at-the-root) take
+  their defaults.
 - A file must be entries. A bare `[1, 2]` is an error.
 - One layer may define a key only once, so that the result does not depend on
   which file happens to be read first. A second definition is an error, even
@@ -159,7 +161,8 @@ web: port 80
 | `Config { port: 80 }`          | works                      | error: the root has no type               |
 | `#![type(Config)]`             | works                      | error                                     |
 | `[1, 2]`, `42`                 | works                      | error: a file holds entries               |
-| `..` or `..&x` at the top      | works                      | error: the root is not a value            |
+| `..` at the top                | works                      | works, in any layer                       |
+| `..&x` at the top              | works                      | error: the root is not a value            |
 | `x := 1` at the top            | visible in this file       | a template, visible in every file         |
 | `x = port: 80` at the top      | works                      | error: write `&root.port`                 |
 | `port: 1, port: 2`             | the last one wins          | error: `port` is defined twice            |
@@ -205,7 +208,7 @@ decides.
 
 ## Moving a file between modes
 
-A file of plain entries, with no `#![type]`, no top-level `..` and each key set
+A file of plain entries, with no `#![type]`, no top-level spread and each key set
 once, reads the same in both modes. So when one settings file grows into several,
 as in [getting started](getting-started.md), all it takes is a new name:
 `config.crov` becomes `config.crod`. If you think your program might grow, this

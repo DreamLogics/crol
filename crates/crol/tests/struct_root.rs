@@ -154,7 +154,9 @@ fn only_the_composed_root_is_complete() {
     let found = errors(&layers[..1], &schema);
     assert_eq!(
         found,
-        ["`Config` is missing the fields `options`, `retries`, `note`; write them, or end the block with `..` to leave out fields that have defaults"]
+        [
+            "`Config` is missing the fields `options`, `retries`, `note`; write them, or end the block with `..` to leave out fields that have defaults"
+        ]
     );
 }
 
@@ -229,7 +231,10 @@ fn root_defaults_in_a_variant_hold_in_that_context() {
     let text = "name: \"x\", options: { a: true, .. }, <prod> { .. }";
     let found = errors(&[text], &schema);
     assert_eq!(found.len(), 1, "{found:?}");
-    assert!(found[0].starts_with("in {}: `Config` is missing"), "{found:?}");
+    assert!(
+        found[0].starts_with("in {}: `Config` is missing"),
+        "{found:?}"
+    );
     let config: Config = composer(&[text])
         .with_variant("prod")
         .unwrap()
@@ -257,7 +262,13 @@ fn removing_a_field_is_as_in_a_block() {
     let layers = [WHOLE, "-retries, -note"];
     assert_eq!(errors(&layers, &schema), Vec::<String>::new());
     let config: Config = composer(&layers).compose().unwrap();
-    assert_eq!(config, Config { retries: 3, ..whole() });
+    assert_eq!(
+        config,
+        Config {
+            retries: 3,
+            ..whole()
+        }
+    );
     // A required one is missing.
     let layers = [WHOLE, "-name"];
     assert_eq!(errors(&layers, &schema), ["missing field `name`"]);
@@ -388,13 +399,7 @@ fn the_root_argument_chooses_the_type_and_its_kind_the_rule() {
         Vec::<String>::new()
     );
     assert_eq!(
-        errors_with(
-            &["a: true, b: false, c: 1"],
-            &schema,
-            Some(&path),
-            &options
-        )
-        .len(),
+        errors_with(&["a: true, b: false, c: 1"], &schema, Some(&path), &options).len(),
         1
     );
 }
@@ -430,7 +435,10 @@ fn default_reads_the_field_at_a_struct_root() {
 #[test]
 fn fill_defaults_fills_the_root() {
     let schema = schema::build::<Config>();
-    let data = data(&["name: \"x\", options: { a: true, .. }, note: None", ".."], &schema);
+    let data = data(
+        &["name: \"x\", options: { a: true, .. }, note: None", ".."],
+        &schema,
+    );
     let root = data.view().base.clone();
     let span = crol_eval::Span::detached();
     let filled = crol::fill_defaults(&root, &schema, None, span);

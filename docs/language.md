@@ -376,6 +376,9 @@ error.
 }
 ```
 
+The same goes for [a struct at the root](rust.md#a-struct-at-the-root): write `..` at
+the top level of any layer.
+
 A field removed with `-field` also takes its default, without `..`. Use it to
 drop a value that a lower layer or a template set:
 

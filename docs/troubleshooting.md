@@ -90,8 +90,10 @@ involved. Late references read final values, so `a: &root.a + 1` does not mean
 Every field must be written, including `Option` fields. Add it, or end the block
 with `..` to [leave it out on purpose](language.md#leaving-fields-out).
 
-If the message names the struct you load the root into, `..` is not an option,
-since a data-mode file [has no block at the top](rust.md#a-struct-at-the-root).
+If the message names the struct you load the root into, no layer sets the field.
+Add it to a layer, or write `..` at the top level of any layer to
+[let it take its default](rust.md#a-struct-at-the-root). It is reported at the top of
+the last file of the last layer, since it belongs to no line.
 
 If the type has `#[crol(explicit_defaults = false)]`, and your program reports this
 while `crol check` does not, the loader has no schema. Use
@@ -102,10 +104,18 @@ while `crol check` does not, the loader has no schema. Use
 A misspelt field, or a field of another type. If you want to ignore unknown
 fields, set `allow_unknown_fields`.
 
-**`` expected `Config { ... }`, found 8080 ``** from `crol check`
+**`` `Config` has no field `web`; its fields are ... ``** from `crol check`, on a root key
 
-The schema's root type is the type of each root value, not of the root as a
-whole. See [which type a document has](schemas.md#which-type-a-document-has).
+The schema's root type is a struct, so it describes the whole document, and each
+root key is a field of it. If each root value is meant to be a `Config`, build
+the schema from an enum or a map of them. See
+[which type a document has](schemas.md#which-type-a-document-has).
+
+**`` expected a `Definition` variant, found 8080 ``** from `crol check`
+
+The schema's root type is an enum, so it is the type of each root value, and this
+one is not a value of it. If the root keys are meant to be fields, build the schema
+from the struct. See [which type a document has](schemas.md#which-type-a-document-has).
 
 **`` ~: cannot merge `Service` with `Limits` ``**
 
@@ -124,7 +134,7 @@ These appear when what a file holds does not fit its [extension](modes.md).
 
 **`` `type` names the type of a value-mode document; a data-mode document's root has no type ``**
 
-**``a spread or `..` cannot be at the root of a data-mode document; the root is not a value``**
+**`a spread cannot be at the root of a data-mode document; the root is not a value`**
 
 **``a data-mode document holds entries (`key: value,`), not one value``**
 

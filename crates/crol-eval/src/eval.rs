@@ -872,11 +872,9 @@ pub(crate) fn evaluate_data(
         let varying = evaluator.share.then(|| plan.varying(context));
         let (slots, defaults, defaulted) = match &*root_cell.state.borrow() {
             State::Done(Ok(shaped)) => match &shaped.shape {
-                Shape::Keyed(keyed) => (
-                    keyed.slots.clone(),
-                    keyed.defaults,
-                    keyed.defaulted.clone(),
-                ),
+                Shape::Keyed(keyed) => {
+                    (keyed.slots.clone(), keyed.defaults, keyed.defaulted.clone())
+                }
                 _ => Default::default(),
             },
             _ => Default::default(),

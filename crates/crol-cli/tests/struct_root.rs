@@ -118,10 +118,11 @@ fn eval_shows_the_filled_root_and_reads_back() {
     let output = crol(&dir, &["eval"]);
     assert!(output.status.success(), "{output:?}");
     let text = stdout(&output);
-    assert!(text.contains("retries: 3 // default"), "{text}");
-    assert!(text.contains("note: None // default"), "{text}");
     // `level` has a default the schema does not record, so `..` stays.
-    assert!(text.lines().any(|l| l.trim_end_matches(',') == ".."), "{text}");
+    assert_eq!(
+        text,
+        "name: \"x\"\noptions: { a: true }\nretries: 3 // default\nnote: None // default\n..\n"
+    );
 
     std::fs::write(dir.join("base/a.crod"), &text).unwrap();
     std::fs::write(dir.join("local/a.crod"), "").unwrap();
@@ -141,7 +142,10 @@ fn all_contexts_reads_back_with_the_same_fingerprint() {
     let output = crol(&dir, &["eval", "--all-contexts"]);
     assert!(output.status.success(), "{output:?}");
     let text = stdout(&output);
-    assert!(text.lines().any(|l| l.trim_end_matches(',') == ".."), "{text}");
+    assert!(
+        text.lines().any(|l| l.trim_end_matches(',') == ".."),
+        "{text}"
+    );
 
     std::fs::write(dir.join("base/a.crod"), &text).unwrap();
     std::fs::write(dir.join("local/a.crod"), "").unwrap();
@@ -179,7 +183,10 @@ fn a_removed_field_reads_back_at_a_struct_root() {
     let check = crol(&dir, &["check"]);
     assert!(check.status.success(), "{check:?}");
     let fingerprint = crol(&dir, &["fingerprint"]);
-    for args in [&["eval", "--all-contexts"][..], &["eval", "--no-defaults"][..]] {
+    for args in [
+        &["eval", "--all-contexts"][..],
+        &["eval", "--no-defaults"][..],
+    ] {
         let dir = project("removed-read-back", COMPLETE, "-note\n-level\n");
         let output = crol(&dir, args);
         assert!(output.status.success(), "{args:?}: {output:?}");
@@ -259,6 +266,9 @@ fn no_layers_and_no_keys_are_still_reported_on_nothing() {
     let dir = project("empty", "", "");
     let output = crol(&dir, &["check"]);
     assert!(!output.status.success(), "{output:?}");
-    assert!(stderr(&output).contains("`Config` is missing"), "{output:?}");
+    assert!(
+        stderr(&output).contains("`Config` is missing"),
+        "{output:?}"
+    );
     assert_eq!(output.status.code(), Some(1), "{output:?}");
 }

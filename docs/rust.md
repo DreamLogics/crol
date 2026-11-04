@@ -173,9 +173,11 @@ uploads: 20 GB
 web: web:1.4 on port 8080
 ```
 
-This is the recommended shape for layered data: an enum of everything the data
-can define, in a map. It is also what [schemas](schemas.md) expect. Use
-`indexmap::IndexMap` if you want to keep the order of the data.
+This is the shape for layered data that defines many things of several kinds: an
+enum of everything the data can define, in a map. Build the
+[schema](schemas.md) from the enum. Use `indexmap::IndexMap` if you want to keep
+the order of the data. For one configuration with known fields, use
+[a struct at the root](#a-struct-at-the-root).
 
 Internally tagged, adjacently tagged and untagged enums work, but serde reads
 them without type names, so they behave as they would with
@@ -183,14 +185,55 @@ them without type names, so they behave as they would with
 
 ### A struct at the root
 
-`compose` can also load the root into a struct whose fields are the root keys,
-as in [getting started](getting-started.md). There is one catch: a data-mode
-file cannot end with `..`, because the root is not a block. So every field of
-that struct must be set by some layer, even `Option` fields and fields with
-`#[serde(default)]`. The error message suggests `..`, which does not apply here.
+The plain way to use layers for a configuration is a struct at the root: the
+struct describes the whole document, and every root key is one of its fields,
+as in [getting started](getting-started.md). The layers together make the
+struct, so one layer can set a field another leaves out, and only the result has
+to be complete.
 
-To allow optional root keys, give that struct `#[crol(explicit_defaults = false)]`,
-and give the composer its schema:
+Like any block, the root can end with `..` to let fields take their defaults. One
+`..` in any layer is enough:
+
+```rust
+// src/main.rs
+use crol::{CrolComposer, CrolLayer};
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct Config {
+    port: u16,
+    workers: Option<u32>,
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+fn main() -> Result<(), crol::Error> {
+    let config: Config = CrolComposer::new()
+        .load_layer(CrolLayer::from_sources("base", [("a.crod", "port: 80\n..")]))
+        .load_layer(CrolLayer::from_sources("local", [("a.crod", "port: & + 8000")]))
+        .compose()?;
+    println!("port {}, workers {:?}, tags {:?}", config.port, config.workers, config.tags);
+    Ok(())
+}
+```
+
+```console
+$ cargo run
+port 8080, workers None, tags []
+```
+
+Everything else works as in a block, too:
+
+- `-tags` in a layer removes the field, and it takes its default, without `..`. A
+  field with no default is then `missing field`, reported for the result, not
+  for the layer that removed it.
+- `<prod> { .. }` leaves fields out in `prod` only.
+- A key the struct does not have is an error that lists its fields, unless you
+  set `allow_unknown_fields`.
+- `t := { ... }` at the root is a template, not a field.
+
+If the fields of the struct should take their defaults without anyone writing
+`..`, give it `#[crol(explicit_defaults = false)]`, and give the composer its schema:
 
 ```rust
 // src/main.rs
@@ -219,9 +262,9 @@ $ cargo run
 port 80, workers None
 ```
 
-The alternatives are to load into a map, or to turn the check off for the whole
-data set with `require_complete: false` in [`CrolConfig`](#configuration), which
-applies to every struct, not only the root one.
+With a [schema](schemas.md) built from the struct, `crol check` and your editor see
+the same thing: root keys are its fields, and completeness is that of all the
+layers together.
 
 ## Ids
 

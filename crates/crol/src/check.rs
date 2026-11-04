@@ -416,9 +416,7 @@ impl Checker<'_> {
                     keyed.defaults || !explicit_defaults.unwrap_or(self.options.require_complete);
                 let left_out: Vec<&str> = fields
                     .iter()
-                    .filter(|(f, field)| {
-                        !field.flatten && !written(f, field) && !removed(f, field)
-                    })
+                    .filter(|(f, field)| !field.flatten && !written(f, field) && !removed(f, field))
                     .map(|(f, _)| f.as_str())
                     .collect();
                 // Serde fills fields that have defaults, also removed ones.

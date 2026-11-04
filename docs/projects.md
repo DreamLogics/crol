@@ -108,6 +108,12 @@ required, and `..` at the end leaves out the rest. Once you have a
 | `root`     | the [root type](schemas.md#which-type-a-document-has), if it is not the schema's own         |
 | `options`  | the same settings as [`CrolConfig`](rust.md#configuration)                                   |
 
+With a schema built from a [struct](rust.md#a-struct-at-the-root), the layers
+together are that struct: `crol check` and your editor take each root key as one
+of its fields, and a field is only missing if no layer sets it. Your editor
+offers the fields at the top of a file, also those set in a layer below, and
+then fills in the value from there.
+
 Each layer has a `name`, a `dir` and `read_only`. `dir` is a
 [module path](#module-paths) written as a string, starting at the project's
 directory, and names a directory or a file. `read_only` is for generated or

@@ -80,9 +80,10 @@ pub(crate) fn run(args: &Args, reporter: &mut Reporter) -> bool {
     let config = FormatConfig::default().with_max_width(args.max_width);
     // Only of a struct is a removed key a field that takes its default; in
     // any other root it is just gone (`SPEC.md` 4.1).
-    let struct_root = inputs.schema.as_ref().is_some_and(|schema| {
-        schema.data_root(inputs.root.as_deref()) == DataRoot::Document
-    });
+    let struct_root = inputs
+        .schema
+        .as_ref()
+        .is_some_and(|schema| schema.data_root(inputs.root.as_deref()) == DataRoot::Document);
     if args.all_contexts {
         if path.is_some() {
             reporter.error("`--all-contexts` prints all the data; it takes no key");

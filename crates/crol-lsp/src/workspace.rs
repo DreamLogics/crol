@@ -671,15 +671,12 @@ pub(crate) fn evaluate(
     problems.append(&mut loading.problems);
     if !snapshot.layers.is_empty() {
         // `&default` reads the project's schema (`SPEC.md` 6.1.3).
-        snapshot.options = snapshot
-            .options
-            .clone()
-            .with_defaults(
-                snapshot
-                    .schema
-                    .as_ref()
-                    .map(|s| s.defaults_for(snapshot.root_type.as_deref())),
-            );
+        snapshot.options = snapshot.options.clone().with_defaults(
+            snapshot
+                .schema
+                .as_ref()
+                .map(|s| s.defaults_for(snapshot.root_type.as_deref())),
+        );
         snapshot.evaluation =
             crol_eval::evaluate_data(&snapshot.sources, &snapshot.layers, &snapshot.options);
         // What does not evaluate above a gap says little: keep what is below

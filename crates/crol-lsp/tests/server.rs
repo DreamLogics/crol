@@ -3280,7 +3280,10 @@ fn hover_in_data_shows_the_doc_of_the_field() {
 ";
     let dir = workspace(
         "lsp-hover-data",
-        &[("crol/schema.crov", &generated_data_schema()), ("a.crod", text)],
+        &[
+            ("crol/schema.crov", &generated_data_schema()),
+            ("a.crod", text),
+        ],
     );
     let mut client = Client::start(&dir);
     let mut buffer = Buffer::open(&client, &dir, "a.crod");
@@ -3375,7 +3378,10 @@ fn hover_on_a_reference_has_what_it_names_after_the_doc() {
     );
     let dir = workspace(
         "lsp-hover-reference",
-        &[("crol/schema.crov", &generated_data_schema()), ("a.crod", &text)],
+        &[
+            ("crol/schema.crov", &generated_data_schema()),
+            ("a.crod", &text),
+        ],
     );
     let mut client = Client::start(&dir);
     let mut buffer = Buffer::open(&client, &dir, "a.crod");
@@ -3392,7 +3398,10 @@ fn hover_keeps_to_values_and_keys() {
     let text = "#![schema(crol::schema)]\n\nt := 1\nn = +web: Config { .. }\n";
     let dir = workspace(
         "lsp-hover-elsewhere",
-        &[("crol/schema.crov", &generated_data_schema()), ("a.crod", text)],
+        &[
+            ("crol/schema.crov", &generated_data_schema()),
+            ("a.crod", text),
+        ],
     );
     let mut client = Client::start(&dir);
     let mut buffer = Buffer::open(&client, &dir, "a.crod");
@@ -3712,7 +3721,11 @@ fn completion_at_a_struct_root_offers_its_fields() {
     let cases: &[Case<'_>] = &[
         ("|", root, fields),
         // Not what this document writes; what the layers below set stays.
-        ("options: { .. }\n|", &["name", "items", "retries"], &["options"]),
+        (
+            "options: { .. }\n|",
+            &["name", "items", "retries"],
+            &["options"],
+        ),
         ("name: \"x\"\n|", &["items", "options"], &["name"]),
         ("-name\n|", &["items"], &["name"]),
         // A template is no field, and does not count as written.
@@ -3733,13 +3746,17 @@ fn completion_at_a_struct_root_offers_its_fields() {
     let items = local.complete(&mut client, "|");
     let name = items.iter().find(|i| i["label"] == "name").unwrap();
     assert_eq!(name["textEdit"]["newText"], "name: \"below\"");
-    assert_eq!(name["documentation"]["value"], "The name of the application.");
+    assert_eq!(
+        name["documentation"]["value"],
+        "The name of the application."
+    );
     client.stop();
 }
 
 #[test]
 fn hover_at_a_struct_root_shows_the_field() {
-    let text = "name: \"x\"\nitems: [{ id: 1 }]\noptions: { fast: true, quiet: true }\nretries: 1\n";
+    let text =
+        "name: \"x\"\nitems: [{ id: 1 }]\noptions: { fast: true, quiet: true }\nretries: 1\n";
     let dir = struct_root_project("lsp-struct-root-hover", text, "");
     let mut client = Client::start(&dir);
     let mut base = Buffer::open(&client, &dir, "base/a.crod");
@@ -3793,6 +3810,61 @@ fn diagnostics_at_a_struct_root_are_of_the_composed_root() {
     );
     let found = client.diagnostics_for(&base, |_| true);
     assert_eq!(found, Vec::<Value>::new());
+    client.stop();
+}
+
+#[test]
+fn code_actions_for_the_root_are_about_the_root() {
+    let text = "name: \"x\"\noptions: { fast: true, quiet: true }\nnam: 1\n";
+    let dir = struct_root_project("lsp-struct-root-actions", "", text);
+    let mut client = Client::start(&dir);
+    let local = uri(&dir.join("local/a.crod"));
+    let found = client.diagnostics_for(&local, |d| says(d, "is missing the field"));
+    let titles = |client: &mut Client, part: &str| -> Vec<(String, String)> {
+        let diagnostic = found
+            .iter()
+            .find(|d| d["message"].as_str().unwrap().contains(part))
+            .unwrap();
+        let actions = client.request(
+            "textDocument/codeAction",
+            json!({
+                "textDocument": { "uri": local },
+                "range": diagnostic["range"],
+                "context": { "diagnostics": [diagnostic], "triggerKind": 2 },
+            }),
+        );
+        actions
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| {
+                let edits = a["edit"]["changes"][&local].as_array().unwrap();
+                (a["title"].as_str().unwrap().to_owned(), apply(text, edits))
+            })
+            .collect()
+    };
+    // Not on `options: { ... }`, the first block in the document.
+    assert_eq!(
+        titles(&mut client, "is missing the field"),
+        [
+            (
+                "Add the missing fields".to_owned(),
+                format!("{text}items: []\nretries: 0\n")
+            ),
+            (
+                "End the document with `..`".to_owned(),
+                format!("{text}..\n")
+            ),
+        ]
+    );
+    // A misspelt root key.
+    assert_eq!(
+        titles(&mut client, "has no field `nam`"),
+        [(
+            "Change to `name`".to_owned(),
+            text.replace("nam: 1", "name: 1")
+        )]
+    );
     client.stop();
 }
 

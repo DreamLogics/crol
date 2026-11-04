@@ -206,13 +206,6 @@ impl Document<'_> {
             }
         } else if message.contains("is missing the field") || message.starts_with("missing field `")
         {
-            let block = node
-                .ancestors()
-                .chain(node.descendants())
-                .find_map(ast::Block::cast);
-            let Some(block) = block else {
-                return;
-            };
             let missing: Vec<&str> = if message.starts_with("missing field `") {
                 names.iter().take(1).copied().collect()
             } else {
@@ -223,6 +216,23 @@ impl Document<'_> {
                     .filter(|n| *n != "..")
                     .collect()
             };
+            // A diagnostic of the root as a whole has no range, and is about
+            // no block in the document (`SPEC.md` 4.1), unless its outer
+            // braces.
+            let block = if diagnostic.range.start == diagnostic.range.end {
+                let document = crol_syntax::parse(self.text).document();
+                let Some(ast::Expr::Block(block)) = document.expr() else {
+                    return self.root_fixes(&document, &missing, diagnostic, out);
+                };
+                Some(block)
+            } else {
+                node.ancestors()
+                    .chain(node.descendants())
+                    .find_map(ast::Block::cast)
+            };
+            let Some(block) = block else {
+                return;
+            };
             self.add_fields(&block, &missing, diagnostic, out);
             if message.contains("is missing the field") && !has_defaults_marker(&block) {
                 out.push(self.action(
@@ -232,6 +242,57 @@ impl Document<'_> {
                     vec![insert_at_end(self.text, &block, &["..".to_owned()])],
                 ));
             }
+        }
+    }
+
+    /// What can be added to a document without outer braces for a root
+    /// that lacks the fields `missing`: they, or `..`, as its last entries.
+    fn root_fixes(
+        &self,
+        document: &ast::Document,
+        missing: &[&str],
+        diagnostic: &Diagnostic,
+        out: &mut Vec<CodeActionOrCommand>,
+    ) {
+        let end = TextRange::empty(TextSize::of(self.text));
+        let line_break = if self.text.is_empty() || self.text.ends_with('\n') {
+            ""
+        } else {
+            "\n"
+        };
+        let schema = self.snapshot.and_then(|s| s.schema_for(self.file));
+        let fields = schema.as_ref().and_then(|schema| {
+            let (_, fields) = schema::struct_of(schema.file, &schema::root_expr(schema))?;
+            Some((schema.file, fields))
+        });
+        let lines: Option<Vec<String>> = missing
+            .iter()
+            .map(|name| {
+                let (schema, fields) = fields?;
+                let field = schema::field(fields, name)?;
+                let value = schema::placeholder(schema, &field.ty);
+                Some(format!("{}: {value}\n", key_name(name)))
+            })
+            .collect();
+        if let Some(lines) = lines.filter(|lines| !lines.is_empty()) {
+            let s = if lines.len() == 1 { "" } else { "s" };
+            out.push(self.action(
+                format!("Add the missing field{s}"),
+                CodeActionKind::QUICKFIX,
+                Some(diagnostic),
+                vec![(end, format!("{line_break}{}", lines.concat()))],
+            ));
+        }
+        let has_marker = document
+            .entries()
+            .any(|e| matches!(e, ast::AnyEntry::Defaults(_)));
+        if diagnostic.message.contains("is missing the field") && !has_marker {
+            out.push(self.action(
+                "End the document with `..`".to_owned(),
+                CodeActionKind::QUICKFIX,
+                Some(diagnostic),
+                vec![(end, format!("{line_break}..\n"))],
+            ));
         }
     }
 
