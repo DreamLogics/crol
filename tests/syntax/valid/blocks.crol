@@ -1,0 +1,8 @@
+t := { port = port: 80, ..&base, .., value := 1 },
++web: Service {
+    ..&t,
+    replicas<prod>: 4,
+    <cache> { url: "redis" },
+    limits: & ~ { cpu: 2.0 },
+    ..
+},

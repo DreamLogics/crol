@@ -1,0 +1,96 @@
+==================
+Entries
+==================
+
++web: Service { port: 80, .. },
+-old,
+
+---
+
+(document
+  (entry
+    (target
+      (key
+        (identifier)))
+    (block
+      (identifier)
+      (entry
+        (target
+          (key
+            (identifier)))
+        (literal
+          (integer)))
+      (defaults)))
+  (remove_entry
+    (target
+      (key
+        (identifier)))))
+
+==================
+References and variants
+==================
+
+web<prod>.url: &root.db<dev>.host + &self.port,
+
+---
+
+(document
+  (entry
+    (target
+      (key
+        (identifier))
+      (variant
+        (cond_name
+          (identifier)))
+      (field_selector
+        (identifier)))
+    (binary_expr
+      (path_expr
+        (reference
+          (root))
+        (field_selector
+          (identifier))
+        (variant
+          (cond_name
+            (identifier)))
+        (field_selector
+          (identifier)))
+      (path_expr
+        (reference
+          (self))
+        (field_selector
+          (identifier))))))
+
+==================
+Value document
+==================
+
+Config { tags: ["a", r#"b"#], pair: (1,), id: @web }
+
+---
+
+(document
+  (block
+    (identifier)
+    (entry
+      (target
+        (key
+          (identifier)))
+      (list_expr
+        (literal
+          (string))
+        (literal
+          (raw_string))))
+    (entry
+      (target
+        (key
+          (identifier)))
+      (tuple_expr
+        (literal
+          (integer))))
+    (entry
+      (target
+        (key
+          (identifier)))
+      (id_expr
+        (id)))))

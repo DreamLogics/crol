@@ -1,0 +1,5 @@
+// A comment, /* and a /* nested */ block comment */
+Config {
+    listen: "0.0.0.0:8080", // trailing
+    workers: None,
+}

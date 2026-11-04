@@ -12,3 +12,10 @@
 .vscode/
 *.swp
 .DS_Store
+
+# tree-sitter build artifacts
+/tree-sitter-crol/build
+/tree-sitter-crol/*.so
+/tree-sitter-crol/*.dylib
+/tree-sitter-crol/*.wasm
+/tree-sitter-crol/node_modules

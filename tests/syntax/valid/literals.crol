@@ -1,0 +1,7 @@
+a: [12, 0x1F, 0o17, 0b1010, 1_000, -3, 1.5, 1e3, 2.5E-3, -1_000.0],
+b: ["text", "esc\n\"\u{1F600}\x7F", r"raw", r#"a "quoted" b"#, 'a', '\n', true, false],
+c: [(), (1,), (1, 2), (1), @web, @"odd id"],
+d: "multi
+line",
+e: "skip \
+    whitespace",
