@@ -19,6 +19,8 @@
 
 #![forbid(unsafe_code)]
 
+use indexmap::IndexMap;
+
 mod cond;
 mod diagnostic;
 mod eval;
@@ -102,6 +104,9 @@ pub struct DataOptions {
     /// Let a path go through a field left out, from its default
     /// (`SPEC.md` 5.1). Needs `defaults`.
     pub init_defaults: bool,
+    /// Merge a block at a root key with the value below, instead of
+    /// replacing it, as a `schema.crod` does (`SPEC.md` 10.12).
+    pub merge_root: bool,
 }
 
 /// A shared [`DefaultsProvider`], for [`DataOptions::defaults`].
@@ -128,11 +133,18 @@ impl Default for DataOptions {
             evaluate_every_key: false,
             defaults: None,
             init_defaults: false,
+            merge_root: false,
         }
     }
 }
 
 impl DataOptions {
+    /// Sets [`DataOptions::merge_root`].
+    pub fn with_merge_root(mut self, merge: bool) -> Self {
+        self.merge_root = merge;
+        self
+    }
+
     /// Sets [`DataOptions::each_variant`].
     pub fn with_each_variant(mut self, each: bool) -> Self {
         self.each_variant = each;
@@ -182,6 +194,10 @@ impl DataOptions {
     }
 }
 
+/// The document at the root of a layer that patches the schema, not the data
+/// (`SPEC.md` 10.12).
+pub const SCHEMA_DOCUMENT: &str = "schema.crod";
+
 /// Layers read and lowered, ready to be evaluated in any context, without
 /// reading their text again. Share one between threads with an `Arc`.
 #[derive(Debug)]
@@ -210,11 +226,38 @@ pub fn evaluate_data(sources: &Sources, layers: &[Layer], options: &DataOptions)
 /// Reads and lowers layers of data-mode documents, with every diagnostic
 /// found; `None` if there are errors.
 pub fn compile(sources: &Sources, layers: &[Layer]) -> (Option<Compiled>, Vec<Diagnostic>) {
+    compile_documents(sources, layers, false)
+}
+
+/// [`compile`], for a layer's `schema.crod` too, which is otherwise left out.
+pub fn compile_schema_documents(
+    sources: &Sources,
+    layers: &[Layer],
+) -> (Option<Compiled>, Vec<Diagnostic>) {
+    compile_documents(sources, layers, true)
+}
+
+/// A layer's documents in the order they apply, without its `schema.crod`
+/// unless `schema` says.
+fn documents_of(layer: &Layer, schema: bool) -> Vec<&(String, FileId)> {
+    let mut documents: Vec<&(String, FileId)> = layer
+        .documents
+        .iter()
+        .filter(|(path, _)| schema || path != SCHEMA_DOCUMENT)
+        .collect();
+    documents.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+    documents
+}
+
+fn compile_documents(
+    sources: &Sources,
+    layers: &[Layer],
+    schema: bool,
+) -> (Option<Compiled>, Vec<Diagnostic>) {
     let mut diagnostics = Vec::new();
     let mut parses = Vec::new();
     for (layer_index, layer) in layers.iter().enumerate() {
-        let mut documents: Vec<&(String, FileId)> = layer.documents.iter().collect();
-        documents.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+        let documents = documents_of(layer, schema);
         for pair in documents.windows(2) {
             if pair[0].0 == pair[1].0 {
                 let span = Span::new(pair[1].1, Default::default());
@@ -287,6 +330,7 @@ pub fn evaluate_compiled(compiled: &Compiled, options: &DataOptions) -> Evaluati
         evaluate_every_key: options.evaluate_every_key,
         defaults: options.defaults.as_ref().map(|d| &*d.0),
         init_defaults: options.init_defaults,
+        merge_root: options.merge_root,
     };
     let (result, mut errors) = eval::evaluate_data(&lowered.ir, &input);
     diagnostics.append(&mut errors);
@@ -296,6 +340,24 @@ pub fn evaluate_compiled(compiled: &Compiled, options: &DataOptions) -> Evaluati
             ..Evaluation::default()
         };
     };
+    let evaluated = !diagnostics.iter().any(Diagnostic::is_error);
+    if let (Some(defaults), Some(base)) = (&options.defaults, &result.base)
+        && defaults.0.has_constraints()
+    {
+        check_constraints(
+            &*defaults.0,
+            base,
+            &result.contexts,
+            &result.variants,
+            &mut diagnostics,
+        );
+    }
+    if evaluated
+        && let (Some(defaults), Some(base)) = (input.defaults, &result.base)
+        && defaults.has_sealed()
+    {
+        check_sealed(lowered, &input, defaults, base, &result, &mut diagnostics);
+    }
     if diagnostics.iter().any(Diagnostic::is_error) {
         return Evaluation {
             variants: result.variants,
@@ -441,8 +503,7 @@ fn explain_paths(
     }
     let mut parses = Vec::new();
     for (layer_index, layer) in layers.iter().enumerate() {
-        let mut documents: Vec<&(String, FileId)> = layer.documents.iter().collect();
-        documents.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+        let documents = documents_of(layer, false);
         for (index, (_, file)) in documents.into_iter().enumerate() {
             parses.push((
                 *file,
@@ -478,8 +539,140 @@ fn explain_paths(
         evaluate_every_key: false,
         defaults: options.defaults.as_ref().map(|d| &*d.0),
         init_defaults: options.init_defaults,
+        merge_root: options.merge_root,
     };
     eval::explain(&lowered.ir, &input, requests, context)
+}
+
+/// Whether an operation's path leads to a field path, or past it. An
+/// operation with no path may set anything.
+fn touches(op: &ir::RootOp, path: &[String]) -> bool {
+    op.path
+        .iter()
+        .zip(path)
+        .all(|(selector, field)| eval::selector_field(selector).is_none_or(|name| name == *field))
+}
+
+/// Reports the sealed fields that differ from what they are after the layer
+/// that defines their root key (`SPEC.md` 10.13), however they changed. The
+/// data after a layer is the data of the layers up to it, evaluated alone: a
+/// layer that does not evaluate alone has nothing to compare with.
+fn check_sealed(
+    lowered: &lower::LoweredData,
+    input: &eval::DataInput<'_>,
+    defaults: &dyn DefaultsProvider,
+    base: &Value,
+    result: &eval::DataResult,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let ops = input.ops;
+    let mut first_layer: IndexMap<&str, usize> = IndexMap::new();
+    for op in ops {
+        first_layer.entry(&*op.key).or_insert(op.layer);
+    }
+    let contexts: Vec<Vec<String>> = result
+        .contexts
+        .iter()
+        .map(|data| {
+            let names = result.variants.chosen_names(&data.context);
+            names.into_iter().map(str::to_owned).collect()
+        })
+        .collect();
+    let mut reported = std::collections::HashSet::new();
+    for layer in 0..input.layer_names.len() {
+        // Operations are in layer order.
+        let end = ops.partition_point(|op| op.layer <= layer);
+        if end == ops.len() {
+            break;
+        }
+        if !first_layer.values().any(|&first| first == layer) {
+            continue;
+        }
+        let below = eval::DataInput {
+            ops: &ops[..end],
+            variants: &result.variants,
+            contexts: Some(&contexts),
+            warn_cross_file_patches: false,
+            ..*input
+        };
+        let (below, _) = eval::evaluate_data(&lowered.ir, &below);
+        let Some((below, Some(below_base))) = below.map(|b| {
+            let value = b.base.clone();
+            (b, value)
+        }) else {
+            continue;
+        };
+        let keyed = |value: &Value, key: &Key| match &value.kind {
+            ValueKind::Keyed(keyed) => keyed.entries.get(key).cloned(),
+            _ => None,
+        };
+        for (key, _) in first_layer.iter().filter(|(_, first)| **first == layer) {
+            let root_key = Key::Str((*key).to_owned());
+            let mut pairs = vec![(keyed(&below_base, &root_key), keyed(base, &root_key))];
+            for data in &result.contexts {
+                let then = below.contexts.iter().find(|b| b.context == data.context);
+                pairs.push((
+                    then.and_then(|then| then.get(&below_base, &root_key).cloned()),
+                    data.get(base, &root_key).cloned(),
+                ));
+            }
+            for (then, now) in pairs {
+                let (Some(then), Some(now)) = (then, now) else {
+                    continue;
+                };
+                for path in defaults.changed_sealed(key, &then, &now) {
+                    let above = || ops[end..].iter().filter(|op| &*op.key == *key);
+                    let op = above()
+                        .find(|op| touches(op, &path))
+                        .or_else(|| above().next())
+                        .or_else(|| ops.iter().find(|op| &*op.key == *key));
+                    let Some(op) = op else { continue };
+                    let name = format!("{key}.{}", path.join("."));
+                    let layer_name = &input.layer_names[layer];
+                    let message = format!(
+                        "`{name}` is sealed: only the layer that defines `{key}` (`{layer_name}`) can set it"
+                    );
+                    if reported.insert((op.span, message.clone())) {
+                        diagnostics.push(Diagnostic::error(op.span, message));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Checks the constraints of every root key, in the base, and in each context
+/// where a key differs from it (`SPEC.md` 10.12).
+fn check_constraints(
+    defaults: &dyn DefaultsProvider,
+    base: &Value,
+    contexts: &[ContextData],
+    variants: &Variants,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let ValueKind::Keyed(keyed) = &base.kind else {
+        return;
+    };
+    let name_of = |key: &Key| match key {
+        Key::Str(name) => name.clone(),
+        Key::Int(i) => i.to_string(),
+    };
+    let in_base = |name: &str| keyed.entries.get(&Key::Str(name.to_owned())).cloned();
+    for (key, value) in &keyed.entries {
+        for (span, message) in defaults.broken_constraints(&name_of(key), value, &in_base) {
+            diagnostics.push(Diagnostic::error(span, message));
+        }
+    }
+    for data in contexts {
+        let in_context = |name: &str| data.get(base, &Key::Str(name.to_owned())).cloned();
+        for (key, change) in &data.changes {
+            let Some(value) = change else { continue };
+            for (span, message) in defaults.broken_constraints(&name_of(key), value, &in_context) {
+                let context = variants.display(&data.context);
+                diagnostics.push(Diagnostic::error(span, format!("in {context}: {message}")));
+            }
+        }
+    }
 }
 
 /// Evaluates a file as a value-mode document (`SPEC.md` 4): one value, with

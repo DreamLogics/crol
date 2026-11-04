@@ -1,0 +1,11 @@
+list: OneOf(["a", "b"])
+colour: Rgb(11, 20, 0)
+point: (10, 20)
+nested: { limits: Range(0, 3), name: "n" }
+merged: { limits: Range(1, 3), name: "m" }
+wrapped: Some(6)
+already: Some(6)
+other: Bar(Foo(1))
+items: [1, 2]
+short: Pair(1, 2)
+landed: { list: OneOf(["a", "t"]) }

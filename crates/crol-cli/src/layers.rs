@@ -313,9 +313,6 @@ pub(crate) fn inputs(
         },
         None => None,
     };
-    // `&default` reads the schema (`SPEC.md` 6.1.3).
-    options = options.with_defaults(schema.as_ref().map(|s| s.defaults_for(root.as_deref())));
-
     let mut sources = Sources::new();
     let mut warnings = Vec::new();
     let layers: Vec<Layer> = composer
@@ -346,6 +343,14 @@ pub(crate) fn inputs(
                 .collect(),
         })
         .collect();
+    // A layer's `schema.crod` changes the schema (`SPEC.md` 10.12).
+    let schema = schema.map(|schema| {
+        let (schema, mut found) = schema.patched(&mut sources, &layers);
+        warnings.append(&mut found);
+        schema
+    });
+    // `&default` reads the schema (`SPEC.md` 6.1.3), and so do constraints.
+    options = options.with_defaults(schema.as_ref().map(|s| s.defaults_for(root.as_deref())));
     Some(Inputs {
         sources,
         layers,

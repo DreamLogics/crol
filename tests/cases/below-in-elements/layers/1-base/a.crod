@@ -1,0 +1,36 @@
+// The same position of a named tuple of the same name, or a tuple.
++list: OneOf(["a"])
+list: OneOf(& + ["b"])
+
++colour: Rgb(10, 20, 30)
+colour: Rgb(& + 1, &, 0)
+
++point: (1, 2)
+point: (& * 10, & * 10)
+
+// Through a path, and a block.
++nested: { limits: Range(1, 2), name: "n" }
+nested.limits: Range(& - 1, & + 1)
++merged: { limits: Range(1, 2), name: "m" }
+merged: & ~ { limits: Range(&, & + 1) }
+
+// Any other value below is that value as a whole.
++wrapped: 5
+wrapped: Some(& + 1)
++already: Some(5)
+already: Some(& + 1)
++other: Foo(1)
+other: Bar(&)
+
+// In a list, it is the value below the list.
++items: 1
+items: [&, & + 1]
+
+// A position it lacks is missing, and a fallback catches that.
++short: Pair(1)
+short: Pair(&, & | 2)
+
+// A template lands the same way.
+more := { list: OneOf(& + ["t"]) }
++landed: { list: OneOf(["a"]) }
+landed: & ~ &more

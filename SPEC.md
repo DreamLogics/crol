@@ -872,6 +872,13 @@ and is that entry's value below:
   of the entry it is the value of (and nothing if it is elsewhere, such
   as in a list).
 
+- for an element of a tuple or named tuple in an entry's value, the
+  element at the same position of the value below, if that is a tuple, or
+  a named tuple of the same name; an element it lacks is missing. Below any
+  other value, it is that value as a whole. So `channel: OneOf(& + ["x"])`
+  adds to the list in the `OneOf` below, and `armour: Some(& + 1)` adds to
+  `5` or to `Some(5)`. In a list element, `&` is the value below the list.
+
 `&` with nothing below is *missing* (section 6.5).
 
 **Self and parent.** Every block has a **location**: the path where its
@@ -2178,8 +2185,8 @@ document, and is an error if it does not parse.
 
 Evaluation and deserialization need no schema, except `&default`
 (section 6.1.3), which reads defaults from it, and what serde does not
-tell the deserializer: aliases (section 10.2) and `explicit_defaults`
-(section 10.3). Tools do: a language
+tell the deserializer: aliases (section 10.2), `explicit_defaults`
+(section 10.3), constraints and sealed fields (sections 10.12, 10.13). Tools do: a language
 server cannot complete field names, show docs or check types without
 knowing the Rust types. The schema describes them; it is built from the
 Rust types and written to a file.
@@ -2454,6 +2461,115 @@ contexts, reads the evaluated data through these instead:
 
 A query only reads evaluated data. Data cannot select keys by what they
 hold, since what a patch selects would depend on what patches do.
+
+
+### 10.12 Constraints
+
+A **constraint** says what a field's value must be, beyond its type.
+The Rust model names constraints, and says what they are or leaves that to
+the data:
+
+```rust
+#[derive(crol::Schema)]
+#[crol(constraints(positive = Min(0)))]        // defined by the program
+#[crol(open_constraints(channel = OneOf(["voice", "music"])))]
+struct Unit {
+    #[crol(constraint = "positive")]
+    hp: i32,
+    #[crol(constraint = "channel")]
+    channels: Vec<String>,
+    #[crol(key_constraint = "stat")]           // defined by the data
+    bonuses: BTreeMap<String, i32>,
+}
+
+#[derive(crol::Schema)]
+#[crol(constraint = "percentage")]             // wherever the type is used
+struct Percent(i32);
+```
+
+`constraint` on a field applies to its value, and on an `Option`, a list,
+a set, an array or a map to what it holds. `key_constraint` applies to a
+map's keys. On a newtype or transparent struct, `constraint` applies
+wherever the type is used. The constraints are:
+
+| Constraint | Holds for |
+|---|---|
+| `Min(n)`, `Max(n)` | a number not below, or not above, `n` |
+| `Range(a, b)` | a number from `a` to `b`, inclusive |
+| `OneOf([...])` | one of these values; a string, an id and a unit name count as their text |
+| `Refers(["Type", ...])` | an id, or a string, naming a root value of one of these types; `#[crol(constraints(x = Refers(Type)))]` in Rust |
+
+The schema file records the name on the field or type, and the program's
+definitions in `constraints`. A definition from
+`#[crol(constraints(...))]` is **sealed**: the program relies on it, and
+no layer may change it. One from `#[crol(open_constraints(...))]` is open.
+
+**`schema.crod`.** A document with this name at the root of a layer is not
+data. It patches the constraints, and a schema is generated, so a
+definition cannot be written there. A document of that name deeper in a
+layer is ordinary data.
+
+```rust
+// data/base/schema.crod
+constraints: {
+    stat: OneOf(["hit_points", "speed"]),
+    percentage: Range(0, 100),
+}
+
+// mods/my_mod/schema.crod
+constraints.stat: OneOf(& + ["armour"])
+```
+
+These documents are data-mode documents, evaluated in layer order on top
+of the program's definitions, with these differences:
+
+- `constraints` is the only root key, and a block at it merges with the
+  layers below instead of replacing them;
+- there are no variants;
+- what a layer defines is open.
+
+A program applies them with `SchemaFile::patched(sources, layers)`.
+`CrolComposer`, `crol` and the language server do this themselves.
+Changing a sealed constraint is an error, and so are a constraint nothing
+defines and, for a composer, a `schema.crod` without a schema.
+
+Constraints are checked on the final value, in every evaluated context, and
+an error points at where the value was written. They need the schema, as
+`explicit_defaults` does (section 10.3); they change no value and no
+fingerprint.
+
+### 10.13 Sealed fields
+
+`#[crol(sealed)]` on a field means that only the layer that defines a value
+can set that field. On a type, it seals all of its fields, wherever it
+is used.
+
+```rust
+#[derive(crol::Schema)]
+struct Tech {
+    #[crol(sealed)]
+    original: Option<Original>,
+    name: String,
+}
+```
+
+The layer that **defines** a root key is the lowest layer with an operation
+on it. All of that layer's operations may set the field, conditional
+ones too, so a later layer can still define a new value and set it there.
+
+The check compares values, not operations. For each context, the field's
+final value must equal its value in the layers up to the defining one,
+evaluated alone. So it does not matter how a field changes: a path, a
+higher layer's definition, a removal, or a late reference to something a
+higher layer changed. Setting it to the value it has is no change. The error
+is on the operation above the defining layer that leads to the field, else
+the first on that key, else the key's definition. A defining layer that
+does not evaluate alone has nothing to compare with, and is not checked.
+This costs one more evaluation for each such layer below the top one, and
+only for a schema with sealed fields.
+
+The schema records the mark on the field, and a `schema.crod` cannot
+change it. Sealing changes no value and no fingerprint.
 
 ---
 
@@ -2771,6 +2887,10 @@ project file, and what can be evaluated still is:
 - While the layers do not evaluate this way, hover and completion use the
   latest evaluation that had a value (below), else that of the layers below
   what is missing.
+
+A field's doc, in hover and completion, ends with its constraints and whether
+it is sealed (sections 10.12, 10.13), and completion leaves a sealed field out
+in a layer above one that has the value's key.
 
 **Hover.** Hover says what a place is for: the doc comment first, then the
 type on a line of its own, in Markdown, with nothing to scroll past. Evaluated

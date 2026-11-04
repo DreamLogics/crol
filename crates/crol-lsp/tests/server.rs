@@ -1893,6 +1893,78 @@ fn completion_from_the_project_at_any_depth() {
     client.stop();
 }
 
+const SEALED_SCHEMA: &str = r#"Schema {
+    format: 1,
+    root: "app::Unit",
+    types: {
+        "app::Unit": Struct {
+            name: "Unit",
+            source: ("a.rs", 1),
+            fields: {
+                hp: { ty: I32, constraint: Some("positive"), .. },
+                original: { ty: U32, doc: "The id.", sealed: true, .. },
+            },
+            ..
+        },
+    },
+    constraints: { positive: { constraint: Min(0.0), sealed: true } },
+}"#;
+
+#[test]
+fn sealed_fields_and_constraints_in_a_project() {
+    let dir = workspace(
+        "lsp-sealed",
+        &[
+            (
+                "project.crol",
+                r#"Project {
+                    layers: List([{ name: "base", dir: "base", .. }, { name: "local", dir: "local", .. }]),
+                    schema: Some("schema"),
+                    root: Some("app::Map"),
+                    ..
+                }"#,
+            ),
+            (
+                "schema.crol",
+                &SEALED_SCHEMA.replace(
+                    r#"root: "app::Unit",
+    types: {"#,
+                    r#"root: "app::Map",
+    types: {
+        "app::Map": Transparent {
+            name: "",
+            source: ("a.rs", 1),
+            inner: Map(String, Named("app::Unit")),
+        },"#,
+                ),
+            ),
+            ("base/a.crod", "+x: Unit { hp: 1, original: 1 },\n"),
+            ("local/a.crod", "x.hp: -1\nx.original: 2\n"),
+        ],
+    );
+    let mut client = Client::start(&dir);
+    let local = Buffer::open(&client, &dir, "local/a.crod");
+    client.diagnostics_for(&uri(&dir.join("local/a.crod")), |found| {
+        says(found, "-1 is below 0")
+    });
+
+    // Completion above the defining layer leaves the sealed field out.
+    let mut own = Buffer::open(&client, &dir, "base/a.crod");
+    let mut local = local;
+    check_completions(
+        &mut client,
+        &mut local,
+        "",
+        &[("x.|", &["hp"], &["original"])],
+    );
+    check_completions(
+        &mut client,
+        &mut own,
+        "",
+        &[("x.|", &["hp", "original"], &[])],
+    );
+}
+
 #[test]
 fn hover_at_any_depth() {
     let (mut client, mut buffer) = nested_document("lsp-nested-hover");

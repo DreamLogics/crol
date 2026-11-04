@@ -998,12 +998,14 @@ fn schema_files_of_every_shape_pass_their_own_schema() {
             doc: String::new(),
             source: source.clone(),
             inner: TypeExpr::F64,
+            constraint: None,
         },
         TypeDef::Transparent {
             name: "W".to_owned(),
             doc: String::new(),
             source: source.clone(),
             inner: TypeExpr::Unit,
+            constraint: None,
         },
         TypeDef::UnitStruct {
             name: "U".to_owned(),
@@ -1061,6 +1063,7 @@ fn schema_files_of_every_shape_pass_their_own_schema() {
             .into_iter()
             .map(|def| (def.name().to_owned(), def))
             .collect(),
+        constraints: Default::default(),
     };
     check(&schema.to_text().unwrap());
     assert_eq!(

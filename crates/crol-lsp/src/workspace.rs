@@ -651,6 +651,12 @@ pub(crate) fn evaluate(
     }
     problems.append(&mut loading.problems);
     if !snapshot.layers.is_empty() {
+        // A layer's `schema.crod` changes the schema (`SPEC.md` 10.12).
+        if let Some(schema) = snapshot.schema.take() {
+            let (schema, found) = schema.patched(&mut snapshot.sources, &snapshot.layers);
+            snapshot.extra.extend(found);
+            snapshot.schema = Some(schema);
+        }
         // `&default` reads the project's schema (`SPEC.md` 6.1.3).
         snapshot.options = snapshot.options.clone().with_defaults(
             snapshot

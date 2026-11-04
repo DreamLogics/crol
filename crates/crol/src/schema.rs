@@ -51,6 +51,7 @@ pub type TypeRef = TypeExpr;
 pub struct Registry {
     types: BTreeMap<String, TypeDef>,
     in_progress: HashSet<String>,
+    constraints: BTreeMap<String, ConstraintDef>,
 }
 
 impl Registry {
@@ -71,6 +72,13 @@ impl Registry {
         TypeExpr::Named(path.to_owned())
     }
 
+    /// Defines a constraint (`#[crol(constraints(...))]`). A sealed one
+    /// cannot be changed by a `schema.crod`.
+    pub fn constraint(&mut self, name: &str, constraint: Constraint, sealed: bool) {
+        self.constraints
+            .insert(name.to_owned(), ConstraintDef { constraint, sealed });
+    }
+
     /// Describes `T`.
     pub fn describe<T: Schema + ?Sized>(&mut self) -> TypeRef {
         T::describe(self)
@@ -79,7 +87,7 @@ impl Registry {
 
 /// A schema file: the Rust types data loads into, as tools see them. It is
 /// generated from those types, so change them rather than this file.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename = "Schema")]
 pub struct SchemaFile {
     /// The format version of this file. It changes only when the format of
@@ -91,6 +99,66 @@ pub struct SchemaFile {
     pub root: String,
     /// Every named type the root type uses, by path.
     pub types: BTreeMap<String, TypeDef>,
+    /// The constraints the program defines, by name (`SPEC.md` 10.12).
+    #[serde(default)]
+    pub constraints: BTreeMap<String, ConstraintDef>,
+}
+
+/// By hand, so that a schema without constraints is written as it always
+/// was: a field left out would give it `..`.
+impl Serialize for SchemaFile {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct as _;
+        let fields = if self.constraints.is_empty() { 3 } else { 4 };
+        let mut out = serializer.serialize_struct("Schema", fields)?;
+        out.serialize_field("format", &self.format)?;
+        out.serialize_field("root", &self.root)?;
+        out.serialize_field("types", &self.types)?;
+        if !self.constraints.is_empty() {
+            out.serialize_field("constraints", &self.constraints)?;
+        }
+        out.end()
+    }
+}
+
+/// What a field's value must be (`SPEC.md` 10.12).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Constraint {
+    /// A number not below this.
+    Min(f64),
+    /// A number not above this.
+    Max(f64),
+    /// A number from the first to the second, inclusive.
+    Range(f64, f64),
+    /// One of these values. A string, an id and a unit name count as their
+    /// text.
+    OneOf(Vec<RawValue>),
+    /// The id of a root value of one of these types.
+    Refers(Vec<String>),
+}
+
+impl Constraint {
+    /// `OneOf` these values, for `#[crol(constraints(...))]`.
+    pub fn one_of<T: Serialize>(values: impl IntoIterator<Item = T>) -> Self {
+        let values = values
+            .into_iter()
+            .filter_map(|value| crate::to_value(&value).ok())
+            .map(RawValue)
+            .collect();
+        Constraint::OneOf(values)
+    }
+}
+
+/// A constraint in a schema, under its name.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename = "")]
+pub struct ConstraintDef {
+    /// What it says.
+    pub constraint: Constraint,
+    /// Whether a `schema.crod` may not change it: one the program defines
+    /// is, unless it is marked open (`SPEC.md` 10.12).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub sealed: bool,
 }
 
 /// What a root type is to a data-mode document (`SPEC.md` 4.1).
@@ -160,6 +228,9 @@ pub enum TypeDef {
         source: (String, u32),
         /// The wrapped type.
         inner: TypeExpr,
+        /// The constraint on the value, wherever the type is used.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        constraint: Option<String>,
     },
     /// A struct with `#[serde(transparent)]`: data writes only `x`.
     Transparent {
@@ -173,6 +244,9 @@ pub enum TypeDef {
         source: (String, u32),
         /// The wrapped type.
         inner: TypeExpr,
+        /// The constraint on the value, wherever the type is used.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        constraint: Option<String>,
     },
     /// A unit struct: `struct U;`.
     UnitStruct {
@@ -313,6 +387,17 @@ pub struct Field {
     /// For an id field, the root types an id may name (`#[crol(refers(...))]`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub refers: Vec<String>,
+    /// The constraint on its value, or on what a collection holds
+    /// (`#[crol(constraint = "...")]`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub constraint: Option<String>,
+    /// The constraint on a map's keys (`#[crol(key_constraint = "...")]`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_constraint: Option<String>,
+    /// `#[crol(sealed)]`: only the layer that defines a value can set this
+    /// field (`SPEC.md` 10.13).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub sealed: bool,
 }
 
 impl Field {
@@ -325,6 +410,9 @@ impl Field {
             default: FieldDefault::Required,
             flatten: false,
             refers: Vec::new(),
+            constraint: None,
+            key_constraint: None,
+            sealed: false,
         }
     }
 }
@@ -501,7 +589,12 @@ impl SchemaFile {
     }
 
     fn from_named_text(name: &str, text: &str) -> Result<Self, Error> {
-        let schema: SchemaFile = crate::from_named_str(name, text)?;
+        // A schema without constraints leaves them out, with no `..`.
+        let options = crate::de::Options {
+            require_complete: false,
+            ..Default::default()
+        };
+        let (schema, _): (SchemaFile, _) = crate::from_text(name, text, options)?;
         if schema.format != FORMAT {
             return Err(Error::new(format!(
                 "the schema has format {}, and this version of crol reads format {FORMAT}",
@@ -676,6 +769,7 @@ pub fn build<T: Schema + ?Sized>() -> SchemaFile {
                 doc: String::new(),
                 source: (String::new(), 0),
                 inner: other,
+                constraint: None,
             };
             registry.types.insert(path.clone(), wrapper);
             path
@@ -685,6 +779,7 @@ pub fn build<T: Schema + ?Sized>() -> SchemaFile {
         format: FORMAT,
         root,
         types: registry.types,
+        constraints: registry.constraints,
     }
 }
 
@@ -732,9 +827,9 @@ pub fn check_file<T: Schema + ?Sized>(path: impl AsRef<Path>) -> Result<(), Erro
 /// The defaults a schema records, for `&default` (`SPEC.md` 6.1.3).
 #[derive(Debug, Clone)]
 pub(crate) struct SchemaDefaults {
-    schema: SchemaFile,
+    pub(crate) schema: SchemaFile,
     /// The path of the root type, if not the schema's.
-    root: Option<String>,
+    pub(crate) root: Option<String>,
 }
 
 impl SchemaDefaults {
@@ -850,6 +945,32 @@ impl crol_eval::DefaultsProvider for SchemaDefaults {
 
     fn root_is_document(&self) -> bool {
         self.schema.data_root(self.root.as_deref()) == DataRoot::Document
+    }
+
+    fn has_constraints(&self) -> bool {
+        self.any_constraints()
+    }
+
+    fn broken_constraints(
+        &self,
+        key: &str,
+        value: &crate::Value,
+        root: &dyn Fn(&str) -> Option<crate::Value>,
+    ) -> Vec<(crate::Span, String)> {
+        self.broken(key, value, root)
+    }
+
+    fn has_sealed(&self) -> bool {
+        self.any_sealed()
+    }
+
+    fn changed_sealed(
+        &self,
+        key: &str,
+        before: &crate::Value,
+        after: &crate::Value,
+    ) -> Vec<Vec<String>> {
+        self.sealed(key, before, after)
     }
 }
 
@@ -1223,7 +1344,8 @@ impl Schema for SchemaFile {
     fn describe(registry: &mut Registry) -> TypeRef {
         registry.add(SCHEMA_PATH, |registry| {
             let types = string_map(registry.describe::<TypeDef>());
-            struct_def(
+            let constraints = string_map(registry.describe::<ConstraintDef>());
+            let mut definition = struct_def(
                 "Schema",
                 "A schema file: the Rust types data loads into, as tools see them. It is generated from those types, so change them rather than this file.",
                 vec![
@@ -1251,9 +1373,24 @@ impl Schema for SchemaFile {
                             FieldDefault::Required,
                         ),
                     ),
+                    (
+                        "constraints",
+                        field(
+                            constraints,
+                            "The constraints the program defines, by name (`SPEC.md` 10.12).",
+                            recorded_default(&BTreeMap::<String, String>::new()),
+                        ),
+                    ),
                 ],
                 None,
-            )
+            );
+            if let TypeDef::Struct {
+                explicit_defaults, ..
+            } = &mut definition
+            {
+                *explicit_defaults = Some(false);
+            }
+            definition
         })
     }
 }
@@ -1266,10 +1403,20 @@ impl Schema for TypeDef {
             let variants = string_map(registry.describe::<VariantDef>());
             let repr = registry.describe::<Repr>();
             let wrapped = || {
-                definition_fields(vec![(
-                    "inner",
-                    field(expr.clone(), "The wrapped type.", FieldDefault::Required),
-                )])
+                definition_fields(vec![
+                    (
+                        "inner",
+                        field(expr.clone(), "The wrapped type.", FieldDefault::Required),
+                    ),
+                    (
+                        "constraint",
+                        field(
+                            TypeExpr::Option(Box::new(TypeExpr::String)),
+                            "The constraint on the value, wherever the type is used.",
+                            none_value(),
+                        ),
+                    ),
+                ])
             };
             let shape = |fields| VariantShape::Struct(named(fields));
             enum_def(
@@ -1524,8 +1671,113 @@ impl Schema for Field {
                             recorded_default(&Vec::<String>::new()),
                         ),
                     ),
+                    (
+                        "constraint",
+                        field(
+                            TypeExpr::Option(Box::new(TypeExpr::String)),
+                            "The constraint on its value, or on what a collection holds (`#[crol(constraint = \"...\")]`).",
+                            none_value(),
+                        ),
+                    ),
+                    (
+                        "key_constraint",
+                        field(
+                            TypeExpr::Option(Box::new(TypeExpr::String)),
+                            "The constraint on a map's keys (`#[crol(key_constraint = \"...\")]`).",
+                            none_value(),
+                        ),
+                    ),
+                    (
+                        "sealed",
+                        field(
+                            TypeExpr::Bool,
+                            "`#[crol(sealed)]`: only the layer that defines a value can set this field (`SPEC.md` 10.13).",
+                            recorded_default(&false),
+                        ),
+                    ),
                 ],
                 None,
+            )
+        })
+    }
+}
+
+impl Schema for ConstraintDef {
+    fn describe(registry: &mut Registry) -> TypeRef {
+        registry.add("crol::schema::ConstraintDef", |registry| {
+            let constraint = registry.describe::<Constraint>();
+            struct_def(
+                "",
+                "A constraint in a schema, under its name.",
+                vec![
+                    (
+                        "constraint",
+                        field(constraint, "What it says.", FieldDefault::Required),
+                    ),
+                    (
+                        "sealed",
+                        field(
+                            TypeExpr::Bool,
+                            "Whether a `schema.crod` may not change it: one the program defines is, unless it is marked open (`SPEC.md` 10.12).",
+                            recorded_default(&false),
+                        ),
+                    ),
+                ],
+                None,
+            )
+        })
+    }
+}
+
+impl Schema for Constraint {
+    fn describe(registry: &mut Registry) -> TypeRef {
+        registry.add("crol::schema::Constraint", |_| {
+            let variant = |shape, doc: &str| VariantDef {
+                shape,
+                doc: doc.to_owned(),
+                aliases: Vec::new(),
+                explicit_defaults: None,
+            };
+            enum_def(
+                "Constraint",
+                "What a field's value must be (`SPEC.md` 10.12).",
+                vec![
+                    (
+                        "Min",
+                        variant(
+                            VariantShape::Newtype(TypeExpr::F64),
+                            "A number not below this.",
+                        ),
+                    ),
+                    (
+                        "Max",
+                        variant(
+                            VariantShape::Newtype(TypeExpr::F64),
+                            "A number not above this.",
+                        ),
+                    ),
+                    (
+                        "Range",
+                        variant(
+                            VariantShape::Tuple(vec![TypeExpr::F64, TypeExpr::F64]),
+                            "A number from the first to the second, inclusive.",
+                        ),
+                    ),
+                    (
+                        "OneOf",
+                        variant(
+                            VariantShape::Newtype(list(TypeExpr::Any)),
+                            "One of these values. A string, an id and a unit name count as their text.",
+                        ),
+                    ),
+                    (
+                        "Refers",
+                        variant(
+                            VariantShape::Newtype(list(TypeExpr::String)),
+                            "The id of a root value of one of these types.",
+                        ),
+                    ),
+                ],
             )
         })
     }

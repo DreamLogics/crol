@@ -484,8 +484,8 @@ pub struct CrolComposer<T = String> {
     loaded: HashSet<SourceId>,
     /// An error from `load_layer` or `with_variant`, reported by `compose`.
     error: Option<Error>,
-    /// The schema, for `&default`.
-    schema: Option<crol_eval::Defaults>,
+    /// The schema, for `&default`, constraints and sealed fields.
+    schema: Option<crate::schema::SchemaFile>,
     /// The schema's aliases and settings, for completeness.
     structs: Option<std::sync::Arc<de::Structs>>,
     /// The variants made active with `with_variant`.
@@ -611,7 +611,7 @@ impl<T: VariantName> CrolComposer<T> {
     /// `.schema(crol::schema::build::<Definition>())`.
     pub fn schema(mut self, schema: crate::schema::SchemaFile) -> Self {
         self.structs = Some(std::sync::Arc::new(de::Structs::from_schema(&schema)));
-        self.schema = Some(schema.defaults());
+        self.schema = Some(schema);
         self
     }
 
@@ -771,6 +771,29 @@ impl<T: VariantName> CrolComposer<T> {
                 documents,
             });
         }
+        // A layer's `schema.crod` changes the schema (`SPEC.md` 10.12).
+        let schema = match &self.schema {
+            Some(schema) => {
+                let (schema, found) = schema.patched(&mut sources, &layers);
+                if found.iter().any(Diagnostic::is_error) {
+                    return Err(Error::from_diagnostics(&sources, &found));
+                }
+                Some(schema.defaults())
+            }
+            None => {
+                let patched = layers
+                    .iter()
+                    .flat_map(|layer| &layer.documents)
+                    .any(|(path, _)| path == crol_eval::SCHEMA_DOCUMENT);
+                if patched {
+                    return Err(Error::new(format!(
+                        "composer: a layer has a `{}`, which needs a schema: `CrolComposer::schema`",
+                        crol_eval::SCHEMA_DOCUMENT
+                    )));
+                }
+                None
+            }
+        };
         let options = DataOptions::default()
             .with_warn_cross_file_patches(self.config.warn_cross_file_patches)
             .with_init_defaults(self.config.init_defaults)
@@ -779,7 +802,7 @@ impl<T: VariantName> CrolComposer<T> {
             .with_each_variant(self.config.each_variant)
             .with_max_contexts(self.config.max_contexts)
             .with_variant_keys(self.config.variant_keys)
-            .with_defaults(self.schema.clone());
+            .with_defaults(schema);
         let (compiled, mut diagnostics) = compile(&sources, &layers);
         let Some(compiled) = compiled else {
             return Err(Error::from_diagnostics(&sources, &diagnostics));

@@ -27,7 +27,15 @@ use syn::{
 ///   ids may name;
 /// - `#[crol(schema = OtherType)]` or `#[crol(schema = any)]` on a field:
 ///   describe it as another type with the same serialized shape, or as
-///   anything.
+///   anything;
+/// - `#[crol(constraint = "name")]` on a field, or on a newtype or transparent
+///   struct, and `#[crol(key_constraint = "name")]` on a map field: the
+///   constraint on its value, or on the map's keys;
+/// - `#[crol(constraints(name = Min(0)))]` on a type: define sealed
+///   constraints, and `#[crol(open_constraints(...))]` ones that a
+///   `schema.crod` may change;
+/// - `#[crol(sealed)]` on a field, or on a type for all of its fields: only
+///   the layer that defines a value can set it.
 #[proc_macro_derive(Schema, attributes(crol))]
 pub fn derive_schema(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -130,6 +138,51 @@ fn option_inner(ty: &Type) -> Option<&Type> {
 
 // ---- Attributes ----
 
+/// A `Constraint` from what `#[crol(constraints(...))]` writes: `Min(0)`,
+/// `Max(10)`, `Range(0, 10)`, `OneOf(["a", "b"])`, `Refers(Unit, Tech)`.
+fn constraint_expr(expr: &Expr) -> syn::Result<TokenStream2> {
+    let wrong = || {
+        Error::new(
+            expr.span(),
+            "expected `Min(n)`, `Max(n)`, `Range(a, b)`, `OneOf([...])` or `Refers(Type, ...)`",
+        )
+    };
+    let Expr::Call(call) = expr else {
+        return Err(wrong());
+    };
+    let Expr::Path(function) = &*call.func else {
+        return Err(wrong());
+    };
+    let name = function.path.get_ident().ok_or_else(wrong)?.to_string();
+    let args: Vec<&Expr> = call.args.iter().collect();
+    Ok(match (name.as_str(), args.as_slice()) {
+        ("Min", [n]) => quote!(::crol::schema::Constraint::Min((#n) as f64)),
+        ("Max", [n]) => quote!(::crol::schema::Constraint::Max((#n) as f64)),
+        ("Range", [a, b]) => {
+            quote!(::crol::schema::Constraint::Range((#a) as f64, (#b) as f64))
+        }
+        ("OneOf", [values]) => quote!(::crol::schema::Constraint::one_of(#values)),
+        ("Refers", types) if !types.is_empty() => {
+            let names = types
+                .iter()
+                .map(|ty| match ty {
+                    Expr::Path(path) => path
+                        .path
+                        .segments
+                        .last()
+                        .map(|s| s.ident.to_string())
+                        .ok_or_else(wrong),
+                    _ => Err(wrong()),
+                })
+                .collect::<syn::Result<Vec<String>>>()?;
+            quote!(::crol::schema::Constraint::Refers(
+                ::std::vec![#(::std::string::String::from(#names)),*]
+            ))
+        }
+        _ => return Err(wrong()),
+    })
+}
+
 /// The serde and crol attributes of a type, variant or field.
 #[derive(Default)]
 struct Attrs {
@@ -150,6 +203,15 @@ struct Attrs {
     defaults: bool,
     explicit_defaults: Option<bool>,
     refers: Vec<Path>,
+    /// `#[crol(constraint = "...")]`
+    constraint: Option<String>,
+    /// `#[crol(key_constraint = "...")]`
+    key_constraint: Option<String>,
+    /// `#[crol(sealed)]`
+    sealed: bool,
+    /// `#[crol(constraints(...))]` and `#[crol(open_constraints(...))]`:
+    /// the name, the `Constraint` expression, and whether it is sealed.
+    constraints: Vec<(String, TokenStream2, bool)>,
     /// `#[crol(schema = T)]`: `Some(Some(T))`; `#[crol(schema = any)]`:
     /// `Some(None)`.
     schema: Option<Option<Type>>,
@@ -254,6 +316,24 @@ impl Attrs {
                         } else {
                             true
                         });
+                    } else if path.is_ident("constraint") {
+                        out.constraint = Some(string_value(&meta)?);
+                    } else if path.is_ident("key_constraint") {
+                        out.key_constraint = Some(string_value(&meta)?);
+                    } else if path.is_ident("sealed") {
+                        out.sealed = true;
+                    } else if path.is_ident("constraints") || path.is_ident("open_constraints") {
+                        let sealed = path.is_ident("constraints");
+                        meta.parse_nested_meta(|inner| {
+                            let name = inner
+                                .path
+                                .get_ident()
+                                .ok_or_else(|| inner.error("expected the constraint's name"))?
+                                .to_string();
+                            let expr: Expr = inner.value()?.parse()?;
+                            out.constraints.push((name, constraint_expr(&expr)?, sealed));
+                            Ok(())
+                        })?;
                     } else if path.is_ident("refers") {
                         let content;
                         syn::parenthesized!(content in meta.input);
@@ -498,7 +578,8 @@ fn schema(input: &DeriveInput) -> syn::Result<TokenStream2> {
                         ))
                     }
                     Fields::Named(_) => {
-                        let fields = named_fields(&variant.fields, None, false, false)?;
+                        let fields =
+                            named_fields(&variant.fields, None, false, false, attrs.sealed)?;
                         quote!(::crol::schema::VariantShape::Struct(#fields))
                     }
                 };
@@ -538,12 +619,17 @@ fn schema(input: &DeriveInput) -> syn::Result<TokenStream2> {
         }
     };
 
+    let constraints = attrs.constraints.iter().map(
+        |(name, constraint, sealed)| quote!(registry.constraint(#name, #constraint, #sealed);),
+    );
+
     Ok(quote! {
         impl #impl_generics ::crol::schema::Schema for #ident #ty_generics #where_clause {
             fn describe(registry: &mut ::crol::schema::Registry) -> ::crol::schema::TypeRef {
                 let path = #path;
                 registry.add(&path, |registry| {
                     let _ = &registry;
+                    #(#constraints)*
                     #definition
                 })
             }
@@ -585,6 +671,7 @@ fn named_fields(
     rule: Option<&str>,
     defaults: bool,
     struct_default: bool,
+    sealed: bool,
 ) -> syn::Result<TokenStream2> {
     let mut entries = Vec::new();
     for field in fields {
@@ -611,6 +698,9 @@ fn named_fields(
         let doc = &attrs.doc;
         let aliases = &attrs.aliases;
         let flatten = attrs.flatten;
+        let constraint = option_string(attrs.constraint.as_deref());
+        let key_constraint = option_string(attrs.key_constraint.as_deref());
+        let field_sealed = sealed || attrs.sealed;
         entries.push(quote! {
             (::std::string::String::from(#name), ::crol::schema::Field {
                 ty: #ty,
@@ -619,10 +709,23 @@ fn named_fields(
                 default: #default,
                 flatten: #flatten,
                 refers: ::std::vec::Vec::new(),
+                constraint: #constraint,
+                key_constraint: #key_constraint,
+                sealed: #field_sealed,
             })
         });
     }
     Ok(quote!(::std::iter::IntoIterator::into_iter([#(#entries),*]).collect()))
+}
+
+/// `Some(String::from(text))` or `None`, as an expression.
+fn option_string(text: Option<&str>) -> TokenStream2 {
+    match text {
+        Some(text) => {
+            quote!(::std::option::Option::Some(::std::string::String::from(#text)))
+        }
+        None => quote!(::std::option::Option::None),
+    }
 }
 
 fn struct_definition(
@@ -634,6 +737,14 @@ fn struct_definition(
 ) -> syn::Result<TokenStream2> {
     let name_expr = quote!(::std::string::String::from(#name));
     let doc_expr = quote!(::std::string::String::from(#doc));
+    let constraint = option_string(attrs.constraint.as_deref());
+    let wraps = attrs.transparent || matches!(fields, Fields::Unnamed(f) if f.unnamed.len() == 1);
+    if attrs.constraint.is_some() && !wraps {
+        return Err(Error::new(
+            Span::call_site(),
+            "`constraint` on a type goes on a newtype or transparent struct; on another type, put it on its fields",
+        ));
+    }
     Ok(match fields {
         Fields::Unit => quote! {
             ::crol::schema::TypeDef::UnitStruct { name: #name_expr, doc: #doc_expr, source: #source }
@@ -646,7 +757,7 @@ fn struct_definition(
                 .ok_or_else(|| Error::new(named.span(), "a transparent struct needs a field"))?;
             let inner = field_type(&Attrs::parse(&field.attrs)?, &field.ty)?;
             quote! {
-                ::crol::schema::TypeDef::Transparent { name: #name_expr, doc: #doc_expr, source: #source, inner: #inner }
+                ::crol::schema::TypeDef::Transparent { name: #name_expr, doc: #doc_expr, source: #source, inner: #inner, constraint: #constraint }
             }
         }
         Fields::Named(_) => {
@@ -655,6 +766,7 @@ fn struct_definition(
                 attrs.rename_all.as_deref(),
                 attrs.defaults,
                 attrs.default.is_some(),
+                attrs.sealed,
             )?;
             let deny = attrs.deny_unknown_fields;
             let default = if attrs.defaults && matches!(attrs.default, Some(None)) {
@@ -689,13 +801,13 @@ fn struct_definition(
                 (1, true) => {
                     let inner = &types[0];
                     quote! {
-                        ::crol::schema::TypeDef::Transparent { name: #name_expr, doc: #doc_expr, source: #source, inner: #inner }
+                        ::crol::schema::TypeDef::Transparent { name: #name_expr, doc: #doc_expr, source: #source, inner: #inner, constraint: #constraint }
                     }
                 }
                 (1, false) => {
                     let inner = &types[0];
                     quote! {
-                        ::crol::schema::TypeDef::Newtype { name: #name_expr, doc: #doc_expr, source: #source, inner: #inner }
+                        ::crol::schema::TypeDef::Newtype { name: #name_expr, doc: #doc_expr, source: #source, inner: #inner, constraint: #constraint }
                     }
                 }
                 _ => quote! {

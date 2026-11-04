@@ -143,6 +143,11 @@ Serde's attributes are understood: `rename`, `rename_all`, `alias`, `default`,
 | `#[crol(refers(Service, Volume))]` | an id field | which root types its ids may name, also in lists, options and maps |
 | `#[crol(schema = OtherType)]`    | a field    | describe it as a type with the same serialized shape        |
 | `#[crol(schema = any)]`          | a field    | accept anything here, unchecked                             |
+| `#[crol(constraint = "name")]`   | a field, newtype | [the constraint on its value](#constraints)           |
+| `#[crol(key_constraint = "name")]` | a map field | the constraint on its keys                                 |
+| `#[crol(constraints(name = Min(0)))]` | a type | define sealed constraints                                  |
+| `#[crol(open_constraints(...))]` | a type     | define constraints that layers may change                   |
+| `#[crol(sealed)]`                | a field, type | [only the layer that defines a value can set it](#sealed-fields) |
 
 Use `schema = ...` for a field whose type has no `Schema`, such as a type from
 another crate, and for fields with `#[serde(with = "...")]`, which the derive
@@ -478,6 +483,118 @@ of what it holds. A step with no default stays an error.
 an error, with `crol::from_str`, `crol::from_str_with_schema`, a `.crol` file given
 to `crol` and in the language server alike. There, and in data with no schema at
 all, it reports `defaults come from a schema, and no schema is given`.
+
+## Constraints
+
+A type says what kind of value a field holds. A _constraint_ says more, such as a
+range, or a set of values. Your types name constraints, and either define them or
+leave that to the data:
+
+```rust
+// src/lib.rs
+use std::collections::BTreeMap;
+
+use serde::Deserialize;
+
+#[derive(Deserialize, crol::Schema)]
+#[crol(constraints(positive = Min(0)))]
+#[crol(open_constraints(channel = OneOf(["voice", "music"])))]
+pub struct Unit {
+    #[crol(constraint = "positive")]
+    pub hp: i32,
+    #[crol(constraint = "channel")]
+    pub channels: Vec<String>,
+    #[crol(key_constraint = "stat")]
+    pub bonuses: BTreeMap<String, i32>,
+}
+```
+
+| Constraint              | Holds for                                                |
+| ----------------------- | -------------------------------------------------------- |
+| `Min(n)`, `Max(n)`      | a number not below, or not above, `n`                    |
+| `Range(a, b)`           | a number from `a` to `b`, inclusive                      |
+| `OneOf(["a", "b"])`     | one of these; a string, an id and a unit name count as their text |
+| `Refers(Type)`          | an id or string naming a root value of that type         |
+
+On an `Option`, list or map, a constraint is on what it holds, and `key_constraint`
+is on a map's keys. `#[crol(constraint = "...")]` on a newtype holds wherever the
+type is used. Constraints are checked on the final value, in every context:
+
+```console
+$ crol check
+error: -1 is below 0, the minimum of `positive`
+  ┌─ data/local/overrides.crod:2:7
+  │
+2 │ web.hp: -1
+  │         ^^
+```
+
+### Constraints in the data
+
+A schema is generated, so you do not edit it. To define or extend a constraint,
+write a file called `schema.crod` at the root of a layer. It is not data, and it can
+hold only `constraints`:
+
+```crol
+// data/base/schema.crod
+constraints: {
+    stat: OneOf(["hit_points", "speed"]),
+}
+```
+
+This is how a game engine can name a constraint and leave its values to the game. A
+higher layer builds on the ones below, like any data, so an extension can add to a
+set:
+
+```crol
+// extensions/shields/schema.crod
+constraints.stat: OneOf(& + ["shields"])
+```
+
+A constraint from `#[crol(constraints(...))]` is _sealed_: your program relies on it,
+so changing it in a `schema.crod` is an error. Use `open_constraints` for one that
+layers may change. A name that nothing defines is an error too.
+
+`CrolComposer`, `crol` and your editor read these files by themselves, given a schema.
+
+## Sealed fields
+
+Some fields only make sense where a value is defined, such as an id into another
+file. `#[crol(sealed)]` says that only the layer that defines a value can set the
+field. On a type, it seals all of its fields.
+
+```rust
+// src/lib.rs
+use serde::Deserialize;
+
+#[derive(Deserialize, crol::Schema)]
+pub struct Tech {
+    #[crol(sealed)]
+    pub original: u32,
+    pub name: String,
+}
+```
+
+```crol
+// data/base/techs.crod
++armour: Tech { original: 12, name: "Armour" }
+```
+
+```crol
+// data/mod/changes.crod
+armour.name: "Better armour"   // fine
+armour.original: 13            // error
++shields: Tech { original: 99, name: "Shields" }   // fine: this layer defines it
+```
+
+```console
+$ crol check
+error: `armour.original` is sealed: only the layer that defines `armour` (`base`) can set it
+```
+
+The check compares values, so it does not matter how the value changed: through a
+path, by defining the key again, or through a reference to something a higher layer
+changed. Your editor leaves sealed fields out of completion in higher layers.
 
 ## What else the loader learns from a schema
 

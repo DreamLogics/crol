@@ -11,6 +11,16 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Added
 
+- Constraints (`SPEC.md` 10.12): `#[crol(constraint = "...")]` and `key_constraint`
+  name one, `#[crol(constraints(...))]` and `open_constraints` define `Min`, `Max`,
+  `Range`, `OneOf` and `Refers`, and a `schema.crod` at the root of a layer defines
+  and extends them. `crol check`, `CrolComposer` and the language server enforce them.
+  The schema file format gains `constraints`, and fields gain `constraint`,
+  `key_constraint` and `sealed`, all optional.
+- Sealed fields (`SPEC.md` 10.13): with `#[crol(sealed)]`, only the layer that defines
+  a value can set the field, however a higher layer would change it. Hover shows
+  constraints and sealed fields, and completion leaves sealed fields out above the
+  defining layer.
 - Views and queries (`SPEC.md` 10.11): `#[derive(crol::View)]` reads fields by path,
   `CrolData::distinct` and `variations` give a key's distinct values across contexts,
   and `CrolData::query` chooses keys by type or by what they hold.
@@ -35,6 +45,10 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   as a value that is no block does. To keep the old meaning, write `^key` or `~^`
   (`SPEC.md` 5.2, 6.4). Data that relied on the old meaning changes value, and so
   does its fingerprint.
+- **Breaking:** `&` in an element of a tuple, or of a named tuple of the same name
+  as the value below, reads the same position of it, so `OneOf(& + ["x"])` adds to
+  the list in the `OneOf` below. Below any other value it is still that whole value
+  (`SPEC.md` 6.1).
 - **Breaking:** `&` in an entry with nothing below where it was written, as in a
   template, reads the value below where the entry lands, so a template can be a
   patch: `stronger := { hp: & + 5 }`, `unit: & ~ &stronger` (`SPEC.md` 6.1).

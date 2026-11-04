@@ -55,6 +55,24 @@ pub(crate) fn block_fields<'a>(
     shape_struct(schema, shape).map(|fields| (schema, fields))
 }
 
+/// A field's doc, with what constrains it (`SPEC.md` 12.5).
+pub(crate) fn field_doc(field: &crol::schema::Field) -> String {
+    let mut parts = Vec::new();
+    if !field.doc.trim().is_empty() {
+        parts.push(field.doc.trim().to_owned());
+    }
+    if let Some(name) = &field.constraint {
+        parts.push(format!("Constraint: `{name}`"));
+    }
+    if let Some(name) = &field.key_constraint {
+        parts.push(format!("Keys: `{name}`"));
+    }
+    if field.sealed {
+        parts.push("Sealed: only the layer that defines this value can set it.".to_owned());
+    }
+    parts.join("\n\n")
+}
+
 /// What hover says of a place: the doc and the type of what is there.
 pub(crate) struct About {
     /// The doc: of the field the place is in, else, where it is in none, of
@@ -435,7 +453,7 @@ fn field_step(
     depth: usize,
 ) -> Option<(TypeExpr, Option<String>)> {
     if let Some(found) = field(fields, name).filter(|f| !f.flatten) {
-        return Some((found.ty.clone(), Some(found.doc.clone())));
+        return Some((found.ty.clone(), Some(field_doc(found))));
     }
     fields
         .values()

@@ -568,6 +568,44 @@ impl Completer<'_> {
     /// The fields of a place, each with its doc. Accepting one writes the
     /// value it has now, if any, else a placeholder; only its name when a
     /// `:` is there already.
+    /// Whether a layer below this document's has the root key of a place.
+    /// It looks at the text, since a document being edited rarely evaluates.
+    fn defined_below(&self, place: &Place<'_>) -> bool {
+        let Some(PathStep::Field(key)) = place.path.as_ref().and_then(|path| path.first()) else {
+            return false;
+        };
+        let snapshot = self.snapshot;
+        let holds_this = |layer: &crol_eval::Layer| {
+            layer
+                .documents
+                .iter()
+                .any(|(_, file)| Some(*file) == self.file)
+        };
+        let Some(this) = snapshot.layers.iter().position(holds_this) else {
+            return false;
+        };
+        snapshot.layers[..this]
+            .iter()
+            .flat_map(|layer| &layer.documents)
+            .map(|(_, file)| snapshot.sources.file(*file).text())
+            .filter(|text| text.contains(key.as_str()))
+            .any(|text| {
+                crol_syntax::parse(text).document().entries().any(|entry| {
+                    let target = match &entry {
+                        ast::AnyEntry::Entry(entry) => entry.target(),
+                        ast::AnyEntry::Remove(entry) => entry.target(),
+                        _ => None,
+                    };
+                    target.is_some_and(|target| {
+                        let text = target.syntax().text().to_string();
+                        text == *key
+                            || text.starts_with(&format!("{key}."))
+                            || text.starts_with(&format!("{key}<"))
+                    })
+                })
+            })
+    }
+
     fn fields(&self, place: &Place<'_>, written: &[String]) -> Vec<CompletionItem> {
         let (Some(schema), Some(shape)) = (
             self.snapshot.schema_for(self.file).map(|s| s.file),
@@ -575,9 +613,13 @@ impl Completer<'_> {
         ) else {
             return Vec::new();
         };
-        schema::fields_of(schema, &shape)
+        let fields = schema::fields_of(schema, &shape);
+        // A layer above the one that defines a value cannot set a sealed
+        // field of it (`SPEC.md` 10.13).
+        let sealed = fields.iter().any(|(_, field)| field.sealed) && self.defined_below(place);
+        fields
             .iter()
-            .filter(|(name, _)| !written.contains(name))
+            .filter(|(name, field)| !written.contains(name) && !(sealed && field.sealed))
             .map(|(name, field)| {
                 let current = place.path.as_ref().and_then(|path| {
                     let (key, rest) = match path.split_first() {
@@ -605,7 +647,7 @@ impl Completer<'_> {
                         CompletionItemKind::FIELD,
                         Some(schema::rust_type(schema, &field.ty)),
                     ),
-                    &field.doc,
+                    &schema::field_doc(field),
                 );
                 item.insert_text = Some(if self.before_colon {
                     written_name

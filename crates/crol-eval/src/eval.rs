@@ -247,6 +247,15 @@ enum Below {
     /// With `init_defaults`: what this is, or where that is missing, the
     /// default there (`SPEC.md` 5.1).
     Defaulted(Rc<DefaultedBelow>),
+    /// Below an element of a tuple or named tuple (`SPEC.md` 6.1).
+    Element(Rc<ElementBelow>),
+}
+
+struct ElementBelow {
+    below: Below,
+    /// The named tuple's name; `None` for a tuple.
+    name: Option<Arc<str>>,
+    index: usize,
 }
 
 struct DefaultedBelow {
@@ -264,6 +273,7 @@ impl Below {
             Below::Value(_) => false,
             Below::Select(inner, _) => inner.is_nothing(),
             Below::Defaulted(defaulted) => defaulted.below.is_nothing(),
+            Below::Element(element) => element.below.is_nothing(),
         }
     }
 }
@@ -397,7 +407,7 @@ fn names_agree(a: &Option<Arc<str>>, b: &Option<Arc<str>>) -> bool {
 }
 
 /// The field a selector names, if it names one.
-fn selector_field(selector: &Selector) -> Option<String> {
+pub(crate) fn selector_field(selector: &Selector) -> Option<String> {
     match &selector.kind {
         SelectorKind::Field(name) => Some(name.to_string()),
         _ => None,
@@ -487,6 +497,8 @@ pub(crate) struct Evaluator<'ir> {
     defaults: Option<&'ir dyn DefaultsProvider>,
     /// Whether paths start from the defaults of the fields left out.
     init_defaults: bool,
+    /// Whether a block as a root key's value merges with the value below.
+    merge_root: bool,
     /// Every cell that starts pending. Cells can hold each other in a
     /// cycle (a value bind never read holds its job, whose binds hold the
     /// cell; `a: &self` holds itself), so their states are cleared when
@@ -561,6 +573,36 @@ pub trait DefaultsProvider: std::fmt::Debug + Send + Sync {
         self.default_of(type_name, path)
     }
 
+    /// Whether [`broken_constraints`](Self::broken_constraints) has anything
+    /// to check.
+    fn has_constraints(&self) -> bool {
+        false
+    }
+
+    /// What is wrong with a root key's value by the constraints on its
+    /// fields (`SPEC.md` 10.12): where, and why. `root` gives a root key's
+    /// value in the same context.
+    fn broken_constraints(
+        &self,
+        _key: &str,
+        _value: &Value,
+        _root: &dyn Fn(&str) -> Option<Value>,
+    ) -> Vec<(Span, String)> {
+        Vec::new()
+    }
+
+    /// Whether [`changed_sealed`](Self::changed_sealed) has anything to check.
+    fn has_sealed(&self) -> bool {
+        false
+    }
+
+    /// The paths of the sealed fields of a root key that differ between its
+    /// value after the layer that defines it and its final value
+    /// (`SPEC.md` 10.13), each as field names.
+    fn changed_sealed(&self, _key: &str, _before: &Value, _after: &Value) -> Vec<Vec<String>> {
+        Vec::new()
+    }
+
     /// Whether the root type is the whole of a data-mode document, so that a
     /// root key is the first step of a path from it, rather than the type
     /// of each root value (`SPEC.md` 4.1).
@@ -628,6 +670,7 @@ pub(crate) fn evaluate(ir: &Ir, root: ExprId) -> (Option<Value>, Vec<Diagnostic>
         base_created: Vec::new(),
         defaults: None,
         init_defaults: false,
+        merge_root: false,
         cells: RefCell::new(Vec::new()),
     };
     let root_cell = Rc::new(Cell {
@@ -673,6 +716,7 @@ pub enum VariantKeys {
 }
 
 /// What data evaluation needs besides the IR.
+#[derive(Clone, Copy)]
 pub(crate) struct DataInput<'a> {
     pub(crate) ops: &'a [RootOp],
     pub(crate) templates: &'a [BindId],
@@ -690,6 +734,7 @@ pub(crate) struct DataInput<'a> {
     pub(crate) evaluate_every_key: bool,
     pub(crate) defaults: Option<&'a dyn DefaultsProvider>,
     pub(crate) init_defaults: bool,
+    pub(crate) merge_root: bool,
 }
 
 /// The evaluated data: the variants (declared, or found in the data), the
@@ -924,6 +969,7 @@ pub(crate) fn evaluate_data(
         base_created: Vec::new(),
         defaults: input.defaults,
         init_defaults: input.init_defaults,
+        merge_root: input.merge_root,
         cells: RefCell::new(Vec::new()),
     };
     // Errors in the static structure of the chains are reported once.
@@ -1184,6 +1230,7 @@ pub(crate) fn explain(
         base_created: Vec::new(),
         defaults: input.defaults,
         init_defaults: input.init_defaults,
+        merge_root: input.merge_root,
         cells: RefCell::new(Vec::new()),
     };
     let id = evaluator.context_state(&context);
@@ -1856,7 +1903,9 @@ impl Evaluator<'_> {
                                 here: Some(here.clone()),
                                 below: below.clone(),
                                 outer_below: below,
-                                merge: false,
+                                merge: self.merge_root
+                                    && !op.replace
+                                    && self.is_block(op.value.expect("a set has a value")),
                                 vbinds: vbinds.clone(),
                                 context,
                             },
@@ -2281,15 +2330,15 @@ impl Evaluator<'_> {
                 self.block(*block, start, true, env, span)
             }
             ExprKind::List(elements) => {
-                let cells = self.elements(elements, env);
+                let cells = self.elements(elements, env, None);
                 Self::shaped(Shape::List(cells), span)
             }
             ExprKind::Tuple(elements) => {
-                let cells = self.elements(elements, env);
+                let cells = self.elements(elements, env, Some(None));
                 Self::shaped(Shape::Tuple(cells), span)
             }
             ExprKind::Named(name, elements) => {
-                let cells = self.elements(elements, env);
+                let cells = self.elements(elements, env, Some(Some(name)));
                 Self::shaped(Shape::Named(name.clone(), cells), span)
             }
             ExprKind::Path(base, selectors)
@@ -2344,14 +2393,31 @@ impl Evaluator<'_> {
     }
 
     /// Cells for list, tuple and named tuple elements, at `[i]` or `.i`.
-    fn elements(&mut self, elements: &[ExprId], env: &Env) -> Vec<Lazy> {
+    /// `positional` says that `&` in an element reads the same position of
+    /// a tuple (`Some(None)`), or a named tuple of this name, below it.
+    fn elements(
+        &mut self,
+        elements: &[ExprId],
+        env: &Env,
+        positional: Option<Option<&Arc<str>>>,
+    ) -> Vec<Lazy> {
+        let positional = positional.filter(|_| !env.below.is_nothing());
         elements
             .iter()
             .enumerate()
             .map(|(i, &element)| {
                 let here = child_location(&env.here, Step::Index(i));
+                let below = match positional {
+                    Some(name) => Below::Element(Rc::new(ElementBelow {
+                        below: env.below.clone(),
+                        name: name.cloned(),
+                        index: i,
+                    })),
+                    None => env.below.clone(),
+                };
                 let env = Env {
                     here: here.clone(),
+                    below,
                     outer_below: Below::Missing,
                     ..env.clone()
                 };
@@ -2533,6 +2599,19 @@ impl Evaluator<'_> {
                     result => result,
                 }
             }
+            Below::Element(element) => {
+                let cell = self.resolve_below(&element.below, span)?;
+                let value = self.force(&cell, span)?;
+                let items = match (&value.shape, &element.name) {
+                    (Shape::Named(name, items), Some(wanted)) if name == wanted => items,
+                    (Shape::Tuple(items), None) => items,
+                    // Of another shape, it is the value below as a whole.
+                    _ => return Ok(cell),
+                };
+                items.get(element.index).cloned().ok_or_else(|| {
+                    Fail::Missing(span, "&: there is no value below here".to_owned())
+                })
+            }
             Below::Defaulted(defaulted) => match self.resolve_below(&defaulted.below, span) {
                 Err(Fail::Missing(at, message)) => match self.default_cell(defaulted, span) {
                     Some(cell) => Ok(cell),
@@ -2631,7 +2710,7 @@ impl Evaluator<'_> {
                 Some((name, path))
             }
             Below::Defaulted(defaulted) => self.type_path(&defaulted.below, span),
-            Below::Missing | Below::Value(_) => None,
+            Below::Missing | Below::Value(_) | Below::Element(_) => None,
         }
     }
 

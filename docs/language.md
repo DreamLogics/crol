@@ -264,6 +264,24 @@ b: { limits: { cpu: 2.0 }, port: 80 }
 A block of another type replaces too, which is how you change an enum's struct
 variant: `shape: Square { side: 2 }` over a `Circle`.
 
+Inside a tuple, or a named tuple of the same name, `&` reads the same position of
+the value below, so you can change what one holds without taking it apart:
+
+```crol
+// example.crod
++colour: Rgb(10, 20, 30)
++armour: Some(5)
+
+colour: Rgb(& + 1, &, 0)
+armour: Some(& + 1)
+```
+
+```console
+$ crol eval example.crod
+colour: Rgb(11, 20, 0)
+armour: Some(6)
+```
+
 ## References
 
 References read other values. They all start with `&`:
