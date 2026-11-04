@@ -239,9 +239,9 @@ impl Parser<'_> {
             self.skip_trivia()?;
             let key_pos = self.pos;
             let key = match self.value()?.kind {
-                ValueKind::String(s) => Key::Str(s),
+                ValueKind::String(s) => Key::Str(s.into()),
                 ValueKind::Int(i) => Key::Int(i),
-                ValueKind::UnitName(name) => Key::Str(name),
+                ValueKind::UnitName(name) => Key::Str(name.into()),
                 other => {
                     return Err((
                         key_pos,
@@ -278,7 +278,7 @@ impl Parser<'_> {
                 self.skip_trivia()?;
                 let field = self.identifier()?;
                 self.expect(':')?;
-                entries.insert(Key::Str(field), self.value()?);
+                entries.insert(Key::Str(field.into()), self.value()?);
                 if !self.eat(',')? {
                     self.expect(')')?;
                     break;

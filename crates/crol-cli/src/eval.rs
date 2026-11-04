@@ -196,6 +196,9 @@ fn select<'v>(root: &'v Value, path: &str) -> Result<&'v Value, String> {
     let ValueKind::Keyed(keyed) = &root.kind else {
         return Err(missing());
     };
-    let value = keyed.entries.get(&Key::Str(key)).ok_or_else(missing)?;
+    let value = keyed
+        .entries
+        .get(&Key::Str(key.into()))
+        .ok_or_else(missing)?;
     crol_eval::value_at_path(value, &steps).ok_or_else(missing)
 }

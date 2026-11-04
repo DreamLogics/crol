@@ -1093,7 +1093,7 @@ impl<T: VariantName> CrolData<T> {
 
     /// A root key's value in a context, without building the whole root.
     fn key_in(&self, key: &str, context: &Context) -> Option<&Value> {
-        let key = Key::Str(key.to_owned());
+        let key = Key::Str(key.into());
         match self.changes_in(context) {
             Some(data) => data.get(&self.base, &key),
             None if context.is_base() => Self::keyed(&self.base).entries.get(&key),
@@ -1246,7 +1246,7 @@ impl<T: VariantName> CrolData<T> {
                 .entries
                 .keys()
                 .filter_map(|k| match k {
-                    Key::Str(s) => Some(s.clone()),
+                    Key::Str(s) => Some(s.to_string()),
                     Key::Int(_) => None,
                 })
                 .collect(),

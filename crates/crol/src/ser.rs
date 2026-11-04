@@ -409,7 +409,7 @@ impl<'c> MapSerializer<'c> {
         let v = v.serialize(ValueSerializer {
             config: self.config,
         })?;
-        self.entries.insert(Key::Str(key.to_owned()), v);
+        self.entries.insert(Key::Str(key.into()), v);
         Ok(())
     }
 
@@ -572,7 +572,7 @@ impl ser::Serializer for KeySerializer {
     }
 
     fn serialize_str(self, v: &str) -> Result<Key, Error> {
-        Ok(Key::Str(v.to_owned()))
+        Ok(Key::Str(v.into()))
     }
 
     fn serialize_bytes(self, _: &[u8]) -> Result<Key, Error> {
@@ -601,7 +601,7 @@ impl ser::Serializer for KeySerializer {
         _: u32,
         variant: &'static str,
     ) -> Result<Key, Error> {
-        Ok(Key::Str(variant.to_owned()))
+        Ok(Key::Str(variant.into()))
     }
 
     fn serialize_newtype_struct<T: Serialize + ?Sized>(

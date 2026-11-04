@@ -183,10 +183,7 @@ impl<'a> ValueDeserializer<'a> {
         Self {
             value,
             context,
-            path: Rc::new(PathNode::Key(
-                Rc::new(PathNode::Root),
-                Key::Str(key.to_owned()),
-            )),
+            path: Rc::new(PathNode::Key(Rc::new(PathNode::Root), Key::Str(key.into()))),
             variant: None,
         }
     }
@@ -288,7 +285,7 @@ impl<'a> ValueDeserializer<'a> {
                         .error(format!("`{name}` has named fields; the key {i} is not one")));
                 }
             };
-            if !self.context.options.allow_unknown_fields && !fields.contains(&field.as_str()) {
+            if !self.context.options.allow_unknown_fields && !fields.contains(&field.as_ref()) {
                 let mut message = format!("`{name}` has no field `{field}`");
                 if !fields.is_empty() {
                     let _ = write!(message, "; its fields are `{}`", fields.join("`, `"));
@@ -306,7 +303,7 @@ impl<'a> ValueDeserializer<'a> {
             .unwrap_or(options.require_complete);
         if explicit && !keyed.defaults {
             let present = |f: &str| {
-                let key = Key::Str(f.to_owned());
+                let key = Key::Str(f.into());
                 keyed.entries.contains_key(&key) || keyed.defaulted.contains(&key)
             };
             // A field is written when one of its names is.
@@ -820,8 +817,7 @@ impl<'a> de::Deserializer<'a> for KeyDeserializer<'_, 'a> {
         visitor: V,
     ) -> Result<V::Value, Error> {
         match self.key {
-            Key::Str(s) => s
-                .as_str()
+            Key::Str(s) => (&**s)
                 .into_deserializer()
                 .deserialize_enum(name, variants, visitor),
             Key::Int(i) => Err(Error::new(format!(

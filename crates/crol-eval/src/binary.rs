@@ -124,7 +124,7 @@ impl Writer<'_> {
             }
             Key::Str(s) => {
                 self.out.push(1);
-                self.string(&Arc::from(s.as_str()));
+                self.string(s);
             }
         }
     }
@@ -589,7 +589,7 @@ impl Reader<'_> {
     fn key(&mut self) -> Read<Key> {
         match self.byte()? {
             0 => self.int().map(Key::Int),
-            1 => self.string().map(|s| Key::Str(s.to_string())),
+            1 => self.string().map(Key::Str),
             _ => Err(Corrupt),
         }
     }

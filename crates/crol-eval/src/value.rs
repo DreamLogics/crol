@@ -2,6 +2,7 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
+use std::sync::Arc;
 
 use indexmap::IndexMap;
 
@@ -13,8 +14,9 @@ use crate::source::Span;
 pub enum Key {
     /// An integer key: `12: "a"`, `[-3]: "a"`.
     Int(i128),
-    /// A string key: `port: 80`, `"cache url": 1`.
-    Str(String),
+    /// A string key: `port: 80`, `"cache url": 1`. Values with the same
+    /// field share its name.
+    Str(Arc<str>),
 }
 
 /// A borrowed [`Key`], for looking up entries without allocating. It hashes
@@ -29,7 +31,7 @@ impl indexmap::Equivalent<Key> for KeyRef<'_> {
     fn equivalent(&self, key: &Key) -> bool {
         match (self, key) {
             (KeyRef::Int(a), Key::Int(b)) => a == b,
-            (KeyRef::Str(a), Key::Str(b)) => *a == b,
+            (KeyRef::Str(a), Key::Str(b)) => *a == &**b,
             _ => false,
         }
     }

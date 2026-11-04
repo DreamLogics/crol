@@ -331,7 +331,7 @@ enum Step {
 /// The step a selector takes; `None` for a context selector.
 fn selector_step(selector: &Selector) -> Option<Step> {
     match &selector.kind {
-        SelectorKind::Field(name) => Some(Step::Key(Key::Str(name.to_string()))),
+        SelectorKind::Field(name) => Some(Step::Key(Key::Str(name.clone()))),
         SelectorKind::Element(i) => Some(Step::Index(*i)),
         SelectorKind::Accessor(i) => Some(Step::Accessor(*i)),
         SelectorKind::Context(_) => None,
@@ -423,7 +423,7 @@ pub(crate) fn selector_field(selector: &Selector) -> Option<String> {
 
 fn key_selector(key: &Key, span: Span) -> Selector {
     let kind = match key {
-        Key::Str(s) => SelectorKind::Field(Arc::from(s.as_str())),
+        Key::Str(s) => SelectorKind::Field(s.clone()),
         Key::Int(i) => SelectorKind::Accessor(*i),
     };
     Selector { kind, span }
@@ -1079,7 +1079,7 @@ pub(crate) fn evaluate_data(
         for (key, slot) in &slots {
             let base_value = base_keyed.entries.get(key);
             let name = match key {
-                Key::Str(name) => name.as_str(),
+                Key::Str(name) => &**name,
                 Key::Int(_) => "",
             };
             if let (Some(varying), Some(_)) = (&varying, base_value)
@@ -1308,7 +1308,7 @@ fn explain_key(
     context: &Context,
     id: usize,
 ) -> Vec<ExplainStep> {
-    let Some(key_plan) = plan.keys.get(key) else {
+    let Some((key, key_plan)) = plan.keys.get_key_value(key) else {
         return Vec::new();
     };
     let order = plan.chain(key_plan, context);
@@ -1345,7 +1345,7 @@ fn explain_key(
             Some(SetOp::Ensure) => "?".to_owned(),
             Some(SetOp::Set) => String::new(),
         };
-        entry.push_str(&Key::Str(key.to_owned()).to_string());
+        entry.push_str(&Key::Str(key.clone()).to_string());
         if let Some(condition) = &op.condition {
             entry.push_str(&format!("<{condition}>"));
         }
@@ -1800,7 +1800,7 @@ impl Evaluator<'_> {
             if let Some((varying, base_slots, base_defaulted)) = &shared
                 && !varying.contains(key)
             {
-                let key = Key::Str(key.to_string());
+                let key = Key::Str(key.clone());
                 if let Some((position, _, slot)) = base_slots.get_full(&key) {
                     slots.push((self.base_created[position], key, slot.clone()));
                 } else if base_defaulted.contains(&key) {
@@ -1819,9 +1819,9 @@ impl Evaluator<'_> {
                 if id == 0 && self.evict && self.diagnostics.len() == diagnostics_before {
                     slot.value = self.key_cell(key, &slot.value, cells_before);
                 }
-                slots.push((created, Key::Str(key.to_string()), slot));
+                slots.push((created, Key::Str(key.clone()), slot));
             } else if !order.is_empty() {
-                defaulted.insert(Key::Str(key.to_string()));
+                defaulted.insert(Key::Str(key.clone()));
             }
         }
         // Keys are in the order they were created, by layer and position.
@@ -1865,11 +1865,11 @@ impl Evaluator<'_> {
 
     /// Applies the chain of a root key of the base, and runs its last
     /// operation here, as the job of the key's cell.
-    fn run_key(&mut self, key: &str) -> Eval<Rc<Shaped>> {
+    fn run_key(&mut self, key: &Arc<str>) -> Eval<Rc<Shaped>> {
         let plan = self.plan.expect("only data mode has root keys");
         self.remade = true;
         let base = &self.contexts[0];
-        let order = plan.chain(&plan.keys[key], &base.context);
+        let order = plan.chain(&plan.keys[&**key], &base.context);
         let (root, chain, templates) = (
             base.root.clone(),
             base.chain.clone(),
@@ -1916,7 +1916,7 @@ impl Evaluator<'_> {
             };
             if !self.window_escaped
                 && self.diagnostics.len() == diagnostics_before
-                && !dependents.contains_key(name.as_str())
+                && !dependents.contains_key(name)
                 && matches!(&*slot.value.state.borrow(), State::Done(_))
             {
                 self.evict_key(name, &slot.value, cells_before);
@@ -1939,8 +1939,8 @@ impl Evaluator<'_> {
 
     /// Frees what a root key computed: its cell starts again, and the cells
     /// since `cells_before` are its own.
-    fn evict_key(&mut self, key: &str, cell: &Lazy, cells_before: usize) {
-        *cell.state.borrow_mut() = State::Pending(Box::new(Job::Key(Arc::from(key))));
+    fn evict_key(&mut self, key: &Arc<str>, cell: &Lazy, cells_before: usize) {
+        *cell.state.borrow_mut() = State::Pending(Box::new(Job::Key(key.clone())));
         for cell in self.cells.get_mut().drain(cells_before..) {
             *cell.state.borrow_mut() = State::Running;
         }
@@ -1952,12 +1952,12 @@ impl Evaluator<'_> {
         &self,
         root: &Location,
         root_chain: &Chain,
-        key: &str,
+        key: &Arc<str>,
         blocks: &[Vec<Selector>],
     ) -> Chain {
         let mut chain = root_chain.clone();
         for path in blocks.iter().rev() {
-            let mut location = root.child(Step::Key(Key::Str(key.to_owned())));
+            let mut location = root.child(Step::Key(Key::Str(key.clone())));
             for step in path.iter().filter_map(selector_step) {
                 location = location.child(step);
             }
@@ -1975,7 +1975,7 @@ impl Evaluator<'_> {
     /// final value, if the key exists, and the operation that created it.
     fn apply_chain(
         &mut self,
-        key: &str,
+        key: &Arc<str>,
         order: &[usize],
         root_chain: &Chain,
         root: &Location,
@@ -1983,7 +1983,7 @@ impl Evaluator<'_> {
         context: usize,
     ) -> Option<(usize, Slot)> {
         let ops = self.plan.expect("data mode").ops;
-        let here = root.child(Step::Key(Key::Str(key.to_owned())));
+        let here = root.child(Step::Key(Key::Str(key.clone())));
         let mut value: Option<(usize, Lazy)> = None;
         for &i in order {
             let op = &ops[i];
@@ -2002,7 +2002,7 @@ impl Evaluator<'_> {
                 let Some((created, base)) = value.clone().or(filled) else {
                     let mut target = match op.op {
                         None => format!("-{key}"),
-                        Some(SetOp::Set) => key.to_owned(),
+                        Some(SetOp::Set) => key.to_string(),
                         Some(set) => format!("{}{key}", set.symbol()),
                     };
                     for selector in &op.path {
@@ -2909,7 +2909,7 @@ impl Evaluator<'_> {
             steps
                 .iter()
                 .map(|step| match step {
-                    Step::Key(Key::Str(name)) => Some(name.clone()),
+                    Step::Key(Key::Str(name)) => Some(name.to_string()),
                     _ => None,
                 })
                 .collect()
@@ -3317,13 +3317,13 @@ impl Evaluator<'_> {
     ) -> Eval<Rc<Shaped>> {
         let (selector, rest) = path.split_first().expect("a path entry has a path");
         let step = match (&value.shape, &selector.kind) {
-            (Shape::Keyed(_), SelectorKind::Field(name)) => Step::Key(Key::Str(name.to_string())),
+            (Shape::Keyed(_), SelectorKind::Field(name)) => Step::Key(Key::Str(name.clone())),
             (Shape::Keyed(_), SelectorKind::Accessor(i)) => Step::Key(Key::Int(*i)),
             (_, SelectorKind::Accessor(i)) => {
                 Step::Index(usize::try_from(*i).unwrap_or(usize::MAX))
             }
             (_, SelectorKind::Element(i)) => Step::Index(*i),
-            (_, SelectorKind::Field(name)) => Step::Key(Key::Str(name.to_string())),
+            (_, SelectorKind::Field(name)) => Step::Key(Key::Str(name.clone())),
             (_, SelectorKind::Context(_)) => {
                 return Err(self.fail(selector.span, "internal error: a condition in a path"));
             }
@@ -3384,7 +3384,7 @@ impl Evaluator<'_> {
         match (&value.shape, &selector.kind) {
             (Shape::Keyed(keyed), SelectorKind::Field(_) | SelectorKind::Accessor(_)) => {
                 let key = match &selector.kind {
-                    SelectorKind::Field(name) => Key::Str(name.to_string()),
+                    SelectorKind::Field(name) => Key::Str(name.clone()),
                     SelectorKind::Accessor(i) => Key::Int(*i),
                     SelectorKind::Element(_) | SelectorKind::Context(_) => unreachable!(),
                 };
@@ -3482,7 +3482,7 @@ impl Evaluator<'_> {
         let shape = match (&value.shape, &selector.kind) {
             (Shape::Keyed(keyed), kind) => {
                 let key = match kind {
-                    SelectorKind::Field(name) => Key::Str(name.to_string()),
+                    SelectorKind::Field(name) => Key::Str(name.clone()),
                     SelectorKind::Accessor(i) => Key::Int(*i),
                     SelectorKind::Element(i) => Key::Int(*i as i128),
                     SelectorKind::Context(_) => {

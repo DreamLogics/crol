@@ -168,7 +168,7 @@ impl Walker<'_> {
         };
         for key in keyed.entries.keys() {
             let kind = match key {
-                Key::Str(text) => ValueKind::String(text.clone()),
+                Key::Str(text) => ValueKind::String(text.to_string()),
                 Key::Int(i) => ValueKind::Int(*i),
             };
             self.apply(
@@ -202,7 +202,7 @@ impl Walker<'_> {
         for (name, field) in fields {
             if field.flatten {
                 self.value(&field.ty, value);
-            } else if let Some(entry) = keyed.entries.get(&Key::Str(name.clone())) {
+            } else if let Some(entry) = keyed.entries.get(&Key::Str(name.as_str().into())) {
                 self.field(field, entry);
             }
         }
@@ -458,7 +458,7 @@ impl SchemaFile {
         };
         let mut result = BTreeMap::new();
         for (key, value) in root.entries {
-            if key != Key::Str("constraints".to_owned()) {
+            if key != Key::Str("constraints".into()) {
                 diagnostics.push(Diagnostic::error(
                     value.span,
                     format!("a `schema.crod` holds only `constraints`, not `{key}`"),
@@ -561,7 +561,7 @@ impl SchemaDefaults {
                 self.sealed_in(&field.ty, before, after, path, found);
                 continue;
             }
-            let key = Key::Str(name.clone());
+            let key = Key::Str(name.as_str().into());
             let (old, new) = (a.entries.get(&key), b.entries.get(&key));
             path.push(name.clone());
             if field.sealed {

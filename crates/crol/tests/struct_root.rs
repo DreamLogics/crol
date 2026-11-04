@@ -445,7 +445,7 @@ fn fill_defaults_fills_the_root() {
     let crol_eval::ValueKind::Keyed(keyed) = &filled.kind else {
         panic!("the root is keyed")
     };
-    let retries = &keyed.entries[&crol_eval::Key::Str("retries".to_owned())];
+    let retries = &keyed.entries[&crol_eval::Key::Str("retries".into())];
     assert!(matches!(retries.kind, crol_eval::ValueKind::Int(3)));
     // Every field is written now.
     assert!(!keyed.defaults);

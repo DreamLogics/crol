@@ -81,9 +81,7 @@ fn at_path<'v>(value: &'v Value, path: &[&str]) -> Option<&'v Value> {
             ValueKind::Keyed(keyed) => keyed,
             _ => return None,
         };
-        value = keyed
-            .entries
-            .get(&crol_eval::Key::Str((*step).to_owned()))?;
+        value = keyed.entries.get(&crol_eval::Key::Str((*step).into()))?;
     }
     Some(unwrap_some(value))
 }

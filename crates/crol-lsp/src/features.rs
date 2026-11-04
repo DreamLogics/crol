@@ -420,7 +420,7 @@ fn reference_path(token: &SyntaxToken) -> Option<(String, Vec<PathStep>)> {
 }
 
 pub(crate) fn describe_path(key: &str, path: &[PathStep]) -> String {
-    let mut out = Key::Str(key.to_owned()).to_string();
+    let mut out = Key::Str(key.into()).to_string();
     for step in path {
         match step {
             PathStep::Field(name) if crol_eval::is_identifier(name) => {
@@ -483,7 +483,7 @@ pub(crate) fn value_in(
     let ValueKind::Keyed(keyed) = &root.kind else {
         return None;
     };
-    crol_eval::value_at_path(keyed.entries.get(&Key::Str(key.to_owned()))?, path).cloned()
+    crol_eval::value_at_path(keyed.entries.get(&Key::Str(key.into()))?, path).cloned()
 }
 
 /// A value on one line, in code: nothing for what does not fit on one.
@@ -759,7 +759,7 @@ pub(crate) fn definition(
         &snapshot.sources,
         layers,
         options,
-        &Key::Str(key).to_string(),
+        &Key::Str(key.into()).to_string(),
         &[],
     )
     .ok()?;

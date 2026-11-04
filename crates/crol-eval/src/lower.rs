@@ -2,7 +2,7 @@
 //! reading errors: attributes, binds and their scopes, and the forms of
 //! variant selectors.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crol_syntax::SyntaxKind;
@@ -79,6 +79,7 @@ pub(crate) fn lower_data_over(
     let mut lowerer = Lowerer {
         file: documents.first().map_or(FileId::default(), |d| d.file),
         ir,
+        names: HashSet::new(),
         diagnostics: Vec::new(),
         scopes: Vec::new(),
         aliases: HashMap::new(),
@@ -210,6 +211,8 @@ struct Scope {
 struct Lowerer {
     file: FileId,
     ir: Ir,
+    /// Every name so far, so that each is held once.
+    names: HashSet<Arc<str>>,
     diagnostics: Vec<Diagnostic>,
     scopes: Vec<Scope>,
     /// `use(path as Alias)`: alias to the type name it stands for.
@@ -299,7 +302,7 @@ fn field_names(path: &[Selector]) -> Vec<Arc<str>> {
 
 fn key_selector(key: &Key, span: Span) -> Selector {
     let kind = match key {
-        Key::Str(s) => SelectorKind::Field(Arc::from(s.as_str())),
+        Key::Str(s) => SelectorKind::Field(s.clone()),
         Key::Int(i) => SelectorKind::Accessor(*i),
     };
     Selector { kind, span }
@@ -380,6 +383,7 @@ pub(crate) fn lower_value_document(
     let mut lowerer = Lowerer {
         file,
         ir: Ir::default(),
+        names: HashSet::new(),
         diagnostics: Vec::new(),
         scopes: Vec::new(),
         aliases: HashMap::new(),
@@ -519,7 +523,7 @@ impl Lowerer {
             return;
         };
         let key: Arc<str> = match key {
-            Key::Str(key) => Arc::from(key),
+            Key::Str(key) => key,
             Key::Int(i) => {
                 self.error(
                     span,
@@ -660,7 +664,7 @@ impl Lowerer {
         let saved_reach = std::mem::take(&mut self.reach);
         let mut entry_target = self.block_target.clone();
         if let Key::Str(key) = &key {
-            entry_target.path.push(Arc::from(key.as_str()));
+            entry_target.path.push(key.clone());
         }
         entry_target.path.extend(field_names(&path));
         let saved_target = std::mem::replace(&mut self.default_target, entry_target);
@@ -732,6 +736,16 @@ impl Lowerer {
         Some((key, path))
     }
 
+    /// The one copy of a name.
+    fn name(&mut self, name: &str) -> Arc<str> {
+        if let Some(name) = self.names.get(name) {
+            return name.clone();
+        }
+        let name: Arc<str> = Arc::from(name);
+        self.names.insert(name.clone());
+        name
+    }
+
     fn span(&self, node: &crol_syntax::SyntaxNode) -> Span {
         Span::new(self.file, node.text_range())
     }
@@ -749,8 +763,11 @@ impl Lowerer {
         self.ir.add_expr(ExprKind::Error, span)
     }
 
-    fn resolve_type_name(&self, name: &str) -> Arc<str> {
-        Arc::from(self.aliases.get(name).map_or(name, String::as_str))
+    fn resolve_type_name(&mut self, name: &str) -> Arc<str> {
+        match self.aliases.get(name).cloned() {
+            Some(alias) => self.name(&alias),
+            None => self.name(name),
+        }
     }
 
     // ---- Attributes (`SPEC.md` 4.1) ----
@@ -977,7 +994,7 @@ impl Lowerer {
                     let target_span = self.span(target.syntax());
                     let mut entry_target = block_target.clone();
                     if let Key::Str(key) = &key {
-                        entry_target.path.push(Arc::from(key.as_str()));
+                        entry_target.path.push(key.clone());
                     }
                     entry_target.path.extend(field_names(&path));
                     self.default_target = entry_target;
@@ -1088,9 +1105,9 @@ impl Lowerer {
         } else {
             let token = key_node.token()?;
             match token.kind() {
-                SyntaxKind::IDENT => Key::Str(token.text().to_owned()),
+                SyntaxKind::IDENT => Key::Str(self.name(token.text())),
                 SyntaxKind::STRING | SyntaxKind::RAW_STRING => {
-                    Key::Str(literal::string(token.text()))
+                    Key::Str(self.name(&literal::string(token.text())))
                 }
                 SyntaxKind::INT => match literal::int(token.text(), false) {
                     Ok(value) => Key::Int(value),
@@ -1115,7 +1132,7 @@ impl Lowerer {
                     None
                 }
             },
-            _ => Some(Key::Str(literal::string(token.text()))),
+            _ => Some(Key::Str(self.name(&literal::string(token.text())))),
         }
     }
 
@@ -1131,7 +1148,7 @@ impl Lowerer {
         for selector in selectors {
             let span = self.span(selector.syntax());
             let kind = match &selector {
-                ast::Selector::Field(field) => SelectorKind::Field(Arc::from(field.name()?.text())),
+                ast::Selector::Field(field) => SelectorKind::Field(self.name(field.name()?.text())),
                 ast::Selector::Index(index) => {
                     let token = index.index()?;
                     match token.text().parse() {
@@ -1143,7 +1160,7 @@ impl Lowerer {
                     }
                 }
                 ast::Selector::Accessor(accessor) => match self.accessor_key(accessor)? {
-                    Key::Str(s) => SelectorKind::Field(Arc::from(s)),
+                    Key::Str(s) => SelectorKind::Field(s),
                     Key::Int(i) => SelectorKind::Accessor(i),
                 },
                 ast::Selector::Variant(variant) => match usage {
@@ -1202,7 +1219,8 @@ impl Lowerer {
                     SyntaxKind::IDENT => name.text().to_owned(),
                     _ => literal::string(name.text()),
                 };
-                self.ir.add_expr(ExprKind::Id(Arc::from(text)), span)
+                let text = self.name(&text);
+                self.ir.add_expr(ExprKind::Id(text), span)
             }
             ast::Expr::Reference(reference) => self.reference(reference, span),
             ast::Expr::Block(block) => {
@@ -1448,7 +1466,7 @@ impl Lowerer {
                         if let Some((target, key, _)) = scope.entry_binds.get(name) {
                             let mut path = vec![Selector {
                                 kind: match key {
-                                    Key::Str(s) => SelectorKind::Field(Arc::from(s.as_str())),
+                                    Key::Str(s) => SelectorKind::Field(s.clone()),
                                     Key::Int(i) => SelectorKind::Accessor(*i),
                                 },
                                 span,

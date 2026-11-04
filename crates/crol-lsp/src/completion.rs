@@ -144,7 +144,7 @@ fn type_paths(snapshot: &Snapshot, file: Option<FileId>) -> Vec<String> {
         .entries
         .keys()
         .filter_map(|key| match key {
-            crol_eval::Key::Str(path) => Some(path.clone()),
+            crol_eval::Key::Str(path) => Some(path.to_string()),
             crol_eval::Key::Int(_) => None,
         })
         .collect()

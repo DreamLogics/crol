@@ -57,7 +57,7 @@ pub fn key_fingerprints(
             }
         }
         let name = match key {
-            Key::Str(name) => name.clone(),
+            Key::Str(name) => name.to_string(),
             Key::Int(i) => i.to_string(),
         };
         found.insert(name, *blake3::hash(&out).as_bytes());

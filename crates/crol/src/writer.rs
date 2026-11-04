@@ -160,7 +160,7 @@ impl DataWriter {
 /// A root key as a target: a key that is no identifier is quoted, and one
 /// that reads as an integer stays a string.
 fn root_key(key: &str) -> String {
-    Key::Str(key.to_owned()).to_string()
+    Key::Str(key.into()).to_string()
 }
 
 /// Whether `~` merges `b` into `a`, rather than `b` replacing it.

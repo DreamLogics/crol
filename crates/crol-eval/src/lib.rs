@@ -19,6 +19,8 @@
 
 #![forbid(unsafe_code)]
 
+use std::sync::Arc;
+
 use indexmap::IndexMap;
 
 pub mod binary;
@@ -685,7 +687,7 @@ fn check_sealed(
             _ => None,
         };
         for (key, _) in first_layer.iter().filter(|(_, first)| **first == layer) {
-            let root_key = Key::Str((*key).to_owned());
+            let root_key = Key::Str(Arc::from(*key));
             let mut pairs = vec![(keyed(&below_base, &root_key), keyed(base, &root_key))];
             for data in &result.contexts {
                 let then = below.contexts.iter().find(|b| b.context == data.context);
@@ -732,17 +734,17 @@ fn check_constraints(
         return;
     };
     let name_of = |key: &Key| match key {
-        Key::Str(name) => name.clone(),
+        Key::Str(name) => name.to_string(),
         Key::Int(i) => i.to_string(),
     };
-    let in_base = |name: &str| keyed.entries.get(&Key::Str(name.to_owned())).cloned();
+    let in_base = |name: &str| keyed.entries.get(&value::KeyRef::Str(name)).cloned();
     for (key, value) in &keyed.entries {
         for (span, message) in defaults.broken_constraints(&name_of(key), value, &in_base) {
             diagnostics.push(Diagnostic::error(span, message));
         }
     }
     for data in contexts {
-        let in_context = |name: &str| data.get(base, &Key::Str(name.to_owned())).cloned();
+        let in_context = |name: &str| data.get(base, &Key::Str(Arc::from(name))).cloned();
         for (key, change) in &data.changes {
             let Some(value) = change else { continue };
             for (span, message) in defaults.broken_constraints(&name_of(key), value, &in_context) {

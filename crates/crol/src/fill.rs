@@ -171,13 +171,13 @@ impl Filler<'_> {
         let written = |keyed: &Keyed, name: &str, field: &Field| {
             std::iter::once(name)
                 .chain(field.aliases.iter().map(String::as_str))
-                .any(|n| keyed.entries.contains_key(&Key::Str(n.to_owned())))
+                .any(|n| keyed.entries.contains_key(&Key::Str(n.into())))
         };
         for (name, field) in fields {
             if field.flatten || written(keyed, name, field) {
                 continue;
             }
-            let key = Key::Str(name.clone());
+            let key = Key::Str(name.as_str().into());
             if !keyed.defaults
                 && explicit_defaults != Some(false)
                 && !keyed.defaulted.contains(&key)
@@ -203,9 +203,11 @@ impl Filler<'_> {
                 continue;
             }
             let Key::Str(name) = key else { continue };
-            let field = fields
-                .get(name)
-                .or_else(|| fields.values().find(|f| f.aliases.contains(name)));
+            let field = fields.get(&**name).or_else(|| {
+                fields
+                    .values()
+                    .find(|f| f.aliases.iter().any(|a| **a == **name))
+            });
             if let Some(field) = field {
                 self.value(item, &field.ty, None, depth + 1);
             }

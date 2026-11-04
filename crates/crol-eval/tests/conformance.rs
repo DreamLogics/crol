@@ -86,7 +86,7 @@ fn options(case: &Path) -> DataOptions {
         let Key::Str(key) = key else {
             panic!("integer key in options.crol")
         };
-        match (key.as_str(), &value.kind) {
+        match (&*key, &value.kind) {
             ("warn_cross_file_patches", ValueKind::Bool(b)) => options.warn_cross_file_patches = *b,
             ("max_contexts", ValueKind::Int(i)) => options.max_contexts = *i as usize,
             ("variant_keys", ValueKind::UnitName(rule)) => {

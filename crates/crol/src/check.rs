@@ -46,7 +46,7 @@ pub struct DataView<'a> {
 
 impl<'a> DataView<'a> {
     fn value(&self, key: &str, context: Option<&'a ContextData>) -> Option<&'a Value> {
-        let key = Key::Str(key.to_owned());
+        let key = Key::Str(key.into());
         match context {
             Some(data) => data.get(self.base, &key),
             None => match &self.base.kind {
@@ -63,7 +63,7 @@ impl<'a> DataView<'a> {
                 .entries
                 .keys()
                 .filter_map(|k| match k {
-                    Key::Str(s) => Some(s.clone()),
+                    Key::Str(s) => Some(s.to_string()),
                     Key::Int(_) => None,
                 })
                 .collect(),
@@ -372,9 +372,11 @@ impl Checker<'_> {
                         );
                         continue;
                     };
-                    let field = fields
-                        .get(field_name)
-                        .or_else(|| fields.values().find(|f| f.aliases.contains(field_name)));
+                    let field = fields.get(&**field_name).or_else(|| {
+                        fields
+                            .values()
+                            .find(|f| f.aliases.iter().any(|a| **a == **field_name))
+                    });
                     match field {
                         Some(field) => self.value(item, &field.ty, &join(path, field_name), None),
                         None if self.options.allow_unknown_fields || flattened => {}
@@ -401,7 +403,7 @@ impl Checker<'_> {
                 let names = |f: &'_ str, field: &Field| -> Vec<Key> {
                     std::iter::once(f.to_owned())
                         .chain(field.aliases.iter().cloned())
-                        .map(Key::Str)
+                        .map(|name| Key::Str(name.into()))
                         .collect()
                 };
                 let written = |f: &str, field: &Field| {
