@@ -372,6 +372,15 @@ impl SchemaFile {
             .map(|(path, def)| (path.as_str(), def))
     }
 
+    /// Where `&default` finds its values in this schema (`SPEC.md` 6.1.3),
+    /// for tools that evaluate with
+    /// [`DataOptions::with_defaults`](crol_eval::DataOptions::with_defaults).
+    /// [`CrolComposer::schema`](crate::CrolComposer::schema) does this for an
+    /// application.
+    pub fn defaults(&self) -> crol_eval::Defaults {
+        crol_eval::Defaults(std::sync::Arc::new(SchemaDefaults(self.clone())))
+    }
+
     /// Reads a schema file. It is a value document, so a `.crod` or `.crol`
     /// file is an error (`SPEC.md` 4).
     pub fn read(path: impl AsRef<Path>) -> Result<Self, Error> {

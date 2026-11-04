@@ -387,3 +387,66 @@ fn init_refuses_a_project_crol() {
     );
     assert!(!dir.join("project.crov").exists());
 }
+
+const DEFAULTS_SCHEMA: &str = r#"Schema {
+    format: 1,
+    root: "app::Service",
+    types: {
+        "app::Service": Struct {
+            name: "Service",
+            source: ("src/lib.rs", 1),
+            fields: { replicas: { ty: U32, default: Value(3), .. } },
+            ..
+        },
+        "app::Config": Struct {
+            name: "Config",
+            source: ("src/lib.rs", 2),
+            fields: { port: { ty: U16, .. }, host: { ty: String, default: Value("h"), .. } },
+            ..
+        },
+    },
+}"#;
+
+#[test]
+fn default_reads_the_schema_tools_have() {
+    let data = "+web: Service { replicas: &default * 2, .. }\n";
+    let dir = tree(
+        "default",
+        &[
+            ("schema.crov", DEFAULTS_SCHEMA),
+            ("given.crod", data),
+            ("named.crod", &format!("#![schema(schema)]\n\n{data}")),
+            (
+                "project.crov",
+                "Project { layers: List([{ name: \"d\", dir: \"data\", .. }]), schema: Some(\"schema\"), .. }",
+            ),
+            ("data/a.crod", data),
+        ],
+    );
+    let args = ["eval", "given.crod", "--schema", "schema.crov"];
+    let output = crol(&dir, &args);
+    assert!(stdout(&output).contains("replicas: 6"), "{output:?}");
+    let output = crol(&dir, &["eval", "named.crod"]);
+    assert!(stdout(&output).contains("replicas: 6"), "{output:?}");
+    let output = crol(&dir, &["eval"]);
+    assert!(stdout(&output).contains("replicas: 6"), "{output:?}");
+    let output = crol(&dir, &["check"]);
+    assert!(output.status.success(), "{output:?}");
+
+    // With no schema at all, it stays an error.
+    let output = crol(&dir, &["check", "given.crod"]);
+    assert!(!output.status.success(), "{output:?}");
+    assert!(stderr(&output).contains("no schema is given"), "{output:?}");
+}
+
+const FILES_PROJECT: &str = r#"Project {
+    layers: List([{ name: "d", dir: "data", .. }]),
+    schema: Some("schema"),
+    files: [
+        { glob: "config::special", type: "app::Service" },
+        { glob: "config::**::*", type: "Config" },
+    ],
+    ..
+}"#;
+
+

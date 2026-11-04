@@ -210,7 +210,9 @@ the document, or make it agree.
 
 **`&default: defaults come from a schema, and no schema is given`**
 
-`&default` works only in your program, through `CrolComposer::schema`. See
+There is no schema to read the default from. Give your program the schema with
+`CrolComposer::schema`, and tools one with `--schema`, `schema` in `project.crov`
+or `#![schema(...)]`. A value-mode document never has defaults. See
 [the limits](schemas.md#using-default).
 
 **`` schema: `fleet` is not cached, and fetching schemas is off ``**

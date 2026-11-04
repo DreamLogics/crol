@@ -262,14 +262,23 @@ impl Snapshot {
 
 /// Evaluates a `.crod` document that is in no layer, as a layer of its own.
 /// What it builds on is not loaded, so this reports what `crol check` does
-/// for the file alone.
-fn evaluate_alone(sources: &Sources, file: FileId, options: &DataOptions) -> Evaluation {
+/// for the file alone. `&default` reads the document's schema, not the
+/// project's (`SPEC.md` 6.1.3).
+fn evaluate_alone(
+    sources: &Sources,
+    file: FileId,
+    options: &DataOptions,
+    schema: Option<&SchemaFile>,
+) -> Evaluation {
     let name = sources.file(file).name().to_owned();
     let layer = Layer {
         name: name.clone(),
         documents: vec![(name, file)],
     };
-    crol_eval::evaluate_data(sources, &[layer], options)
+    let options = options
+        .clone()
+        .with_defaults(schema.map(SchemaFile::defaults));
+    crol_eval::evaluate_data(sources, &[layer], &options)
 }
 
 /// Puts a problem on the file to blame, or the project file, so that the
@@ -342,6 +351,11 @@ pub(crate) fn evaluate(
         }
     }
     if !snapshot.layers.is_empty() {
+        // `&default` reads the project's schema (`SPEC.md` 6.1.3).
+        snapshot.options = snapshot
+            .options
+            .clone()
+            .with_defaults(snapshot.schema.as_ref().map(SchemaFile::defaults));
         snapshot.evaluation =
             crol_eval::evaluate_data(&snapshot.sources, &snapshot.layers, &snapshot.options);
         if let (Some(schema), Some(base)) = (&snapshot.schema, &snapshot.evaluation.value) {
@@ -373,10 +387,6 @@ pub(crate) fn evaluate(
             continue;
         }
         let mode = Mode::of_path(path).unwrap_or(Mode::Value);
-        let evaluation = match mode {
-            Mode::Data => evaluate_alone(&snapshot.sources, file, &snapshot.options),
-            Mode::Value => crol_eval::evaluate_value(&snapshot.sources, file),
-        };
         // The project file has the schema `crol` provides (`SPEC.md` 12.4).
         let is_project_file = project_path
             .as_ref()
@@ -393,6 +403,13 @@ pub(crate) fn evaluate(
                 .or(path.parent())
                 .unwrap_or(Path::new("."));
             document_schema(text, path, root_dir, remote, &mut snapshot.remote)
+        };
+        let evaluation = match mode {
+            Mode::Data => {
+                let own = schema.as_ref().and_then(|s| s.as_ref().ok());
+                evaluate_alone(&snapshot.sources, file, &snapshot.options, own)
+            }
+            Mode::Value => crol_eval::evaluate_value(&snapshot.sources, file),
         };
         match schema {
             Some(Ok(schema)) => {

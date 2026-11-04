@@ -38,6 +38,9 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   patches, and its own variants are completed. A problem with the project is now
   shown on the file to blame.
 - `crol --init` writes `project.crov` and `data/base/main.crod`.
+- `&default` works in `crol` and in the language server, not only through
+  `CrolComposer::schema`: they read defaults from the schema they check against
+  (`SPEC.md` 6.1.3). `SchemaFile::defaults` gives them to a tool of your own.
 - `CrolLayer::without_file` is gone: `FileLoaders::with_project_file` names the
   one `.crov` file a layer's directory may hold.
 

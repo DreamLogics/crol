@@ -2385,3 +2385,123 @@ fn an_open_crol_file_says_to_rename_it() {
     assert!(message.contains("`.crod`") && message.contains("`.crov`"));
     client.stop();
 }
+
+// ---- What a document builds on: `extends`, `files`, failed layers ----
+
+/// Opens `text` as `uri` without waiting for anything.
+fn open_text(client: &Client, uri: &str, text: &str) {
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": uri, "languageId": "crol", "version": 1, "text": text } }),
+    );
+}
+
+/// Whether a diagnostic's message holds `text`.
+fn says(diagnostics: &[Value], text: &str) -> bool {
+    diagnostics
+        .iter()
+        .any(|d| d["message"].as_str().unwrap().contains(text))
+}
+
+
+
+
+
+
+
+/// A schema with a default, and a type for `files`.
+const DEFAULTS_SCHEMA: &str = r#"Schema {
+    format: 1,
+    root: "app::Service",
+    types: {
+        "app::Service": Struct {
+            name: "Service",
+            source: ("src/lib.rs", 1),
+            fields: {
+                replicas: { ty: U32, default: Value(3), .. },
+                name: { ty: String, default: Value("x"), .. },
+            },
+            ..
+        },
+        "app::Config": Struct {
+            name: "Config",
+            source: ("src/lib.rs", 2),
+            fields: { port: { ty: U16, doc: "The port.", .. } },
+            ..
+        },
+    },
+}"#;
+
+
+
+/// A project of three layers, the middle one's directory as given.
+fn three_layers(name: &str, middle: &[(&str, &str)], middle_dir: &str) -> PathBuf {
+    let project = format!(
+        r#"Project {{ layers: List([
+            {{ name: "base", dir: "base", .. }},
+            {{ name: "middle", dir: "{middle_dir}", .. }},
+            {{ name: "top", dir: "top", .. }},
+        ]), .. }}"#
+    );
+    let mut files = vec![
+        ("project.crov", project.as_str()),
+        ("base/a.crod", "+web: { port: 80 }\n"),
+        ("top/a.crod", "web.port: & + 1\n+db: 2\n"),
+    ];
+    files.extend_from_slice(middle);
+    workspace(name, &files)
+}
+
+
+
+
+#[test]
+fn default_reads_the_project_schema() {
+    let project = r#"Project {
+        layers: List([{ name: "base", dir: "data", .. }]),
+        schema: Some("schema"),
+        ..
+    }"#;
+    let text = "+web: Service { replicas: &default * 2, .. }\n";
+    let dir = workspace(
+        "lsp-default-project",
+        &[
+            ("project.crov", project),
+            ("schema.crov", DEFAULTS_SCHEMA),
+            ("data/a.crod", text),
+        ],
+    );
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "data/a.crod");
+    let hover = buffer.hover(
+        &mut client,
+        "+web: Service { repl|icas: &default * 2, .. }\n",
+    );
+    assert!(hover.contains("`6`"), "{hover}");
+    client.stop();
+}
+
+#[test]
+fn default_reads_the_schema_of_a_document_on_its_own() {
+    let text = "#![schema(schema)]\n\n+web: Service { replicas: &default * 2, .. }\n";
+    let dir = workspace(
+        "lsp-default-alone",
+        &[
+            ("schema.crov", DEFAULTS_SCHEMA),
+            ("a.crod", text),
+            ("b.crod", ""),
+        ],
+    );
+    let client = Client::start(&dir);
+    let file = uri(&dir.join("a.crod"));
+    open_text(&client, &file, text);
+    client.diagnostics_for(&file, |d| d.is_empty());
+
+    // Without a schema it stays an error.
+    let plain = uri(&dir.join("b.crod"));
+    open_text(&client, &plain, "+web: &default\n");
+    client.diagnostics_for(&plain, |d| says(d, "no schema is given"));
+    client.stop();
+}
+
+

@@ -956,11 +956,14 @@ struct):
 - **Where defaults come from.** From the schema (section 10.9), which
   records them for types with `#[crol(defaults)]`. The loader needs the
   schema for this: `CrolComposer::schema(crol::schema::build::<Definition>())`.
-  Tools read them from the schema file.
+  Tools read them from the schema file they check against: the CLI from
+  `--schema`, the project's, or the one the documents name, and the language
+  server from the project's for a layer, and for a document on its own from
+  the one it names (section 12.5). Value mode has no defaults.
 - **Missing.** A field without a default, a type without recorded
   defaults, or a target whose type cannot be found makes `&default`
   *missing*, so `&default | 1` falls back (section 6.5). Without a
-  schema at all, `&default` is an error.
+  schema at all, and in value mode, `&default` is an error.
 - **Fixed.** Defaults depend neither on layers nor on the context, so
   `&default` is evaluated once per target and never takes part in a
   cycle.
