@@ -1,0 +1,1 @@
+1-base/a.crod:5:6: `Config` has no field `foo`; its fields are `name`, `items`, `options`, `retries`, `note`

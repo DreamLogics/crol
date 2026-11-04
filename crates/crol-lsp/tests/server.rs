@@ -529,8 +529,14 @@ fn code_actions_fix_what_the_diagnostics_say() {
                 "schema.crov",
                 r#"Schema {
                     format: 1,
-                    root: "app::Service",
+                    root: "app::Services",
                     types: {
+                        "app::Services": Transparent {
+                            name: "Services",
+                            source: ("src/lib.rs", 2),
+                            inner: Map(String, Named("app::Service")),
+                            ..
+                        },
                         "app::Service": Struct {
                             name: "Service",
                             source: ("src/lib.rs", 1),
@@ -2588,8 +2594,14 @@ fn a_layer_of_a_project_is_evaluated_on_what_it_extends() {
 /// A schema with a default, and a type for `files`.
 const DEFAULTS_SCHEMA: &str = r#"Schema {
     format: 1,
-    root: "app::Service",
+    root: "app::Services",
     types: {
+        "app::Services": Transparent {
+            name: "Services",
+            source: ("src/lib.rs", 3),
+            inner: Map(String, Named("app::Service")),
+            ..
+        },
         "app::Service": Struct {
             name: "Service",
             source: ("src/lib.rs", 1),
@@ -3061,6 +3073,14 @@ fn generated_schema() -> String {
         .unwrap()
 }
 
+/// The schema of data where each root value is a `Config`: a map, as a struct
+/// root type would be the whole document (`SPEC.md` 4.1).
+fn generated_data_schema() -> String {
+    crol::schema::build::<indexmap::IndexMap<String, generated::Config>>()
+        .to_text()
+        .unwrap()
+}
+
 const GENERATED_PROJECT: &str = r#"Project {
     layers: List([
         { name: "base", dir: "base", read_only: true },
@@ -3260,7 +3280,7 @@ fn hover_in_data_shows_the_doc_of_the_field() {
 ";
     let dir = workspace(
         "lsp-hover-data",
-        &[("crol/schema.crov", &generated_schema()), ("a.crod", text)],
+        &[("crol/schema.crov", &generated_data_schema()), ("a.crod", text)],
     );
     let mut client = Client::start(&dir);
     let mut buffer = Buffer::open(&client, &dir, "a.crod");
@@ -3316,7 +3336,7 @@ fn hover_shows_the_layers_only_when_there_are_several_operations() {
         "lsp-hover-history",
         &[
             ("project.crov", project),
-            ("crol/schema.crov", &generated_schema()),
+            ("crol/schema.crov", &generated_data_schema()),
             ("base/a.crod", &base),
             ("top/a.crod", "web.limits.memory: 2\n"),
         ],
@@ -3355,7 +3375,7 @@ fn hover_on_a_reference_has_what_it_names_after_the_doc() {
     );
     let dir = workspace(
         "lsp-hover-reference",
-        &[("crol/schema.crov", &generated_schema()), ("a.crod", &text)],
+        &[("crol/schema.crov", &generated_data_schema()), ("a.crod", &text)],
     );
     let mut client = Client::start(&dir);
     let mut buffer = Buffer::open(&client, &dir, "a.crod");
@@ -3372,7 +3392,7 @@ fn hover_keeps_to_values_and_keys() {
     let text = "#![schema(crol::schema)]\n\nt := 1\nn = +web: Config { .. }\n";
     let dir = workspace(
         "lsp-hover-elsewhere",
-        &[("crol/schema.crov", &generated_schema()), ("a.crod", text)],
+        &[("crol/schema.crov", &generated_data_schema()), ("a.crod", text)],
     );
     let mut client = Client::start(&dir);
     let mut buffer = Buffer::open(&client, &dir, "a.crod");
@@ -3616,5 +3636,264 @@ fn a_schema_file_is_checked_against_the_built_in_schema() {
         }),
     );
     client.diagnostics_for(&file, |d| says(d, "has no field `sauce`"));
+    client.stop();
+}
+
+// ---- A struct as the root type (`SPEC.md` 4.1, 12.5) ----
+
+const STRUCT_ROOT_SCHEMA: &str = r#"Schema {
+    format: 1,
+    root: "app::Config",
+    types: {
+        "app::Config": Struct {
+            name: "Config",
+            doc: "The whole configuration.",
+            source: ("src/lib.rs", 1),
+            fields: {
+                name: { ty: String, doc: "The name of the application.", .. },
+                items: { ty: List(Named("app::Item")), doc: "What it holds.", .. },
+                options: { ty: Named("app::Options"), doc: "How it behaves.", .. },
+                retries: { ty: U32, default: Value(3), .. },
+            },
+            ..
+        },
+        "app::Item": Struct {
+            name: "Item",
+            doc: "One thing.",
+            source: ("src/lib.rs", 2),
+            fields: { id: { ty: U32, doc: "Its number.", .. } },
+            ..
+        },
+        "app::Options": Struct {
+            name: "Options",
+            doc: "The options.",
+            source: ("src/lib.rs", 3),
+            fields: {
+                fast: { ty: Bool, doc: "Whether to hurry.", .. },
+                quiet: { ty: Bool, doc: "Whether to say nothing.", .. },
+            },
+            ..
+        },
+    },
+}"#;
+
+const STRUCT_ROOT_PROJECT: &str = r#"Project {
+    layers: List([
+        { name: "base", dir: "base", .. },
+        { name: "local", dir: "local", .. },
+    ]),
+    schema: Some("schema"),
+    ..
+}"#;
+
+fn struct_root_project(name: &str, base: &str, local: &str) -> PathBuf {
+    workspace(
+        name,
+        &[
+            ("project.crov", STRUCT_ROOT_PROJECT),
+            ("schema.crov", STRUCT_ROOT_SCHEMA),
+            ("base/a.crod", base),
+            ("local/a.crod", local),
+        ],
+    )
+}
+
+#[test]
+fn completion_at_a_struct_root_offers_its_fields() {
+    let dir = struct_root_project(
+        "lsp-struct-root-completion",
+        "name: \"below\"\nitems: []\n",
+        "options: { fast: true, quiet: true }\n",
+    );
+    let mut client = Client::start(&dir);
+    let mut local = Buffer::open(&client, &dir, "local/a.crod");
+    let fields: &[&str] = &["fast", "quiet"];
+    let root: &[&str] = &["name", "items", "options", "retries"];
+    let cases: &[Case<'_>] = &[
+        ("|", root, fields),
+        // Not what this document writes; what the layers below set stays.
+        ("options: { .. }\n|", &["name", "items", "retries"], &["options"]),
+        ("name: \"x\"\n|", &["items", "options"], &["name"]),
+        ("-name\n|", &["items"], &["name"]),
+        // A template is no field, and does not count as written.
+        ("t := { a: 1 }\n|", root, &["t"]),
+        // At depth.
+        ("options: { | }", fields, &["name", "items", "options"]),
+        ("options: { fast: true, | }", &["quiet"], &["fast", "name"]),
+        ("options.|", fields, &["name"]),
+        ("items: [{ | }]", &["id"], &["name", "fast"]),
+        ("<prod> { | }", root, fields),
+        ("<prod> { options: { | } }", fields, &["name"]),
+        ("{ | }", root, fields),
+        ("options: { fast: |", &["true", "false"], &["name"]),
+    ];
+    check_completions(&mut client, &mut local, "", cases);
+
+    // Accepting a field fills in the value below.
+    let items = local.complete(&mut client, "|");
+    let name = items.iter().find(|i| i["label"] == "name").unwrap();
+    assert_eq!(name["textEdit"]["newText"], "name: \"below\"");
+    assert_eq!(name["documentation"]["value"], "The name of the application.");
+    client.stop();
+}
+
+#[test]
+fn hover_at_a_struct_root_shows_the_field() {
+    let text = "name: \"x\"\nitems: [{ id: 1 }]\noptions: { fast: true, quiet: true }\nretries: 1\n";
+    let dir = struct_root_project("lsp-struct-root-hover", text, "");
+    let mut client = Client::start(&dir);
+    let mut base = Buffer::open(&client, &dir, "base/a.crod");
+    let name = "The name of the application.\n\n`String`";
+    let fast = "Whether to hurry.\n\n`bool`";
+    let cases = [
+        // On the key and the value.
+        ("name: \"x\"", 1, name),
+        ("name: \"x\"", 7, name),
+        ("items:", 1, "What it holds.\n\n`Vec<Item>`"),
+        ("options:", 1, "How it behaves.\n\n`Options`"),
+        ("fast: true", 1, fast),
+        ("fast: true", 7, fast),
+        ("id: 1", 1, "Its number.\n\n`u32`"),
+        ("id: 1", 4, "Its number.\n\n`u32`"),
+        // A field with no doc shows its type.
+        ("retries:", 1, "`u32`"),
+    ];
+    let mut failures = Vec::new();
+    for (word, into, wanted) in cases {
+        let i = text.find(word).unwrap() + into;
+        let marked = format!("{}|{}", &text[..i], &text[i..]);
+        let markdown = base.hover(&mut client, &marked);
+        if markdown != wanted {
+            failures.push(format!("{word}: wanted {wanted:?}, got {markdown:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    client.stop();
+}
+
+#[test]
+fn diagnostics_at_a_struct_root_are_of_the_composed_root() {
+    let dir = struct_root_project(
+        "lsp-struct-root-diagnostics",
+        "name: \"x\"\n",
+        "items: []\nfoo: { bar: 2 }\n",
+    );
+    let client = Client::start(&dir);
+    let base = uri(&dir.join("base/a.crod"));
+    let local = uri(&dir.join("local/a.crod"));
+    // The top document has what is wrong with the whole, and a lower one
+    // nothing: it is no whole on its own.
+    let found = client.diagnostics_for(&local, |d| says(d, "`Config` is missing the fields"));
+    assert!(says(&found, "`Config` has no field `foo`"), "{found:?}");
+    assert_eq!(found.len(), 2, "{found:?}");
+    let text = std::fs::read_to_string(dir.join("base/a.crod")).unwrap();
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": base, "languageId": "crol", "version": 1, "text": text } }),
+    );
+    let found = client.diagnostics_for(&base, |_| true);
+    assert_eq!(found, Vec::<Value>::new());
+    client.stop();
+}
+
+#[test]
+fn a_complete_project_has_no_diagnostics_in_any_layer() {
+    let dir = struct_root_project(
+        "lsp-struct-root-complete",
+        "name: \"x\"\nitems: []\n",
+        "options: { fast: true, quiet: false }\n..\n",
+    );
+    let client = Client::start(&dir);
+    let local = uri(&dir.join("local/a.crod"));
+    let found = client.diagnostics_for(&local, |_| true);
+    assert_eq!(found, Vec::<Value>::new());
+    client.stop();
+}
+
+#[test]
+fn a_read_only_top_layer_passes_the_missing_field_to_a_writable_one() {
+    let dir = workspace(
+        "lsp-struct-root-read-only",
+        &[
+            (
+                "project.crov",
+                r#"Project {
+    layers: List([
+        { name: "base", dir: "base", .. },
+        { name: "vendored", dir: "vendored", read_only: true },
+    ]),
+    schema: Some("schema"),
+    ..
+}"#,
+            ),
+            ("schema.crov", STRUCT_ROOT_SCHEMA),
+            ("base/a.crod", "name: \"x\"\n"),
+            ("vendored/a.crod", "items: []\n"),
+        ],
+    );
+    let client = Client::start(&dir);
+    let base = uri(&dir.join("base/a.crod"));
+    client.diagnostics_for(&base, |d| says(d, "`Config` is missing the fields"));
+    client.stop();
+}
+
+#[test]
+fn a_standalone_crod_file_is_its_own_whole() {
+    let dir = workspace(
+        "lsp-struct-root-standalone",
+        &[
+            ("schema.crov", STRUCT_ROOT_SCHEMA),
+            ("one.crod", "#![schema(::schema)]\n\nname: \"x\"\n"),
+        ],
+    );
+    let mut client = Client::start(&dir);
+    let file = uri(&dir.join("one.crod"));
+    open_text(&client, &file, "#![schema(::schema)]\n\nname: \"x\"\n");
+    client.diagnostics_for(&file, |d| says(d, "`Config` is missing the fields"));
+    let mut one = Buffer {
+        uri: file,
+        version: 1,
+    };
+    let items = one.complete(&mut client, "#![schema(::schema)]\n\nname: \"x\"\n|");
+    let found = labels(&items);
+    assert!(found.contains(&"items"), "{found:?}");
+    assert!(!found.contains(&"name"), "{found:?}");
+    client.stop();
+}
+
+#[test]
+fn an_enum_root_stays_the_type_of_each_root_value() {
+    let schema = STRUCT_ROOT_SCHEMA
+        .replace("root: \"app::Config\"", "root: \"app::Definition\"")
+        .replace(
+            "types: {",
+            r#"types: {
+        "app::Definition": Enum {
+            name: "Definition",
+            doc: "What the data defines.",
+            source: ("src/lib.rs", 4),
+            variants: { Options: { shape: Newtype(Named("app::Options")), .. } },
+            ..
+        },"#,
+        );
+    let dir = workspace(
+        "lsp-enum-root",
+        &[
+            ("project.crov", STRUCT_ROOT_PROJECT),
+            ("schema.crov", &schema),
+            ("base/a.crod", "web: Options { fast: true, quiet: true }\n"),
+            ("local/a.crod", ""),
+        ],
+    );
+    let mut client = Client::start(&dir);
+    let mut base = Buffer::open(&client, &dir, "base/a.crod");
+    let cases: &[Case<'_>] = &[
+        ("|", &[], &["name", "items", "options"]),
+        ("web: Options { | }", &["fast", "quiet"], &["name"]),
+        ("web: |", &["Options"], &["fast"]),
+    ];
+    check_completions(&mut client, &mut base, "", cases);
+    let hover = base.hover(&mut client, "w|eb: Options { fast: true, quiet: true }\n");
+    assert_eq!(hover, "The options.\n\n`Options`");
     client.stop();
 }

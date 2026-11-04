@@ -4,6 +4,7 @@
 use std::io::Write;
 use std::path::Path;
 
+use crol::schema::DataRoot;
 use crol_eval::{Key, Span, Value, ValueKind, print};
 use crol_syntax::format::FormatConfig;
 
@@ -77,20 +78,32 @@ pub(crate) fn run(args: &Args, reporter: &mut Reporter) -> bool {
         return false;
     };
     let config = FormatConfig::default().with_max_width(args.max_width);
+    // Only of a struct is a removed key a field that takes its default; in
+    // any other root it is just gone (`SPEC.md` 4.1).
+    let struct_root = inputs.schema.as_ref().is_some_and(|schema| {
+        schema.data_root(inputs.root.as_deref()) == DataRoot::Document
+    });
     if args.all_contexts {
         if path.is_some() {
             reporter.error("`--all-contexts` prints all the data; it takes no key");
             return false;
         }
-        let output =
-            print::to_all_contexts(&base, &evaluation.contexts, &evaluation.variants, &config);
+        let write_data = if struct_root {
+            print::to_all_contexts_of_struct
+        } else {
+            print::to_all_contexts
+        };
+        let output = write_data(&base, &evaluation.contexts, &evaluation.variants, &config);
         return write(&output, reporter);
     }
     // With `--context`, the one context evaluated besides the base.
-    let root = match (&args.context, evaluation.contexts.first()) {
+    let mut root = match (&args.context, evaluation.contexts.first()) {
         (Some(_), Some(data)) => data.root(&base),
         _ => base,
     };
+    if !struct_root && let ValueKind::Keyed(keyed) = &mut root.kind {
+        keyed.defaulted.clear();
+    }
     // Fields that take their defaults show them, as the application sees
     // the data, each marked with a comment.
     let filled = Span {

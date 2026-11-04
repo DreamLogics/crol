@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 use crol_syntax::format::{FormatConfig, format};
 
 use crate::eval::ContextData;
-use crate::value::{Key, Value, ValueKind, format_float, is_identifier, quote, quote_char};
+use crate::value::{Key, Keyed, Value, ValueKind, format_float, is_identifier, quote, quote_char};
 use crate::variants::Variants;
 
 /// Writes a value as a value-mode document, formatted. A keyed value without
@@ -44,24 +44,76 @@ pub fn to_document_noted(
 /// does (`SPEC.md` 11): the base data, then for each other context with
 /// differences a block whose condition holds in that context only, with the
 /// keys whose value differs (`key: value`) or that are missing (`-key`).
-/// The output evaluates back to the same data.
+/// A `..` at the root is written too: in the base, or in the block of a
+/// context that has it where the base does not. The output evaluates back
+/// to the same data.
 pub fn to_all_contexts(
     base: &Value,
     contexts: &[ContextData],
     variants: &Variants,
     config: &FormatConfig,
 ) -> String {
+    all_contexts(base, contexts, variants, config, false)
+}
+
+/// [`to_all_contexts`] for a root that is a struct (`SPEC.md` 4.1), where a
+/// removed root key is a field that takes its default: it is written as
+/// removed, since the data is complete only with that.
+pub fn to_all_contexts_of_struct(
+    base: &Value,
+    contexts: &[ContextData],
+    variants: &Variants,
+    config: &FormatConfig,
+) -> String {
+    all_contexts(base, contexts, variants, config, true)
+}
+
+fn write_removed(out: &mut String, key: &Key) {
+    write_key(out, key);
+    out.push_str(": (), -");
+    write_key(out, key);
+    out.push_str(",\n");
+}
+
+fn all_contexts(
+    base: &Value,
+    contexts: &[ContextData],
+    variants: &Variants,
+    config: &FormatConfig,
+    removed: bool,
+) -> String {
     let mut text = String::new();
-    if let ValueKind::Keyed(keyed) = &base.kind {
-        for (key, value) in &keyed.entries {
-            write_key(&mut text, key);
-            text.push_str(": ");
-            write_value(&mut text, value, None);
-            text.push_str(",\n");
+    let empty = Keyed::default();
+    let keyed = match &base.kind {
+        ValueKind::Keyed(keyed) => keyed,
+        _ => &empty,
+    };
+    for (key, value) in &keyed.entries {
+        write_key(&mut text, key);
+        text.push_str(": ");
+        write_value(&mut text, value, None);
+        text.push_str(",\n");
+    }
+    if removed {
+        for key in &keyed.defaulted {
+            write_removed(&mut text, key);
         }
     }
+    if keyed.defaults {
+        text.push_str("..,\n");
+    }
     for data in contexts {
-        if data.changes.is_empty() {
+        let defaults = data.defaults && !keyed.defaults;
+        // Removed in the context, and neither held nor removed in the base,
+        // so not among its changes.
+        let only_here: Vec<&Key> = data
+            .defaulted
+            .iter()
+            .filter(|key| {
+                removed && !keyed.defaulted.contains(*key) && !keyed.entries.contains_key(*key)
+            })
+            .collect();
+        if data.changes.is_empty() && !defaults && only_here.is_empty() {
             continue;
         }
         let mut body = String::new();
@@ -78,6 +130,12 @@ pub fn to_all_contexts(
                 }
             }
             body.push_str(",\n");
+        }
+        for key in only_here {
+            write_removed(&mut body, key);
+        }
+        if defaults {
+            body.push_str("..,\n");
         }
         let condition: Vec<String> = variants
             .ids()

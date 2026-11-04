@@ -1,0 +1,9 @@
+name: & + "-local"
+options.b: true
+?retries: 3
+?note: Some("kept out")
+
+<prod> {
+    name: "app-prod"
+    retries: 5
+}

@@ -210,8 +210,14 @@ fn project_files_give_the_layers_and_the_schema() {
         dir.join("crol/schema.crov"),
         r#"Schema {
             format: 1,
-            root: "app::Service",
+            root: "app::Services",
             types: {
+                "app::Services": Transparent {
+                    name: "Services",
+                    source: ("src/lib.rs", 2),
+                    inner: Map(String, Named("app::Service")),
+                    ..
+                },
                 "app::Service": Struct {
                     name: "Service",
                     source: ("src/lib.rs", 1),
@@ -290,8 +296,14 @@ fn check_uses_the_schema_a_document_names() {
         dir.join("schema.crov"),
         r#"Schema {
             format: 1,
-            root: "app::Service",
+            root: "app::Services",
             types: {
+                "app::Services": Transparent {
+                    name: "Services",
+                    source: ("src/lib.rs", 2),
+                    inner: Map(String, Named("app::Service")),
+                    ..
+                },
                 "app::Service": Struct {
                     name: "Service",
                     source: ("src/lib.rs", 1),
@@ -341,8 +353,14 @@ fn eval_shows_the_defaults_fields_take() {
         dir.join("schema.crov"),
         r#"Schema {
             format: 1,
-            root: "app::Service",
+            root: "app::Services",
             types: {
+                "app::Services": Transparent {
+                    name: "Services",
+                    source: ("src/lib.rs", 2),
+                    inner: Map(String, Named("app::Service")),
+                    ..
+                },
                 "app::Service": Struct {
                     name: "Service",
                     source: ("src/lib.rs", 1),

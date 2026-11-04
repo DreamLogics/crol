@@ -466,6 +466,13 @@ pub trait DefaultsProvider: std::fmt::Debug + Send + Sync {
     /// (`None`: the root type), or with an empty path the type's own
     /// default; `None` if no default is recorded.
     fn default_of(&self, type_name: Option<&str>, path: &[String]) -> Option<Value>;
+
+    /// Whether the root type is the whole of a data-mode document, so that a
+    /// root key is the first step of a path from it, rather than the type
+    /// of each root value (`SPEC.md` 4.1).
+    fn root_is_document(&self) -> bool {
+        false
+    }
 }
 
 /// A shape for a value that is already computed, such as a default.
@@ -573,6 +580,8 @@ pub enum VariantKeys {
 pub(crate) struct DataInput<'a> {
     pub(crate) ops: &'a [RootOp],
     pub(crate) templates: &'a [BindId],
+    pub(crate) root_defaults: &'a [RootDefaults],
+    pub(crate) root_span: Span,
     pub(crate) layer_names: &'a [String],
     pub(crate) warn_cross_file_patches: bool,
     pub(crate) variants: &'a Variants,
@@ -603,6 +612,12 @@ pub struct ContextData {
     pub context: Context,
     /// The differences from the base.
     pub changes: IndexMap<Key, Option<Value>>,
+    /// Whether the root has `..` in the context (`SPEC.md` 4). A `..` in the
+    /// base holds in every context.
+    pub defaults: bool,
+    /// The root keys the context's chains remove, as the `defaulted` of its
+    /// root (`SPEC.md` 10.3).
+    pub defaulted: BTreeSet<Key>,
 }
 
 impl ContextData {
@@ -622,6 +637,8 @@ impl ContextData {
                 }
             }
         }
+        keyed.defaults = self.defaults;
+        keyed.defaulted.clone_from(&self.defaulted);
         Value::new(ValueKind::Keyed(keyed), base.span)
     }
 
@@ -644,6 +661,8 @@ pub(crate) struct DataPlan<'a> {
     variants: Variants,
     /// Each operation's condition, resolved; `None` for a base operation.
     conditions: Vec<Option<Resolved>>,
+    /// The condition of each `..` at a root, resolved.
+    root_defaults: Vec<Option<Resolved>>,
     keys: IndexMap<Rc<str>, KeyPlan>,
     /// For each root key, the keys whose value it reads late.
     dependents: std::collections::HashMap<Rc<str>, Vec<Rc<str>>>,
@@ -828,7 +847,13 @@ pub(crate) fn evaluate_data(
     let base_cell = evaluator.contexts[base_id].root_cell.clone();
     let base = evaluator
         .full_value(&base_cell, Span::detached(), &mut Vec::new())
-        .ok();
+        .ok()
+        .map(|mut base| {
+            // The root is written nowhere; what is wrong with it as a whole
+            // needs a place all the same.
+            base.span = input.root_span;
+            base
+        });
     let base_failed = base.is_none() || !evaluator.diagnostics.is_empty();
     evaluator.share = !base_failed && !input.evaluate_every_key;
     record(&mut evaluator, 0);
@@ -845,12 +870,16 @@ pub(crate) fn evaluate_data(
         // Only keys that can differ are evaluated again, unless the base
         // failed: then every context's own errors are wanted.
         let varying = evaluator.share.then(|| plan.varying(context));
-        let slots = match &*root_cell.state.borrow() {
+        let (slots, defaults, defaulted) = match &*root_cell.state.borrow() {
             State::Done(Ok(shaped)) => match &shaped.shape {
-                Shape::Keyed(keyed) => keyed.slots.clone(),
-                _ => IndexMap::new(),
+                Shape::Keyed(keyed) => (
+                    keyed.slots.clone(),
+                    keyed.defaults,
+                    keyed.defaulted.clone(),
+                ),
+                _ => Default::default(),
             },
-            _ => IndexMap::new(),
+            _ => Default::default(),
         };
         let mut changes = IndexMap::new();
         let mut failed = false;
@@ -899,6 +928,8 @@ pub(crate) fn evaluate_data(
             per_context.push(ContextData {
                 context: context.clone(),
                 changes: ordered,
+                defaults,
+                defaulted,
             });
         }
     }
@@ -1135,6 +1166,11 @@ impl<'a> DataPlan<'a> {
                 condition.names(&mut names);
             }
         }
+        for defaults in input.root_defaults {
+            if let Some(condition) = &defaults.condition {
+                condition.names(&mut names);
+            }
+        }
         for expr in &ir.exprs {
             if let ExprKind::Path(_, selectors) = &expr.kind {
                 for selector in selectors {
@@ -1168,18 +1204,28 @@ impl<'a> DataPlan<'a> {
             .iter()
             .map(|op| op.condition.as_ref().and_then(|c| c.resolve(&variants)))
             .collect();
+        let root_defaults: Vec<Option<Resolved>> = input
+            .root_defaults
+            .iter()
+            .map(|d| d.condition.as_ref().and_then(|c| c.resolve(&variants)))
+            .collect();
         // A condition that cannot hold is a mistake (`SPEC.md` 8.2); checked
         // where the contexts are few enough to try.
         if variants.context_count() <= 1 << 16 {
             let all = variants.all_contexts();
             let mut reported = std::collections::HashSet::new();
-            for (op, condition) in input.ops.iter().zip(&conditions) {
+            let spans = input.ops.iter().map(|op| op.span);
+            let root_spans = input.root_defaults.iter().map(|d| d.span);
+            for (span, condition) in spans
+                .chain(root_spans)
+                .zip(conditions.iter().chain(&root_defaults))
+            {
                 if let Some(condition) = condition
                     && !all.iter().any(|c| condition.holds(c))
                     && reported.insert(condition.normalized())
                 {
                     diagnostics.push(Diagnostic::error(
-                        op.span,
+                        span,
                         "this condition cannot hold in any context",
                     ));
                 }
@@ -1246,9 +1292,18 @@ impl<'a> DataPlan<'a> {
             templates: input.templates,
             variants,
             conditions,
+            root_defaults,
             keys,
             dependents,
         })
+    }
+
+    /// Whether the root has `..` in `context`: the flag ORs, as in a block
+    /// (`SPEC.md` 10.3), and nothing replaces the root.
+    fn root_has_defaults(&self, context: &Context) -> bool {
+        self.root_defaults
+            .iter()
+            .any(|condition| condition.as_ref().is_none_or(|c| c.holds(context)))
     }
 
     /// The keys whose value can differ from the base in `context`: those
@@ -1500,23 +1555,27 @@ impl Evaluator<'_> {
         // A key that cannot differ from the base shares the base's cell.
         let shared = (self.share && id > 0).then(|| {
             let base = &self.contexts[0];
-            let slots = match &*base.root_cell.state.borrow() {
+            let (slots, defaulted) = match &*base.root_cell.state.borrow() {
                 State::Done(Ok(shaped)) => match &shaped.shape {
-                    Shape::Keyed(keyed) => keyed.slots.clone(),
-                    _ => IndexMap::new(),
+                    Shape::Keyed(keyed) => (keyed.slots.clone(), keyed.defaulted.clone()),
+                    _ => Default::default(),
                 },
-                _ => IndexMap::new(),
+                _ => Default::default(),
             };
-            (plan.varying(context), slots)
+            (plan.varying(context), slots, defaulted)
         });
         let mut slots = Vec::new();
+        // The keys whose chain ends in a remove (`SPEC.md` 10.3).
+        let mut defaulted = BTreeSet::new();
         for (key, key_plan) in &plan.keys {
-            if let Some((varying, base_slots)) = &shared
+            if let Some((varying, base_slots, base_defaulted)) = &shared
                 && !varying.contains(key)
             {
                 let key = Key::Str(key.to_string());
                 if let Some((position, _, slot)) = base_slots.get_full(&key) {
                     slots.push((self.base_created[position], key, slot.clone()));
+                } else if base_defaulted.contains(&key) {
+                    defaulted.insert(key);
                 }
                 continue;
             }
@@ -1525,6 +1584,8 @@ impl Evaluator<'_> {
                 self.apply_chain(key, &order, &chain, &root, &templates, id)
             {
                 slots.push((created, Key::Str(key.to_string()), slot));
+            } else if !order.is_empty() {
+                defaulted.insert(Key::Str(key.to_string()));
             }
         }
         // Keys are in the order they were created, by layer and position.
@@ -1537,6 +1598,8 @@ impl Evaluator<'_> {
                 .into_iter()
                 .map(|(_, key, slot)| (key, slot))
                 .collect(),
+            defaults: plan.root_has_defaults(context),
+            defaulted,
             ..KeyedShape::default()
         };
         *root_cell.state.borrow_mut() = State::Done(Ok(Rc::new(Shaped {
@@ -2126,7 +2189,17 @@ impl Evaluator<'_> {
                         "&default: defaults come from a schema, and no schema is given",
                     ));
                 };
-                let path: Vec<String> = target.path.iter().map(|p| p.to_string()).collect();
+                // A root key is a field where the root type is the whole
+                // document (`SPEC.md` 4.1).
+                let key = target
+                    .root_key
+                    .as_ref()
+                    .filter(|_| defaults.root_is_document());
+                let path: Vec<String> = key
+                    .into_iter()
+                    .chain(&target.path)
+                    .map(|p| p.to_string())
+                    .collect();
                 match defaults.default_of(target.type_name.as_deref(), &path) {
                     Some(value) => Ok(shaped_from_value(&value)),
                     None => {

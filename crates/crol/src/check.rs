@@ -4,7 +4,9 @@
 use crol_eval::{Context, ContextData, Diagnostic, Key, Keyed, Span, Value, ValueKind, Variants};
 
 use crate::compose::{CrolData, VariantName};
-use crate::schema::{Field, FieldDefault, Repr, SchemaFile, TypeDef, TypeExpr, VariantShape};
+use crate::schema::{
+    DataRoot, Field, FieldDefault, Repr, SchemaFile, TypeDef, TypeExpr, VariantShape,
+};
 
 /// Options of [`check`], as `CrolConfig` sets them for deserializing.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,11 +76,12 @@ impl<'a> DataView<'a> {
     }
 }
 
-/// Checks evaluated data against a schema (`SPEC.md` 10.9): each root
-/// value against the type at `root` (`None`: the schema's root type), with
-/// the rules of the deserializer, and every id: it must name a root key in
-/// the same context, of one of the types it may refer to. Every evaluated
-/// context is checked.
+/// Checks evaluated data against a schema (`SPEC.md` 10.9): the composed root
+/// against the type at `root` (`None`: the schema's root type) if it is the
+/// whole document, else each root value (`SPEC.md` 4.1), with the rules of
+/// the deserializer, and every id: it must name a root key in the same
+/// context, of one of the types it may refer to. Every evaluated context is
+/// checked.
 pub fn check<T: VariantName>(
     data: &CrolData<T>,
     schema: &SchemaFile,
@@ -135,6 +138,7 @@ pub fn check_view(
     options: &CheckOptions,
 ) -> Vec<Diagnostic> {
     let root_type = TypeExpr::Named(root.unwrap_or(&schema.root).to_owned());
+    let whole = schema.data_root(root) == DataRoot::Document;
     let contexts: Vec<Option<&ContextData>> = std::iter::once(None)
         .chain(data.contexts.iter().map(Some))
         .collect();
@@ -148,9 +152,14 @@ pub fn check_view(
             context: *context,
             found: Vec::new(),
         };
-        for key in data.keys(*context) {
-            if let Some(value) = data.value(&key, *context) {
-                checker.value(value, &root_type, &key, None);
+        if whole {
+            let root = context.map(|data_in| data_in.root(data.base));
+            checker.value(root.as_ref().unwrap_or(data.base), &root_type, "", None);
+        } else {
+            for key in data.keys(*context) {
+                if let Some(value) = data.value(&key, *context) {
+                    checker.value(value, &root_type, &key, None);
+                }
             }
         }
         for diagnostic in checker.found {
@@ -312,7 +321,7 @@ impl Checker<'_> {
                                 path,
                             );
                         }
-                        self.value(item, value_type, &format!("{path}.{key}"), None);
+                        self.value(item, value_type, &join(path, &key.to_string()), None);
                     }
                     true
                 }
@@ -387,42 +396,48 @@ impl Checker<'_> {
                     }
                 }
                 // A field is written when its name or an alias is.
-                let present = |f: &str, field: &Field| {
-                    std::iter::once(f)
-                        .chain(field.aliases.iter().map(String::as_str))
-                        .any(|n| {
-                            keyed.entries.contains_key(&Key::Str(n.to_owned()))
-                                || keyed.defaulted.contains(&Key::Str(n.to_owned()))
-                        })
+                let names = |f: &'_ str, field: &Field| -> Vec<Key> {
+                    std::iter::once(f.to_owned())
+                        .chain(field.aliases.iter().cloned())
+                        .map(Key::Str)
+                        .collect()
+                };
+                let written = |f: &str, field: &Field| {
+                    names(f, field)
+                        .iter()
+                        .any(|n| keyed.entries.contains_key(n))
+                };
+                let removed = |f: &str, field: &Field| {
+                    names(f, field).iter().any(|n| keyed.defaulted.contains(n))
                 };
                 // Fields may be left out with `..`, or without it when
                 // neither the type nor the options ask for it.
                 let may_leave_out =
                     keyed.defaults || !explicit_defaults.unwrap_or(self.options.require_complete);
-                let missing: Vec<&str> = fields
+                let left_out: Vec<&str> = fields
                     .iter()
-                    .filter(|(f, field)| !field.flatten && !present(f, field))
-                    .filter(|(_, field)| {
-                        // Serde fills fields that have defaults.
-                        !may_leave_out || field.default == FieldDefault::Required
+                    .filter(|(f, field)| {
+                        !field.flatten && !written(f, field) && !removed(f, field)
                     })
                     .map(|(f, _)| f.as_str())
                     .collect();
-                if !missing.is_empty() {
-                    if may_leave_out {
-                        self.error(value.span, format!("missing field `{}`", missing[0]), path);
-                    } else {
-                        let s = if missing.len() == 1 { "" } else { "s" };
-                        self.error(
-                            value.span,
-                            format!(
-                                "`{name}` is missing the field{s} `{}`; write {}, or end the block with `..` to leave out fields that have defaults",
-                                missing.join("`, `"),
-                                if missing.len() == 1 { "it" } else { "them" },
-                            ),
-                            path,
-                        );
-                    }
+                // Serde fills fields that have defaults, also removed ones.
+                let required = fields.iter().find(|(f, field)| {
+                    !field.flatten && !written(f, field) && field.default == FieldDefault::Required
+                });
+                if !may_leave_out && !left_out.is_empty() {
+                    let s = if left_out.len() == 1 { "" } else { "s" };
+                    self.error(
+                        value.span,
+                        format!(
+                            "`{name}` is missing the field{s} `{}`; write {}, or end the block with `..` to leave out fields that have defaults",
+                            left_out.join("`, `"),
+                            if left_out.len() == 1 { "it" } else { "them" },
+                        ),
+                        path,
+                    );
+                } else if let Some((field, _)) = required {
+                    self.error(value.span, format!("missing field `{field}`"), path);
                 }
             }
             TypeDef::Newtype { name, inner, .. } => match &value.kind {

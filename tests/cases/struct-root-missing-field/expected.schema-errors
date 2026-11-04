@@ -1,0 +1,1 @@
+2-local/a.crod:1:1: `Config` is missing the fields `options`, `retries`, `note`; write them, or end the block with `..` to leave out fields that have defaults

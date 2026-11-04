@@ -1,0 +1,8 @@
+name: "app"
+items: []
+options: { a: true, .. }
+
+// Only `prod` may leave out fields: the base is incomplete.
+<prod> {
+    ..
+}

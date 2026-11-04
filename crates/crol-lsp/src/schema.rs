@@ -16,7 +16,7 @@ const MAX_DEPTH: usize = 8;
 /// What a place holds, by the schema.
 #[derive(Clone)]
 pub(crate) enum Shape<'a> {
-    /// The root keys of data, each a value of the root type.
+    /// The root keys of data whose root type is that of each root value.
     Keys,
     /// A value of a type.
     Type(TypeExpr),
@@ -398,10 +398,18 @@ pub(crate) fn rust_type(schema: &SchemaFile, ty: &TypeExpr) -> String {
             let items: Vec<String> = items.iter().map(inner).collect();
             format!("({})", items.join(", "))
         }
-        TypeExpr::Named(path) => match schema.get(path).map(TypeDef::name) {
+        TypeExpr::Named(path) => match schema.get(path) {
+            // What `schema::build` names, for a root type with no name.
+            Some(TypeDef::Transparent {
+                name,
+                inner: wrapped,
+                ..
+            }) if name.is_empty() => inner(wrapped),
             // A type that data writes with no name.
-            Some("") => path.rsplit("::").next().unwrap_or(path).to_owned(),
-            Some(name) => name.to_owned(),
+            Some(def) if def.name().is_empty() => {
+                path.rsplit("::").next().unwrap_or(path).to_owned()
+            }
+            Some(def) => def.name().to_owned(),
             None => path.clone(),
         },
         other => format!("{other:?}").to_lowercase(),

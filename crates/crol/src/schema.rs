@@ -85,12 +85,27 @@ pub struct SchemaFile {
     /// The format version of this file. It changes only when the format of
     /// schema files does.
     pub format: u32,
-    /// The path of the root type: the type the schema was built for, which
-    /// each root value has unless it says otherwise.
+    /// The path of the root type: the type the schema was built for. In data,
+    /// a struct or map is the whole document, and any other type that of
+    /// each root value (`SPEC.md` 4.1).
     pub root: String,
     /// Every named type the root type uses, by path.
     pub types: BTreeMap<String, TypeDef>,
 }
+
+/// What a root type is to a data-mode document (`SPEC.md` 4.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataRoot {
+    /// A struct or a map: it describes the whole document, and a root key
+    /// is a field or a key of it. Completeness is that of the composed root.
+    Document,
+    /// Anything else, such as an enum: it is the type of each root value.
+    EachValue,
+}
+
+/// How many wrappers are followed to find what a type is; a type that wraps
+/// itself stops here.
+const MAX_WRAPPERS: usize = 64;
 
 /// The definition of a named type.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -423,7 +438,50 @@ impl SchemaFile {
     /// [`CrolComposer::schema`](crate::CrolComposer::schema) does this for an
     /// application.
     pub fn defaults(&self) -> crol_eval::Defaults {
-        crol_eval::Defaults(std::sync::Arc::new(SchemaDefaults(self.clone())))
+        self.defaults_for(None)
+    }
+
+    /// [`SchemaFile::defaults`] with the type at `root` as the root type
+    /// (`None`: the schema's), as a project's `root` chooses (`SPEC.md` 12.4).
+    pub fn defaults_for(&self, root: Option<&str>) -> crol_eval::Defaults {
+        crol_eval::Defaults(std::sync::Arc::new(SchemaDefaults {
+            schema: self.clone(),
+            root: root.map(str::to_owned),
+        }))
+    }
+
+    /// What the type at `root` (`None`: the schema's root type) is to a
+    /// data-mode document (`SPEC.md` 4.1). This is the one place that says
+    /// so: the checks, `fill_defaults`, `&default` and the language server
+    /// all ask here.
+    pub fn data_root(&self, root: Option<&str>) -> DataRoot {
+        let path = root.unwrap_or(&self.root);
+        if self.has_keys(&TypeExpr::Named(path.to_owned()), 0) {
+            DataRoot::Document
+        } else {
+            DataRoot::EachValue
+        }
+    }
+
+    /// Whether a value of `ty` is a keyed value of its own: a struct or a
+    /// map, through what deserializes as what it wraps. An enum and what the
+    /// schema does not describe are not.
+    fn has_keys(&self, ty: &TypeExpr, depth: usize) -> bool {
+        if depth > MAX_WRAPPERS {
+            return false;
+        }
+        match ty {
+            TypeExpr::Map(..) => true,
+            TypeExpr::Option(inner) => self.has_keys(inner, depth + 1),
+            TypeExpr::Named(path) => match self.get(path) {
+                Some(TypeDef::Struct { .. }) => true,
+                Some(TypeDef::Newtype { inner, .. } | TypeDef::Transparent { inner, .. }) => {
+                    self.has_keys(inner, depth + 1)
+                }
+                _ => false,
+            },
+            _ => false,
+        }
     }
 
     /// Reads a schema file. It is a value document, so a `.crod` or `.crol`
@@ -607,10 +665,21 @@ pub fn attribute_remote(text: &str) -> Option<String> {
 /// Builds the schema of `T` and every type it uses.
 pub fn build<T: Schema + ?Sized>() -> SchemaFile {
     let mut registry = Registry::new();
-    let root = T::describe(&mut registry);
-    let root = match root {
+    let root = match T::describe(&mut registry) {
         TypeExpr::Named(path) => path,
-        other => format!("{other:?}"),
+        // `root` is the path of a named type, so a type with no name of its
+        // own, such as a map, gets one that data never writes.
+        other => {
+            let path = type_name(&other);
+            let wrapper = TypeDef::Transparent {
+                name: String::new(),
+                doc: String::new(),
+                source: (String::new(), 0),
+                inner: other,
+            };
+            registry.types.insert(path.clone(), wrapper);
+            path
+        }
     };
     SchemaFile {
         format: FORMAT,
@@ -662,7 +731,11 @@ pub fn check_file<T: Schema + ?Sized>(path: impl AsRef<Path>) -> Result<(), Erro
 
 /// The defaults a schema records, for `&default` (`SPEC.md` 6.1.3).
 #[derive(Debug, Clone)]
-pub(crate) struct SchemaDefaults(pub(crate) SchemaFile);
+pub(crate) struct SchemaDefaults {
+    schema: SchemaFile,
+    /// The path of the root type, if not the schema's.
+    root: Option<String>,
+}
 
 impl SchemaDefaults {
     /// The default at `path` in the type at `type_path`.
@@ -670,7 +743,7 @@ impl SchemaDefaults {
         if depth > 64 {
             return None;
         }
-        match self.0.get(type_path)? {
+        match self.schema.get(type_path)? {
             TypeDef::Struct {
                 fields, default, ..
             } => {
@@ -707,9 +780,13 @@ impl SchemaDefaults {
                     .collect();
                 own.and_then(|value| crol_eval::value_at_path(&value, &steps).cloned())
             }
-            TypeDef::Newtype { inner, .. } | TypeDef::Transparent { inner, .. } => {
-                self.resolve(named_type(inner)?, path, depth + 1)
-            }
+            TypeDef::Newtype { inner, .. } | TypeDef::Transparent { inner, .. } => match inner {
+                // A key is no field: what is below it is a field of the value.
+                TypeExpr::Map(_, value) => {
+                    self.resolve(named_type(value)?, path.get(1..)?, depth + 1)
+                }
+                _ => self.resolve(named_type(inner)?, path, depth + 1),
+            },
             _ => None,
         }
     }
@@ -730,16 +807,20 @@ impl crol_eval::DefaultsProvider for SchemaDefaults {
             // A type name must name one type; an ambiguous one needs `use`,
             // which tools resolve.
             Some(name) => {
-                let mut found = self.0.by_name(name);
+                let mut found = self.schema.by_name(name);
                 let (path, _) = found.next()?;
                 if found.next().is_some() {
                     return None;
                 }
                 path.to_owned()
             }
-            None => self.0.root.clone(),
+            None => self.root.clone().unwrap_or(self.schema.root.clone()),
         };
         self.resolve(&type_path, path, 0)
+    }
+
+    fn root_is_document(&self) -> bool {
+        self.schema.data_root(self.root.as_deref()) == DataRoot::Document
     }
 }
 
@@ -1129,7 +1210,7 @@ impl Schema for SchemaFile {
                         "root",
                         field(
                             TypeExpr::String,
-                            "The path of the root type: the type the schema was built for, which each root value has unless it says otherwise.",
+                            "The path of the root type: the type the schema was built for. In data, a struct or map is the whole document, and any other type that of each root value (`SPEC.md` 4.1).",
                             FieldDefault::Required,
                         ),
                     ),

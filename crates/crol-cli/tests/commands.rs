@@ -311,8 +311,14 @@ fn a_key_after_an_operator_points_at_the_missing_comma() {
 
 const SERVICE_SCHEMA: &str = r#"Schema {
     format: 1,
-    root: "app::Service",
+    root: "app::Services",
     types: {
+        "app::Services": Transparent {
+            name: "Services",
+            source: ("src/lib.rs", 2),
+            inner: Map(String, Named("app::Service")),
+            ..
+        },
         "app::Service": Struct {
             name: "Service",
             source: ("src/lib.rs", 1),

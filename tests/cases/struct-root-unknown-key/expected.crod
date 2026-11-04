@@ -1,0 +1,5 @@
+name: "app"
+items: []
+options: { a: true, .. }
+foo: { bar: 2 }
+..

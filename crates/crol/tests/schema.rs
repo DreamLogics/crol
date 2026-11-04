@@ -642,7 +642,8 @@ fn fields_of_a_struct_with_serde_default_have_a_default() {
             memory_mb: 512,
         }
     );
-    let checked = crol::check(&data, &schema::build::<Limits>(), None, &Default::default());
+    let schema = schema::build::<indexmap::IndexMap<String, Limits>>();
+    let checked = crol::check(&data, &schema, None, &Default::default());
     assert!(checked.is_empty(), "{checked:?}");
 }
 
@@ -711,20 +712,16 @@ pub struct StrictRoot {
 }
 
 #[test]
-fn the_root_of_data_cannot_write_the_marker() {
+fn the_root_of_data_writes_the_marker_as_a_block_does() {
     let composer = |text: &str| {
         crol::CrolComposer::new()
             .load_layer(crol::CrolLayer::from_sources("base", [("a.crod", text)]))
     };
-    // `..` is an error there, so a root struct that needs it must write
-    // every field; `explicit_defaults = false` is how it can leave some out.
-    let error = composer("+name: \"x\",\n..,")
+    let root = composer("+name: \"x\",\n..,")
+        .schema(schema::build::<StrictRoot>())
         .compose::<StrictRoot>()
-        .unwrap_err();
-    assert!(
-        error.to_string().contains("cannot be at the root"),
-        "{error}"
-    );
+        .unwrap();
+    assert_eq!(root.port, 0);
     let error = composer("+name: \"x\",")
         .schema(schema::build::<StrictRoot>())
         .compose::<StrictRoot>()

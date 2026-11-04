@@ -602,9 +602,7 @@ impl<T: VariantName> CrolComposer<T> {
     /// `.schema(crol::schema::build::<Definition>())`.
     pub fn schema(mut self, schema: crate::schema::SchemaFile) -> Self {
         self.structs = Some(std::sync::Arc::new(de::Structs::from_schema(&schema)));
-        self.schema = Some(crol_eval::Defaults(std::sync::Arc::new(
-            crate::schema::SchemaDefaults(schema),
-        )));
+        self.schema = Some(schema.defaults());
         self
     }
 

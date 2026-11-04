@@ -1,0 +1,1 @@
+1-base/a.crod:1:1: in {}: `Config` is missing the fields `retries`, `note`; write them, or end the block with `..` to leave out fields that have defaults

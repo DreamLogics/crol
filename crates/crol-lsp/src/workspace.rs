@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crol::project::Project;
-use crol::schema::SchemaFile;
+use crol::schema::{DataRoot, SchemaFile};
 use crol::{
     CheckOptions, CrolComposer, CrolConfig, CrolLayer, ExtendsLoad, FileLoader, FileLoaders,
     FsLoader, Loaded, LoaderError, Mode, ModulePath, SourceId,
@@ -227,6 +227,13 @@ pub(crate) struct DocumentSchema<'a> {
 impl DocumentSchema<'_> {
     pub(crate) fn root_type(&self) -> &str {
         self.root.unwrap_or(&self.file.root)
+    }
+
+    /// Whether the document as a whole is a value of the root type: a value
+    /// document, or data whose root type is a struct or map, where a root
+    /// key is a field of it (`SPEC.md` 4.1).
+    pub(crate) fn is_whole_value(&self) -> bool {
+        self.value_mode || self.file.data_root(self.root) == DataRoot::Document
     }
 }
 
@@ -667,7 +674,12 @@ pub(crate) fn evaluate(
         snapshot.options = snapshot
             .options
             .clone()
-            .with_defaults(snapshot.schema.as_ref().map(SchemaFile::defaults));
+            .with_defaults(
+                snapshot
+                    .schema
+                    .as_ref()
+                    .map(|s| s.defaults_for(snapshot.root_type.as_deref())),
+            );
         snapshot.evaluation =
             crol_eval::evaluate_data(&snapshot.sources, &snapshot.layers, &snapshot.options);
         // What does not evaluate above a gap says little: keep what is below
@@ -685,7 +697,22 @@ pub(crate) fn evaluate(
                 contexts: &snapshot.evaluation.contexts,
                 variants: &snapshot.evaluation.variants,
             };
-            let found = crol::check_view(view, schema, snapshot.root_type.as_deref(), &check);
+            let mut found = crol::check_view(view, schema, snapshot.root_type.as_deref(), &check);
+            // What is wrong with the root as a whole is on the top document
+            // (`SPEC.md` 4.1). A read-only one gets no diagnostics, so it
+            // goes on the top one that does.
+            let writable = (snapshot.layers.iter().rev())
+                .flat_map(|layer| layer.documents.iter().rev())
+                .map(|(_, file)| *file)
+                .find(|file| !snapshot.read_only.contains(file));
+            for diagnostic in &mut found {
+                if let Some(file) = writable
+                    && diagnostic.span.range.is_empty()
+                    && snapshot.read_only.contains(&diagnostic.span.file)
+                {
+                    diagnostic.span.file = file;
+                }
+            }
             snapshot.extra.extend(found);
         }
         // Above a gap, an error may only say what is missing.

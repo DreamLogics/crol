@@ -4,7 +4,9 @@
 use indexmap::IndexMap;
 
 use crate::RawValue;
-use crate::schema::{Field, FieldDefault, Repr, SchemaFile, TypeDef, TypeExpr, VariantShape};
+use crate::schema::{
+    DataRoot, Field, FieldDefault, Repr, SchemaFile, TypeDef, TypeExpr, VariantShape,
+};
 use crol_eval::{Key, Keyed, PathStep, Span, Value, ValueKind};
 
 /// How deep types are followed; types that contain themselves stop here.
@@ -14,12 +16,15 @@ const MAX_DEPTH: usize = 64;
 /// fields removed with `-field`, and, in a struct with `..` or of a type
 /// with `explicit_defaults: false`, fields left out. Only defaults the schema records are filled in; each filled-in
 /// value has the span `filled`, so a printer can say where it came from.
-/// `root` is the type of each root value (`None`: the schema's root).
+/// `root` is the root type (`None`: the schema's): of the whole root if it
+/// is the whole document, else of each root value (`SPEC.md` 4.1).
 pub fn fill_defaults(data: &Value, schema: &SchemaFile, root: Option<&str>, filled: Span) -> Value {
     let root_type = TypeExpr::Named(root.unwrap_or(&schema.root).to_owned());
     let filler = Filler { schema, filled };
     let mut data = data.clone();
-    if let ValueKind::Keyed(keyed) = &mut data.kind {
+    if schema.data_root(root) == DataRoot::Document {
+        filler.value(&mut data, &root_type, None, 0);
+    } else if let ValueKind::Keyed(keyed) = &mut data.kind {
         for value in keyed.entries.values_mut() {
             filler.value(value, &root_type, None, 0);
         }

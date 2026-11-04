@@ -220,6 +220,8 @@ pub fn evaluate_data(sources: &Sources, layers: &[Layer], options: &DataOptions)
     let input = eval::DataInput {
         ops: &lowered.ops,
         templates: &lowered.templates,
+        root_defaults: &lowered.root_defaults,
+        root_span: lowered.root_span,
         layer_names: &layer_names,
         warn_cross_file_patches: options.warn_cross_file_patches,
         variants: &options.variants,
@@ -407,6 +409,8 @@ fn explain_paths(
     let input = eval::DataInput {
         ops: &lowered.ops,
         templates: &lowered.templates,
+        root_defaults: &lowered.root_defaults,
+        root_span: lowered.root_span,
         layer_names: &layer_names,
         warn_cross_file_patches: false,
         variants: &evaluation.variants,

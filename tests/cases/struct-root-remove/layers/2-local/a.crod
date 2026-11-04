@@ -1,0 +1,3 @@
+// As `-field` in a block: the field takes its default, without `..`.
+-retries
+-note

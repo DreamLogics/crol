@@ -1,0 +1,5 @@
+name: "app"
+items: []
+options: { a: true, b: true }
+retries: 2
+note: "old"

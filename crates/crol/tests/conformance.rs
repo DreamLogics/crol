@@ -2,7 +2,9 @@
 //! both by deserializing into the test types below and by `crol::check`,
 //! and both must give the same errors.
 //!
-//! A case has a schema when its `options.crov` has `schema: "services"`.
+//! A case has a schema when its `options.crov` has `schema: "services"`,
+//! whose root type is an enum, the type of each root value, or `schema:
+//! "config"`, whose root type is a struct, the whole document (`SPEC.md` 4.1).
 //! The errors `crol::check` reports are in `expected.schema-errors`, one
 //! per line, as `<layer dir>/<path>:line:col: message`;
 //! `UPDATE_EXPECT=1 cargo test` writes them. The evaluation itself is
@@ -79,6 +81,31 @@ pub enum Definition {
     },
 }
 
+/// An item of the configuration.
+#[derive(Debug, Deserialize, Schema)]
+pub struct Item {
+    pub id: u32,
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize, Schema)]
+pub struct Options {
+    pub a: bool,
+    #[serde(default)]
+    pub b: bool,
+}
+
+/// A whole document: each root key is a field.
+#[derive(Debug, Deserialize, Schema)]
+pub struct Config {
+    pub name: String,
+    pub items: Vec<Item>,
+    pub options: Options,
+    #[serde(default)]
+    pub retries: u32,
+    pub note: Option<String>,
+}
+
 fn cases_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/cases")
 }
@@ -123,7 +150,7 @@ fn schema_of(case: &Path) -> Option<String> {
     }
 }
 
-fn load(case: &Path) -> CrolData {
+fn load(case: &Path, schema: crol::schema::SchemaFile) -> CrolData {
     let mut layer_dirs: Vec<PathBuf> = fs::read_dir(case.join("layers"))
         .unwrap()
         .map(|e| e.unwrap().path())
@@ -144,7 +171,7 @@ fn load(case: &Path) -> CrolData {
     }
     // The schema, for what serde does not tell the deserializer.
     composer
-        .schema(crol::schema::build::<Definition>())
+        .schema(schema)
         .compose_data()
         .unwrap_or_else(|e| panic!("{}: {e}", case.display()))
 }
@@ -172,11 +199,19 @@ fn check_and_deserializing_agree() {
         let Some(schema_name) = schema_of(case) else {
             continue;
         };
-        assert_eq!(schema_name, "services", "{}", case.display());
+        let whole = match schema_name.as_str() {
+            "services" => false,
+            "config" => true,
+            other => panic!("{}: no schema `{other}`", case.display()),
+        };
         ran += 1;
         let name = case.file_name().unwrap().to_string_lossy().into_owned();
-        let data = load(case);
-        let schema = crol::schema::build::<Definition>();
+        let schema = if whole {
+            crol::schema::build::<Config>()
+        } else {
+            crol::schema::build::<Definition>()
+        };
+        let data = load(case, schema.clone());
         let checked = crol::check(&data, &schema, None, &Default::default());
 
         // Every error deserializing gives, in every context, is one the
@@ -184,12 +219,18 @@ fn check_and_deserializing_agree() {
         let mut deserialized = Vec::new();
         let contexts: Vec<_> = data.contexts().collect();
         for context in &contexts {
-            for key in data.keys_in(context) {
-                if let Err(error) = data.get_in::<Definition>(&key, context) {
-                    let found = (error.message().to_owned(), error.span());
-                    if !deserialized.contains(&found) {
-                        deserialized.push(found);
-                    }
+            let mut errors = Vec::new();
+            if whole {
+                errors.extend(data.deserialize_root::<Config>(Some(context)).err());
+            } else {
+                for key in data.keys_in(context) {
+                    errors.extend(data.get_in::<Definition>(&key, context).err());
+                }
+            }
+            for error in errors {
+                let found = (error.message().to_owned(), error.span());
+                if !deserialized.contains(&found) {
+                    deserialized.push(found);
                 }
             }
         }

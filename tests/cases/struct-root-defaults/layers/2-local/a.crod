@@ -1,0 +1,3 @@
+// One `..` in any layer reaches the composed root.
+..
+-note

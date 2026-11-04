@@ -390,8 +390,14 @@ fn init_refuses_a_project_crol() {
 
 const DEFAULTS_SCHEMA: &str = r#"Schema {
     format: 1,
-    root: "app::Service",
+    root: "app::Services",
     types: {
+        "app::Services": Transparent {
+            name: "Services",
+            source: ("src/lib.rs", 3),
+            inner: Map(String, Named("app::Service")),
+            ..
+        },
         "app::Service": Struct {
             name: "Service",
             source: ("src/lib.rs", 1),

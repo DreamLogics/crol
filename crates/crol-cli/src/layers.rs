@@ -316,7 +316,7 @@ pub(crate) fn inputs(
         None => None,
     };
     // `&default` reads the schema (`SPEC.md` 6.1.3).
-    options = options.with_defaults(schema.as_ref().map(SchemaFile::defaults));
+    options = options.with_defaults(schema.as_ref().map(|s| s.defaults_for(root.as_deref())));
 
     let mut sources = Sources::new();
     let mut warnings = Vec::new();

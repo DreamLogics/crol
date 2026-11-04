@@ -25,7 +25,16 @@ pub fn fingerprint_value(value: &Value) -> [u8; 32] {
 
 /// The canonical encoding of the data (appendix B).
 pub fn encode_data(out: &mut Vec<u8>, base: &Value, contexts: &[ContextData], variants: &Variants) {
-    out.extend_from_slice(b"CROL1");
+    // A `..` at the root is the one thing a root has besides its keys; data
+    // without one keeps the encoding it always had.
+    let base_defaults = matches!(&base.kind, ValueKind::Keyed(keyed) if keyed.defaults);
+    let root_defaults = base_defaults || contexts.iter().any(|data| data.defaults);
+    if root_defaults {
+        out.extend_from_slice(b"CROLR1");
+        out.push(u8::from(base_defaults));
+    } else {
+        out.extend_from_slice(b"CROL1");
+    }
     match &base.kind {
         ValueKind::Keyed(keyed) => {
             leb128(out, keyed.entries.len() as u128);
@@ -59,6 +68,9 @@ pub fn encode_data(out: &mut Vec<u8>, base: &Value, contexts: &[ContextData], va
                     encode(out, value);
                 }
             }
+        }
+        if root_defaults {
+            out.push(u8::from(data.defaults));
         }
     }
 }

@@ -29,6 +29,11 @@ pub(crate) struct LoweredData {
     pub(crate) ir: Ir,
     pub(crate) ops: Vec<RootOp>,
     pub(crate) templates: Vec<BindId>,
+    /// Every `..` at a root.
+    pub(crate) root_defaults: Vec<RootDefaults>,
+    /// Where what is wrong with the root as a whole is reported: the start
+    /// of the top document (`SPEC.md` 4.1).
+    pub(crate) root_span: Span,
 }
 
 /// The root entries of a data-mode document: its entries, or those of its
@@ -74,6 +79,7 @@ pub(crate) fn lower_data(documents: &[DataDocument<'_>]) -> (LoweredData, Vec<Di
         position: (0, 0),
         default_target: DefaultTarget::default(),
         block_target: DefaultTarget::default(),
+        root_defaults: Vec::new(),
     };
 
     // Templates are visible in every document of every layer, so they are
@@ -116,6 +122,9 @@ pub(crate) fn lower_data(documents: &[DataDocument<'_>]) -> (LoweredData, Vec<Di
     lowerer.scopes.push(scope);
 
     let mut ops = Vec::new();
+    let root_span = documents.last().map_or(Span::detached(), |document| {
+        Span::new(document.file, Default::default())
+    });
     for (document, entries) in documents.iter().zip(&entries_of) {
         lowerer.file = document.file;
         lowerer.position = (document.layer, document.index);
@@ -134,10 +143,20 @@ pub(crate) fn lower_data(documents: &[DataDocument<'_>]) -> (LoweredData, Vec<Di
     let Lowerer {
         ir,
         mut diagnostics,
+        root_defaults,
         ..
     } = lowerer;
     diagnostics.sort_by_key(|d| (d.span.file, d.span.range.start()));
-    (LoweredData { ir, ops, templates }, diagnostics)
+    (
+        LoweredData {
+            ir,
+            ops,
+            templates,
+            root_defaults,
+            root_span,
+        },
+        diagnostics,
+    )
 }
 
 /// A lowered value-mode document.
@@ -180,6 +199,8 @@ struct Lowerer {
     lift_floor: Option<usize>,
     /// The layer and document position of the document being lowered.
     position: (usize, usize),
+    /// Every `..` at a root so far.
+    root_defaults: Vec<RootDefaults>,
     /// Whose default a `&default` here is.
     default_target: DefaultTarget,
     /// The `&default` target of the block being lowered, for its value binds
@@ -328,6 +349,7 @@ pub(crate) fn lower_value_document(
         position: (0, 0),
         default_target: DefaultTarget::default(),
         block_target: DefaultTarget::default(),
+        root_defaults: Vec::new(),
     };
     let type_name = lowerer.attributes(document);
     let root = match document.expr() {
@@ -409,12 +431,22 @@ impl Lowerer {
                 self.ir.value_binds[id].expr = expr;
                 return;
             }
-            ast::AnyEntry::Spread(_) | ast::AnyEntry::Defaults(_) => {
+            ast::AnyEntry::Spread(_) => {
                 let span = self.span(entry.syntax());
                 self.error(
                     span,
-                    "a spread or `..` cannot be at the root of a data-mode document; the root is not a value",
+                    "a spread cannot be at the root of a data-mode document; the root is not a value",
                 );
+                return;
+            }
+            ast::AnyEntry::Defaults(_) => {
+                let span = self.span(entry.syntax());
+                for condition in conditions {
+                    self.root_defaults.push(RootDefaults {
+                        condition: condition.clone(),
+                        span,
+                    });
+                }
                 return;
             }
             ast::AnyEntry::VariantBlock(block) => {
@@ -484,9 +516,11 @@ impl Lowerer {
             outer: Vec::new(),
             conditions: alternatives.clone(),
         });
-        // A root value's type is the schema's root type (`SPEC.md` 4.1).
+        // A root value's type is the schema's root type, or the key is a
+        // field of it (`SPEC.md` 4.1).
         self.default_target = DefaultTarget {
             type_name: None,
+            root_key: Some(key.clone()),
             path: field_names(&path),
         };
         let value = value.map(|value| self.expr(&value));
@@ -792,6 +826,7 @@ impl Lowerer {
         let block_target = match &name {
             Some(name) => DefaultTarget {
                 type_name: Some(name.clone()),
+                root_key: None,
                 path: Vec::new(),
             },
             None => outer_target.clone(),

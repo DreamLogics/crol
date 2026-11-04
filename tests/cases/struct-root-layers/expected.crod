@@ -1,0 +1,10 @@
+name: "app-local"
+items: [{ id: 1, name: "one" }]
+options: { a: true, b: true }
+note: None
+retries: 3
+
+<prod> {
+    name: "app-prod",
+    retries: 5,
+}

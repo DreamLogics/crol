@@ -43,12 +43,13 @@ impl<'a> Scope<'a> {
         }
     }
 
-    /// The document as a whole: a value of the root type, or in data, root
-    /// keys.
+    /// The document as a whole: a value of the root type, or in data whose
+    /// root type is that of each root value, root keys. Everything below
+    /// follows from this place (`SPEC.md` 4.1).
     fn root(&self) -> Place<'a> {
         Place {
             shape: self.schema.as_ref().map(|schema| {
-                if schema.value_mode {
+                if schema.is_whole_value() {
                     Shape::Type(schema::root_expr(schema))
                 } else {
                     Shape::Keys

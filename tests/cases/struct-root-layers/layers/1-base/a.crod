@@ -1,0 +1,6 @@
+// A root key is a field of the root struct. This layer alone leaves fields
+// out, which is no error: only the composed root is checked.
+first := { id: 1 }
+
+name: "app"
+items: [{ ..&first, name: "one" }]

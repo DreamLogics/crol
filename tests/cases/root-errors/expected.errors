@@ -1,6 +1,5 @@
 1-base/a.crod:1:1: `type` names the type of a value-mode document; a data-mode document's root has no type
-1-base/a.crod:2:1: a spread or `..` cannot be at the root of a data-mode document; the root is not a value
-1-base/a.crod:3:1: a spread or `..` cannot be at the root of a data-mode document; the root is not a value
+1-base/a.crod:2:1: a spread cannot be at the root of a data-mode document; the root is not a value
 1-base/a.crod:4:1: root keys are ids, which are strings; write `"12"` for the key 12
 1-base/a.crod:5:1: a bind at the top level of a data-mode document is not needed: write `&root.key`
 1-base/b.crod:1:1: the outer braces of a data-mode document cannot have a type name

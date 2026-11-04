@@ -1,0 +1,5 @@
+// An enum root is the type of each root value, as it was: `..` at the root
+// says nothing about them.
+..
+data: Volume { size_gb: 2 }
+name: "x"

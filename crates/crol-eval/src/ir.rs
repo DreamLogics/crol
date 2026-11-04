@@ -75,6 +75,10 @@ pub(crate) enum RefKind {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct DefaultTarget {
     pub(crate) type_name: Option<Rc<str>>,
+    /// The root key of a data-mode document the path starts below, with no
+    /// type name: a step of the path where the root type is the whole
+    /// document (`SPEC.md` 4.1).
+    pub(crate) root_key: Option<Rc<str>>,
     pub(crate) path: Vec<Rc<str>>,
 }
 
@@ -191,6 +195,14 @@ pub(crate) struct RootOp {
     /// of the blocks around it, innermost first, so that `&self`, `&parent`
     /// and binds see them. Empty for a root entry.
     pub(crate) blocks: Vec<Vec<Selector>>,
+}
+
+/// A `..` at the root of a data-mode document (`SPEC.md` 4), under a
+/// condition if it is in a variant block.
+#[derive(Debug)]
+pub(crate) struct RootDefaults {
+    pub(crate) condition: Option<crate::cond::Cond>,
+    pub(crate) span: Span,
 }
 
 impl RootOp {
