@@ -46,14 +46,32 @@ writable layers, not only the ones you have open, and `read_only` layers get non
 **Other open files**, and all open files if there is no project, are evaluated on
 their own, and checked against their `#![schema(...)]` if they have one. The
 [extension](modes.md) gives the mode: a `.crov` file is a value document, and a
-`.crod` file is data, as a layer of its own, with its variants and patches.
+`.crod` file is data, as a layer of its own, with its variants and patches. A
+`.crov` file in a project gets the project's schema only through
+[`files`](projects.md#value-documents-in-a-project), which give it a type.
 
-A `.crod` file alone only knows itself, so a patch to a key from another file has
-nothing below it. The server does not follow `#![extends(...)]` yet, so list your
-layers in `project.crov` to see how they work together.
+A `.crod` file is evaluated on top of what its `#![extends(...)]` names, as with
+`crol check`, and open files among those count even when they are not saved. Hover,
+go to definition and completion see the extended keys, and changing an extended
+file evaluates the document again. Errors in an extended file are not shown as if
+they were yours: the first one, an `extends` that names nothing and a cycle appear
+on the `extends` itself. A `.crod` file with no `extends` only knows itself, so a
+patch to a key from another file has nothing below it. Name what it builds on, or
+list your layers in `project.crov`.
 
-A wrong file in a layer, such as a `.crov` file, is reported on that file. The
-server shows a `.crol` file only an error that says to rename it.
+While a file does not evaluate, as in the middle of an edit, hover and completion
+use the last evaluation that did. Hover says so.
+
+A layer that does not load does not stop the others, as it does for `crol check`.
+A wrong file in a layer, such as a `.crov` or a `.crol` file, is reported on that
+file and left out, and the rest of the layer loads. A layer that cannot be read at
+all, such as one whose `dir` names nothing, is reported on the file to blame or on
+`project.crov`, and adds nothing: its keys have no values, and the layers after it
+are evaluated without it. Errors in those layers are then warnings that say so,
+since what is missing may be why. Hover and completion keep working, from the last
+evaluation that succeeded or else from the layers below.
+
+The server shows a `.crol` file only an error that says to rename it.
 
 `project.crov` itself is checked against the schema of project files.
 

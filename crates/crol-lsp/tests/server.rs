@@ -2385,3 +2385,667 @@ fn an_open_crol_file_says_to_rename_it() {
     assert!(message.contains("`.crod`") && message.contains("`.crov`"));
     client.stop();
 }
+
+// ---- What a document builds on: `extends`, `files`, failed layers ----
+
+/// Opens `text` as `uri` without waiting for anything.
+fn open_text(client: &Client, uri: &str, text: &str) {
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": uri, "languageId": "crol", "version": 1, "text": text } }),
+    );
+}
+
+/// Whether a diagnostic's message holds `text`.
+fn says(diagnostics: &[Value], text: &str) -> bool {
+    diagnostics
+        .iter()
+        .any(|d| d["message"].as_str().unwrap().contains(text))
+}
+
+#[test]
+fn a_document_on_its_own_is_evaluated_on_what_it_extends() {
+    let dir = workspace(
+        "lsp-extends",
+        &[
+            ("base.crod", "+web: { port: 80, name: \"w\" }\n"),
+            ("local.crod", "#![extends(base)]\n\nweb.port: & + 1\n"),
+        ],
+    );
+    let mut client = Client::start(&dir);
+    let local = uri(&dir.join("local.crod"));
+    open_text(&client, &local, "#![extends(base)]\n\nweb.port: & + 1\n");
+    client.diagnostics_for(&local, |d| d.is_empty());
+    let mut buffer = Buffer {
+        uri: local,
+        version: 1,
+    };
+
+    // Hover has the value on top of what is below, with its history.
+    let hover = buffer.hover(&mut client, "#![extends(base)]\n\nweb.po|rt: & + 1\n");
+    assert!(hover.contains("`81`"), "{hover}");
+    assert!(hover.contains("base.crod"), "{hover}");
+
+    // Completion sees the keys of the extended document.
+    let items = buffer.complete(&mut client, "#![extends(base)]\n\nx: &root.|\n");
+    assert!(labels(&items).contains(&"web"), "{items:?}");
+
+    // Go to definition leaves the document for the one that defines it.
+    let (text, position) = at_marker("#![extends(base)]\n\nw|eb.port: & + 1\n");
+    buffer.change(&client, &text);
+    client.diagnostics_for(&buffer.uri, |d| d.is_empty());
+    let found = client.request(
+        "textDocument/definition",
+        json!({ "textDocument": { "uri": buffer.uri }, "position": position }),
+    );
+    assert_eq!(found["uri"], uri(&dir.join("base.crod")), "{found}");
+    client.stop();
+}
+
+#[test]
+fn an_extended_file_that_changes_evaluates_the_document_again() {
+    let dir = workspace(
+        "lsp-extends-changes",
+        &[
+            ("base.crod", "+web: { port: 80 }\n"),
+            ("local.crod", "#![extends(base)]\n\ndb.host: \"h\"\n"),
+        ],
+    );
+    let client = Client::start(&dir);
+    let local = uri(&dir.join("local.crod"));
+    let base = uri(&dir.join("base.crod"));
+    open_text(&client, &local, "#![extends(base)]\n\ndb.host: \"h\"\n");
+    client.diagnostics_for(&local, |d| says(d, "cannot be patched"));
+
+    // An open buffer counts, saved or not.
+    open_text(&client, &base, "+web: { port: 80 }\n+db: { host: \"a\" }\n");
+    client.diagnostics_for(&local, |d| d.is_empty());
+
+    // Closed, the file on disk counts again.
+    client.notify(
+        "textDocument/didClose",
+        json!({ "textDocument": { "uri": base } }),
+    );
+    client.diagnostics_for(&local, |d| says(d, "cannot be patched"));
+
+    // A change on disk, as the client's file watcher reports it.
+    std::fs::write(dir.join("base.crod"), "+db: { host: \"b\" }\n").unwrap();
+    client.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({ "changes": [{ "uri": base, "type": 2 }] }),
+    );
+    client.diagnostics_for(&local, |d| d.is_empty());
+    client.stop();
+}
+
+#[test]
+fn the_server_asks_to_be_told_about_files_on_disk() {
+    let dir = workspace("lsp-watch", &[("a.crod", "+a: 1\n")]);
+    let (server_side, client_side) = Connection::memory();
+    let server = thread::spawn(move || {
+        crol_lsp::Server::start(server_side, None)
+            .unwrap()
+            .run()
+            .unwrap();
+    });
+    let send = |message: Message| client_side.sender.send(message).unwrap();
+    send(Message::Request(Request::new(
+        RequestId::from(1),
+        "initialize".to_owned(),
+        json!({
+            "capabilities": {
+                "workspace": { "didChangeWatchedFiles": { "dynamicRegistration": true } },
+            },
+            "workspaceFolders": [{ "uri": uri(&dir), "name": "test" }],
+        }),
+    )));
+    send(Message::Notification(Notification::new(
+        "initialized".to_owned(),
+        json!({}),
+    )));
+    let registration = loop {
+        let message = client_side
+            .receiver
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap();
+        if let Message::Request(request) = message
+            && request.method == "client/registerCapability"
+        {
+            break request;
+        }
+    };
+    let text = registration.params.to_string();
+    assert!(text.contains("workspace/didChangeWatchedFiles"), "{text}");
+    assert!(text.contains("crod"), "{text}");
+    send(Message::Request(Request::new(
+        RequestId::from(2),
+        "shutdown".to_owned(),
+        json!(null),
+    )));
+    send(Message::Notification(Notification::new(
+        "exit".to_owned(),
+        json!(null),
+    )));
+    server.join().unwrap();
+}
+
+#[test]
+fn a_failed_extends_is_reported_on_the_attribute() {
+    let dir = workspace(
+        "lsp-extends-failed",
+        &[
+            ("base.crod", "+web: { port: 80 }\n"),
+            ("ring_a.crod", "#![extends(ring_b)]\n\n+a: 1\n"),
+            ("ring_b.crod", "#![extends(ring_a)]\n\n+b: 1\n"),
+            (
+                "missing.crod",
+                "#![extends(base)]\n#![extends(nothing)]\n\nweb.port: 1\n",
+            ),
+        ],
+    );
+    let client = Client::start(&dir);
+    let file = uri(&dir.join("missing.crod"));
+    open_text(
+        &client,
+        &file,
+        &std::fs::read_to_string(dir.join("missing.crod")).unwrap(),
+    );
+    let diagnostics = client.diagnostics_for(&file, |d| !d.is_empty());
+    // On the second attribute; what the first brought in still counts.
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert_eq!(diagnostics[0]["range"]["start"]["line"], 1);
+    assert!(says(&diagnostics, "nothing"), "{diagnostics:?}");
+
+    let ring = uri(&dir.join("ring_a.crod"));
+    open_text(
+        &client,
+        &ring,
+        &std::fs::read_to_string(dir.join("ring_a.crod")).unwrap(),
+    );
+    let diagnostics = client.diagnostics_for(&ring, |d| !d.is_empty());
+    assert!(says(&diagnostics, "cycle"), "{diagnostics:?}");
+    assert_eq!(diagnostics[0]["range"]["start"]["line"], 0);
+
+    // A document that extends itself.
+    let own = uri(&dir.join("base.crod"));
+    open_text(&client, &own, "#![extends(base)]\n\n+web: 1\n");
+    let diagnostics = client.diagnostics_for(&own, |d| says(d, "cycle"));
+    assert_eq!(diagnostics[0]["range"]["start"]["line"], 0);
+    client.stop();
+}
+
+#[test]
+fn a_problem_in_an_extended_document_is_shown_on_the_attribute() {
+    let dir = workspace(
+        "lsp-extends-broken",
+        &[
+            ("base.crod", "+web: 1 / 0\n"),
+            ("local.crod", "#![extends(base)]\n\n+db: 1\n"),
+        ],
+    );
+    let client = Client::start(&dir);
+    let local = uri(&dir.join("local.crod"));
+    open_text(&client, &local, "#![extends(base)]\n\n+db: 1\n");
+    let diagnostics = client.diagnostics_for(&local, |d| !d.is_empty());
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert_eq!(diagnostics[0]["range"]["start"]["line"], 0);
+    assert!(says(&diagnostics, "division"), "{diagnostics:?}");
+    client.stop();
+}
+
+#[test]
+fn a_layer_of_a_project_is_evaluated_on_what_it_extends() {
+    let dir = workspace(
+        "lsp-extends-project",
+        &[
+            (
+                "project.crov",
+                r#"Project { layers: List([{ name: "local", dir: "local", .. }]), .. }"#,
+            ),
+            ("shared/base.crod", "+web: { port: 80 }\n"),
+            (
+                "local/a.crod",
+                "#![extends(::shared::base)]\n\nweb.port: & + 1\n",
+            ),
+        ],
+    );
+    let client = Client::start(&dir);
+    let file = uri(&dir.join("local/a.crod"));
+    // What is extended is not a lower layer, which tools warn about.
+    let diagnostics = client.diagnostics_for(&file, |d| !d.is_empty());
+    assert!(says(&diagnostics, "not a lower layer"), "{diagnostics:?}");
+    assert_eq!(diagnostics[0]["severity"], 2, "{diagnostics:?}");
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    client.stop();
+}
+
+/// A schema with a default, and a type for `files`.
+const DEFAULTS_SCHEMA: &str = r#"Schema {
+    format: 1,
+    root: "app::Service",
+    types: {
+        "app::Service": Struct {
+            name: "Service",
+            source: ("src/lib.rs", 1),
+            fields: {
+                replicas: { ty: U32, default: Value(3), .. },
+                name: { ty: String, default: Value("x"), .. },
+            },
+            ..
+        },
+        "app::Config": Struct {
+            name: "Config",
+            source: ("src/lib.rs", 2),
+            fields: { port: { ty: U16, doc: "The port.", .. } },
+            ..
+        },
+    },
+}"#;
+
+#[test]
+fn files_give_value_documents_a_type() {
+    let project = r#"Project {
+        layers: List([{ name: "base", dir: "data", .. }]),
+        schema: Some("schema"),
+        files: [{ glob: "config::*", type: "app::Config" }],
+        ..
+    }"#;
+    let dir = workspace(
+        "lsp-files",
+        &[
+            ("project.crov", project),
+            ("schema.crov", DEFAULTS_SCHEMA),
+            ("data/a.crod", "+web: Service { .. }\n"),
+            ("config/app.crov", "{ port: 80 }\n"),
+            ("other/app.crov", "{ port: \"not checked\" }\n"),
+        ],
+    );
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "config/app.crov");
+    let items = buffer.complete(&mut client, "{ po| }\n");
+    assert!(labels(&items).contains(&"port"), "{items:?}");
+    buffer.change(&client, "{ port: \"x\" }\n");
+    let diagnostics = client.diagnostics_for(&buffer.uri, |d| !d.is_empty());
+    assert!(says(&diagnostics, "found \"x\""), "{diagnostics:?}");
+
+    // A document that matches no glob is not given the project's schema.
+    let other = uri(&dir.join("other/app.crov"));
+    open_text(&client, &other, "{ port: \"not checked\" }\n");
+    client.diagnostics_for(&other, |d| d.is_empty());
+    client.stop();
+}
+
+#[test]
+fn a_type_the_schema_does_not_have_is_reported() {
+    let project = r#"Project {
+        layers: List([{ name: "base", dir: "data", .. }]),
+        schema: Some("schema"),
+        files: [{ glob: "config::*", type: "app::Nothing" }],
+        ..
+    }"#;
+    let dir = workspace(
+        "lsp-files-unknown",
+        &[
+            ("project.crov", project),
+            ("schema.crov", DEFAULTS_SCHEMA),
+            ("data/a.crod", "+web: Service { .. }\n"),
+            ("config/app.crov", "{ port: 80 }\n"),
+        ],
+    );
+    let client = Client::start(&dir);
+    let file = uri(&dir.join("config/app.crov"));
+    open_text(&client, &file, "{ port: 80 }\n");
+    let diagnostics = client.diagnostics_for(&file, |d| !d.is_empty());
+    assert!(says(&diagnostics, "app::Nothing"), "{diagnostics:?}");
+    client.stop();
+}
+
+/// A project of three layers, the middle one's directory as given.
+fn three_layers(name: &str, middle: &[(&str, &str)], middle_dir: &str) -> PathBuf {
+    let project = format!(
+        r#"Project {{ layers: List([
+            {{ name: "base", dir: "base", .. }},
+            {{ name: "middle", dir: "{middle_dir}", .. }},
+            {{ name: "top", dir: "top", .. }},
+        ]), .. }}"#
+    );
+    let mut files = vec![
+        ("project.crov", project.as_str()),
+        ("base/a.crod", "+web: { port: 80 }\n"),
+        ("top/a.crod", "web.port: & + 1\n+db: 2\n"),
+    ];
+    files.extend_from_slice(middle);
+    workspace(name, &files)
+}
+
+#[test]
+fn a_stray_file_leaves_the_rest_of_its_layer_and_the_layers_after_it() {
+    let dir = three_layers(
+        "lsp-failed-file",
+        &[
+            ("middle/a.crod", "+cache: 1\n"),
+            ("middle/stray.crov", "1\n"),
+        ],
+        "middle",
+    );
+    let mut client = Client::start(&dir);
+    client.diagnostics_for(&uri(&dir.join("middle/stray.crov")), |d| {
+        says(d, "cannot be a layer")
+    });
+    let mut buffer = Buffer::open(&client, &dir, "top/a.crod");
+    let hover = buffer.hover(&mut client, "web.po|rt: & + 1\n+db: 2\n");
+    assert!(hover.contains("`81`"), "{hover}");
+    let items = buffer.complete(&mut client, "web.port: & + 1\n+db: 2\nx: &root.|\n");
+    let found = labels(&items);
+    assert!(
+        found.contains(&"cache") && found.contains(&"db"),
+        "{found:?}"
+    );
+    client.stop();
+}
+
+#[test]
+fn a_layer_that_cannot_be_found_leaves_the_layers_after_it() {
+    let dir = three_layers("lsp-failed-layer", &[], "nothing");
+    let mut client = Client::start(&dir);
+    client.diagnostics_for(&uri(&dir.join("project.crov")), |d| {
+        says(d, "layer `middle`")
+    });
+    let mut buffer = Buffer::open(&client, &dir, "top/a.crod");
+    let hover = buffer.hover(&mut client, "web.po|rt: & + 1\n+db: 2\n");
+    assert!(hover.contains("`81`"), "{hover}");
+    client.stop();
+}
+
+#[test]
+fn what_a_failed_layer_would_have_defined_is_no_error_above_it() {
+    let dir = three_layers("lsp-failed-gap", &[], "nothing");
+    std::fs::write(dir.join("top/a.crod"), "cache.size: 1\nweb.port: & + 1\n").unwrap();
+    let mut client = Client::start(&dir);
+    let file = uri(&dir.join("top/a.crod"));
+    let diagnostics = client.diagnostics_for(&file, |d| !d.is_empty());
+    assert!(says(&diagnostics, "cannot be patched"), "{diagnostics:?}");
+    assert!(says(&diagnostics, "`middle`"), "{diagnostics:?}");
+    assert_eq!(diagnostics[0]["severity"], 2, "{diagnostics:?}");
+    // The layers below the gap still evaluate.
+    open_text(&client, &file, "cache.size: 1\nweb.port: & + 1\n");
+    let mut buffer = Buffer {
+        uri: file,
+        version: 1,
+    };
+    let items = buffer.complete(&mut client, "cache.size: 1\nx: &root.|\n");
+    assert!(labels(&items).contains(&"web"), "{items:?}");
+    client.stop();
+}
+
+#[test]
+fn default_reads_the_project_schema() {
+    let project = r#"Project {
+        layers: List([{ name: "base", dir: "data", .. }]),
+        schema: Some("schema"),
+        ..
+    }"#;
+    let text = "+web: Service { replicas: &default * 2, .. }\n";
+    let dir = workspace(
+        "lsp-default-project",
+        &[
+            ("project.crov", project),
+            ("schema.crov", DEFAULTS_SCHEMA),
+            ("data/a.crod", text),
+        ],
+    );
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "data/a.crod");
+    let hover = buffer.hover(
+        &mut client,
+        "+web: Service { repl|icas: &default * 2, .. }\n",
+    );
+    assert!(hover.contains("`6`"), "{hover}");
+    client.stop();
+}
+
+#[test]
+fn default_reads_the_schema_of_a_document_on_its_own() {
+    let text = "#![schema(schema)]\n\n+web: Service { replicas: &default * 2, .. }\n";
+    let dir = workspace(
+        "lsp-default-alone",
+        &[
+            ("schema.crov", DEFAULTS_SCHEMA),
+            ("a.crod", text),
+            ("b.crod", ""),
+        ],
+    );
+    let client = Client::start(&dir);
+    let file = uri(&dir.join("a.crod"));
+    open_text(&client, &file, text);
+    client.diagnostics_for(&file, |d| d.is_empty());
+
+    // Without a schema it stays an error.
+    let plain = uri(&dir.join("b.crod"));
+    open_text(&client, &plain, "+web: &default\n");
+    client.diagnostics_for(&plain, |d| says(d, "no schema is given"));
+    client.stop();
+}
+
+#[test]
+fn a_document_on_its_own_keeps_its_last_good_evaluation() {
+    let text = "#![schema(schema)]\n\n+web: Service { replicas: 7, name: \"w\" }\n";
+    let dir = workspace(
+        "lsp-last-good",
+        &[("schema.crov", DEFAULTS_SCHEMA), ("a.crod", text)],
+    );
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "a.crod");
+    let broken = "#![schema(schema)]\n\n+web: Service { repl|icas: 7, name: 1 / 0 }\n";
+    let hover = buffer.hover(&mut client, broken);
+    assert!(hover.contains("`7`"), "{hover}");
+    assert!(hover.contains("last"), "{hover}");
+
+    // Filling in a field writes its value, not a placeholder.
+    let items = buffer.complete(
+        &mut client,
+        "#![schema(schema)]\n\n+web: Service { name: 1 / 0, rep| }\n",
+    );
+    let replicas = items.iter().find(|i| i["label"] == "replicas").unwrap();
+    assert_eq!(replicas["textEdit"]["newText"], "replicas: 7", "{replicas}");
+    client.stop();
+}
+
+#[test]
+fn a_value_document_keeps_its_last_good_evaluation() {
+    let dir = workspace("lsp-last-good-value", &[("a.crov", "{ port: 80 }\n")]);
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "a.crov");
+    let hover = buffer.hover(&mut client, "{ po|rt: 1 / 0 }\n");
+    assert!(hover.contains("`80`"), "{hover}");
+    client.stop();
+}
+
+#[test]
+fn a_leftover_crol_file_in_a_layer_may_be_what_is_missing() {
+    let dir = three_layers(
+        "lsp-failed-crol",
+        &[("middle/old.crol", "+cache: 1\n")],
+        "middle",
+    );
+    std::fs::write(dir.join("top/a.crod"), "cache.size: 1\n").unwrap();
+    let client = Client::start(&dir);
+    let diagnostics = client.diagnostics_for(&uri(&dir.join("top/a.crod")), |d| !d.is_empty());
+    assert_eq!(diagnostics[0]["severity"], 2, "{diagnostics:?}");
+    client.diagnostics_for(&uri(&dir.join("middle/old.crol")), |d| says(d, "retired"));
+    client.stop();
+}
+
+#[test]
+fn a_stray_file_in_an_extended_directory_is_reported_on_it() {
+    let dir = workspace(
+        "lsp-extends-stray",
+        &[
+            ("shared/a.crod", "+web: 1\n"),
+            ("shared/stray.crov", "1\n"),
+            ("local.crod", "#![extends(shared)]\n\nweb: 2\n"),
+        ],
+    );
+    let client = Client::start(&dir);
+    let local = uri(&dir.join("local.crod"));
+    open_text(&client, &local, "#![extends(shared)]\n\nweb: 2\n");
+    client.diagnostics_for(&uri(&dir.join("shared/stray.crov")), |d| {
+        says(d, "cannot be a layer")
+    });
+    client.stop();
+}
+
+#[test]
+fn super_paths_and_directories_can_be_extended() {
+    let dir = workspace(
+        "lsp-extends-super",
+        &[
+            ("shared/a.crod", "+web: { port: 1 }\n"),
+            ("shared/b.crod", "+db: { port: 2 }\n"),
+            ("deep/er/local.crod", ""),
+        ],
+    );
+    let client = Client::start(&dir);
+    let local = uri(&dir.join("deep/er/local.crod"));
+    let text = "#![extends(super::super::shared)]\n\nweb.port: 3\ndb.port: 4\n";
+    open_text(&client, &local, text);
+    client.diagnostics_for(&local, |d| d.is_empty());
+    client.stop();
+}
+
+/// A schema of the enums serde writes without a name.
+const TAGGED_SCHEMA: &str = r#"Schema {
+    format: 1,
+    root: "app::Root",
+    types: {
+        "app::Root": Struct {
+            name: "Root",
+            source: ("src/lib.rs", 1),
+            fields: {
+                internal: { ty: Named("app::Internal"), .. },
+                adjacent: { ty: Named("app::Adjacent"), .. },
+                untagged: { ty: Named("app::Untagged"), .. },
+                external: { ty: Named("app::External"), .. },
+            },
+            ..
+        },
+        "app::Internal": Enum {
+            name: "Internal",
+            source: ("src/lib.rs", 2),
+            repr: Internal { tag: "kind" },
+            variants: {
+                Disk: { shape: Struct({ path: { ty: String, .. } }), .. },
+                Memory: { shape: Newtype(Named("app::Memory")), .. },
+            },
+            ..
+        },
+        "app::Memory": Struct {
+            name: "Memory",
+            source: ("src/lib.rs", 3),
+            fields: { size: { ty: U32, .. }, path: { ty: String, .. } },
+            ..
+        },
+        "app::Adjacent": Enum {
+            name: "Adjacent",
+            source: ("src/lib.rs", 4),
+            repr: Adjacent { tag: "t", content: "c" },
+            variants: { A: { shape: Unit, .. } },
+            ..
+        },
+        "app::Untagged": Enum {
+            name: "Untagged",
+            source: ("src/lib.rs", 5),
+            repr: Untagged,
+            variants: {
+                One: { shape: Struct({ first: { ty: U32, .. } }), .. },
+                Two: { shape: Struct({ second: { ty: U32, .. } }), .. },
+            },
+            ..
+        },
+        "app::External": Enum {
+            name: "External",
+            source: ("src/lib.rs", 6),
+            variants: { One: { shape: Struct({ first: { ty: U32, .. } }), .. } },
+            ..
+        },
+    },
+}"#;
+
+#[test]
+fn enums_without_a_name_offer_their_fields() {
+    let dir = workspace(
+        "lsp-tagged",
+        &[
+            ("schema.crov", TAGGED_SCHEMA),
+            ("a.crov", "#![schema(schema)]\n\n{ .. }\n"),
+        ],
+    );
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "a.crov");
+    let cases: &[Case<'_>] = &[
+        ("{ internal: { | } }", &["kind", "path", "size"], &[]),
+        ("{ internal: { kind: \"Disk\", | } }", &["path"], &["kind"]),
+        ("{ adjacent: { | } }", &["t", "c"], &[]),
+        ("{ untagged: { | } }", &["first", "second"], &[]),
+        // The name says the variant here, and a block has none.
+        ("{ external: { | } }", &[], &["first"]),
+    ];
+    check_completions(&mut client, &mut buffer, HEADER, cases);
+    client.stop();
+}
+
+#[test]
+fn hover_on_a_dotted_target_is_about_the_segment_under_it() {
+    let text = "#![schema(schema)]\n\n{ server: { tls: { cert: { path: \"a\" } } } }\n";
+    let dir = workspace(
+        "lsp-hover-segment",
+        &[("schema.crov", NESTED_SCHEMA), ("config.crov", text)],
+    );
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "config.crov");
+    let hover = buffer.hover(
+        &mut client,
+        "#![schema(schema)]\n\n{ server.t|ls.cert.path: \"a\" }\n",
+    );
+    assert!(hover.contains("**server.tls**"), "{hover}");
+    assert!(!hover.contains("cert.path"), "{hover}");
+    let hover = buffer.hover(
+        &mut client,
+        "#![schema(schema)]\n\n{ ser|ver.tls.cert.path: \"a\" }\n",
+    );
+    assert!(hover.contains("**server**"), "{hover}");
+    let hover = buffer.hover(
+        &mut client,
+        "#![schema(schema)]\n\n{ server.tls.cert.pa|th: \"a\" }\n",
+    );
+    assert!(hover.contains("**server.tls.cert.path**"), "{hover}");
+    assert!(hover.contains("`String`"), "{hover}");
+    client.stop();
+}
+
+#[test]
+fn inlay_hints_on_elements() {
+    let dir = workspace(
+        "lsp-element-hints",
+        &[
+            (
+                "project.crov",
+                r#"Project { layers: List([{ name: "base", dir: "base", .. }]), .. }"#,
+            ),
+            (
+                "base/a.crod",
+                "+a: [1 + 1, 2, 3 * 3]\n+b: (2 + 2, \"x\")\n+c: Some(1 + 4)\n+d: [1] + [2 + 4]\n",
+            ),
+            ("value.crov", "{ a: [1 + 1, { b: [2 + 2] }] }\n"),
+        ],
+    );
+    let mut client = Client::start_with(&dir, json!({ "debounce_ms": 10, "inlay_hints": true }));
+    let buffer = Buffer::open(&client, &dir, "base/a.crod");
+    assert_eq!(
+        inlay_labels(&mut client, &buffer),
+        ["= 2", "= 9", "= 4", "= 5", "= [1, 6]"]
+    );
+    let buffer = Buffer::open(&client, &dir, "value.crov");
+    assert_eq!(inlay_labels(&mut client, &buffer), ["= 2", "= 4"]);
+    client.stop();
+}

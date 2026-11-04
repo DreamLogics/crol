@@ -125,6 +125,105 @@ pub struct FilePattern {
     pub type_path: String,
 }
 
+impl FilePattern {
+    /// The glob's segments, from the project's directory.
+    fn segments(&self) -> Vec<&str> {
+        let glob = self.glob.strip_prefix("::").unwrap_or(&self.glob);
+        glob.split("::").collect()
+    }
+
+    /// Checks the form of the glob (`SPEC.md` 12.4).
+    fn check(&self) -> Result<(), Error> {
+        let invalid =
+            |why: &str| Error::new(format!("invalid glob `{}` in `files`: {why}", self.glob));
+        let segments = self.segments();
+        if segments.last() == Some(&"**") {
+            return Err(invalid(
+                "its last segment names files, and `**` directories",
+            ));
+        }
+        for segment in segments {
+            if segment.is_empty() {
+                return Err(invalid("a segment is empty"));
+            }
+            if segment == "super" {
+                return Err(invalid("it starts from the project's directory"));
+            }
+            if segment == "**" {
+                continue;
+            }
+            if segment.contains("**") {
+                return Err(invalid("`**` is a whole segment"));
+            }
+            if !segment
+                .chars()
+                .all(|c| c == '*' || c == '_' || c.is_alphanumeric())
+            {
+                return Err(invalid(&format!("`{segment}` is not a name")));
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether the glob matches the `.crov` file `stem` in `directories`
+    /// below the project's directory (`SPEC.md` 12.4).
+    fn matches(&self, directories: &[String], stem: &str) -> bool {
+        let segments = self.segments();
+        let Some((last, above)) = segments.split_last() else {
+            return false;
+        };
+        name_matches(last, stem)
+            && wildcard(
+                above,
+                directories,
+                |segment| *segment == "**",
+                |segment, directory| name_matches(segment, directory),
+            )
+    }
+}
+
+/// Whether a glob segment matches a name: `*` is any part of it.
+fn name_matches(segment: &str, name: &str) -> bool {
+    let segment: Vec<char> = segment.chars().collect();
+    let name: Vec<char> = name.chars().collect();
+    wildcard(&segment, &name, |c| *c == '*', |a, b| a == b)
+}
+
+/// Whether `pattern` matches all of `items`, where what `is_star` says of
+/// stands for any number of items, and `fits` says of the rest which item
+/// each stands for. It only goes back to the last star, so it takes no more
+/// than the two lengths multiplied, whatever a glob holds.
+fn wildcard<P, T>(
+    pattern: &[P],
+    items: &[T],
+    is_star: impl Fn(&P) -> bool,
+    fits: impl Fn(&P, &T) -> bool,
+) -> bool {
+    let (mut at, mut item) = (0, 0);
+    let mut last_star = None;
+    while item < items.len() {
+        match pattern.get(at) {
+            Some(star) if is_star(star) => {
+                last_star = Some((at, item));
+                at += 1;
+            }
+            Some(one) if fits(one, &items[item]) => {
+                at += 1;
+                item += 1;
+            }
+            _ => {
+                let Some((star, from)) = last_star else {
+                    return false;
+                };
+                last_star = Some((star, from + 1));
+                at = star + 1;
+                item = from + 1;
+            }
+        }
+    }
+    pattern[at..].iter().all(is_star)
+}
+
 impl Project {
     /// The project file in `start` or the nearest directory above it. A
     /// `project.crol` where it is sought is an error that says to rename it,
@@ -154,7 +253,41 @@ impl Project {
         let text = std::fs::read_to_string(path)
             .map_err(|e| Error::new(format!("cannot read {}: {e}", path.display())))?;
         let name = path.display().to_string();
-        crate::from_named_str(&name, &text).map_err(|e| e.in_file(&name))
+        let in_file = |e: Error| e.in_file(&name);
+        let project: Self = crate::from_named_str(&name, &text).map_err(in_file)?;
+        for pattern in &project.files {
+            pattern.check().map_err(in_file)?;
+        }
+        Ok(project)
+    }
+
+    /// The type `files` gives the value document at `path`, for a project in
+    /// `dir`: that of the first glob that matches (`SPEC.md` 12.4). The file
+    /// need not exist: this only looks at its name, so that nothing depends
+    /// on what a directory holds.
+    pub fn file_type(&self, dir: &Path, path: &Path) -> Option<&str> {
+        let canonical = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+        let dir = if dir.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            dir
+        };
+        let path = canonical(path);
+        let relative = path.strip_prefix(canonical(dir)).ok()?;
+        let mut names: Vec<String> = relative
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        let file = names.pop()?;
+        let stem = file.strip_suffix(".crov")?;
+        let mut hidden = names.iter().map(String::as_str).chain([stem]);
+        if stem.is_empty() || hidden.any(|name| name.starts_with('.')) {
+            return None;
+        }
+        self.files
+            .iter()
+            .find(|pattern| pattern.matches(&names, stem))
+            .map(|pattern| pattern.type_path.as_str())
     }
 
     /// The layers, running the layer command if there is one. `dir` is the
@@ -510,6 +643,113 @@ mod tests {
         let value: crate::RawValue = crate::from_str(text).unwrap();
         let errors = crate::check_value(&value.0, &schema, None, &Default::default());
         assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    fn project_with(globs: &[&str]) -> Project {
+        Project {
+            layers: ProjectLayers::List(Vec::new()),
+            variants: Vec::new(),
+            parents: IndexMap::new(),
+            options: ProjectOptions::default(),
+            schema: None,
+            root: None,
+            files: globs
+                .iter()
+                .map(|glob| FilePattern {
+                    glob: (*glob).to_owned(),
+                    type_path: (*glob).to_owned(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn globs_match_by_segments() {
+        let dir = Path::new("/p");
+        let matched = |glob: &str, file: &str| {
+            project_with(&[glob])
+                .file_type(dir, &dir.join(file))
+                .is_some()
+        };
+        for (glob, file) in [
+            ("config::*", "config/app.crov"),
+            ("::config::*", "config/app.crov"),
+            ("config::app", "config/app.crov"),
+            ("config::a*p", "config/app.crov"),
+            ("config::*p*", "config/app.crov"),
+            ("*", "app.crov"),
+            ("**::*", "app.crov"),
+            ("**::*", "a/b/c/app.crov"),
+            ("a::**::*", "a/app.crov"),
+            ("a::**::c::*", "a/b/b/c/app.crov"),
+            ("**::b::**::*", "a/b/c/app.crov"),
+            ("c*::*", "config/app.crov"),
+            // Matched by name, not resolved: this cannot be a module path.
+            ("config::*", "config/my-app.crov"),
+        ] {
+            assert!(matched(glob, file), "{glob} {file}");
+        }
+        for (glob, file) in [
+            ("config::*", "app.crov"),
+            ("config::*", "config/deep/app.crov"),
+            ("config::*", "other/app.crov"),
+            ("config::*", "config/app.crod"),
+            ("config::*", "config/app.crol"),
+            ("config::*", "config/app.txt"),
+            ("config::app", "config/app2.crov"),
+            ("config::App", "config/app.crov"),
+            ("*", "../app.crov"),
+            ("**::*", "/elsewhere/app.crov"),
+            ("*", ".hidden.crov"),
+            ("**::*", ".git/app.crov"),
+            ("a::**::c::*", "a/app.crov"),
+        ] {
+            assert!(!matched(glob, file), "{glob} {file}");
+        }
+    }
+
+    #[test]
+    fn the_first_glob_that_matches_decides() {
+        let project = project_with(&["config::**::*", "config::app"]);
+        let dir = Path::new("/p");
+        assert_eq!(
+            project.file_type(dir, &dir.join("config/app.crov")),
+            Some("config::**::*")
+        );
+    }
+
+    #[test]
+    fn a_glob_has_a_form() {
+        for glob in [
+            "a::**",
+            "**",
+            "a::",
+            "::",
+            "",
+            "a::::b",
+            "super::a",
+            "a::super::b",
+            "a**::b",
+            "a::***",
+            "a/b",
+            "a.b",
+            "a::b.crov",
+        ] {
+            let error = project_with(&[glob]).files[0].check().unwrap_err();
+            assert!(error.to_string().contains("invalid glob"), "{glob}");
+        }
+        for glob in ["a", "::a", "a::*", "a::b*c*", "**::*", "_a1::**::*"] {
+            project_with(&[glob]).files[0].check().unwrap();
+        }
+    }
+
+    #[test]
+    fn a_glob_with_many_stars_stays_quick() {
+        let glob = format!("{}x", "*a".repeat(40));
+        let file = format!("{}.crov", "a".repeat(4000));
+        let dir = Path::new("/p");
+        let project = project_with(&[&glob]);
+        assert_eq!(project.file_type(dir, &dir.join(file)), None);
     }
 
     #[test]

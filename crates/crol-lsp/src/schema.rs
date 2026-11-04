@@ -1,6 +1,6 @@
 //! What the schema says about a place in the data (`SPEC.md` 10.9, 12.5).
 
-use crol::schema::{Field, SchemaFile, TypeDef, TypeExpr, VariantShape};
+use crol::schema::{Field, Repr, SchemaFile, TypeDef, TypeExpr, VariantShape};
 use crol_eval::{FileId, PathStep};
 use crol_syntax::ast::{self, AstNode};
 use crol_syntax::{SyntaxKind, SyntaxNode};
@@ -55,15 +55,16 @@ pub(crate) fn block_fields<'a>(
     shape_struct(schema, shape).map(|fields| (schema, fields))
 }
 
-/// The type of an entry's value, and the doc of what it sets: the
-/// field's, or the type's for a root entry.
+/// The type at the offset `end` in an entry's target, the end of a segment
+/// of it, and the doc of what is there: the field's, or the type's for a
+/// root entry.
 pub(crate) fn entry_type(
     snapshot: &Snapshot,
     file: Option<FileId>,
     entry: &ast::Entry,
+    end: crol_syntax::TextSize,
 ) -> Option<(TypeExpr, String)> {
     let schema = snapshot.schema_for(file)?;
-    let end = entry.target()?.syntax().text_range().end();
     let text = document_text(entry.syntax());
     let scope = Scope::new(snapshot, file);
     let cursor = place::locate(&scope, &text, end);
@@ -232,16 +233,50 @@ fn shape_struct<'a>(
 }
 
 /// The fields a block at a place can have, with those of flattened fields
-/// in place of them.
-pub(crate) fn fields_of<'a>(
-    schema: &'a SchemaFile,
-    shape: &Shape<'a>,
-) -> Vec<(&'a String, &'a Field)> {
-    let mut out = Vec::new();
+/// in place of them. A tagged or untagged enum is written as a block with no
+/// name to say the variant by (`SPEC.md` 10.4), so it can have its tag and
+/// those of every variant.
+pub(crate) fn fields_of(schema: &SchemaFile, shape: &Shape<'_>) -> Vec<(String, Field)> {
+    let mut found = Vec::new();
+    let mut own = Vec::new();
     if let Some(fields) = shape_struct(schema, shape) {
-        flatten_into(schema, fields, &mut out, 0);
+        flatten_into(schema, fields, &mut found, 0);
+    } else if let Shape::Type(ty) = shape
+        && let Some(TypeDef::Enum { repr, variants, .. }) = named_def(schema, ty)
+    {
+        let tag = |name: &String, ty, doc: &str| {
+            let mut field = Field::new(ty);
+            field.doc = doc.to_owned();
+            (name.clone(), field)
+        };
+        match repr {
+            Repr::External => return Vec::new(),
+            Repr::Internal { tag: name } => {
+                own.push(tag(name, TypeExpr::String, "The variant."));
+            }
+            Repr::Adjacent { tag: name, content } => {
+                own.push(tag(name, TypeExpr::String, "The variant."));
+                own.push(tag(content, TypeExpr::Any, "The variant's value."));
+                return own;
+            }
+            Repr::Untagged => {}
+        }
+        for variant in variants.values() {
+            let fields = match &variant.shape {
+                VariantShape::Struct(fields) => Some(fields),
+                VariantShape::Newtype(inner) => struct_of(schema, inner).map(|(_, f)| f),
+                _ => None,
+            };
+            if let Some(fields) = fields {
+                flatten_into(schema, fields, &mut found, 0);
+            }
+        }
     }
-    out
+    let mut seen = std::collections::HashSet::new();
+    own.into_iter()
+        .chain(found.into_iter().map(|(n, f)| (n.clone(), f.clone())))
+        .filter(|(name, _)| seen.insert(name.clone()))
+        .collect()
 }
 
 fn flatten_into<'a>(

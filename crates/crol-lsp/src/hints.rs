@@ -38,27 +38,28 @@ pub(crate) fn inlay_hints(
     let start = convert::offset(text, range.start, encoding);
     let end = convert::offset(text, range.end, encoding);
     let parse = crol_syntax::parse(text);
-    let entries: Vec<ast::Entry> = parse
+    // Every value that computes something: of an entry, or an element of a
+    // list, tuple or `Name(...)`, in document order.
+    let values: Vec<Hinted> = parse
         .syntax()
         .descendants()
-        .filter_map(ast::Entry::cast)
-        .filter(|e| {
-            let r = e.syntax().text_range();
+        .filter(|node| {
+            let r = node.text_range();
             r.end() >= start && r.start() <= end
         })
-        .filter(|e| e.value().is_some_and(|v| computes(v.syntax())))
+        .filter_map(hinted)
         .collect();
-    if entries.is_empty() {
+    if values.is_empty() {
         return Vec::new();
     }
 
-    // In a layer, the value after the operation the entry is part of; in
-    // a document on its own, the final value.
-    let operations = if snapshot.in_layers(file) {
+    // In data, the value after the operation the entry is part of; in a
+    // value document, the final value.
+    let operations = if let Some((layers, options)) = snapshot.chain_of(file) {
         match crol_eval::operation_values(
             &snapshot.sources,
-            &snapshot.layers,
-            &snapshot.options,
+            layers,
+            options,
             file,
             &settings.context,
         ) {
@@ -69,13 +70,13 @@ pub(crate) fn inlay_hints(
         None
     };
     let mut hints = Vec::new();
-    for entry in entries {
-        let Some(token) = entry.target().and_then(|t| t.key()).and_then(|k| k.token()) else {
-            continue;
-        };
-        let Some((key, path)) = features::target_path(&token) else {
-            continue;
-        };
+    for Hinted {
+        expr,
+        entry,
+        key,
+        path,
+    } in values
+    {
         let value = match &operations {
             // The operation's value is the root key's.
             Some(values) => operation_of(&entry, values)
@@ -85,11 +86,8 @@ pub(crate) fn inlay_hints(
         let Some(value) = value else {
             continue;
         };
-        let Some(expr) = entry.value() else {
-            continue;
-        };
         hints.push(InlayHint {
-            position: convert::position(text, &index, expr.syntax().text_range().end(), encoding),
+            position: convert::position(text, &index, expr.text_range().end(), encoding),
             label: InlayHintLabel::String(format!("= {}", short(&value))),
             kind: None,
             text_edits: None,
@@ -100,6 +98,46 @@ pub(crate) fn inlay_hints(
         });
     }
     hints
+}
+
+/// A value worth a hint.
+struct Hinted {
+    expr: SyntaxNode,
+    /// The entry around it, or that it is the value of.
+    entry: ast::Entry,
+    key: String,
+    path: Vec<crol_eval::PathStep>,
+}
+
+/// `node` as a value worth a hint, if it is one: an entry whose value
+/// computes something, or an element that does.
+fn hinted(node: SyntaxNode) -> Option<Hinted> {
+    if let Some(entry) = ast::Entry::cast(node.clone()) {
+        let expr = entry.value().filter(|v| computes(v.syntax()))?;
+        let token = entry.target()?.key()?.token()?;
+        let (key, path) = features::target_path(&token)?;
+        return Some(Hinted {
+            expr: expr.syntax().clone(),
+            entry,
+            key,
+            path,
+        });
+    }
+    let parent = node.parent()?;
+    let element = matches!(
+        parent.kind(),
+        SyntaxKind::LIST_EXPR | SyntaxKind::TUPLE_EXPR | SyntaxKind::ARG_LIST
+    );
+    if !element || ast::Expr::cast(node.clone()).is_none() || !computes(&node) {
+        return None;
+    }
+    let (key, path) = features::element_path(&node)?;
+    Some(Hinted {
+        entry: node.ancestors().find_map(ast::Entry::cast)?,
+        expr: node,
+        key,
+        path,
+    })
 }
 
 /// Whether an expression computes something, so that its result is worth

@@ -3,13 +3,13 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crol::project::Project;
 use crol::schema::SchemaFile;
 use crol::{
-    CheckOptions, FileLoader, FileLoaders, FsLoader, Loaded, LoaderError, Mode, ModulePath,
-    SourceId,
+    CheckOptions, CrolComposer, CrolConfig, CrolLayer, ExtendsLoad, FileLoader, FileLoaders,
+    FsLoader, Loaded, LoaderError, Mode, ModulePath, SourceId,
 };
 use crol_eval::{DataOptions, Diagnostic, Evaluation, FileId, Layer, Severity, Sources};
 use lsp_types::Uri;
@@ -25,10 +25,50 @@ pub(crate) type RemoteStatus = HashMap<(String, PathBuf), String>;
 type Buffers = Arc<HashMap<PathBuf, String>>;
 
 /// The file system with the open buffers over it: a buffer replaces its
-/// file, saved or not (`SPEC.md` 12.5).
+/// file, saved or not (`SPEC.md` 12.5). Paths resolve as on the file system
+/// ([`FileLoaders::with_file_reader`]).
+///
+/// A file a directory should not hold is left out of the directory, and
+/// noted in `left_out`, where `crol check` stops at it: the rest of a layer
+/// is no less meaningful for it (`SPEC.md` 12.5).
 struct BufferLoader {
     files: FsLoader,
     open: Buffers,
+    project_file: Option<SourceId>,
+    left_out: LeftOut,
+}
+
+/// What was left out of the directories read.
+type LeftOut = Arc<Mutex<Vec<Stray>>>;
+
+/// A file left out of a directory.
+struct Stray {
+    problem: Problem,
+    /// Whether it may be data that is now missing, as a `.crol` file that
+    /// was not renamed. A `.crov` file never was any.
+    lost_data: bool,
+}
+
+impl BufferLoader {
+    /// The loaders that read below `root`, with the buffers over the files,
+    /// as the composer of `crol check` has them on the file system.
+    fn loaders(
+        root: &Path,
+        open: &Buffers,
+        project_file: Option<&Path>,
+        left_out: &LeftOut,
+    ) -> FileLoaders {
+        let loaders = FileLoaders::new().with_file_reader(Self {
+            files: FsLoader::new(root),
+            open: Arc::clone(open),
+            project_file: project_file.map(SourceId::from_path),
+            left_out: Arc::clone(left_out),
+        });
+        match project_file {
+            Some(file) => loaders.with_project_file(file),
+            None => loaders,
+        }
+    }
 }
 
 impl FileLoader for BufferLoader {
@@ -37,10 +77,34 @@ impl FileLoader for BufferLoader {
     }
 
     fn load(&self, source: &SourceId) -> Result<Loaded, LoaderError> {
-        match source.canonical_path().and_then(|p| self.open.get(p)) {
-            Some(text) => Ok(Loaded::Document(text.clone().into_bytes())),
-            None => self.files.load(source),
+        if let Some(text) = source.canonical_path().and_then(|p| self.open.get(p)) {
+            return Ok(Loaded::Document(text.clone().into_bytes()));
         }
+        let loaded = self.files.load(source)?;
+        let Loaded::Directory(entries) = loaded else {
+            return Ok(loaded);
+        };
+        let mut left_out = self.left_out.lock().unwrap_or_else(|e| e.into_inner());
+        let mut kept = Vec::with_capacity(entries.len());
+        for (relative, entry) in entries {
+            let refused = Mode::Data.check(&entry.to_string());
+            match refused {
+                Err(error) if self.project_file.as_ref() != Some(&entry) => {
+                    let lost_data = crol::is_retired(&entry.to_string());
+                    let problem = Problem {
+                        message: error.to_string(),
+                        file: entry.as_path().map(Path::to_path_buf),
+                    };
+                    // A directory may be read twice: as a layer, and for an
+                    // `extends`.
+                    if left_out.iter().all(|s| s.problem.file != problem.file) {
+                        left_out.push(Stray { problem, lost_data });
+                    }
+                }
+                _ => kept.push((relative, entry)),
+            }
+        }
+        Ok(Loaded::Directory(kept))
     }
 }
 
@@ -61,6 +125,9 @@ pub struct Snapshot {
     /// While the layers do not evaluate (as while a document is being
     /// typed): the latest evaluation of them that did, for completion.
     pub last_good: Option<Evaluation>,
+    /// While a document on its own does not evaluate: the latest evaluation
+    /// of it that did, by its path (ids do not outlive a snapshot).
+    last_good_documents: HashMap<PathBuf, Evaluation>,
     /// Documents evaluated on their own, each in the mode its extension
     /// states (`SPEC.md` 4): a name that states none is value mode.
     pub documents: Vec<(FileId, Evaluation)>,
@@ -73,8 +140,16 @@ pub struct Snapshot {
     /// The schemas of documents evaluated on their own, with the type of
     /// each one's value: the one it names, or the project file's.
     own_schemas: HashMap<FileId, OwnSchema>,
+    /// The project, with its directory, for what its `files` say of a
+    /// document (`SPEC.md` 12.4).
+    project: Option<(Project, PathBuf)>,
+    /// What each `.crod` document evaluated on its own was evaluated with.
+    chains: HashMap<FileId, Chain>,
     /// The path of each file, by its id.
     paths: Vec<PathBuf>,
+    /// The id of each file, by its canonical path: a file read twice, as
+    /// when two documents extend it, is one file.
+    by_path: HashMap<PathBuf, FileId>,
     /// Files of read-only layers, which get no diagnostics.
     read_only: HashSet<FileId>,
     /// A message for the project as a whole, such as a project file that
@@ -85,6 +160,25 @@ pub struct Snapshot {
     pub(crate) remote: Vec<(String, PathBuf)>,
 }
 
+/// A `.crod` document on its own, on top of what it extends (`SPEC.md` 4.1).
+struct Chain {
+    /// Lowest first; the document is the last.
+    layers: Vec<Layer>,
+    options: DataOptions,
+}
+
+/// An `#![extends(...)]`, followed.
+struct Followed {
+    /// The document it is written in.
+    file: FileId,
+    range: crol_syntax::TextRange,
+    written: String,
+    /// The files it brought in.
+    files: Vec<FileId>,
+    /// Why it could not be followed.
+    error: Option<String>,
+}
+
 /// The schema of a document evaluated on its own.
 struct OwnSchema {
     file: SchemaFile,
@@ -92,8 +186,8 @@ struct OwnSchema {
     mode: Mode,
 }
 
-/// What is wrong with the project as a whole, and the file to say it on, if
-/// one is to blame.
+/// What is wrong with the project as a whole or a part of it, and the file
+/// to say it on, if one is to blame.
 struct Problem {
     message: String,
     file: Option<PathBuf>,
@@ -160,10 +254,137 @@ impl Snapshot {
     /// The file a path is, if it was read.
     pub fn file_of(&self, path: &Path) -> Option<FileId> {
         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        self.paths
+        self.by_path.get(&canonical).copied()
+    }
+
+    /// The file at a path, added with `text` if it was not read yet: what
+    /// several evaluations read is one file, so that diagnostics and
+    /// locations agree on it.
+    fn intern(&mut self, display: &str, text: &str) -> FileId {
+        let path = PathBuf::from(display);
+        let canonical = path.canonicalize().unwrap_or(path);
+        if let Some(file) = self.by_path.get(&canonical) {
+            return *file;
+        }
+        let file = self.sources.add(display, text);
+        self.paths.push(canonical.clone());
+        self.by_path.insert(canonical, file);
+        file
+    }
+
+    /// The composer's layers, as the evaluator takes them.
+    fn intern_layers(&mut self, layers: &[CrolLayer]) -> Vec<Layer> {
+        layers
             .iter()
-            .position(|p| *p == canonical)
-            .and_then(|i| self.sources.files().nth(i).map(|(id, _)| id))
+            .map(|layer| Layer {
+                name: layer.name().to_owned(),
+                documents: layer
+                    .documents()
+                    .map(|(relative, display, text)| {
+                        (relative.to_owned(), self.intern(display, text))
+                    })
+                    .collect(),
+            })
+            .collect()
+    }
+
+    /// The composer's account of `extends`, with the files it brought in.
+    fn followed(&mut self, loads: Vec<ExtendsLoad>, layers: &[Layer]) -> Vec<Followed> {
+        loads
+            .into_iter()
+            .map(|load| Followed {
+                file: self.intern(&load.document, ""),
+                range: load.range,
+                files: layers[load.layers]
+                    .iter()
+                    .flat_map(|l| l.documents.iter().map(|(_, file)| *file))
+                    .collect(),
+                written: load.path,
+                error: load.error.map(|e| e.to_string()),
+            })
+            .collect()
+    }
+
+    /// The latest evaluation that had a value of a file, if the one it
+    /// belongs to now has none: of the layers, or of a document on its own.
+    pub(crate) fn last_good_of(&self, file: Option<FileId>) -> Option<&Evaluation> {
+        match file {
+            Some(file) if !self.in_layers(file) => self.last_good_documents.get(self.path(file)?),
+            _ => self.last_good.as_ref(),
+        }
+    }
+
+    /// Takes over from `previous` what still stands while something does
+    /// not evaluate: a document being typed mostly does not.
+    pub(crate) fn keep_last_good(&mut self, mut previous: Snapshot) {
+        for (file, evaluation) in std::mem::take(&mut previous.documents) {
+            if evaluation.value.is_some()
+                && let Some(path) = previous.path(file).map(Path::to_path_buf)
+            {
+                previous.last_good_documents.insert(path, evaluation);
+            }
+        }
+        for (file, evaluation) in &self.documents {
+            if evaluation.value.is_none()
+                && let Some(path) = self.path(*file)
+                && let Some(good) = previous.last_good_documents.remove(path)
+            {
+                self.last_good_documents.insert(path.to_path_buf(), good);
+            }
+        }
+        if self.evaluation.value.is_none() {
+            // Better than what is below a layer that did not load, if that
+            // is all there is now.
+            self.last_good = match previous.evaluation.value {
+                Some(_) => Some(previous.evaluation),
+                None => self.last_good.take().or(previous.last_good),
+            };
+        }
+    }
+
+    /// What the project's `files` say of a value document: the project's
+    /// schema, with the type to check it as; nothing if no glob matches it
+    /// (`SPEC.md` 12.4).
+    #[allow(clippy::type_complexity)]
+    fn project_files(
+        &self,
+        path: &Path,
+        mode: Mode,
+    ) -> Option<(
+        Result<SchemaFile, (crol_syntax::TextRange, String)>,
+        Option<String>,
+    )> {
+        let (project, dir) = self.project.as_ref()?;
+        if mode != Mode::Value {
+            return None;
+        }
+        let type_name = project.file_type(dir, path)?;
+        let failed = |why: String| {
+            let message =
+                format!("project: `files` gives this document the type `{type_name}`, {why}");
+            Some((Err((Default::default(), message)), None))
+        };
+        let Some(schema) = &self.schema else {
+            return failed(match project.schema {
+                Some(_) => "and the project's schema did not load".to_owned(),
+                None => "and the project has no schema".to_owned(),
+            });
+        };
+        match schema.type_path(type_name) {
+            Some(root) => Some((Ok(schema.clone()), Some(root.to_owned()))),
+            None => failed("which the schema does not have".to_owned()),
+        }
+    }
+
+    /// The layers and options a data document was evaluated with: the
+    /// project's for a file in its layers, else its own (`SPEC.md` 4.1).
+    /// Nothing for a document that is not data.
+    pub(crate) fn chain_of(&self, file: FileId) -> Option<(&[Layer], &DataOptions)> {
+        if self.in_layers(file) {
+            return Some((&self.layers, &self.options));
+        }
+        let chain = self.chains.get(&file)?;
+        Some((&chain.layers, &chain.options))
     }
 
     /// A file's path.
@@ -260,35 +481,122 @@ impl Snapshot {
     }
 }
 
-/// Evaluates a `.crod` document that is in no layer, as a layer of its own.
-/// What it builds on is not loaded, so this reports what `crol check` does
-/// for the file alone.
-fn evaluate_alone(sources: &Sources, file: FileId, options: &DataOptions) -> Evaluation {
-    let name = sources.file(file).name().to_owned();
-    let layer = Layer {
-        name: name.clone(),
-        documents: vec![(name, file)],
+/// What loading found, besides the layers.
+#[derive(Default)]
+struct Loading {
+    followed: Vec<Followed>,
+    /// Problems to put on the files to blame.
+    problems: Vec<Problem>,
+    /// The lowest layer that may be wrong for what did not load, with what
+    /// did not: the layers from that one up.
+    gap: Option<(usize, String)>,
+}
+
+impl Loading {
+    /// Notes what was left out of the directories read while `layer` was
+    /// loaded.
+    fn left_out(&mut self, left_out: &LeftOut, layer: usize) {
+        let mut strays = left_out.lock().unwrap_or_else(|e| e.into_inner());
+        for stray in strays.drain(..) {
+            if stray.lost_data {
+                let why = "a file of this layer or a lower one was left out";
+                self.gap.get_or_insert((layer, why.to_owned()));
+            }
+            self.problems.push(stray.problem);
+        }
+    }
+}
+
+/// Loads a `.crod` document that is in no layer as a layer of its own, on
+/// top of what it extends, through the composer `crol check` uses, so that
+/// what it reports is what `crol check` does (`SPEC.md` 4.1).
+fn load_chain(
+    snapshot: &mut Snapshot,
+    path: &Path,
+    root: &Path,
+    open: &Buffers,
+    project_file: Option<&Path>,
+) -> Result<(Vec<Layer>, Loading), crol::Error> {
+    let left_out = LeftOut::default();
+    let file_loaders = BufferLoader::loaders(root, open, project_file, &left_out);
+    let layer = file_loaders
+        .resolve_path(path, root)
+        .load(path.display().to_string())?;
+    let mut composer = CrolComposer::with_cfg(CrolConfig::<String> {
+        load_extends: true,
+        root_path: root.to_path_buf(),
+        file_loaders,
+        ..Default::default()
+    });
+    let loads = composer.load_layer_tolerant(layer);
+    let layers = snapshot.intern_layers(composer.layers());
+    let mut loading = Loading {
+        followed: snapshot.followed(loads, &layers),
+        ..Default::default()
     };
-    crol_eval::evaluate_data(sources, &[layer], options)
+    loading.left_out(&left_out, 0);
+    Ok((layers, loading))
+}
+
+/// What the attributes say of what was followed: why one could not be, and
+/// the first error found among `diagnostics` in what each brought in. Those
+/// are the only ones shown of an extended document (`SPEC.md` 4.1).
+fn extends_problems(
+    followed: &[Followed],
+    diagnostics: &[Diagnostic],
+    sources: &Sources,
+) -> Vec<Diagnostic> {
+    let mut found = Vec::new();
+    for extends in followed {
+        let span = crol_eval::Span::new(extends.file, extends.range);
+        if let Some(error) = &extends.error {
+            found.push(Diagnostic::error(span, format!("extends: {error}")));
+        }
+        let broken = diagnostics
+            .iter()
+            .find(|d| d.is_error() && extends.files.contains(&d.span.file));
+        if let Some(diagnostic) = broken {
+            let message = format!(
+                "extends: `{}` has errors: {}",
+                extends.written,
+                diagnostic.display(sources)
+            );
+            found.push(Diagnostic::error(span, message));
+        }
+    }
+    found
+}
+
+/// Makes warnings of the errors in `diagnostics` that `suspect` says may
+/// only be there for what could not be loaded, which `why` says.
+fn soften(diagnostics: &mut [Diagnostic], why: &str, suspect: impl Fn(FileId) -> bool) {
+    for diagnostic in diagnostics {
+        if diagnostic.is_error() && suspect(diagnostic.span.file) {
+            diagnostic.severity = Severity::Warning;
+            diagnostic.message.push_str(&format!(" ({why})"));
+        }
+    }
+}
+
+/// Keeps the diagnostics of `file`, those of the document on its own.
+fn only_in(diagnostics: &mut Vec<Diagnostic>, file: FileId) {
+    diagnostics.retain(|d| d.span.is_detached() || d.span.file == file);
 }
 
 /// Puts a problem on the file to blame, or the project file, so that the
-/// editor shows it, and records it on the snapshot.
+/// editor shows it, and records the first on the snapshot.
 fn report_problem(snapshot: &mut Snapshot, problem: Problem, project: Option<&Path>) {
     let blamed = problem.file.as_deref().or(project);
     if let Some(path) = blamed {
         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        let file = snapshot.file_of(&canonical).unwrap_or_else(|| {
-            let text = std::fs::read_to_string(&canonical).unwrap_or_default();
-            snapshot.paths.push(canonical.clone());
-            snapshot.sources.add(canonical.display().to_string(), text)
-        });
+        let text = std::fs::read_to_string(&canonical).unwrap_or_default();
+        let file = snapshot.intern(&canonical.display().to_string(), &text);
         let span = crol_eval::Span::new(file, Default::default());
         snapshot
             .extra
             .push(Diagnostic::error(span, problem.message.clone()));
     }
-    snapshot.problem = Some(problem.message);
+    snapshot.problem.get_or_insert(problem.message);
 }
 
 /// Evaluates the workspace: the project found from `root`, and each open
@@ -306,12 +614,16 @@ pub(crate) fn evaluate(
         options: DataOptions::default(),
         evaluation: Evaluation::default(),
         last_good: None,
+        last_good_documents: HashMap::new(),
         documents: Vec::new(),
         extra: Vec::new(),
         schema: None,
         root_type: None,
         own_schemas: HashMap::new(),
+        project: None,
+        chains: HashMap::new(),
         paths: Vec::new(),
+        by_path: HashMap::new(),
         read_only: HashSet::new(),
         problem: None,
         remote: Vec::new(),
@@ -321,29 +633,52 @@ pub(crate) fn evaluate(
             .map(|(p, t)| (p.canonicalize().unwrap_or_else(|_| p.clone()), t.clone()))
             .collect(),
     );
-    let mut problem = None;
+    let mut problems = Vec::new();
     let project_path = match (&settings.project, root) {
         (Some(project), _) => Some(project.clone()),
         (None, Some(root)) => Project::find(root).unwrap_or_else(|error| {
-            problem = Some(Problem::from(error));
+            problems.push(Problem::from(error));
             None
         }),
         (None, None) => None,
     };
     let mut check = CheckOptions::default();
+    let mut loading = Loading::default();
     if let Some(project_path) = &project_path {
-        match load_project(&mut snapshot, project_path, &canonical_open, remote) {
+        let loaded = load_project(
+            &mut snapshot,
+            project_path,
+            &canonical_open,
+            remote,
+            &mut loading,
+        );
+        match loaded {
             Ok((schema, root_type, options)) => {
                 snapshot.schema = schema;
                 snapshot.root_type = root_type;
                 check = options;
             }
-            Err(found) => problem = Some(found),
+            Err(found) => problems.push(found),
         }
     }
+    problems.append(&mut loading.problems);
     if !snapshot.layers.is_empty() {
+        // `&default` reads the project's schema (`SPEC.md` 6.1.3).
+        snapshot.options = snapshot
+            .options
+            .clone()
+            .with_defaults(snapshot.schema.as_ref().map(SchemaFile::defaults));
         snapshot.evaluation =
             crol_eval::evaluate_data(&snapshot.sources, &snapshot.layers, &snapshot.options);
+        // What does not evaluate above a gap says little: keep what is below
+        // it, until there is better.
+        if let Some((gap, _)) = &loading.gap
+            && snapshot.evaluation.value.is_none()
+        {
+            let below = &snapshot.layers[..*gap];
+            let evaluation = crol_eval::evaluate_data(&snapshot.sources, below, &snapshot.options);
+            snapshot.last_good = evaluation.value.is_some().then_some(evaluation);
+        }
         if let (Some(schema), Some(base)) = (&snapshot.schema, &snapshot.evaluation.value) {
             let view = crol::DataView {
                 base,
@@ -353,16 +688,49 @@ pub(crate) fn evaluate(
             let found = crol::check_view(view, schema, snapshot.root_type.as_deref(), &check);
             snapshot.extra.extend(found);
         }
+        // Above a gap, an error may only say what is missing.
+        if let Some((gap, why)) = &loading.gap {
+            let above: HashSet<FileId> = snapshot.layers[*gap..]
+                .iter()
+                .flat_map(|l| l.documents.iter().map(|(_, file)| *file))
+                .collect();
+            let why = format!("{why}, which may be why");
+            let suspect = |file| above.contains(&file);
+            soften(&mut snapshot.evaluation.diagnostics, &why, suspect);
+            soften(&mut snapshot.extra, &why, suspect);
+        }
+        let found = extends_problems(
+            &loading.followed,
+            &snapshot.evaluation.diagnostics,
+            &snapshot.sources,
+        );
+        snapshot.extra.extend(found);
+        // What is extended and is no lower layer goes below this one all
+        // the same, as in `crol check`, where the project's layers should
+        // have said so (`SPEC.md` 4.1).
+        for extends in loading.followed.iter().filter(|e| !e.files.is_empty()) {
+            let span = crol_eval::Span::new(extends.file, extends.range);
+            snapshot.extra.push(Diagnostic::warning(
+                span,
+                format!(
+                    "extends: `{}` is not a lower layer of the project; add it to the project's layers",
+                    extends.written
+                ),
+            ));
+        }
     }
-    // Open documents that are in no layer are evaluated on their own.
-    for (path, text) in canonical_open.iter() {
-        if snapshot.paths.contains(path) {
+    // Open documents that are in no layer are evaluated on their own, each
+    // time in one order.
+    let mut open_files: Vec<(&PathBuf, &String)> = canonical_open.iter().collect();
+    open_files.sort();
+    for (path, text) in open_files {
+        if snapshot
+            .file_of(path)
+            .is_some_and(|f| snapshot.in_layers(f))
+        {
             continue;
         }
-        let file = snapshot
-            .sources
-            .add(path.display().to_string(), text.as_str());
-        snapshot.paths.push(path.clone());
+        let file = snapshot.intern(&path.display().to_string(), text);
         // A retired file is not evaluated: it states no mode (`SPEC.md` 4).
         if crol::is_retired(&path.to_string_lossy()) {
             let message = "the `.crol` extension is retired; \
@@ -373,30 +741,92 @@ pub(crate) fn evaluate(
             continue;
         }
         let mode = Mode::of_path(path).unwrap_or(Mode::Value);
-        let evaluation = match mode {
-            Mode::Data => evaluate_alone(&snapshot.sources, file, &snapshot.options),
-            Mode::Value => crol_eval::evaluate_value(&snapshot.sources, file),
-        };
         // The project file has the schema `crol` provides (`SPEC.md` 12.4).
         let is_project_file = project_path
             .as_ref()
             .is_some_and(|p| p.canonicalize().unwrap_or_else(|_| p.clone()) == *path);
+        // `::` starts from the project's directory, else the workspace
+        // folder, else the document's own (`SPEC.md` 4.2).
+        let root_dir = project_path
+            .as_ref()
+            .and_then(|p| p.parent())
+            .or(root)
+            .or(path.parent())
+            .unwrap_or(Path::new("."));
+        let mut loading = Loading::default();
+        let mut chain = None;
+        if mode == Mode::Data {
+            let project_file = project_path.as_deref();
+            match load_chain(&mut snapshot, path, root_dir, &canonical_open, project_file) {
+                Ok((layers, found)) => {
+                    chain = Some(layers);
+                    loading = found;
+                }
+                Err(error) => {
+                    let span = crol_eval::Span::new(file, Default::default());
+                    snapshot
+                        .extra
+                        .push(Diagnostic::error(span, error.to_string()));
+                }
+            }
+        }
+        // What the project's `files` give a value document that names no
+        // schema (`SPEC.md` 12.4).
+        let mut given_type = None;
         let schema = if is_project_file {
             Some(Ok(crol::schema::build::<Project>()))
         } else {
-            // `::` starts from the project's directory, else the
-            // workspace folder, else the document's own (`SPEC.md` 4.2).
-            let root_dir = project_path
-                .as_ref()
-                .and_then(|p| p.parent())
-                .or(root)
-                .or(path.parent())
-                .unwrap_or(Path::new("."));
             document_schema(text, path, root_dir, remote, &mut snapshot.remote)
+                .or_else(|| {
+                    extended_schema(
+                        &mut snapshot,
+                        chain.as_deref().unwrap_or_default(),
+                        root_dir,
+                        remote,
+                    )
+                })
+                .or_else(|| {
+                    let (schema, root) = snapshot.project_files(path, mode)?;
+                    given_type = root;
+                    Some(schema)
+                })
         };
+        let mut evaluation = match (&chain, mode) {
+            (Some(layers), _) => {
+                // `&default` reads the document's schema, not the project's
+                // (`SPEC.md` 6.1.3).
+                let own = schema.as_ref().and_then(|s| s.as_ref().ok());
+                let options = snapshot
+                    .options
+                    .clone()
+                    .with_defaults(own.map(SchemaFile::defaults));
+                let evaluation = crol_eval::evaluate_data(&snapshot.sources, layers, &options);
+                let chain = Chain {
+                    layers: layers.clone(),
+                    options,
+                };
+                snapshot.chains.insert(file, chain);
+                evaluation
+            }
+            (None, Mode::Data) => Evaluation::default(),
+            (None, Mode::Value) => crol_eval::evaluate_value(&snapshot.sources, file),
+        };
+        problems.append(&mut loading.problems);
+        let followed = &loading.followed;
+        let found = extends_problems(followed, &evaluation.diagnostics, &snapshot.sources);
+        snapshot.extra.extend(found);
+        only_in(&mut evaluation.diagnostics, file);
+        // Without what could not be loaded, this document may be wrong
+        // where it is not.
+        let incomplete = loading.gap.is_some() || followed.iter().any(|e| e.error.is_some());
+        let why = "what it extends did not all load, which may be why";
+        if incomplete {
+            soften(&mut evaluation.diagnostics, why, |_| true);
+        }
         match schema {
             Some(Ok(schema)) => {
-                let mut root = None;
+                let by_project = given_type.is_some();
+                let mut root = given_type;
                 if let Some(value) = &evaluation.value {
                     match mode {
                         Mode::Data => {
@@ -405,18 +835,27 @@ pub(crate) fn evaluate(
                                 contexts: &evaluation.contexts,
                                 variants: &evaluation.variants,
                             };
-                            let found = crol::check_view(view, &schema, None, &check);
+                            let mut found = crol::check_view(view, &schema, None, &check);
+                            only_in(&mut found, file);
+                            if incomplete {
+                                soften(&mut found, why, |_| true);
+                            }
                             snapshot.extra.extend(found);
                         }
                         Mode::Value => {
-                            // A top-level type name chooses the type
-                            // (`SPEC.md` 4.1).
-                            root = crol::value_type(value, &schema);
+                            // A top-level type name chooses the type,
+                            // unless the project gives it one (`SPEC.md`
+                            // 4.1, 12.4), whose options then count.
+                            let plain = CheckOptions::default();
+                            let options = if by_project { &check } else { &plain };
+                            if !by_project {
+                                root = crol::value_type(value, &schema);
+                            }
                             snapshot.extra.extend(crol::check_value(
                                 value,
                                 &schema,
                                 root.as_deref(),
-                                &CheckOptions::default(),
+                                options,
                             ));
                         }
                     }
@@ -438,7 +877,7 @@ pub(crate) fn evaluate(
         }
         snapshot.documents.push((file, evaluation));
     }
-    if let Some(problem) = problem {
+    for problem in problems {
         report_problem(&mut snapshot, problem, project_path.as_deref());
     }
     if let Some(checks) = checks {
@@ -478,13 +917,37 @@ fn document_schema(
     )
 }
 
-/// Loads the project's layers into the snapshot; returns its schema, root
-/// type and check options.
+/// The schema the nearest extended document names, for a document that
+/// names none, as `crol check` finds it among the layers (`SPEC.md` 4.1).
+fn extended_schema(
+    snapshot: &mut Snapshot,
+    layers: &[Layer],
+    root: &Path,
+    remote: &RemoteStatus,
+) -> Option<Result<SchemaFile, (crol_syntax::TextRange, String)>> {
+    for layer in layers.iter().rev().skip(1) {
+        for (_, file) in &layer.documents {
+            let text = snapshot.sources.file(*file).text().to_owned();
+            let path = snapshot.path(*file)?.to_path_buf();
+            let found = document_schema(&text, &path, root, remote, &mut snapshot.remote);
+            // Its problems are the extended document's.
+            if let Some(Ok(schema)) = found {
+                return Some(Ok(schema));
+            }
+        }
+    }
+    None
+}
+
+/// Loads the project's layers into the snapshot, through the composer `crol
+/// check` uses, with what they extend; returns its schema, root type and
+/// check options.
 fn load_project(
     snapshot: &mut Snapshot,
     project_path: &Path,
     open: &Buffers,
     remote: &RemoteStatus,
+    loading: &mut Loading,
 ) -> Result<(Option<SchemaFile>, Option<String>, CheckOptions), Problem> {
     let project = Project::read(project_path)?;
     let dir = project_path
@@ -497,37 +960,85 @@ fn load_project(
         .with_max_contexts(project.options.max_contexts)
         .with_contexts(project.options.contexts.clone());
     options = options.with_variant_keys(project.options.variant_keys().map_err(|e| e.to_string())?);
-    let loaders = FileLoaders::new()
-        .with(BufferLoader {
-            files: FsLoader::new(&dir),
-            open: Arc::clone(open),
-        })
-        .with_project_file(project_path);
+    let left_out = LeftOut::default();
+    let loaders = BufferLoader::loaders(&dir, open, Some(project_path), &left_out);
+    let mut composer = CrolComposer::with_cfg(CrolConfig::<String> {
+        load_extends: true,
+        root_path: dir.clone(),
+        file_loaders: loaders.clone(),
+        ..Default::default()
+    });
+    let mut loads = Vec::new();
+    // Each layer of the project, with where it is among the composer's.
+    let mut listed = Vec::new();
     for layer in project.layer_list(&dir).map_err(|e| e.to_string())? {
-        let source = loaders.resolve(&layer.dir, &dir).map_err(|error| {
-            let found = Problem::from(error);
-            Problem {
-                message: format!("layer `{}`: {}", layer.name, found.message),
-                ..found
+        // A layer that does not load does not stop the ones after it. They
+        // are evaluated without it, and may be wrong where they build on
+        // it (`SPEC.md` 12.5).
+        let index = composer.layers().len();
+        let loaded = loaders
+            .resolve(&layer.dir, &dir)
+            .and_then(|source| source.load(layer.name.clone()));
+        match loaded {
+            Ok(loaded) => {
+                let found = composer.load_layer_tolerant(loaded);
+                let index = composer.layers().len() - 1;
+                if found.iter().any(|load| load.error.is_some()) {
+                    let why = format!("what layer `{}` extends did not all load", layer.name);
+                    loading.gap.get_or_insert((index, why));
+                }
+                loads.extend(found);
+                listed.push((index, layer.read_only));
             }
-        })?;
-        let loaded = source.load(layer.name.clone())?;
-        let mut documents = Vec::new();
-        for (relative, display, text) in loaded.documents() {
-            let path = PathBuf::from(display);
-            let canonical = path.canonicalize().unwrap_or(path);
-            let file = snapshot.sources.add(display, text);
-            snapshot.paths.push(canonical);
-            if layer.read_only {
+            Err(error) => {
+                let found = Problem::from(error);
+                let message = format!("layer `{}`: {}", layer.name, found.message);
+                loading.problems.push(Problem { message, ..found });
+                let why = format!("layer `{}` did not load", layer.name);
+                loading.gap.get_or_insert((index, why));
+            }
+        }
+        loading.left_out(&left_out, index);
+    }
+    snapshot.layers = snapshot.intern_layers(composer.layers());
+    let layer_files = |snapshot: &Snapshot, index: usize| -> Vec<FileId> {
+        let documents = &snapshot.layers[index].documents;
+        documents.iter().map(|(_, file)| *file).collect()
+    };
+    // Extended documents get no diagnostics of their own (`SPEC.md` 4.1),
+    // but for one the user is editing.
+    let mut extended: HashSet<FileId> = snapshot
+        .layers
+        .iter()
+        .flat_map(|l| l.documents.iter().map(|(_, file)| *file))
+        .collect();
+    for (index, read_only) in &listed {
+        for file in layer_files(snapshot, *index) {
+            extended.remove(&file);
+            if *read_only {
                 snapshot.read_only.insert(file);
             }
-            documents.push((relative.to_owned(), file));
         }
-        snapshot.layers.push(Layer {
-            name: layer.name.clone(),
-            documents,
+    }
+    extended.retain(|file| {
+        snapshot
+            .path(*file)
+            .is_none_or(|path| !open.contains_key(path))
+    });
+    snapshot.read_only.extend(extended);
+    let mut found = snapshot.followed(loads, &snapshot.layers.clone());
+    for extends in &mut found {
+        // Only what is no layer of the project is brought in by `extends`.
+        extends.files.retain(|file| {
+            !listed.iter().any(|(index, _)| {
+                snapshot.layers[*index]
+                    .documents
+                    .iter()
+                    .any(|d| d.1 == *file)
+            })
         });
     }
+    loading.followed.append(&mut found);
     snapshot.options = options;
     let schema_path = project.schema_path(&dir, false);
     let schema_path = match project.schema.clone() {
@@ -579,7 +1090,9 @@ fn load_project(
     check.implicit_some = project.options.implicit_some;
     check.allow_unknown_fields = project.options.allow_unknown_fields;
     check.require_complete = project.options.require_complete;
-    Ok((schema, project.root.clone(), check))
+    let root = project.root.clone();
+    snapshot.project = Some((project, dir));
+    Ok((schema, root, check))
 }
 
 #[cfg(test)]

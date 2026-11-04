@@ -2,7 +2,7 @@
 
 use crol_eval::{Key, PathStep, StepKind, Value, ValueKind, print};
 use crol_syntax::ast::{self, AstNode};
-use crol_syntax::{LineIndex, SyntaxKind, SyntaxNode, SyntaxToken, TextRange};
+use crol_syntax::{LineIndex, SyntaxKind, SyntaxNode, SyntaxToken, TextRange, TextSize};
 use lsp_types::{
     DocumentSymbol, Hover, HoverContents, Location, MarkupContent, MarkupKind, Position,
     SymbolKind, TextEdit, Uri,
@@ -210,11 +210,18 @@ pub(crate) fn key_text(key: &ast::Key) -> Option<String> {
     Some(string_text(token.text()))
 }
 
-/// The steps of a target: its key and selectors. An integer key is a key
-/// of that integer, not of the text.
+/// The steps of a target: its key and selectors.
 fn target_steps(target: &ast::Target) -> Option<Vec<PathStep>> {
+    let mut steps = key_steps(target)?;
+    steps.extend(selector_steps(target.selectors()));
+    Some(steps)
+}
+
+/// The step of a target's key. An integer key is a key of that integer, not
+/// of the text.
+fn key_steps(target: &ast::Target) -> Option<Vec<PathStep>> {
     let key = target.key()?;
-    let mut steps = match key.accessor() {
+    let steps = match key.accessor() {
         Some(accessor) => selector_steps(std::iter::once(ast::Selector::Accessor(accessor))),
         None => {
             let token = key.token()?;
@@ -227,7 +234,6 @@ fn target_steps(target: &ast::Target) -> Option<Vec<PathStep>> {
             )]
         }
     };
-    steps.extend(selector_steps(target.selectors()));
     Some(steps)
 }
 
@@ -297,6 +303,30 @@ pub(crate) fn target_path(token: &SyntaxToken) -> Option<(String, Vec<PathStep>)
     let mut path = place_path(&target.syntax().parent()?)?;
     path.extend(target_steps(&target)?);
     from_root(path)
+}
+
+/// [`target_path`] up to the segment of the target a token is on, with where
+/// that segment ends: `web.limits` on `limits` in `web.limits.cpu: 2`.
+fn segment_path(token: &SyntaxToken) -> Option<(String, Vec<PathStep>, TextSize)> {
+    let target = token.parent_ancestors().find_map(ast::Target::cast)?;
+    let mut path = place_path(&target.syntax().parent()?)?;
+    path.extend(key_steps(&target)?);
+    let mut end = target.key()?.syntax().text_range().end();
+    let reached: Vec<ast::Selector> = target
+        .selectors()
+        .take_while(|s| s.syntax().text_range().start() <= token.text_range().start())
+        .collect();
+    if let Some(last) = reached.last() {
+        end = last.syntax().text_range().end();
+    }
+    path.extend(selector_steps(reached.into_iter()));
+    let (key, steps) = from_root(path)?;
+    Some((key, steps, end))
+}
+
+/// The root key and path of an element of a list, tuple or `Name(...)`.
+pub(crate) fn element_path(node: &SyntaxNode) -> Option<(String, Vec<PathStep>)> {
+    from_root(place_path(node)?)
 }
 
 /// The root key a token names: the key of a root entry's target, an id
@@ -415,7 +445,7 @@ pub(crate) fn value_at(
 }
 
 /// The evaluation a document belongs to, else the project's; while that
-/// has no value, the latest of the project's that had one.
+/// has no value, the latest of the same that had one.
 pub(crate) fn evaluation_for(
     snapshot: &Snapshot,
     file: Option<crol_eval::FileId>,
@@ -423,9 +453,9 @@ pub(crate) fn evaluation_for(
     let evaluation = file
         .and_then(|f| snapshot.evaluation_of(f))
         .unwrap_or(&snapshot.evaluation);
-    match (&evaluation.value, &snapshot.last_good) {
-        (None, Some(good)) if file.is_none_or(|f| snapshot.in_layers(f)) => good,
-        _ => evaluation,
+    match &evaluation.value {
+        None => snapshot.last_good_of(file).unwrap_or(evaluation),
+        Some(_) => evaluation,
     }
 }
 
@@ -481,7 +511,9 @@ pub(crate) fn hover(
     let path = convert::uri_to_path(uri)?;
     let file = snapshot.file_of(&path)?;
     let (_, token) = token_at(text, position, encoding)?;
-    let (key, steps, is_target) = if token
+    // Where the segment of a target under the cursor ends.
+    let mut target_end = None;
+    let (key, steps) = if token
         .parent()
         .is_some_and(|p| p.kind() == SyntaxKind::ID_EXPR)
     {
@@ -490,33 +522,43 @@ pub(crate) fn hover(
             .trim_start_matches('@')
             .trim_matches('"')
             .to_owned();
-        (id, Vec::new(), false)
-    } else if let Some((key, steps)) = reference_path(&token) {
-        (key, steps, false)
-    } else if let Some((key, steps)) = relative_reference_path(&token) {
-        (key, steps, false)
+        (id, Vec::new())
+    } else if let Some(found) = reference_path(&token) {
+        found
+    } else if let Some(found) = relative_reference_path(&token) {
+        found
     } else {
-        let (key, steps) = target_path(&token)?;
-        (key, steps, true)
+        let (key, steps, end) = segment_path(&token)?;
+        target_end = Some(end);
+        (key, steps)
     };
+    let is_target = target_end.is_some();
     let described = describe_path(&key, &steps);
     let in_context = if settings.context.is_empty() {
         String::new()
     } else {
         format!(" in {{{}}}", settings.context.join(", "))
     };
-    let mut markdown = match value_at(snapshot, file, &key, &steps, &settings.context) {
+    let evaluation = evaluation_for(snapshot, Some(file));
+    let stale = snapshot
+        .last_good_of(Some(file))
+        .is_some_and(|good| std::ptr::eq(good, evaluation));
+    let mut markdown = match value_in(evaluation, &key, &steps, &settings.context) {
+        Some(value) if stale => format!(
+            "**{described}**{in_context}: {} (at the last evaluation that had a value)",
+            show(&value)
+        ),
         Some(value) => format!("**{described}**{in_context}: {}", show(&value)),
         None => format!("**{described}**{in_context}: no value"),
     };
     // The type and doc from the schema.
-    if is_target
+    if let Some(end) = target_end
         && let Some(entry) = token
             .parent_ancestors()
             .find_map(ast::Target::cast)
             .and_then(|t| t.syntax().parent())
             .and_then(ast::Entry::cast)
-        && let Some((ty, doc)) = crate::schema::entry_type(snapshot, Some(file), &entry)
+        && let Some((ty, doc)) = crate::schema::entry_type(snapshot, Some(file), &entry, end)
         && let Some(schema) = snapshot.schema_for(Some(file))
     {
         markdown.push_str(&format!(
@@ -527,12 +569,12 @@ pub(crate) fn hover(
             markdown.push_str(&format!(" — {doc}"));
         }
     }
-    if is_target && snapshot.in_layers(file) {
+    if is_target && let Some((layers, options)) = snapshot.chain_of(file) {
         let path_text = described.clone();
         if let Ok(history) = crol_eval::explain(
             &snapshot.sources,
-            &snapshot.layers,
-            &snapshot.options,
+            layers,
+            options,
             &path_text,
             &settings.context,
         ) && !history.is_empty()
@@ -613,10 +655,14 @@ pub(crate) fn definition(
         target_path(&token)?.0
     };
     // The first definition of the key, in the base chain.
+    let file = convert::uri_to_path(uri).and_then(|path| snapshot.file_of(&path));
+    let (layers, options) = file
+        .and_then(|file| snapshot.chain_of(file))
+        .unwrap_or((&snapshot.layers, &snapshot.options));
     let steps = crol_eval::explain(
         &snapshot.sources,
-        &snapshot.layers,
-        &snapshot.options,
+        layers,
+        options,
         &Key::Str(key).to_string(),
         &[],
     )
@@ -648,10 +694,11 @@ fn value_below(
     if let Some(selected) = reference.syntax().parent().and_then(ast::PathExpr::cast) {
         path.extend(selector_steps(selected.selectors()));
     }
+    let (layers, options) = snapshot.chain_of(file)?;
     let steps = crol_eval::explain(
         &snapshot.sources,
-        &snapshot.layers,
-        &snapshot.options,
+        layers,
+        options,
         &describe_path(&key, &path),
         &[],
     )

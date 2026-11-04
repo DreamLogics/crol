@@ -45,6 +45,34 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 - `crol eval` and `crol fingerprint` of layers exit with status 1 on schema errors,
   and print no data or fingerprint, as they already did for a value document and
   for every other error (`SPEC.md` 11).
+- The language server follows `#![extends(...)]`, in a layer and in a document on
+  its own, through the composer `crol check` uses, with open buffers over the
+  files. Hover, go to definition, completion and inlay hints see what is extended,
+  a document follows changes to it, and an `extends` that fails is shown on the
+  attribute. It asks the client to watch the workspace's CROL files.
+  `CrolComposer::load_layer_tolerant`, `FileLoaders::with_file_reader` and
+  `FileLoaders::resolve_path` are what it uses.
+- A layer that does not load no longer stops the language server loading the
+  ones after it. A stray `.crov` or `.crol` file is left out of its layer and has
+  the error; a layer that cannot be loaded adds nothing, and has the error on the
+  file to blame. Errors above what is missing are warnings that say why, and every
+  problem is shown, not only the first (`SPEC.md` 12.5).
+- `Project.files` now does what it says: a `.crov` file that a glob matches is
+  checked as a value of that type against the project's schema, by `crol check`,
+  `crol eval`, `crol fingerprint` and the language server, with completion and
+  hover to match. Its globs are specified (`SPEC.md` 12.4), and one with a wrong
+  form is an error in the project file. A `.crov` file that names a schema or that
+  no glob matches is treated as before.
+- A document on its own keeps its last good evaluation while it does not evaluate,
+  as layers did, so accepting a field fills in its value and hover shows one, saying
+  that it is from the last evaluation. Hover in a layer does this too.
+- In the language server, a block of an internally tagged, adjacently tagged or
+  untagged enum offers its fields, hover on a dotted target is about the segment
+  under the cursor, and inlay hints cover elements of lists, tuples and
+  `Name(...)`, such as `[1 + 1]`.
+- `&default` works in `crol` and in the language server, not only through
+  `CrolComposer::schema`: they read defaults from the schema they check against
+  (`SPEC.md` 6.1.3). `SchemaFile::defaults` gives them to a tool of your own.
 - `CrolLayer::without_file` is gone: `FileLoaders::with_project_file` names the
   one `.crov` file a layer's directory may hold.
 

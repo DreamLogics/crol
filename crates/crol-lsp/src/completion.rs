@@ -496,11 +496,11 @@ impl Completer<'_> {
                     let (key, rest) = match path.split_first() {
                         Some((PathStep::Field(key), rest)) => {
                             let mut rest = rest.to_vec();
-                            rest.push(PathStep::Field((*name).clone()));
+                            rest.push(PathStep::Field(name.clone()));
                             (key.clone(), rest)
                         }
                         Some(_) => return None,
-                        None => ((*name).clone(), Vec::new()),
+                        None => (name.clone(), Vec::new()),
                     };
                     self.value_at(&key, &rest)
                 });
@@ -508,13 +508,13 @@ impl Completer<'_> {
                     .as_ref()
                     .map_or_else(|| schema::placeholder(schema, &field.ty), print::to_text);
                 let written_name = if crol_eval::is_identifier(name) {
-                    (*name).clone()
+                    name.clone()
                 } else {
                     crol_eval::quote(name)
                 };
                 let mut item = documented(
                     item(
-                        (*name).clone(),
+                        name.clone(),
                         CompletionItemKind::FIELD,
                         Some(schema::rust_type(schema, &field.ty)),
                     ),

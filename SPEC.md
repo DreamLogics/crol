@@ -504,7 +504,10 @@ web.replicas: 4,
 - **Tools** always follow it: they evaluate the document on top of those
   layers, so the editor shows the values below, the merged results, and
   the templates and keys the document can use. Diagnostics in extended
-  documents are not reported, only in the document itself.
+  documents are not reported, only in the document itself: an `extends`
+  that cannot be followed (it names nothing, or forms a cycle) and the
+  first error in what an `extends` brought in are shown on its module
+  path. The other `extends` of the document are still followed.
 - **The loader** follows it only with `CrolConfig::load_extends`
   (section 10.7); by default it ignores it, and the application decides
   what is loaded and in which order. Either way `extends` only adds
@@ -963,11 +966,14 @@ struct):
 - **Where defaults come from.** From the schema (section 10.9), which
   records them for types with `#[crol(defaults)]`. The loader needs the
   schema for this: `CrolComposer::schema(crol::schema::build::<Definition>())`.
-  Tools read them from the schema file.
+  Tools read them from the schema file they check against: the CLI from
+  `--schema`, the project's, or the one the documents name, and the language
+  server from the project's for a layer, and for a document on its own from
+  the one it names (section 12.5). Value mode has no defaults.
 - **Missing.** A field without a default, a type without recorded
   defaults, or a target whose type cannot be found makes `&default`
   *missing*, so `&default | 1` falls back (section 6.5). Without a
-  schema at all, `&default` is an error.
+  schema at all, and in value mode, `&default` is an error.
 - **Fixed.** Defaults depend neither on layers nor on the context, so
   `&default` is evaluated once per target and never takes part in a
   cycle.
@@ -1828,6 +1834,11 @@ tools:
   together. `load_layer(CrolLayer)` adds a layer built in code.
 - `with_file_loader(loader)` registers a file loader (below), and
   `without_file_system()` turns off the default one.
+- `load_layer_tolerant(layer)` is `load_layer` for tools, which show what
+  they can: an `extends` that fails stops nothing, the layer goes on top
+  of what the others loaded, and it returns what became of each
+  (`ExtendsLoad`: the document, the module path and its range, the layers
+  it added, and the error). It takes `&mut self`.
 - `with_variant(v)` makes `v` active in the context to compose (section
   8.1). It fails for an undeclared variant (when variants are declared), or a second choice in a group
   that is not an ancestor or descendant of the first. Without any, the
@@ -1891,6 +1902,13 @@ let config: Config = CrolComposer::new()
     .compose()?;
 ```
 
+- `FileLoaders::with_file_reader(loader)` keeps the file system's
+  resolution, and reads every file it reaches through `loader`'s `load`.
+  This is how the language server puts open buffers over the files.
+  `FileLoaders::resolve_path(path, root)` is a layer's document by file
+  system path, read the same way; like `&Path` given to `load`, it needs no
+  name a module path can write, and its relative paths start from its
+  directory.
 - `ModulePath` gives a loader `segments()`, the names from the root to what
   the path names, with `super` and the directory of the document it is
   written in already applied (section 4.2): `super::defaults` in
@@ -2266,14 +2284,16 @@ a layer. So:
 **Modes.** Commands choose the mode by the rules of section 4:
 
 - With one source that is a `.crov` file, `check`, `eval` and `fingerprint`
-  read it in value mode. It is checked against `--schema`, else its
-  `#![schema(...)]`, else, for a file called `project.crov` or given with
-  `--project`, the schema `crol` provides (section 12.4). `eval` prints the
+  read it in value mode. It is checked against `--schema`, else, for a
+  file called `project.crov` or given with `--project`, the schema `crol`
+  provides, else its `#![schema(...)]`, else the type the `files` of the
+  project found, or given with `--project`, give it (section 12.4). `eval` prints the
   value, with a key and path the value there; with a schema, defaults are
   written out as above. `fingerprint` is over the value (appendix B).
   `--context`, `--all-contexts` and the flags that declare variants are
-  errors, as a value document has no variants. `Project.files` is not
-  read; a project's own schema and root type are for its layers.
+  errors, as a value document has no variants. A project's schema and
+  root type are for its layers: a value document only gets them through
+  `Project.files`.
 - `explain` follows a value through layers, so a `.crov` file is an error
   that points to `crol eval`.
 - A `.crov` file among other sources, or written `name=source`, is a layer,
@@ -2394,9 +2414,7 @@ Project {
 - `dir` is a module path (section 4.2), written as a string; the root
   directory is the project file's. The language server resolves it through
   a file loader (section 10.7) that puts open buffers over the file
-  system. `glob` is a module path whose
-  segments may hold `*` (any part of one name) or be `**` (any number of
-  directories). `read_only` layers
+  system. `read_only` layers
   (generated data, vendored data) are loaded but get no diagnostics or
   code actions in the editor.
 - `layers` is either `List([...])` or `Command(["my-app", "list-layers"])`.
@@ -2415,10 +2433,42 @@ Project {
   the application's definition kinds (section 10.4). It defaults to the
   schema's root type. Type names in `root` and `files` are schema paths;
   a plain name is accepted when it is unambiguous.
-- `files` gives value-mode documents a type. A `.crov` file that matches
-  no glob is checked against its `#![schema(...)]` if it has one; otherwise
-  it gets syntax and evaluation checks only. A `.crod` file in no layer is
-  a layer of its own in the editor, with the same schema rule.
+- `files` gives value-mode documents a type: it is how a `.crov` file
+  outside the layers opts in to the project's schema. A document that
+  matches is checked as a value of that type, against `schema`, with the
+  project's `options`, in the language server, and in `crol check`, `crol
+  eval` and `crol fingerprint` given that one file. It is an error if the
+  project has no `schema`, or the schema has no such type.
+- Which schema a `.crov` file gets, first what applies: `--schema` (CLI);
+  for the project file, the one `crol` provides; its `#![schema(...)]`, by
+  that schema's rules, whatever the globs say (section 4.1); the first glob
+  in `files` that matches it; nothing, for syntax and evaluation checks
+  only, with no project schema or root type. A `.crod` file in no layer is
+  a layer of its own in the editor, with its own `#![schema(...)]` or else
+  that of what it extends, never `files`.
+
+**Globs.** A `glob` is written like a module path (section 4.2): segments
+separated by `::`, from the project file's directory, so a leading `::`
+changes nothing. It says which files match; it is not resolved, and
+nothing lists a directory for it, so the result depends on a file's path
+alone, never on what else exists.
+
+- The last segment is matched against the file's name without `.crov`.
+  Every other segment is matched against one directory, in order, except
+  `**`, which matches any number of directories, also none.
+- In a segment, `*` matches any part of one name, also none, and every
+  other character matches itself, by Unicode scalar value: `config::*`,
+  `config::app_*`, `config::**::*`. Case counts, on every platform.
+- A segment holds letters, digits, `_` and `*`. `**` is a whole segment
+  and not the last, `super` is not allowed, and no segment is empty. A glob
+  that breaks this is an error in the project file.
+- Only `.crov` files match, by the name of the file, canonical, below the
+  canonical project directory: one outside it never matches, also through
+  a symbolic link. No name in the path may be hidden (start with `.`). A name
+  that is no identifier does match: `config::*` matches `config/my-app.crov`,
+  which a module path could not name.
+- Entries are tried in the order written, and the first that matches
+  decides.
 
 ### 12.5 Language server
 
@@ -2431,8 +2481,11 @@ editor-neutral; section 12.7 is the Zed client.
 not (section 4). Without a project file, it serves each open document on
 its own: syntax, evaluation (a `.crov` file as a value-mode document, a
 `.crod` file as a layer on its own, on top of its
-`#![extends(...)]` layers), and checks against its
-`#![schema(...)]` if it has one. An open document with another extension
+`#![extends(...)]` layers, loaded by the composer as for `crol check`,
+with open buffers over the files), and checks against its
+`#![schema(...)]` if it has one, else the one the nearest extended
+document names. Hover, go to definition, completion and inlay hints see
+those layers. An open document with another extension
 is value mode, as a text with no layers, and a `.crol` file is not
 evaluated: its one diagnostic says to rename it. With a project file, an open
 document in none of its layers is served in the same way. At start it reads the
@@ -2443,8 +2496,21 @@ After an edit it parses the edited file again at once (for syntax errors
 and the outline), and re-evaluates everything after a pause in typing
 (default 150 ms), cancelling an evaluation that a newer edit makes stale.
 Requests are answered from the latest finished evaluation, so the
-editor never waits for one. Changes to files on disk, the project file
-and the schema file are watched.
+editor never waits for one. While a document does not evaluate, as is
+normal in the middle of an edit, hover, completion and the values
+accepting a field fills in come from the latest evaluation that had a value:
+of the project's layers for a file in them, else of that document on its own,
+for as long as it stays open. Hover says so. Changes to files on disk, the project file
+and the schema file are watched: a client that can register watchers is
+asked for every `.crod`, `.crov` and `.crol` file in the workspace, and any
+change, also to an open buffer, evaluates everything again, so a document
+follows what it extends. Files outside the workspace are read again at
+each evaluation.
+
+A layer of a project may `extends` too, as in `crol check`. What that
+brings in that is no layer of the project goes below the layer, gets no
+diagnostics of its own unless it is open, and has a warning on the
+`extends` (section 4.1).
 
 **Diagnostics.** Everything `crol check` reports, on the spot: syntax,
 reading and evaluation errors, schema errors on final values (unknown
@@ -2456,12 +2522,34 @@ only final values are checked. Diagnostics are published for all files
 of writable layers, not only open ones, and every diagnostic that has
 secondary spans (cycles, two definitions) links to them as related
 information. A problem with the project as a whole is put on the file to
-blame, such as a `.crov` file in a layer's directory or a leftover
-`project.crol`, else on the project file.
+blame, such as a leftover `project.crol`, else on the project file.
+
+**A layer that does not load** stops nothing, unlike in `crol check`, for
+which it is an error. The problem is put on the file to blame, else on the
+project file, and what can be evaluated still is:
+
+- A `.crov` or `.crol` file in a layer's directory is left out, and has
+  the error. The rest of the layer loads. A `.crov` file was never data, so
+  everything else is as it would be without it. A `.crol` file may have
+  been, as for the next case.
+- A layer that cannot be loaded at all (its `dir` names nothing, or both a
+  file and a directory, or a file in it is not UTF-8) adds nothing: its
+  files are not evaluated as part of the project, so an open one is served
+  on its own, its keys have no values, and hover and completion do not
+  offer them. The layers after it are evaluated without it. So are those
+  on top of an `extends` that cannot be followed.
+- What is missing may be why a layer above it fails, so errors in those
+  layers (a patch to a key the missing layer defines, say) are warnings
+  that say so until it loads, and the real errors reappear then.
+- While the layers do not evaluate this way, hover and completion use the
+  latest evaluation that had a value (below), else that of the layers below
+  what is missing.
 
 **Hover.**
 
-- On a target or key: the type and doc comment from the schema; the
+- On a target or key, for the segment under the cursor (`limits` in
+  `web.limits.cpu: 2` is `web.limits`): the type and doc comment from the
+  schema; the
   value *below* this entry (what `&` is here) and the *final* value,
   each with where it came from (file, line, layer); for a key that
   differs between contexts, the value per context, up to a limit.
@@ -2473,7 +2561,8 @@ blame, such as a `.crov` file in a layer's directory or a leftover
 - On an operator: the values of both sides and the result.
 
 **Inlay hints** (optional, off by default): the result after an
-expression that computes something (`& * 4` shows `= 2048`), in the
+expression that computes something (`& * 4` shows `= 2048`), the value of
+an entry or an element of a list, tuple or `Name(...)`, in the
 context chosen with the `context` setting.
 
 **Completion.** The type expected at the cursor is found from the
@@ -2489,7 +2578,10 @@ cursor. `:`, space, `{`, `[`, `(` and `,` trigger completion, as do `.`,
 
 - Keys: in a block of a known type and after a `.` in a target, the
   fields not written yet (in that block, not one around a variant
-  block), with those of flattened fields, each with its doc; accepting
+  block), with those of flattened fields, each with its doc. A block of a
+  tagged or untagged enum (section 10.4) has no name to say the variant, so
+  it offers the tag and the fields of every variant, and an adjacently tagged
+  one its tag and content. Accepting
   one fills in the value below if there is one
   (typing `rep` in a patch of `web` gives `replicas: 2`), else a
   placeholder of the right shape; only the name before an existing `:`.

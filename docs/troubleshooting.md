@@ -212,7 +212,9 @@ the document, or make it agree.
 
 **`&default: defaults come from a schema, and no schema is given`**
 
-`&default` works only in your program, through `CrolComposer::schema`. See
+There is no schema to read the default from. Give your program the schema with
+`CrolComposer::schema`, and tools one with `--schema`, `schema` in `project.crov`
+or `#![schema(...)]`. A value-mode document never has defaults. See
 [the limits](schemas.md#using-default).
 
 **`` schema: `fleet` is not cached, and fetching schemas is off ``**
@@ -245,13 +247,21 @@ found your project. It looks in your workspace folder and above, so open the
 project's folder, not a directory next to it, or set `project`.
 
 **Errors about keys that exist in another file.** A `.crod` file that is not in
-any layer is evaluated alone, and the server does not follow `#![extends(...)]`
-yet, so what it builds on is missing. Add the file's directory to the `layers` in
-`project.crov`.
+any layer only knows itself and what its `#![extends(...)]` names. Add an `extends`,
+or add the file's directory to the `layers` in `project.crov`.
 
-**A `.crov` file or a `project.crol` has one error, and the rest shows nothing.**
-A problem with the project stops the server from loading its layers, and is shown
-on the file to blame. Fix that one first.
+**An error on `#![extends(...)]`.** It names nothing, forms a cycle, or what it
+names has errors of its own, of which the message shows the first. Other errors in
+the document are then warnings when the `extends` cannot be followed at all, since
+what is missing may be why.
+
+**A `project.crov` or a `project.crol` has one error, and the rest shows nothing.**
+A problem with the project file itself stops the server from loading the layers,
+and is shown on the file to blame. Fix that one first.
+
+**Warnings that end in `which may be why`.** A layer or an `extends` did not load,
+and this may only be a result of that. Fix the error on the file it names, or on
+`project.crov`; what is still wrong then shows as an error again.
 
 **Zed cannot start the server.** Zed looks for `crol` in your settings and on the
 `PATH`. With no `crol` there, it tries to download a release, and none exists yet.

@@ -439,11 +439,15 @@ out for serde, and `..&default` copies them into the data.
 Where no default is recorded, `&default` counts as missing, so `&default | 1`
 falls back.
 
-**Limits.** `&default` works only through `CrolComposer::schema`, in layered data.
-In a value-mode document it is an error, with `crol::from_str` and with
-`crol::from_str_with_schema` alike. `crol check`, `crol eval` and the language
-server do not hand their schema to the evaluator yet. In all of these, a document
-with `&default` reports `defaults come from a schema, and no schema is given`.
+`crol check`, `crol eval`, `crol explain`, `crol fingerprint` and the language
+server read defaults from the schema they check against: `--schema`, the project's,
+or the one a document names. Generate the schema from types with
+`#[crol(defaults)]`, so that it records them.
+
+**Limits.** `&default` works in layered data only. In a value-mode document it is
+an error, with `crol::from_str`, `crol::from_str_with_schema`, a `.crov` file given
+to `crol` and in the language server alike. There, and in data with no schema at
+all, it reports `defaults come from a schema, and no schema is given`.
 
 ## What else the loader learns from a schema
 
