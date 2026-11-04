@@ -1082,7 +1082,7 @@ fn documents_on_their_own_complete_from_their_schema() {
         ],
     );
     let mut client = Client::start(&dir);
-    let mut complete = |client: &mut Client, uri: &str, first: &str, text: &str| {
+    let complete = |client: &mut Client, uri: &str, first: &str, text: &str| {
         client.notify(
             "textDocument/didOpen",
             json!({ "textDocument": { "uri": uri, "languageId": "crol", "version": 1, "text": first } }),
