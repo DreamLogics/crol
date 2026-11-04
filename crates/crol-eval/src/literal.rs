@@ -35,21 +35,30 @@ pub(crate) fn float(text: &str, negative: bool) -> Result<f64, String> {
     Ok(if negative { -value } else { value })
 }
 
-/// Decodes a string or raw string token.
+/// Decodes a string or raw string token. An unterminated one (a syntax
+/// error) has no closing quote.
 pub(crate) fn string(text: &str) -> String {
     if let Some(raw) = text.strip_prefix('r') {
-        let hashes = raw.bytes().take_while(|&b| b == b'#').count();
-        let inner = &raw[hashes..raw.len() - hashes];
-        return inner[1..inner.len().saturating_sub(1).max(1)].to_owned();
+        let hashes = &raw[..raw.bytes().take_while(|&b| b == b'#').count()];
+        let inner = raw[hashes.len()..].strip_prefix('"').unwrap_or("");
+        let close = format!("\"{hashes}");
+        return inner
+            .strip_suffix(close.as_str())
+            .unwrap_or(inner)
+            .to_owned();
     }
-    let inner = &text[1..text.len().saturating_sub(1).max(1)];
-    unescape(inner)
+    unescape(between(text, '"'))
 }
 
 /// Decodes a char token.
 pub(crate) fn char(text: &str) -> char {
-    let inner = &text[1..text.len() - 1];
-    unescape(inner).chars().next().unwrap_or('\0')
+    unescape(between(text, '\'')).chars().next().unwrap_or('\0')
+}
+
+/// The text inside the quotes of a token.
+fn between(text: &str, quote: char) -> &str {
+    let inner = text.strip_prefix(quote).unwrap_or(text);
+    inner.strip_suffix(quote).unwrap_or(inner)
 }
 
 fn unescape(text: &str) -> String {

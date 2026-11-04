@@ -61,3 +61,22 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 - The project file (`SPEC.md` 12.4); `crol` commands read their layers,
   variants, options and schema from it when given no layers, and take
   `--project` and `--schema`.
+- Language server: find references, rename of binds, workspace symbols,
+  semantic tokens, inlay hints (off by default), and code actions (quick
+  fixes for diagnostics, missing fields, the values below as comments);
+  completion and hover from the schema.
+- `#![schema(...)]` names the schema a document is checked against, in
+  the language server and `crol check`; `crol::check_value` checks a
+  value-mode document.
+- `crol_eval::operations` and `crol_eval::operation_values`, for editors.
+- Conformance cases with a schema are checked both by deserializing and by
+  `crol::check`.
+- Fuzz targets in `fuzz/` for the parser and both evaluation modes.
+- A limit of 256 conditional operations for one entry (`SPEC.md` 7.7).
+
+### Fixed
+
+- Unterminated string and char literals no longer make evaluation panic.
+- The parser reports tokens it skips while recovering, as in
+  `<a * b>`; the formatter used to accept and garble them.
+- The formatter keeps the space in `1 .0`, which would become a float.

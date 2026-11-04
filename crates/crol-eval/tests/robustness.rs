@@ -298,3 +298,29 @@ fn random_layers_with_variants_round_trip_through_all_contexts() {
         "only {evaluated} data sets evaluated without errors"
     );
 }
+
+/// Inputs the fuzz targets (`fuzz/`) found problems with.
+#[test]
+fn fuzz_findings() {
+    let inputs: &[&str] = &[
+        // A char literal that is only `'`, at the end of the text.
+        "a: '",
+        // Unterminated strings ending in a character of several bytes, or
+        // with nothing after the hashes.
+        "a: \"Ŝ",
+        "a: r#\"Ŝ",
+        "a: r##",
+    ];
+    for input in inputs {
+        let mut sources = Sources::new();
+        let file = sources.add("a.crol", *input);
+        let layers = [crol_eval::Layer {
+            name: "base".to_owned(),
+            documents: vec![("a.crol".to_owned(), file)],
+        }];
+        let evaluation =
+            crol_eval::evaluate_data(&sources, &layers, &crol_eval::DataOptions::default());
+        assert!(evaluation.has_errors(), "{input:?}");
+        let _ = evaluate_value(&sources, file);
+    }
+}

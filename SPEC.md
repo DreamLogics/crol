@@ -1066,7 +1066,10 @@ reading and evaluation have fixed limits, each an error when exceeded:
   copy of itself, as `x: { ..&root }` does: the copy holds `x`, which
   holds another copy, without end. It is reported as a cycle; removing
   the entry stops it (`x: { ..&root, -x }` is fine);
-- 2 000 000 values computed in one evaluation.
+- 2 000 000 values computed in one evaluation;
+- one entry standing for more than 256 conditional operations: `+`
+  lists multiply through nesting, so `<a + b> { <c + d> { x: 1 } }` is
+  four, and nine such levels are 512.
 
 The limits are part of the format: a later version may raise them, but
 never lower them.

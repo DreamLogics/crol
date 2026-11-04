@@ -241,18 +241,27 @@ fn key_selector(key: &Key, span: Span) -> Selector {
     Selector { kind, span }
 }
 
+/// How many conditional operations one entry may stand for, through `+`
+/// lists multiplied by nesting (`SPEC.md` 7.7).
+const MAX_ALTERNATIVES: usize = 256;
+
 /// Each alternative of `alternatives` with each condition of `list`: the
 /// conjunction that nesting means, distributed over `+` lists (`SPEC.md`
-/// 8.2).
-fn distribute(alternatives: &[Option<Cond>], list: &[Cond]) -> Vec<Option<Cond>> {
+/// 8.2). `None` if there would be more than [`MAX_ALTERNATIVES`].
+fn distribute(alternatives: &[Option<Cond>], list: &[Cond]) -> Option<Vec<Option<Cond>>> {
+    if alternatives.len() * list.len() > MAX_ALTERNATIVES {
+        return None;
+    }
     let mut out = Vec::with_capacity(alternatives.len() * list.len());
     for alternative in alternatives {
         for condition in list {
             out.push(Cond::and(alternative.as_ref(), Some(condition)));
         }
     }
-    out
+    Some(out)
 }
+
+const TOO_MANY_ALTERNATIVES: &str = "`+` lists multiply through nested conditions, and this stands for more than 256 conditional operations";
 
 /// Whether a target has a variant selector, which makes its entry a variant
 /// entry.
@@ -413,10 +422,17 @@ impl Lowerer {
                     let span = self.span(bind.syntax());
                     self.error(span, "a bind cannot name a variant block");
                 }
-                let Some(list) = block.variant().and_then(|v| self.variant_list(&v)) else {
+                let Some(variant) = block.variant() else {
                     return;
                 };
-                let inner = distribute(conditions, &list);
+                let Some(list) = self.variant_list(&variant) else {
+                    return;
+                };
+                let Some(inner) = distribute(conditions, &list) else {
+                    let span = self.span(variant.syntax());
+                    self.error(span, TOO_MANY_ALTERNATIVES);
+                    return;
+                };
                 for entry in block.entries() {
                     self.root_entry(&entry, &inner, ops);
                 }
@@ -443,7 +459,11 @@ impl Lowerer {
         };
         let mut alternatives = conditions.to_vec();
         for list in &lists {
-            alternatives = distribute(&alternatives, list);
+            let Some(more) = distribute(&alternatives, list) else {
+                self.error(span, TOO_MANY_ALTERNATIVES);
+                return;
+            };
+            alternatives = more;
         }
         if let Some(bind) = match entry {
             ast::AnyEntry::Entry(e) => e.bind(),
@@ -509,10 +529,17 @@ impl Lowerer {
             }
             ast::AnyEntry::Remove(e) => (e.target(), None, None),
             ast::AnyEntry::VariantBlock(block) => {
-                let Some(list) = block.variant().and_then(|v| self.variant_list(&v)) else {
+                let Some(variant) = block.variant() else {
                     return;
                 };
-                let inner = distribute(conditions, &list);
+                let Some(list) = self.variant_list(&variant) else {
+                    return;
+                };
+                let Some(inner) = distribute(conditions, &list) else {
+                    let span = self.span(variant.syntax());
+                    self.error(span, TOO_MANY_ALTERNATIVES);
+                    return;
+                };
                 for entry in block.entries() {
                     self.lift(&entry, fixed, &inner);
                 }
@@ -543,7 +570,11 @@ impl Lowerer {
         };
         let mut alternatives = conditions.to_vec();
         for list in &lists {
-            alternatives = distribute(&alternatives, list);
+            let Some(more) = distribute(&alternatives, list) else {
+                self.error(span, TOO_MANY_ALTERNATIVES);
+                return;
+            };
+            alternatives = more;
         }
         let mut full_path = fixed.path.clone();
         full_path.push(key_selector(&key, span));

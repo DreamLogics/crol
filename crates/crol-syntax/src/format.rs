@@ -130,6 +130,19 @@ fn child_token(node: &SyntaxNode, kinds: &[SyntaxKind]) -> Option<SyntaxToken> {
         .find(|t| kinds.contains(&t.kind()))
 }
 
+/// What goes between a base and its selectors: nothing, except after an
+/// integer before `.`, where `1 .0` would become the float `1.0`.
+fn separator(base: Option<&SyntaxNode>, selectors: &str) -> &'static str {
+    let ends_in_int = base
+        .and_then(|b| significant_tokens(b).last())
+        .is_some_and(|t| t.kind() == INT);
+    if ends_in_int && selectors.starts_with('.') {
+        " "
+    } else {
+        ""
+    }
+}
+
 fn child_node(node: &SyntaxNode, pred: impl Fn(SyntaxKind) -> bool) -> Option<SyntaxNode> {
     node.children().find(|n| pred(n.kind()))
 }
@@ -482,10 +495,10 @@ impl Formatter {
             PATH_EXPR => {
                 let selectors = self.selectors(node);
                 let base = node.children().next();
-                let base = base.map_or_else(String::new, |base| {
-                    self.render(&base, indent, col, width(&selectors) + trailing)
+                let rendered = base.as_ref().map_or_else(String::new, |base| {
+                    self.render(base, indent, col, width(&selectors) + trailing)
                 });
-                base + &selectors
+                rendered + separator(base.as_ref(), &selectors) + &selectors
             }
             _ => self.flat(node).unwrap_or_else(|| node.text().to_string()),
         }
@@ -504,7 +517,11 @@ impl Formatter {
             }
             PAREN_EXPR => format!("({})", self.flat(&node.children().next()?)?),
             PREFIX_EXPR => format!("-{}", self.flat(&node.children().next()?)?),
-            PATH_EXPR => self.flat(&node.children().next()?)? + &self.selectors(node),
+            PATH_EXPR => {
+                let base = node.children().next()?;
+                let selectors = self.selectors(node);
+                self.flat(&base)? + separator(Some(&base), &selectors) + &selectors
+            }
             BINARY_EXPR => {
                 let mut operands = node.children();
                 let lhs = self.flat(&operands.next()?)?;
@@ -568,7 +585,12 @@ impl Formatter {
                 out.push_str(string_as_identifier(&token).unwrap_or(token.text()));
             }
         }
-        out.push_str(&self.selectors(target));
+        let selectors = self.selectors(target);
+        out.push_str(separator(
+            child_node(target, |k| k == KEY).as_ref(),
+            &selectors,
+        ));
+        out.push_str(&selectors);
         out
     }
 

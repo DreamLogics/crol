@@ -1,0 +1,1 @@
+1-base/a.crol:5:5: `+` lists multiply through nested conditions, and this stands for more than 256 conditional operations

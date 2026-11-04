@@ -279,3 +279,17 @@ fn lists_reflow_to_the_width() {
         "#]],
     );
 }
+
+#[test]
+fn integers_keep_a_space_before_a_dot() {
+    // `1.16` and `1.0` would be floats.
+    check(
+        "1  .16:7,a:1 .0,b:-1  .0,c:x.0",
+        expect![[r#"
+            1 .16: 7,
+            a: 1 .0,
+            b: -1 .0,
+            c: x.0,
+        "#]],
+    );
+}

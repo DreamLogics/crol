@@ -1,0 +1,4 @@
+// An integer before a `.` selector keeps a space: `1.0` is a float.
+1 .16: 7,
+a: 1 .0,
+b: -1 .0,
