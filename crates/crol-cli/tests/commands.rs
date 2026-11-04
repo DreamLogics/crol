@@ -466,6 +466,17 @@ fn a_key_without_layers_says_how_to_name_a_layer() {
 }
 
 #[test]
+fn a_missing_key_that_is_also_a_path_says_how_to_name_the_layer() {
+    let dir = project("key-or-directory");
+    let output = crol(&dir, &["eval", "data"]);
+    assert!(failed(&output), "{output:?}");
+    assert!(stderr(&output).contains("`./data`"), "{output:?}");
+    let output = crol(&dir, &["eval", "nope"]);
+    assert!(failed(&output), "{output:?}");
+    assert!(!stderr(&output).contains("./nope"), "{output:?}");
+}
+
+#[test]
 fn a_key_of_a_value_document() {
     let dir = project("value-key");
     std::fs::write(dir.join("v.crov"), "web: { port: 80 }\n..\n").unwrap();

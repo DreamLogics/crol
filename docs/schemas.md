@@ -200,7 +200,7 @@ each marked with a comment, so you can see what your program will get:
 ```
 
 ```console
-$ crol eval --schema crol/schema.crov data
+$ crol eval --schema crol/schema.crov ./data
 web: Service {
     image: "web:1.4",
     port: 80,

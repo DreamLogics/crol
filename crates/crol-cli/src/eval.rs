@@ -150,6 +150,13 @@ fn print_value(
         None => root,
         Some(path) => match select(root, path) {
             Ok(value) => value,
+            Err(message) if Path::new(path).exists() => {
+                // It stays a key: this only helps whoever meant the layer.
+                reporter.error(&format!(
+                    "{message}; it is read as a key, so write `./{path}` to name the layer"
+                ));
+                return false;
+            }
             Err(message) => {
                 reporter.error(&message);
                 return false;
