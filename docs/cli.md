@@ -9,7 +9,7 @@ $ cargo install --git https://github.com/DreamLogics/crol crol-cli
 | Command                             | Does                                                 |
 | ----------------------------------- | ---------------------------------------------------- |
 | [`crol init`](#crol-init)           | set up a project                                     |
-| [`crol check`](#crol-check)         | read and evaluate layers, and report problems        |
+| [`crol check`](#crol-check)         | read and evaluate layers or a value document, and report problems |
 | [`crol eval`](#crol-eval)           | print evaluated data                                 |
 | [`crol explain`](#crol-explain)     | print the operations behind a value                  |
 | [`crol fingerprint`](#crol-fingerprint) | print a hash of the evaluated data               |
@@ -21,7 +21,7 @@ $ cargo install --git https://github.com/DreamLogics/crol crol-cli
 these two layers:
 
 ```crol
-// data/base/services.crol
+// data/base/services.crod
 +web: { replicas: 2, port: 8080 }
 <prod> {
     web.replicas: 8,
@@ -29,7 +29,7 @@ these two layers:
 ```
 
 ```crol
-// data/local/overrides.crol
+// data/local/overrides.crod
 web.port: 9090
 ```
 
@@ -40,25 +40,26 @@ arguments. `crol --init` is the same thing.
 
 ```console
 $ crol init
-Created /path/to/project/project.crol
-Created /path/to/project/data/base/main.crol
+Created /path/to/project/project.crov
+Created /path/to/project/data/base/main.crod
 
 Next:
   - add `crol = "0.1.0"` to [dependencies] in Cargo.toml, if it is not there yet
-  - write your data in data/base/main.crol
+  - write your data in data/base/main.crod
   - run `crol check`
 ```
 
 It looks for `Cargo.toml` in the current directory and then in each directory
 above, and writes next to the nearest one:
 
-- `project.crol`, a commented [project file](projects.md#starting-a-project) with
+- `project.crov`, a commented [project file](projects.md#starting-a-project) with
   one layer, `base`;
-- `data/base/main.crol`, holding only comments, unless that file exists.
+- `data/base/main.crod`, holding only comments, unless that file exists.
 
 It changes no manifest or source file. It exits with status 1, writing nothing, if
-there is no `Cargo.toml`, if `project.crol` exists there, or if `data/base.crol`
-exists, since the module path `data::base` would then be ambiguous.
+there is no `Cargo.toml`, if `project.crov` exists there, if a leftover
+`project.crol` does, or if `data/base.crod` exists, since the module path
+`data::base` would then be ambiguous.
 
 ## Naming layers
 
@@ -81,6 +82,31 @@ With no layers at all, `crol` looks for a
 options and schema from it. Given layers, it ignores the project file unless you
 pass `--project`, in which case the layers are yours and the rest comes from the
 project.
+
+## Value documents
+
+[The extension says how a file is read](modes.md). One `.crov` file, on its own,
+is read by `check`, `eval` and `fingerprint` as a value document instead of as a
+layer:
+
+```console
+$ printf 'workers: 2 * 2\n..\n' > settings.crov
+$ crol check settings.crov
+$ crol eval settings.crov
+workers: 4
+..
+$ crol eval settings.crov workers
+4
+```
+
+It is checked against `--schema`, else its own
+[`#![schema(...)]`](schemas.md#the-schema-attribute). `project.crov` gets the
+schema of project files, so `crol check project.crov` checks your project file.
+A value document has no variants, so `--context`, `--all-contexts` and the options
+that declare variants are errors.
+
+`crol explain` takes layers only. A `.crov` file among layers is an error, and so
+is a `.crol` file anywhere.
 
 ## Common options
 
@@ -155,7 +181,7 @@ yet: `web.port` is read as a layer. Name the layers, with `--project` to keep
 the project's variants and schema:
 
 ```crol
-// project.crol
+// project.crov
 Project {
     layers: List([{ name: "base", dir: "data::base", .. }]),
     ..,
@@ -163,7 +189,7 @@ Project {
 ```
 
 ```console
-$ crol eval --project project.crol data::base data::local web.port
+$ crol eval --project project.crov data::base data::local web.port
 9090
 ```
 
@@ -175,12 +201,12 @@ each:
 ```console
 $ crol explain data/base data/local web.port
 web.port:
-  data/base/services.crol:2:2    +web      definition  8080
-  data/local/overrides.crol:2:1  web.port  patch       9090
+  data/base/services.crod:2:2    +web      definition  8080
+  data/local/overrides.crod:2:1  web.port  patch       9090
 $ crol explain --context prod data/base data/local web.replicas
 web.replicas in {prod}:
-  data/base/services.crol:2:2  +web                definition  2
-  data/base/services.crol:4:5  web<prod>.replicas  patch       8
+  data/base/services.crod:2:2  +web                definition  2
+  data/base/services.crod:4:5  web<prod>.replicas  patch       8
 ```
 
 `--context a,b` chooses the context. The layers are required here, even in a
@@ -200,12 +226,13 @@ machines that print the same fingerprint have the same data.
 
 ## `crol fmt`
 
-Formats files in place. Unlike the commands above, it takes files, not layers,
-and handles [both modes](modes.md).
+Formats files in place. Unlike the commands above, it takes files, not layers or
+directories, and formats `.crod` and `.crov` [files](modes.md) the same way. A
+`.crol` file is an error, with both names to choose from.
 
 ```console
-$ crol fmt data/base/services.crol
-$ crol fmt --check data/base/services.crol
+$ crol fmt data/base/services.crod
+$ crol fmt --check data/base/services.crod
 ```
 
 With `--check`, it changes nothing and exits with status 1 if a file is not
@@ -213,8 +240,8 @@ formatted. `--max-width <n>` sets the maximum line width, by default 100.
 
 The formatter keeps your comments, and at most one blank line between entries. A
 block that fits stays on one line, unless you put a line break right after its
-`{`. It moves `..` to the end of its block, and removes the outer braces of a
-data-mode document.
+`{`. It moves `..` to the end of its block, and removes outer braces that have no
+type name.
 
 It writes top-level entries one per line, without commas, and keeps the commas in
 nested blocks, including top-level variant blocks and a typed outer block. A comma
@@ -224,8 +251,9 @@ split an entry in two.
 
 ## `crol from-ron`
 
-Converts a RON file to CROL, on standard output. `--max-width <n>` sets the line
-width. See [moving from RON](recipes.md#moving-from-ron).
+Converts a RON file to a CROL value document, on standard output, so give the
+file you keep it in a `.crov` name. `--max-width <n>` sets the line width. See
+[moving from RON](recipes.md#moving-from-ron).
 
 ## `crol lsp`
 
@@ -238,9 +266,9 @@ With `--message-format json`, diagnostics are printed as JSON, one per line, on
 standard output:
 
 ```console
-$ printf 'nope.x: 1,\n' > bad.crol
-$ crol check --message-format json data/base bad.crol
-{"severity":"error","message":"nope.x: `nope` does not exist, so it cannot be patched","file":"bad.crol","line":1,"column":1,"end_line":1,"end_column":7,"context":null,"related":[]}
+$ printf 'nope.x: 1,\n' > bad.crod
+$ crol check --message-format json data/base bad.crod
+{"severity":"error","message":"nope.x: `nope` does not exist, so it cannot be patched","file":"bad.crod","line":1,"column":1,"end_line":1,"end_column":7,"context":null,"related":[]}
 ```
 
 ## Exit status

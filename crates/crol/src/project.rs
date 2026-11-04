@@ -1,4 +1,4 @@
-//! The project file, `project.crol` (`SPEC.md` 12.4): what tools that are
+//! The project file, `project.crov` (`SPEC.md` 12.4): what tools that are
 //! not the application (the CLI, the language server) need to know to
 //! evaluate its data.
 
@@ -9,13 +9,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::compose::Variant;
 use crate::error::Error;
+use crate::loader::SourceId;
+use crate::mode::{Mode, RETIRED};
 use crate::schema::{
     Field, FieldDefault, Registry, Repr, Schema, TypeDef, TypeExpr, TypeRef, VariantDef,
     VariantShape, recorded_default,
 };
 
 /// The file name tools look for.
-pub const FILE_NAME: &str = "project.crol";
+pub const FILE_NAME: &str = "project.crov";
 
 /// A project file (`SPEC.md` 12.4).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -124,21 +126,31 @@ pub struct FilePattern {
 }
 
 impl Project {
-    /// The project file in `start` or the nearest directory above it.
-    pub fn find(start: &Path) -> Option<PathBuf> {
-        let mut dir = Some(start);
-        while let Some(current) = dir {
-            let candidate = current.join(FILE_NAME);
-            if candidate.is_file() {
-                return Some(candidate);
+    /// The project file in `start` or the nearest directory above it. A
+    /// `project.crol` where it is sought is an error that says to rename it,
+    /// also next to a `project.crov` (`SPEC.md` 12.4).
+    pub fn find(start: &Path) -> Result<Option<PathBuf>, Error> {
+        for dir in start.ancestors() {
+            let retired = dir.join(format!("project.{RETIRED}"));
+            if retired.is_file() {
+                Mode::Value
+                    .check_path(&retired)
+                    .map_err(|error| error.with_source_id(SourceId::from_path(&retired)))?;
             }
-            dir = current.parent();
+            let candidate = dir.join(FILE_NAME);
+            if candidate.is_file() {
+                return Ok(Some(candidate));
+            }
         }
-        None
+        Ok(None)
     }
 
-    /// Reads a project file.
+    /// Reads a project file. It is a value document, so a `.crod` or `.crol`
+    /// file is an error (`SPEC.md` 4).
     pub fn read(path: &Path) -> Result<Self, Error> {
+        Mode::Value
+            .check_path(path)
+            .map_err(|error| error.with_source_id(SourceId::from_path(path)))?;
         let text = std::fs::read_to_string(path)
             .map_err(|e| Error::new(format!("cannot read {}: {e}", path.display())))?;
         crate::from_str(&text).map_err(|e| Error::new(format!("{}: {e}", path.display())))
@@ -204,7 +216,7 @@ impl Project {
         } else {
             format!("::{schema}")
         };
-        crate::module_path::resolve(&module, dir, None).map(Some)
+        crate::module_path::resolve(&module, dir, None, Mode::Value).map(Some)
     }
 }
 

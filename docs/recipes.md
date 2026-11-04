@@ -9,7 +9,7 @@ Short answers to common tasks. Each one assumes you have read
 For a layer that may not be there, such as overrides ignored by Git, check first:
 
 ```crol
-// config.crol
+// config.crod
 port: 8080
 ```
 
@@ -26,8 +26,8 @@ struct Config {
 }
 
 fn main() -> Result<(), crol::Error> {
-    let mut composer = CrolComposer::new().load(Path::new("config.crol"))?;
-    let local = Path::new("local.crol");
+    let mut composer = CrolComposer::new().load(Path::new("config.crod"))?;
+    let local = Path::new("local.crod");
     if local.exists() {
         composer = composer.load(local)?;
     }
@@ -48,7 +48,7 @@ Files cannot read the environment, but your program can. Pick the variant in
 Rust:
 
 ```crol
-// config.crol
+// config.crod
 port: 8080
 <prod> {
     port: 443,
@@ -72,7 +72,7 @@ fn main() -> Result<(), crol::Error> {
         variants: CrolVariants::new().add_grouped(["dev", "prod"]),
         ..Default::default()
     })
-    .load(Path::new("config.crol"))?;
+    .load(Path::new("config.crod"))?;
     if let Ok(env) = std::env::var("APP_ENV") {
         composer = composer.with_variant(env)?;
     }
@@ -86,7 +86,7 @@ fn main() -> Result<(), crol::Error> {
 $ APP_ENV=prod cargo run
 port 443
 $ APP_ENV=staging cargo run
-Error: Error(ErrorImpl { message: "composer: `staging` is not a declared variant", span: None, location: None, path: None, diagnostics: [] })
+Error: Error(ErrorImpl { message: "composer: `staging` is not a declared variant", span: None, location: None, path: None, diagnostics: [], source_id: None })
 ```
 
 An unknown environment is an error rather than a silent fallback.
@@ -97,7 +97,7 @@ Keep secrets out of files, and add them as an in-memory layer on top.
 `crol::to_string` takes care of quoting:
 
 ```crol
-// config.crol
+// config.crod
 +database: { host: "db.internal", password: "" }
 url: "postgres://app:" + &root.database.password + "@" + &root.database.host
 ```
@@ -126,8 +126,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let secrets = format!("database.password: {}", crol::to_string(&password)?);
 
     let config: Config = CrolComposer::new()
-        .load(Path::new("config.crol"))?
-        .load_layer(CrolLayer::from_sources("secrets", [("secrets.crol", secrets)]))
+        .load(Path::new("config.crod"))?
+        .load_layer(CrolLayer::from_sources("secrets", [("secrets.crod", secrets)]))
         .compose()?;
 
     assert_eq!(config.database.password, password);
@@ -148,13 +148,13 @@ Because `url` uses late references, it picks up the password from the top layer.
 Ship your defaults inside the program, and let files on disk override them:
 
 ```crol
-// src/defaults.crol
+// src/defaults.crod
 port: 8080
 workers: 4
 ```
 
 ```crol
-// config.crol
+// config.crod
 workers: 2
 ```
 
@@ -174,11 +174,11 @@ struct Config {
 fn main() -> Result<(), crol::Error> {
     let defaults = CrolLayer::from_sources(
         "defaults",
-        [("defaults.crol", include_str!("defaults.crol"))],
+        [("defaults.crod", include_str!("defaults.crod"))],
     );
     let config: Config = CrolComposer::new()
         .load_layer(defaults)
-        .load(Path::new("config.crol"))?
+        .load(Path::new("config.crod"))?
         .compose()?;
     println!("{} workers on port {}", config.workers, config.port);
     Ok(())
@@ -217,7 +217,7 @@ struct Memory {
 
 impl FileLoader for Memory {
     fn resolve(&self, path: &ModulePath<'_>) -> Result<Option<SourceId>, LoaderError> {
-        let name = format!("{}.crol", path.segments().join("/"));
+        let name = format!("{}.crod", path.segments().join("/"));
         let found = self.files.contains_key(&name);
         Ok(found.then(|| SourceId::new(format!("memory:{name}"))))
     }
@@ -235,7 +235,7 @@ struct Config {
 }
 
 fn main() -> Result<(), crol::Error> {
-    let files = BTreeMap::from([("data/base.crol".to_owned(), "port: 8080".to_owned())]);
+    let files = BTreeMap::from([("data/base.crod".to_owned(), "port: 8080".to_owned())]);
     let config: Config = CrolComposer::new()
         .with_file_loader(Memory { files })
         .load("::data::base")?
@@ -252,11 +252,14 @@ port 8080
 
 `path.segments()` gives the names from the root to what the path names, with
 `super` and the document's directory already applied, so `super::defaults` in
-`data/base/web.crol` is `["data", "defaults"]`. A loader cannot be led above the
-root.
+`data/base/web.crod` is `["data", "defaults"]`. A loader cannot be led above the
+root. A module path has no extension: if your loader also serves schema files,
+`path.mode().extension()` gives `crod` or `crov`, whichever is looked for.
 
 The source's name appears in messages, so start it with something of your own,
-like `memory:` here. To hold a directory of documents, return `Loaded::Directory`
+like `memory:` here. Its extension [counts as a file's
+does](modes.md#text-has-no-extension): a layer called `memory:base.crov` is an
+error, and one called `memory:base` follows the call that loaded it. To hold a directory of documents, return `Loaded::Directory`
 with the relative path and source of each: CROL orders them by path itself.
 `crol::Error::source_id()` tells you which source an error from loading is about.
 
@@ -276,7 +279,7 @@ written in a document that loader loaded.** So with `load_extends` on, a documen
 from a custom loader can pull in local files below `root_path`:
 
 ```crol
-// local_secrets.crol
+// local_secrets.crod
 port: 1
 ```
 
@@ -293,7 +296,7 @@ struct Memory {
 
 impl FileLoader for Memory {
     fn resolve(&self, path: &ModulePath<'_>) -> Result<Option<SourceId>, LoaderError> {
-        let name = format!("{}.crol", path.segments().join("/"));
+        let name = format!("{}.crod", path.segments().join("/"));
         let found = self.files.contains_key(&name);
         Ok(found.then(|| SourceId::new(format!("memory:{name}"))))
     }
@@ -312,7 +315,7 @@ struct Config {
 
 fn composer() -> CrolComposer {
     let text = "#![extends(::local_secrets)]\n\nport: & + 1";
-    let files = BTreeMap::from([("remote.crol".to_owned(), text.to_owned())]);
+    let files = BTreeMap::from([("remote.crod".to_owned(), text.to_owned())]);
     CrolComposer::with_cfg(CrolConfig {
         load_extends: true,
         ..Default::default()
@@ -344,7 +347,7 @@ These commands all exit with status 1 on failure:
 
 ```sh
 crol check                          # every layer, in every context
-crol fmt --check data/base/*.crol   # formatting
+crol fmt --check data/base/*.crod   # formatting
 cargo test                          # includes the schema file test
 ```
 
@@ -370,10 +373,17 @@ limit: Some(3)
 ..
 ```
 
-The result goes to standard output. It is a value-mode document, so read it
-with `crol::from_str`. The `..` it adds means that fields left out take their
-defaults, as RON assumes. To make the file usable in layers, remove the `..`,
-and add any fields it was hiding.
+The result goes to standard output. It is a value document, so keep it in a
+`.crov` file and read it with `crol::from_str`:
+
+```console
+$ crol from-ron settings.ron > settings.crov
+$ crol check settings.crov
+```
+
+The `..` it adds means that fields left out take their defaults, as RON assumes.
+To make the file usable in layers, remove the `..`, add any fields it was hiding,
+and name it `.crod`.
 
 ## Finding out why a value is what it is
 

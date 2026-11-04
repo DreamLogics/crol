@@ -13,7 +13,7 @@ An entry is an operation on a key. There are four, and the prefix says which
 one you mean:
 
 ```crol
-// example.crol
+// example.crod
 +name: "web" // declare: create `name`; an error if it already exists
 port: 8080 // set: create `port`, or replace it
 ?replicas: 2 // ensure: create `replicas` unless it already exists
@@ -36,7 +36,7 @@ any block. A trailing comma is allowed, and two entries on one line need a comma
 between them:
 
 ```crol
-// example.crol
+// example.crod
 name: "web"
 port: 80
 limits: { cpu: 1.0, memory_mb: 512 }
@@ -58,7 +58,7 @@ line _begins an entry_. So you can break a long expression, with the operator at
 the end of a line or at the start of the next:
 
 ```crol
-// example.crol
+// example.crod
 base: 100
 extra: 20
 total: &root.base + &root.extra - 5
@@ -66,7 +66,7 @@ sum: 1 + 2
 ```
 
 ```console
-$ crol eval example.crol
+$ crol eval example.crod
 base: 100
 extra: 20
 total: 115
@@ -85,14 +85,14 @@ both, and what follows them on the same line decides:
 | `<`              | it is a condition and `{` follows: `<prod> {` | `<prod>`, `<prod>.name`          |
 
 ```crol
-// example.crol
+// example.crod
 a: 1
 +b: 2 // a new entry
 c: 1 + 2 // still `c`: 3
 ```
 
 ```console
-$ crol eval example.crol
+$ crol eval example.crod
 a: 1
 b: 2
 c: 3
@@ -107,7 +107,7 @@ c: 3
   `crol fmt` will keep it:
 
 ```crol
-// example.crol
+// example.crod
 +ports: { 80: "http", 443: "https" }
 
 ports: & ~ {
@@ -117,7 +117,7 @@ ports: & ~ {
 ```
 
 ```console
-$ crol check example.crol
+$ crol check example.crod
 ```
 
 A line that does not begin an entry stays with the value. So a mistake is an
@@ -149,7 +149,7 @@ Structs and maps look the same in CROL, with one notation, a _keyed value_.
 Your Rust type decides which it becomes.
 
 ```crol
-// example.crol
+// example.crod
 +web: Service {
     replicas: 2,
     limits: Limits { cpu: 1.5, memory_mb: 512 },
@@ -172,7 +172,7 @@ or integers. `port` and `"port"` are the same key; `12` and `"12"` are not.
 Enum values are written as in Rust:
 
 ```crol
-// example.crol
+// example.crod
 +mode: Fast // a unit variant
 +colour: Rgb(255, 128, 0) // a tuple variant
 +shape: Circle { radius: 2.0 } // a struct variant
@@ -189,7 +189,7 @@ A _path_ reaches inside a value. This is how you change one field without
 repeating the rest:
 
 ```crol
-// example.crol
+// example.crod
 +web: {
     limits: { cpu: 1.0, memory_mb: 512 },
     tags: ["a", "b"],
@@ -204,7 +204,7 @@ web.env["LOG LEVEL"]: "debug" // a key that needs quotes
 ```
 
 ```console
-$ crol eval example.crol
+$ crol eval example.crod
 web: {
     limits: { cpu: 2.0, memory_mb: 512 },
     tags: ["first", "b"],
@@ -221,7 +221,7 @@ the value below. The block on the right is applied on top of the value on the
 left:
 
 ```crol
-// example.crol
+// example.crod
 +web: { replicas: 1, port: 80, limits: { cpu: 1.0, memory_mb: 512 } }
 
 web: & ~ {
@@ -231,7 +231,7 @@ web: & ~ {
 ```
 
 ```console
-$ crol eval example.crol
+$ crol eval example.crod
 web: { replicas: 2, port: 80, limits: { cpu: 2.0, memory_mb: 512 } }
 ```
 
@@ -256,7 +256,7 @@ References read other values. They all start with `&`:
 [defaults]: #leaving-fields-out
 
 ```crol
-// example.crol
+// example.crod
 +web: {
     port: 8080,
     url: "http://web:" + &self.port,
@@ -270,7 +270,7 @@ References read other values. They all start with `&`:
 ```
 
 ```console
-$ crol eval example.crol
+$ crol eval example.crod
 web: { port: 8080, url: "http://web:8080", health: { probe: "http://localhost:8080" } }
 proxy: { upstream: "http://web:8080" }
 ```
@@ -289,7 +289,7 @@ If counting `&parent`s gets tiresome, give an entry a name with `name =`, and
 use it from any block nested inside:
 
 ```crol
-// example.crol
+// example.crod
 +web: {
     port = port: 8080,
     health: {
@@ -303,7 +303,7 @@ use it from any block nested inside:
 `name := value` binds a name to a value that is not stored under any key:
 
 ```crol
-// example.crol
+// example.crod
 +web: {
     base := 8000,
     port: &base,
@@ -312,7 +312,7 @@ use it from any block nested inside:
 ```
 
 ```console
-$ crol eval example.crol
+$ crol eval example.crod
 web: { port: 8000, admin_port: 8001 }
 ```
 
@@ -324,7 +324,7 @@ block, copying its entries in. Entries you write yourself win over spread
 ones, wherever you put them:
 
 ```crol
-// example.crol
+// example.crod
 service_defaults := {
     replicas: 1,
     port: 8080,
@@ -343,7 +343,7 @@ service_defaults := {
 ```
 
 ```console
-$ crol eval example.crol
+$ crol eval example.crod
 web: { replicas: 3, port: 8080, url: "http://localhost:8080" }
 admin: { replicas: 1, port: 9000, url: "http://localhost:9000" }
 ```
@@ -369,7 +369,7 @@ with `#[serde(default)]` take their default. A field with neither is still an
 error.
 
 ```crol
-// example.crol
+// example.crod
 +web: Service {
     port: 8080,
     ..,
@@ -380,7 +380,7 @@ A field removed with `-field` also takes its default, without `..`. Use it to
 drop a value that a lower layer or a template set:
 
 ```crol
-// example.crol
+// example.crod
 base := { port: 80, limits: { cpu: 1.0 } }
 
 +web: {
@@ -416,7 +416,7 @@ An integer and a float together count as floats. Integer division truncates.
 Overflow and division by zero are errors, not surprises.
 
 ```crol
-// example.crol
+// example.crod
 +memory: 512 * 4
 +half: 7 / 2
 +ratio: 7 / 2.0
@@ -425,7 +425,7 @@ Overflow and division by zero are errors, not surprises.
 ```
 
 ```console
-$ crol eval example.crol
+$ crol eval example.crod
 memory: 2048
 half: 3
 ratio: 3.5
@@ -444,7 +444,7 @@ then `~`, then `|`. Parentheses group.
 `a | b` is `a`, unless a value in `a` is missing, in which case it is `b`:
 
 ```crol
-// example.crol
+// example.crod
 +settings: { timeout: 30 }
 +timeout: &root.settings.timeout | 60
 +retries: &root.settings.retries | 3
@@ -452,7 +452,7 @@ counter: & + 1 | 1
 ```
 
 ```console
-$ crol eval example.crol
+$ crol eval example.crod
 settings: { timeout: 30 }
 timeout: 30
 retries: 3
@@ -471,7 +471,7 @@ An id, written `@web`, is a value that names a root key. Use one wherever one
 definition points at another:
 
 ```crol
-// example.crol
+// example.crod
 +database: { port: 5432 }
 +web: { depends_on: [@database] }
 ```
@@ -508,4 +508,4 @@ predictable: the same files give the same data, on every machine.
 
 ## Next
 
-[Data mode and value mode](modes.md) explains the two ways a file can be read.
+[Data mode and value mode](modes.md) explains `.crod` and `.crov` files.

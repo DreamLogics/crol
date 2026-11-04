@@ -1,2 +1,2 @@
-1-base/a.crol:1:5: /: division by zero
-1-base/a.crol:4:5: +: cannot add a string to a list
+1-base/a.crod:1:5: /: division by zero
+1-base/a.crod:4:5: +: cannot add a string to a list

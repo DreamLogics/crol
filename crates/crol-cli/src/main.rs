@@ -12,6 +12,7 @@ mod from_ron;
 mod init;
 mod layers;
 mod ron;
+mod value;
 
 use std::process::ExitCode;
 
@@ -32,7 +33,7 @@ struct Cli {
     message_format: MessageFormat,
 
     /// Set up the Cargo project around the current directory: write
-    /// `project.crol` and a first layer. The same as `crol init`.
+    /// `project.crov` and a first layer. The same as `crol init`.
     #[arg(long)]
     init: bool,
 
@@ -56,20 +57,25 @@ enum MessageFormat {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Read and evaluate layers, and print the diagnostics.
+    /// Read and evaluate layers, or a `.crov` value document, and print the
+    /// diagnostics.
     Check(check::Args),
-    /// Print evaluated data as a data-mode document, or one value.
+    /// Print evaluated layers as a data-mode document, a `.crov` value
+    /// document as a value, or one value of either.
     Eval(eval::Args),
     /// Print the operations that produced a value, with the value after each.
     Explain(explain::Args),
-    /// Print the fingerprint of the evaluated data in hex.
+    /// Print the fingerprint of the evaluated data, or of a `.crov` value
+    /// document, in hex.
     Fingerprint(fingerprint::Args),
-    /// Format files in place, or check that they are formatted.
+    /// Format `.crod` and `.crov` files in place, or check that they are
+    /// formatted.
     Fmt(fmt::Args),
-    /// Convert a RON value file to a CROL value document, on standard output.
+    /// Convert a RON value file to a CROL value document (a `.crov` file), on
+    /// standard output.
     FromRon(from_ron::Args),
     /// Set up the Cargo project around the current directory: write
-    /// `project.crol` and a first layer.
+    /// `project.crov` and a first layer.
     Init,
     /// Run the language server on standard input and output.
     Lsp,

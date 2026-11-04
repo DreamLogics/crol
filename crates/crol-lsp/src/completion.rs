@@ -170,7 +170,8 @@ fn items_at(
     }
     let open_angle = before.rfind('<');
     if open_angle.is_some_and(|i| !before[i..].contains('>')) {
-        let variants = &snapshot.evaluation.variants;
+        let evaluation = file.and_then(|f| snapshot.evaluation_of(f));
+        let variants = &evaluation.unwrap_or(&snapshot.evaluation).variants;
         let mut items: Vec<CompletionItem> = variants
             .ids()
             .map(|id| {

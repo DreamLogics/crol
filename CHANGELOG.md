@@ -9,8 +9,42 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ## [Unreleased]
 
+### Changed
+
+- A file's extension now states its mode (`SPEC.md` 4): `.crod` is data mode and
+  `.crov` is value mode, so the name of a file tells how it behaves. Two modes
+  stay, as they serve different purposes. `.crol` is retired: rename layers to
+  `.crod`, and single values, schema files and the project file to `.crov`.
+  A `.crol` file is an error that names the extension to use, everywhere and with
+  no fallback.
+- A file whose extension is wrong for how it is loaded is an error, never a
+  silent skip: a `.crov` file given as a layer or found in a layer's directory,
+  and a `.crod` file read as a project or schema file. File loaders' sources are
+  held to the same rules when their names have one of these extensions; other
+  names follow the API that loaded them. `crol::from_str` is always value mode
+  and the composer always data mode, also for `CrolLayer::from_sources`.
+- The project file is `project.crov`. A leftover `project.crol` is a rename
+  error, not "no project". `Project::find` returns a `Result`.
+- Module paths resolve by what they are for: `data::base` and `extends` find
+  `.crod` files and directories, and `schema` attributes and `Project.schema` find
+  `.crov` files. `crol::resolve_module_path` takes a `Mode`, `ModulePath::mode()`
+  tells a file loader which is looked for, and `FileLoaders::resolve_value`
+  resolves a value document.
+- `crol check`, `crol eval` and `crol fingerprint` read one `.crov` file in value
+  mode, with its schema. `crol explain` refuses one, and points to `crol eval`.
+- `crol fmt` takes `.crod` and `.crov` files, and refuses a `.crol` file.
+- The language server chooses the mode by the extension, in a project or not. A
+  `.crod` file outside the layers is evaluated as data, with its variants and
+  patches, and its own variants are completed. A problem with the project is now
+  shown on the file to blame.
+- `crol --init` writes `project.crov` and `data/base/main.crod`.
+- `CrolLayer::without_file` is gone: `FileLoaders::with_project_file` names the
+  one `.crov` file a layer's directory may hold.
+
 ### Added
 
+- `crol::Mode`, `crol::is_retired`, `crol::value_type`, and
+  `crol_eval::fingerprint::fingerprint_value`.
 - A line break separates entries, in addition to the comma (`SPEC.md` 5.3).
   An entry goes on across lines until the next line begins an entry; lists
   and tuples stay comma-separated. `crol fmt` and `to_string_pretty` leave

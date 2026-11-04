@@ -114,6 +114,19 @@ pub fn check_value(
     checker.found
 }
 
+/// The type a value-mode document's top-level type name chooses in a schema,
+/// as the path to give [`check_value`]: `None` if it has no name, or the
+/// name is not one type's (`SPEC.md` 4.1).
+pub fn value_type(value: &Value, schema: &SchemaFile) -> Option<String> {
+    let name = match &value.kind {
+        ValueKind::Keyed(keyed) => keyed.name.as_deref(),
+        ValueKind::NamedTuple(name, _) | ValueKind::UnitName(name) => Some(name.as_str()),
+        _ => None,
+    }?;
+    let mut found = schema.by_name(name).map(|(path, _)| path.to_owned());
+    found.next().filter(|_| found.next().is_none())
+}
+
 /// [`check`], on a [`DataView`].
 pub fn check_view(
     data: DataView<'_>,

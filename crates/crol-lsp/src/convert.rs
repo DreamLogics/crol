@@ -156,7 +156,7 @@ mod tests {
 
     #[test]
     fn uris() {
-        let uri = Uri::from_str("file:///tmp/a%20b/c.crol").unwrap();
-        assert_eq!(uri_to_path(&uri), Some(PathBuf::from("/tmp/a b/c.crol")));
+        let uri = Uri::from_str("file:///tmp/a%20b/c.crod").unwrap();
+        assert_eq!(uri_to_path(&uri), Some(PathBuf::from("/tmp/a b/c.crod")));
     }
 }

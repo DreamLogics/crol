@@ -8,7 +8,8 @@ use std::sync::Arc;
 use crol::project::Project;
 use crol::schema::SchemaFile;
 use crol::{
-    CheckOptions, FileLoader, FileLoaders, FsLoader, Loaded, LoaderError, ModulePath, SourceId,
+    CheckOptions, FileLoader, FileLoaders, FsLoader, Loaded, LoaderError, Mode, ModulePath,
+    SourceId,
 };
 use crol_eval::{DataOptions, Diagnostic, Evaluation, FileId, Layer, Severity, Sources};
 use lsp_types::Uri;
@@ -60,7 +61,8 @@ pub struct Snapshot {
     /// While the layers do not evaluate (as while a document is being
     /// typed): the latest evaluation of them that did, for completion.
     pub last_good: Option<Evaluation>,
-    /// Documents evaluated on their own, as value-mode documents.
+    /// Documents evaluated on their own, each in the mode its extension
+    /// states (`SPEC.md` 4): a name that states none is value mode.
     pub documents: Vec<(FileId, Evaluation)>,
     /// Diagnostics from the schema and the application's checks.
     pub extra: Vec<Diagnostic>,
@@ -70,7 +72,7 @@ pub struct Snapshot {
     pub root_type: Option<String>,
     /// The schemas of documents evaluated on their own, with the type of
     /// each one's value: the one it names, or the project file's.
-    own_schemas: HashMap<FileId, (SchemaFile, Option<String>)>,
+    own_schemas: HashMap<FileId, OwnSchema>,
     /// The path of each file, by its id.
     paths: Vec<PathBuf>,
     /// Files of read-only layers, which get no diagnostics.
@@ -83,13 +85,48 @@ pub struct Snapshot {
     pub(crate) remote: Vec<(String, PathBuf)>,
 }
 
+/// The schema of a document evaluated on its own.
+struct OwnSchema {
+    file: SchemaFile,
+    root: Option<String>,
+    mode: Mode,
+}
+
+/// What is wrong with the project as a whole, and the file to say it on, if
+/// one is to blame.
+struct Problem {
+    message: String,
+    file: Option<PathBuf>,
+}
+
+impl From<String> for Problem {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            file: None,
+        }
+    }
+}
+
+impl From<crol::Error> for Problem {
+    fn from(error: crol::Error) -> Self {
+        Self {
+            message: error.to_string(),
+            file: error
+                .source_id()
+                .and_then(SourceId::as_path)
+                .map(Path::to_path_buf),
+        }
+    }
+}
+
 /// The schema a document is written against.
 pub(crate) struct DocumentSchema<'a> {
     pub(crate) file: &'a SchemaFile,
     /// The type path of the root type, if not the schema's.
     pub(crate) root: Option<&'a str>,
-    /// Whether the document is a value of the root type (a document on its
-    /// own) rather than data whose root values are (`SPEC.md` 4.1).
+    /// Whether the document is a value of the root type (a value document)
+    /// rather than data whose root values are (`SPEC.md` 4.1).
     pub(crate) value_mode: bool,
 }
 
@@ -103,11 +140,11 @@ impl Snapshot {
     /// The schema of a file: its own, for a document on its own, else the
     /// project's.
     pub(crate) fn schema_for(&self, file: Option<FileId>) -> Option<DocumentSchema<'_>> {
-        if let Some((schema, root)) = file.and_then(|f| self.own_schemas.get(&f)) {
+        if let Some(own) = file.and_then(|f| self.own_schemas.get(&f)) {
             return Some(DocumentSchema {
-                file: schema,
-                root: root.as_deref(),
-                value_mode: true,
+                file: &own.file,
+                root: own.root.as_deref(),
+                value_mode: own.mode == Mode::Value,
             });
         }
         if file.is_some_and(|f| !self.in_layers(f)) {
@@ -223,8 +260,39 @@ impl Snapshot {
     }
 }
 
-/// Evaluates the workspace: the project found from `root`, or each open
-/// document on its own; open buffers replace their files.
+/// Evaluates a `.crod` document that is in no layer, as a layer of its own.
+/// What it builds on is not loaded, so this reports what `crol check` does
+/// for the file alone.
+fn evaluate_alone(sources: &Sources, file: FileId, options: &DataOptions) -> Evaluation {
+    let name = sources.file(file).name().to_owned();
+    let layer = Layer {
+        name: name.clone(),
+        documents: vec![(name, file)],
+    };
+    crol_eval::evaluate_data(sources, &[layer], options)
+}
+
+/// Puts a problem on the file to blame, or the project file, so that the
+/// editor shows it, and records it on the snapshot.
+fn report_problem(snapshot: &mut Snapshot, problem: Problem, project: Option<&Path>) {
+    let blamed = problem.file.as_deref().or(project);
+    if let Some(path) = blamed {
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let file = snapshot.file_of(&canonical).unwrap_or_else(|| {
+            let text = std::fs::read_to_string(&canonical).unwrap_or_default();
+            snapshot.paths.push(canonical.clone());
+            snapshot.sources.add(canonical.display().to_string(), text)
+        });
+        let span = crol_eval::Span::new(file, Default::default());
+        snapshot
+            .extra
+            .push(Diagnostic::error(span, problem.message.clone()));
+    }
+    snapshot.problem = Some(problem.message);
+}
+
+/// Evaluates the workspace: the project found from `root`, and each open
+/// document in no layer on its own; open buffers replace their files.
 pub(crate) fn evaluate(
     root: Option<&Path>,
     settings: &Settings,
@@ -253,10 +321,15 @@ pub(crate) fn evaluate(
             .map(|(p, t)| (p.canonicalize().unwrap_or_else(|_| p.clone()), t.clone()))
             .collect(),
     );
-    let project_path = settings
-        .project
-        .clone()
-        .or_else(|| root.and_then(Project::find));
+    let mut problem = None;
+    let project_path = match (&settings.project, root) {
+        (Some(project), _) => Some(project.clone()),
+        (None, Some(root)) => Project::find(root).unwrap_or_else(|error| {
+            problem = Some(Problem::from(error));
+            None
+        }),
+        (None, None) => None,
+    };
     let mut check = CheckOptions::default();
     if let Some(project_path) = &project_path {
         match load_project(&mut snapshot, project_path, &canonical_open, remote) {
@@ -265,7 +338,7 @@ pub(crate) fn evaluate(
                 snapshot.root_type = root_type;
                 check = options;
             }
-            Err(message) => snapshot.problem = Some(message),
+            Err(found) => problem = Some(found),
         }
     }
     if !snapshot.layers.is_empty() {
@@ -290,7 +363,20 @@ pub(crate) fn evaluate(
             .sources
             .add(path.display().to_string(), text.as_str());
         snapshot.paths.push(path.clone());
-        let evaluation = crol_eval::evaluate_value(&snapshot.sources, file);
+        // A retired file is not evaluated: it states no mode (`SPEC.md` 4).
+        if crol::is_retired(&path.to_string_lossy()) {
+            let message = "the `.crol` extension is retired; \
+                           rename it to `.crod` if it is data, or to `.crov` if it is a value document";
+            let span = crol_eval::Span::new(file, Default::default());
+            snapshot.extra.push(Diagnostic::error(span, message));
+            snapshot.documents.push((file, Evaluation::default()));
+            continue;
+        }
+        let mode = Mode::of_path(path).unwrap_or(Mode::Value);
+        let evaluation = match mode {
+            Mode::Data => evaluate_alone(&snapshot.sources, file, &snapshot.options),
+            Mode::Value => crol_eval::evaluate_value(&snapshot.sources, file),
+        };
         // The project file has the schema `crol` provides (`SPEC.md` 12.4).
         let is_project_file = project_path
             .as_ref()
@@ -310,28 +396,37 @@ pub(crate) fn evaluate(
         };
         match schema {
             Some(Ok(schema)) => {
+                let mut root = None;
                 if let Some(value) = &evaluation.value {
-                    // A top-level type name chooses the type (`SPEC.md` 4.1).
-                    let named = match &value.kind {
-                        crol_eval::ValueKind::Keyed(k) => k.name.as_deref(),
-                        crol_eval::ValueKind::NamedTuple(n, _)
-                        | crol_eval::ValueKind::UnitName(n) => Some(n.as_str()),
-                        _ => None,
-                    };
-                    let root = named.and_then(|n| {
-                        let mut found = schema.by_name(n).map(|(path, _)| path.to_owned());
-                        found.next().filter(|_| found.next().is_none())
-                    });
-                    snapshot.extra.extend(crol::check_value(
-                        value,
-                        &schema,
-                        root.as_deref(),
-                        &CheckOptions::default(),
-                    ));
-                    snapshot.own_schemas.insert(file, (schema, root));
-                } else {
-                    snapshot.own_schemas.insert(file, (schema, None));
+                    match mode {
+                        Mode::Data => {
+                            let view = crol::DataView {
+                                base: value,
+                                contexts: &evaluation.contexts,
+                                variants: &evaluation.variants,
+                            };
+                            let found = crol::check_view(view, &schema, None, &check);
+                            snapshot.extra.extend(found);
+                        }
+                        Mode::Value => {
+                            // A top-level type name chooses the type
+                            // (`SPEC.md` 4.1).
+                            root = crol::value_type(value, &schema);
+                            snapshot.extra.extend(crol::check_value(
+                                value,
+                                &schema,
+                                root.as_deref(),
+                                &CheckOptions::default(),
+                            ));
+                        }
+                    }
                 }
+                let own = OwnSchema {
+                    file: schema,
+                    root,
+                    mode,
+                };
+                snapshot.own_schemas.insert(file, own);
             }
             Some(Err((range, message))) => {
                 snapshot.extra.push(Diagnostic::error(
@@ -342,6 +437,9 @@ pub(crate) fn evaluate(
             None => {}
         }
         snapshot.documents.push((file, evaluation));
+    }
+    if let Some(problem) = problem {
+        report_problem(&mut snapshot, problem, project_path.as_deref());
     }
     if let Some(checks) = checks {
         let found = checks(&snapshot);
@@ -387,8 +485,8 @@ fn load_project(
     project_path: &Path,
     open: &Buffers,
     remote: &RemoteStatus,
-) -> Result<(Option<SchemaFile>, Option<String>, CheckOptions), String> {
-    let project = Project::read(project_path).map_err(|e| e.to_string())?;
+) -> Result<(Option<SchemaFile>, Option<String>, CheckOptions), Problem> {
+    let project = Project::read(project_path)?;
     let dir = project_path
         .parent()
         .unwrap_or(Path::new("."))
@@ -399,18 +497,21 @@ fn load_project(
         .with_max_contexts(project.options.max_contexts)
         .with_contexts(project.options.contexts.clone());
     options = options.with_variant_keys(project.options.variant_keys().map_err(|e| e.to_string())?);
-    let loaders = FileLoaders::new().with(BufferLoader {
-        files: FsLoader::new(&dir),
-        open: Arc::clone(open),
-    });
+    let loaders = FileLoaders::new()
+        .with(BufferLoader {
+            files: FsLoader::new(&dir),
+            open: Arc::clone(open),
+        })
+        .with_project_file(project_path);
     for layer in project.layer_list(&dir).map_err(|e| e.to_string())? {
-        let source = loaders
-            .resolve(&layer.dir, &dir)
-            .map_err(|e| format!("layer `{}`: {e}", layer.name))?;
-        let loaded = source
-            .load(layer.name.clone())
-            .map_err(|e| e.to_string())?
-            .without_file(project_path);
+        let source = loaders.resolve(&layer.dir, &dir).map_err(|error| {
+            let found = Problem::from(error);
+            Problem {
+                message: format!("layer `{}`: {}", layer.name, found.message),
+                ..found
+            }
+        })?;
+        let loaded = source.load(layer.name.clone())?;
         let mut documents = Vec::new();
         for (relative, display, text) in loaded.documents() {
             let path = PathBuf::from(display);
@@ -438,7 +539,7 @@ fn load_project(
         }
         _ => schema_path.map_err(|e| e.to_string()),
     };
-    let schema_path = schema_path?;
+    let schema_path = schema_path.map_err(Problem::from)?;
     // Every document in a layer should agree with the project's schema.
     if let Some(schema_path) = &schema_path {
         let files: Vec<FileId> = snapshot
@@ -471,7 +572,7 @@ fn load_project(
         }
     }
     let schema = match schema_path {
-        Some(path) => Some(SchemaFile::read(&path).map_err(|e| e.to_string())?),
+        Some(path) => Some(SchemaFile::read(&path)?),
         None => None,
     };
     let mut check = CheckOptions::default();
@@ -485,17 +586,17 @@ fn load_project(
 mod tests {
     use super::*;
 
-    /// A project of one layer directory, with `web.crol` on disk.
+    /// A project of one layer directory, with `web.crod` on disk.
     fn project(name: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!("crol-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("data")).unwrap();
         std::fs::write(
-            root.join("project.crol"),
+            root.join("project.crov"),
             "Project { layers: List([{ name: \"base\", dir: \"data\", .. }]), .. }",
         )
         .unwrap();
-        std::fs::write(root.join("data/web.crol"), "+port: 80,").unwrap();
+        std::fs::write(root.join("data/web.crod"), "+port: 80,").unwrap();
         root
     }
 
@@ -504,18 +605,152 @@ mod tests {
         let root = project("buffers");
         let settings = Settings::default();
         let remote = RemoteStatus::new();
-        let open = HashMap::from([(root.join("data/web.crol"), "+port: 81,".to_owned())]);
+        let open = HashMap::from([(root.join("data/web.crod"), "+port: 81,".to_owned())]);
         let snapshot = evaluate(Some(&root), &settings, &open, None, &remote);
         assert_eq!(snapshot.problem, None);
         assert_eq!(snapshot.layers.len(), 1);
-        let file = snapshot.file_of(&root.join("data/web.crol")).unwrap();
+        let file = snapshot.file_of(&root.join("data/web.crod")).unwrap();
         assert_eq!(snapshot.sources.file(file).text(), "+port: 81,");
         assert!(snapshot.in_layers(file));
 
         // Closed, the file is read again.
         let snapshot = evaluate(Some(&root), &settings, &HashMap::new(), None, &remote);
-        let file = snapshot.file_of(&root.join("data/web.crol")).unwrap();
+        let file = snapshot.file_of(&root.join("data/web.crod")).unwrap();
         assert_eq!(snapshot.sources.file(file).text(), "+port: 80,");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Every error found in `path` when it is opened with `text` next to
+    /// the files of a workspace.
+    fn errors(root: &Path, path: &Path, text: &str) -> Vec<String> {
+        let open = HashMap::from([(path.to_path_buf(), text.to_owned())]);
+        let snapshot = evaluate(
+            Some(root),
+            &Settings::default(),
+            &open,
+            None,
+            &RemoteStatus::new(),
+        );
+        let file = snapshot.file_of(path).unwrap();
+        let evaluation = snapshot.evaluation_of(file).unwrap();
+        evaluation
+            .diagnostics
+            .iter()
+            .chain(&snapshot.extra)
+            .filter(|d| d.is_error())
+            .map(|d| d.message.clone())
+            .collect()
+    }
+
+    /// An empty directory.
+    fn directory(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("crol-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    const DATA: &str = "+port: 80\nport: & + 1\n<prod> { port: 443 }\n";
+    const VALUE: &str = "#![type(Config)]\n\nport: 80\n..\n";
+
+    #[test]
+    fn the_extension_chooses_the_mode_of_a_document_on_its_own() {
+        let root = directory("alone");
+        assert_eq!(
+            errors(&root, &root.join("a.crod"), DATA),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            errors(&root, &root.join("a.crov"), VALUE),
+            Vec::<String>::new()
+        );
+        assert!(!errors(&root, &root.join("a.crov"), DATA).is_empty());
+        assert!(!errors(&root, &root.join("a.crod"), VALUE).is_empty());
+        // Nothing to go by: a document on its own is value mode.
+        assert_eq!(
+            errors(&root, &root.join("a.txt"), VALUE),
+            Vec::<String>::new()
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_extension_chooses_the_mode_outside_the_layers_of_a_project() {
+        let root = project("outside");
+        assert_eq!(
+            errors(&root, &root.join("other.crod"), DATA),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            errors(&root, &root.join("other.crov"), VALUE),
+            Vec::<String>::new()
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_document_alone_is_evaluated_in_every_context() {
+        let root = directory("alone-contexts");
+        let path = root.join("a.crod");
+        let open = HashMap::from([(path.clone(), DATA.to_owned())]);
+        let snapshot = evaluate(
+            Some(&root),
+            &Settings::default(),
+            &open,
+            None,
+            &RemoteStatus::new(),
+        );
+        let file = snapshot.file_of(&path).unwrap();
+        let evaluation = snapshot.evaluation_of(file).unwrap();
+        assert!(evaluation.value.is_some());
+        assert!(evaluation.variants.id("prod").is_some());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_problem_with_the_project_lands_on_the_file_to_blame() {
+        let root = project("stray");
+        std::fs::write(root.join("data/stray.crov"), "1").unwrap();
+        let snapshot = evaluate(
+            Some(&root),
+            &Settings::default(),
+            &HashMap::new(),
+            None,
+            &RemoteStatus::new(),
+        );
+        assert!(snapshot.problem.is_some());
+        let file = snapshot.file_of(&root.join("data/stray.crov")).unwrap();
+        assert!(snapshot.extra.iter().any(|d| d.span.file == file));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_project_file_may_lie_in_a_layer() {
+        let root = directory("project-in-layer");
+        std::fs::write(
+            root.join("project.crov"),
+            "Project { layers: List([{ name: \"base\", dir: \"data\", .. }]), .. }",
+        )
+        .unwrap();
+        let data = root.join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(data.join("web.crod"), "+port: 80,").unwrap();
+        std::fs::write(
+            data.join("project.crov"),
+            "Project { layers: List([{ name: \"base\", dir: \"sub\", .. }]), .. }",
+        )
+        .unwrap();
+        std::fs::create_dir_all(data.join("sub")).unwrap();
+        std::fs::write(data.join("sub/web.crod"), "+port: 80,").unwrap();
+        // Found from `data`, the file there is the project file.
+        let snapshot = evaluate(
+            Some(&data),
+            &Settings::default(),
+            &HashMap::new(),
+            None,
+            &RemoteStatus::new(),
+        );
+        assert_eq!(snapshot.problem, None);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

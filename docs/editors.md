@@ -15,7 +15,9 @@ finds your [project file](projects.md#how-it-is-found) by itself.
 - **Hover**: on a key, its type and docs from the schema, the value below, the
   final value, and where they came from. On a reference, what it refers to.
 - **Completion**: field names, enum variants, type names, ids, variants, and
-  keys after `&root.`, `&self.` and the like.
+  keys after `&root.`, `&self.` and the like. It knows the type at the cursor at
+  any depth: through nested blocks, lists, `Some(...)`, dotted keys and variant
+  blocks.
 - **Go to definition**: on keys, references, binds and ids. On a bare `&`, it
   takes you to the value below.
 - **Find references**: every operation on a key, in every layer, and every
@@ -38,20 +40,22 @@ field names from your types.
 Knowing this explains most of what you will see in your editor.
 
 **With a project file**, the server loads every layer and the schema, and
-evaluates every context. Files in a layer are read as data mode. Open files count
-even when they are not saved. Diagnostics are published for all files of the
+evaluates every context. Open files count even when they are not saved. Diagnostics are published for all files of the
 writable layers, not only the ones you have open, and `read_only` layers get none.
 
 **Other open files**, and all open files if there is no project, are evaluated on
-their own, as [value-mode](modes.md) documents, and checked against their
-`#![schema(...)]` if they have one.
+their own, and checked against their `#![schema(...)]` if they have one. The
+[extension](modes.md) gives the mode: a `.crov` file is a value document, and a
+`.crod` file is data, as a layer of its own, with its variants and patches.
 
-That means layered data needs a project file to work well in your editor. Without
-one, a file with variants or `#![extends(...)]` reports that it needs layers, and
-a patch has nothing below it. The server does not follow `#![extends(...)]` yet,
-so list your layers in `project.crol`.
+A `.crod` file alone only knows itself, so a patch to a key from another file has
+nothing below it. The server does not follow `#![extends(...)]` yet, so list your
+layers in `project.crov` to see how they work together.
 
-`project.crol` itself is checked against the schema of project files.
+A wrong file in a layer, such as a `.crov` file, is reported on that file. The
+server shows a `.crol` file only an error that says to rename it.
+
+`project.crov` itself is checked against the schema of project files.
 
 ## Zed
 
@@ -94,7 +98,7 @@ Settings go in Zed's `settings.json`, under `lsp.crol`:
 Any LSP client can use the server. Configure it to:
 
 - run `crol lsp`, which talks over standard input and output;
-- use it for files ending in `.crol`;
+- use it for files ending in `.crod` and `.crov`;
 - pass the [settings](#settings) below as `initializationOptions`.
 
 For highlighting, indentation and folding, there is a

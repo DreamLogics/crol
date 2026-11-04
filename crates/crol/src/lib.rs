@@ -35,9 +35,9 @@
 //!
 //! ## Reading one document
 //!
-//! If your program reads a single settings file, [`from_str`] is all you need.
-//! The file is evaluated first, so it can compute values, and your type only
-//! sees the result:
+//! If your program reads a single settings file, a `.crov` file, [`from_str`]
+//! is all you need. The file is evaluated first, so it can compute values, and
+//! your type only sees the result:
 //!
 //! ```
 //! use serde::Deserialize;
@@ -85,9 +85,10 @@
 //!
 //! ## Layers
 //!
-//! To combine several files, use [`CrolComposer`]. Each [`load`] adds a layer
-//! on top of the ones before it, from a directory, a file, or a [`CrolLayer`]
-//! built in code, and [`compose`] evaluates them and deserializes the result:
+//! To combine several files, `.crod` files, use [`CrolComposer`]. Each [`load`]
+//! adds a layer on top of the ones before it, from a directory, a file, or a
+//! [`CrolLayer`] built in code, and [`compose`] evaluates them and deserializes
+//! the result:
 //!
 //! ```
 //! use std::collections::BTreeMap;
@@ -101,13 +102,13 @@
 //!     url: String,
 //! }
 //!
-//! let base = CrolLayer::from_sources("base", [("services.crol", r#"
+//! let base = CrolLayer::from_sources("base", [("services.crod", r#"
 //!     +web: Service {
 //!         port: 80,
 //!         url: "http://web:" + &self.port,
 //!     }
 //! "#)]);
-//! let local = CrolLayer::from_sources("local", [("overrides.crol", "web.port: 8080")]);
+//! let local = CrolLayer::from_sources("local", [("overrides.crod", "web.port: 8080")]);
 //!
 //! let services: BTreeMap<String, Service> = CrolComposer::new()
 //!     .load_layer(base)
@@ -162,7 +163,7 @@
 //!     .add_grouped(["dev", "prod", "prod_eu"])
 //!     .add_parent("prod_eu", "prod");
 //!
-//! let layer = CrolLayer::from_sources("base", [("root.crol", r#"
+//! let layer = CrolLayer::from_sources("base", [("root.crod", r#"
 //!     replicas: 2
 //!     <prod> {
 //!         replicas: & * 4,
@@ -217,12 +218,12 @@
 //!
 //! // In a test. It fails if the file is out of date;
 //! // `CROL_UPDATE_SCHEMA=1 cargo test` updates it.
-//! crol::schema::check_file::<Definition>("crol/schema.crol").unwrap();
+//! crol::schema::check_file::<Definition>("crol/schema.crov").unwrap();
 //! ```
 //!
 //! The [`schema`] module has the model and functions, and [`check()`] applies
 //! a schema to evaluated data from Rust. The [`project`] module reads
-//! `project.crol`, the file that tells tools about your layers. The guide's
+//! `project.crov`, the file that tells tools about your layers. The guide's
 //! pages on [schemas][schema-guide] and [projects][project-guide] explain how
 //! it all fits together.
 //!
@@ -269,6 +270,7 @@ mod error;
 mod fill;
 mod id;
 mod loader;
+mod mode;
 mod module_path;
 pub mod project;
 mod raw;
@@ -280,7 +282,7 @@ mod ser;
 use crol_eval::evaluate_value;
 use serde::{Deserialize, Serialize};
 
-pub use check::{CheckOptions, DataView, check, check_value, check_view};
+pub use check::{CheckOptions, DataView, check, check_value, check_view, value_type};
 pub use compose::{
     CrolComposer, CrolConfig, CrolContext, CrolData, CrolLayer, CrolVariants, LayerSource, Variant,
     VariantName,
@@ -296,6 +298,7 @@ pub use id::{Id, IdUse};
 pub use loader::{
     FileLoader, FileLoaders, FsLoader, Loaded, LoaderError, ModulePath, ResolvedSource, SourceId,
 };
+pub use mode::{Mode, is_retired};
 pub use raw::RawValue;
 pub use schema::Schema;
 
@@ -359,14 +362,16 @@ pub fn from_value<T: for<'de> Deserialize<'de>>(value: &Value, sources: &Sources
 /// Deserializes `value`, which is at the root key `key` if given, for the
 /// paths in errors.
 /// Resolves a module path (`SPEC.md` 4.2) to the file or directory it names.
+/// A module path has no extension: `mode` says which one the file has.
 /// `here` is the directory of the document it is written in; `None` starts
 /// relative paths from `root`.
 pub fn resolve_module_path(
     module_path: &str,
+    mode: Mode,
     root: &std::path::Path,
     here: Option<&std::path::Path>,
 ) -> Result<std::path::PathBuf> {
-    module_path::resolve(module_path, root, here)
+    module_path::resolve(module_path, root, here, mode)
 }
 
 pub(crate) fn deserialize<T: for<'de> Deserialize<'de>>(

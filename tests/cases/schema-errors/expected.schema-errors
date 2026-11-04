@@ -1,7 +1,7 @@
-1-base/errors.crol:3:34: expected u32, found "two"
-1-base/errors.crol:4:60: `Service` has no field `colour`; its fields are `replicas`, `image`, `tags`, `limits`, `mode`, `depends_on`
-1-base/errors.crol:5:11: `Service` is missing the fields `image`, `tags`, `limits`, `mode`, `depends_on`; write them, or end the block with `..` to leave out fields that have defaults
-1-base/errors.crol:6:56: `Mode` has no variant `Medium`; its variants are `Fast`, `Slow`
-1-base/errors.crol:7:20: `Definition` has no variant `Limits`; its variants are `Service`, `Volume`, `Relaxed`, `Job`
-1-base/errors.crol:8:58: the id `@nothing` names no root key
-1-base/errors.crol:10:28: in {prod}: expected u32, found -1
+1-base/errors.crod:3:34: expected u32, found "two"
+1-base/errors.crod:4:60: `Service` has no field `colour`; its fields are `replicas`, `image`, `tags`, `limits`, `mode`, `depends_on`
+1-base/errors.crod:5:11: `Service` is missing the fields `image`, `tags`, `limits`, `mode`, `depends_on`; write them, or end the block with `..` to leave out fields that have defaults
+1-base/errors.crod:6:56: `Mode` has no variant `Medium`; its variants are `Fast`, `Slow`
+1-base/errors.crod:7:20: `Definition` has no variant `Limits`; its variants are `Service`, `Volume`, `Relaxed`, `Job`
+1-base/errors.crod:8:58: the id `@nothing` names no root key
+1-base/errors.crod:10:28: in {prod}: expected u32, found -1

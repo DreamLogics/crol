@@ -124,7 +124,7 @@ fn random_documents_evaluate_without_panicking() {
             continue;
         }
         let mut sources = Sources::new();
-        let file = sources.add("random.crol", text.as_str());
+        let file = sources.add("random.crod", text.as_str());
         // `CROL_TRACE=<file>` writes each document there before evaluating
         // it, so that the one that hangs or crashes can be found.
         if std::env::var_os("CROL_TRACE").is_some() {
@@ -139,7 +139,7 @@ fn random_documents_evaluate_without_panicking() {
         // The printed value evaluates back to an identical value.
         let printed = print::to_document(&value, &Default::default());
         let mut sources = Sources::new();
-        let file = sources.add("printed.crol", printed.as_str());
+        let file = sources.add("printed.crod", printed.as_str());
         let again = evaluate_value(&sources, file);
         let Some(again) = again.value else {
             panic!(
@@ -244,11 +244,11 @@ fn random_layers_with_variants_round_trip_through_all_contexts() {
         let layers = vec![
             Layer {
                 name: "base".into(),
-                documents: vec![("a.crol".into(), sources.add("base.crol", base.as_str()))],
+                documents: vec![("a.crod".into(), sources.add("base.crod", base.as_str()))],
             },
             Layer {
                 name: "local".into(),
-                documents: vec![("a.crol".into(), sources.add("local.crol", local.as_str()))],
+                documents: vec![("a.crod".into(), sources.add("local.crod", local.as_str()))],
             },
         ];
         let evaluation = evaluate_data(&sources, &layers, &DataOptions::default());
@@ -267,8 +267,8 @@ fn random_layers_with_variants_round_trip_through_all_contexts() {
         let layers = vec![Layer {
             name: "printed".into(),
             documents: vec![(
-                "a.crol".into(),
-                sources.add("printed.crol", printed.as_str()),
+                "a.crod".into(),
+                sources.add("printed.crod", printed.as_str()),
             )],
         }];
         let options = DataOptions::default().with_variants(evaluation.variants.clone());
@@ -313,10 +313,10 @@ fn fuzz_findings() {
     ];
     for input in inputs {
         let mut sources = Sources::new();
-        let file = sources.add("a.crol", *input);
+        let file = sources.add("a.crod", *input);
         let layers = [crol_eval::Layer {
             name: "base".to_owned(),
-            documents: vec![("a.crol".to_owned(), file)],
+            documents: vec![("a.crod".to_owned(), file)],
         }];
         let evaluation =
             crol_eval::evaluate_data(&sources, &layers, &crol_eval::DataOptions::default());

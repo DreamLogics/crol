@@ -1,6 +1,6 @@
 name = "CROL"
 grammar = "crol"
-path_suffixes = ["crol"]
+path_suffixes = ["crod", "crov"]
 line_comments = ["// "]
 block_comment = ["/* ", " */"]
 tab_size = 4

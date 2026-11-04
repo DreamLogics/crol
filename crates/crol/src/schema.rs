@@ -14,7 +14,7 @@
 //! #     fn describe(_: &mut crol::schema::Registry) -> crol::schema::TypeRef { crol::schema::TypeRef::Any }
 //! # }
 //! // In a test: `#[test] fn crol_schema() { ... }`
-//! crol::schema::check_file::<Definition>("crol/schema.crol").unwrap();
+//! crol::schema::check_file::<Definition>("crol/schema.crov").unwrap();
 //! ```
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
@@ -24,6 +24,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
+use crate::mode::Mode;
 use crate::raw::RawValue;
 
 /// The format version of schema files (`SPEC.md` 10.10).
@@ -371,9 +372,11 @@ impl SchemaFile {
             .map(|(path, def)| (path.as_str(), def))
     }
 
-    /// Reads a schema file.
+    /// Reads a schema file. It is a value document, so a `.crod` or `.crol`
+    /// file is an error (`SPEC.md` 4).
     pub fn read(path: impl AsRef<Path>) -> Result<Self, Error> {
         let path = path.as_ref();
+        Mode::Value.check_path(path)?;
         let text = std::fs::read_to_string(path)
             .map_err(|e| Error::new(format!("cannot read {}: {e}", path.display())))?;
         Self::from_text(&text)
@@ -452,7 +455,7 @@ pub fn attribute_path(
         .collect();
     Some((
         range,
-        crate::resolve_module_path(&module_path, root, Some(dir))
+        crate::resolve_module_path(&module_path, Mode::Value, root, Some(dir))
             .map_err(|e| Error::new(format!("schema: {e}"))),
     ))
 }
@@ -537,6 +540,7 @@ pub fn build<T: Schema + ?Sized>() -> SchemaFile {
 /// `--export-schema`.
 pub fn write<T: Schema + ?Sized>(path: impl AsRef<Path>) -> Result<(), Error> {
     let path = path.as_ref();
+    Mode::Value.check_path(path)?;
     let text = build::<T>().to_text()?;
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)
@@ -558,6 +562,7 @@ pub fn check_file<T: Schema + ?Sized>(path: impl AsRef<Path>) -> Result<(), Erro
     {
         path = PathBuf::from(dir).join(path);
     }
+    Mode::Value.check_path(&path)?;
     let expected = build::<T>().to_text()?;
     let update = std::env::var("CROL_UPDATE_SCHEMA").is_ok_and(|v| v == "1");
     match std::fs::read_to_string(&path) {

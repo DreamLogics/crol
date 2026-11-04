@@ -34,6 +34,15 @@ pub(crate) fn run(args: &Args, reporter: &mut Reporter) -> bool {
         reporter.error("give the layers, then the key or path to explain");
         return false;
     };
+    if let Some(document) = crate::value::argument(layers) {
+        // Provenance is the operations of layers; a value has none.
+        reporter.error(&format!(
+            "{}: a value document has no layers to explain; `crol eval {} {path}` prints the value",
+            document.display(),
+            document.display()
+        ));
+        return false;
+    }
     let context = args.context.clone().unwrap_or_default();
     let Some(inputs) =
         crate::layers::inputs(layers, &args.inputs, Some(vec![context.clone()]), reporter)

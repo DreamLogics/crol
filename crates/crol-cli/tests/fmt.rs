@@ -21,7 +21,7 @@ fn file(name: &str, text: &str) -> PathBuf {
 
 #[test]
 fn formats_in_place() {
-    let path = file("in_place.crol", "+web:{port:80}");
+    let path = file("in_place.crod", "+web:{port:80}");
     let output = crol(&["fmt", path.to_str().unwrap()]);
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
@@ -32,8 +32,8 @@ fn formats_in_place() {
 
 #[test]
 fn check_reports_unformatted_files_without_changing_them() {
-    let formatted = file("check_ok.crol", "a: 1\n");
-    let unformatted = file("check_bad.crol", "a:1");
+    let formatted = file("check_ok.crod", "a: 1\n");
+    let unformatted = file("check_bad.crod", "a:1");
     let output = crol(&["fmt", "--check", formatted.to_str().unwrap()]);
     assert!(output.status.success(), "{output:?}");
 
@@ -45,7 +45,7 @@ fn check_reports_unformatted_files_without_changing_them() {
 
 #[test]
 fn syntax_errors_fail_and_leave_the_file_alone() {
-    let path = file("syntax_error.crol", "a: 1 b: 2");
+    let path = file("syntax_error.crod", "a: 1 b: 2");
     let output = crol(&["fmt", "--color", "never", path.to_str().unwrap()]);
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -53,7 +53,7 @@ fn syntax_errors_fail_and_leave_the_file_alone() {
         stderr.contains("expected `,` or a line break between entries"),
         "{stderr}"
     );
-    assert!(stderr.contains("syntax_error.crol:1:5"), "{stderr}");
+    assert!(stderr.contains("syntax_error.crod:1:5"), "{stderr}");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "a: 1 b: 2");
 }
 
@@ -61,7 +61,7 @@ fn syntax_errors_fail_and_leave_the_file_alone() {
 fn invalid_utf8_is_an_error() {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("fmt");
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("not_utf8.crol");
+    let path = dir.join("not_utf8.crod");
     std::fs::write(&path, b"a: \"\xFF\"").unwrap();
     let output = crol(&["fmt", path.to_str().unwrap()]);
     assert_eq!(output.status.code(), Some(1));
@@ -89,11 +89,11 @@ fn check_and_eval_read_layers() {
     std::fs::create_dir_all(dir.join("base")).unwrap();
     std::fs::create_dir_all(dir.join("local")).unwrap();
     std::fs::write(
-        dir.join("base/a.crol"),
+        dir.join("base/a.crod"),
         "+web: { port: 80, url: \"x:\" + &self.port },",
     )
     .unwrap();
-    std::fs::write(dir.join("local/a.crol"), "web.port: 81,").unwrap();
+    std::fs::write(dir.join("local/a.crod"), "web.port: 81,").unwrap();
     let base = dir.join("base");
     let local = dir.join("local");
     let (base, local) = (base.to_str().unwrap(), local.to_str().unwrap());
@@ -109,7 +109,7 @@ fn check_and_eval_read_layers() {
     let output = crol(&["eval", base, local, "web.url"]);
     assert_eq!(String::from_utf8_lossy(&output.stdout), "\"x:81\"\n");
 
-    std::fs::write(dir.join("local/b.crol"), "+web: 1,").unwrap();
+    std::fs::write(dir.join("local/b.crod"), "+web: 1,").unwrap();
     let output = crol(&["check", "--color", "never", base, local]);
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stderr).contains("+: `web` already exists"));
@@ -121,11 +121,11 @@ fn variants_contexts_and_fingerprints() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
-        dir.join("a.crol"),
+        dir.join("a.crod"),
         "+web: { replicas: 1 },\n<prod> { web.replicas: 4 },",
     )
     .unwrap();
-    let layer = dir.join("a.crol");
+    let layer = dir.join("a.crod");
     let layer = layer.to_str().unwrap();
     let declared = ["--group", "dev,prod"];
 
@@ -154,11 +154,11 @@ fn explain_prints_the_history_of_a_value() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
-        dir.join("a.crol"),
+        dir.join("a.crod"),
         "+web: { port: 80 },\nweb.port: & + 1,\n<prod> { web.port: 443 },",
     )
     .unwrap();
-    let layer = dir.join("a.crol");
+    let layer = dir.join("a.crod");
     let layer = layer.to_str().unwrap();
     let output = crol(&[
         "explain",
@@ -192,7 +192,7 @@ fn project_files_give_the_layers_and_the_schema() {
     std::fs::create_dir_all(dir.join("data/base")).unwrap();
     std::fs::create_dir_all(dir.join("crol")).unwrap();
     std::fs::write(
-        dir.join("project.crol"),
+        dir.join("project.crov"),
         r#"Project {
             layers: List([{ name: "base", dir: "data::base", .. }]),
             variants: [Grouped(["dev", "prod"])],
@@ -202,12 +202,12 @@ fn project_files_give_the_layers_and_the_schema() {
     )
     .unwrap();
     std::fs::write(
-        dir.join("data/base/a.crol"),
+        dir.join("data/base/a.crod"),
         "+web: Service { replicas: 1 },\n<prod> { web.replicas: -4 },",
     )
     .unwrap();
     std::fs::write(
-        dir.join("crol/schema.crol"),
+        dir.join("crol/schema.crov"),
         r#"Schema {
             format: 1,
             root: "app::Service",
@@ -251,16 +251,16 @@ fn documents_in_a_project_should_name_its_schema() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("base")).unwrap();
     std::fs::write(
-        dir.join("project.crol"),
+        dir.join("project.crov"),
         r#"Project { layers: List([{ name: "base", dir: "base", .. }]), schema: Some("schema"), .. }"#,
     )
     .unwrap();
     let schema = r#"Schema { format: 1, root: "app::Service", types: {} }"#;
-    std::fs::write(dir.join("schema.crol"), schema).unwrap();
-    std::fs::write(dir.join("other.crol"), schema).unwrap();
-    std::fs::write(dir.join("base/a.crol"), "#![schema(::schema)]\n+a: 1,\n").unwrap();
+    std::fs::write(dir.join("schema.crov"), schema).unwrap();
+    std::fs::write(dir.join("other.crov"), schema).unwrap();
+    std::fs::write(dir.join("base/a.crod"), "#![schema(::schema)]\n+a: 1,\n").unwrap();
     std::fs::write(
-        dir.join("base/b.crol"),
+        dir.join("base/b.crod"),
         "#![schema(super::other)]\n+b: 1,\n",
     )
     .unwrap();
@@ -278,7 +278,7 @@ fn documents_in_a_project_should_name_its_schema() {
         ),
         "{stderr}"
     );
-    assert!(stderr.contains("b.crol:1:4"), "{stderr}");
+    assert!(stderr.contains("b.crod:1:4"), "{stderr}");
 }
 
 #[test]
@@ -287,7 +287,7 @@ fn check_uses_the_schema_a_document_names() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
-        dir.join("schema.crol"),
+        dir.join("schema.crov"),
         r#"Schema {
             format: 1,
             root: "app::Service",
@@ -302,9 +302,9 @@ fn check_uses_the_schema_a_document_names() {
         }"#,
     )
     .unwrap();
-    let good = dir.join("good.crol");
-    let bad = dir.join("bad.crol");
-    let missing = dir.join("missing.crol");
+    let good = dir.join("good.crod");
+    let bad = dir.join("bad.crod");
+    let missing = dir.join("missing.crod");
     std::fs::write(
         &good,
         "#![schema(schema)]\n+web: Service { replicas: 2 },\n",
@@ -338,7 +338,7 @@ fn eval_shows_the_defaults_fields_take() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
-        dir.join("schema.crol"),
+        dir.join("schema.crov"),
         r#"Schema {
             format: 1,
             root: "app::Service",
@@ -357,7 +357,7 @@ fn eval_shows_the_defaults_fields_take() {
         }"#,
     )
     .unwrap();
-    let data = dir.join("data.crol");
+    let data = dir.join("data.crod");
     std::fs::write(
         &data,
         "+web: Service { image: \"w\", .. },\n\
@@ -365,7 +365,7 @@ fn eval_shows_the_defaults_fields_take() {
          db: & ~ { -replicas },\n",
     )
     .unwrap();
-    let schema = dir.join("schema.crol");
+    let schema = dir.join("schema.crov");
     let eval = |extra: &[&str]| {
         let mut args = vec![
             "eval",

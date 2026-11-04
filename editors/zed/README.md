@@ -1,7 +1,7 @@
 # CROL for Zed
 
 Syntax highlighting, brackets, indentation, the outline and text objects for
-[CROL](https://github.com/DreamLogics/crol) files (`.crol`), from the
+[CROL](https://github.com/DreamLogics/crol) files (`.crod` and `.crov`), from the
 tree-sitter grammar in `tree-sitter-crol/`, and the `crol lsp` language
 server (`SPEC.md` 12.7).
 

@@ -1,7 +1,8 @@
 //! `crol eval` (`SPEC.md` 11): print the evaluated data as a data-mode
-//! document, or one value.
+//! document, a value document as a value, or one value of either.
 
 use std::io::Write;
+use std::path::Path;
 
 use crol_eval::{Key, Span, Value, ValueKind, print};
 use crol_syntax::format::FormatConfig;
@@ -10,8 +11,8 @@ use crate::diagnostics::Reporter;
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct Args {
-    /// The layers, lowest first, then optionally a key and path to print
-    /// only that value: `web.limits.cpu`.
+    /// The layers, lowest first, or one `.crov` file, then optionally a key
+    /// and path to print only that value: `web.limits.cpu`.
     #[arg(value_name = "LAYER... [KEY[.PATH]]")]
     arguments: Vec<String>,
 
@@ -51,6 +52,9 @@ pub(crate) fn run(args: &Args, reporter: &mut Reporter) -> bool {
         Some(last) if layers.len() > 1 && !crate::layers::names_a_layer(last) => layers.pop(),
         _ => None,
     };
+    if let Some(document) = crate::value::argument(&layers) {
+        return run_value(args, document, path.as_deref(), reporter);
+    }
     let contexts = match (&args.context, args.all_contexts) {
         (_, true) => None,
         (Some(context), false) => Some(vec![context.clone()]),
@@ -91,10 +95,52 @@ pub(crate) fn run(args: &Args, reporter: &mut Reporter) -> bool {
         }
         _ => root,
     };
+    print_value(&root, path.as_deref(), filled, &config, reporter)
+}
+
+/// `crol eval` of a value document (`SPEC.md` 11).
+fn run_value(args: &Args, document: &Path, path: Option<&str>, reporter: &mut Reporter) -> bool {
+    if args.all_contexts {
+        return crate::value::no_contexts(document, "--all-contexts", reporter);
+    }
+    if args.context.is_some() {
+        return crate::value::no_contexts(document, "--context", reporter);
+    }
+    let Some(mut document) = crate::value::read(document, &args.inputs, reporter) else {
+        return false;
+    };
+    reporter.diagnostics(&document.sources, &document.evaluation.diagnostics);
+    let value = match document.evaluation.value.take() {
+        Some(value) if !document.evaluation.has_errors() => value,
+        _ => return false,
+    };
+    let filled = Span {
+        file: document.sources.add("<default>", ""),
+        range: Default::default(),
+    };
+    let value = match &document.schema {
+        Some(schema) if !args.no_defaults => {
+            crol::fill_defaults_value(&value, schema, document.root.as_deref(), filled)
+        }
+        _ => value,
+    };
+    let config = FormatConfig::default().with_max_width(args.max_width);
+    print_value(&value, path, filled, &config, reporter)
+}
+
+/// Prints `root`, or the value at `path` in it, with what has the span
+/// `filled` marked as a default.
+fn print_value(
+    root: &Value,
+    path: Option<&str>,
+    filled: Span,
+    config: &FormatConfig,
+    reporter: &mut Reporter,
+) -> bool {
     let note = |value: &Value| (value.span == filled).then(|| "default".to_owned());
-    let value = match &path {
-        None => &root,
-        Some(path) => match select(&root, path) {
+    let value = match path {
+        None => root,
+        Some(path) => match select(root, path) {
             Ok(value) => value,
             Err(message) => {
                 reporter.error(&message);
@@ -102,7 +148,7 @@ pub(crate) fn run(args: &Args, reporter: &mut Reporter) -> bool {
             }
         },
     };
-    let output = print::to_document_noted(value, &config, &note);
+    let output = print::to_document_noted(value, config, &note);
     write(&output, reporter)
 }
 

@@ -3,6 +3,7 @@
 use std::io::{ErrorKind, Write};
 use std::path::Path;
 
+use crol::Mode;
 use crol::project::{FILE_NAME, Project};
 use crol_syntax::format::{FormatConfig, format};
 
@@ -21,7 +22,7 @@ Project {
     variants: [],
 
     // The schema file your application writes, to check the data's types:
-    // `Some("schema")` is `schema.crol` next to this file.
+    // `Some("schema")` is `schema.crov` next to this file.
     schema: None,
     ..
 }
@@ -31,12 +32,12 @@ Project {
 const LAYER_DIR: &str = "data/base";
 
 /// The name of the first document of the layer.
-const DOCUMENT_NAME: &str = "main.crol";
+const DOCUMENT_NAME: &str = "main.crod";
 
 /// The first document of the layer. A layer's directory has to exist, and
 /// an empty directory would not survive version control.
 const DOCUMENT: &str = r#"
-// The `base` layer: every `.crol` file below this directory belongs to it.
+// The `base` layer: every `.crod` file below this directory belongs to it.
 // Define your data here, for instance:
 //
 //     +server: { port: 8080 }
@@ -66,6 +67,8 @@ fn init(reporter: &mut Reporter) -> Result<(), String> {
                 current.display()
             )
         })?;
+    // A `project.crol` here or above has to be renamed first.
+    let other_project = Project::find(&current).map_err(|e| e.to_string())?;
     let project_file = root.join(FILE_NAME);
     // `symlink_metadata` also sees a dangling link.
     if project_file.symlink_metadata().is_ok() {
@@ -74,7 +77,7 @@ fn init(reporter: &mut Reporter) -> Result<(), String> {
     let layer_dir = root.join(LAYER_DIR);
     // Beside this file, the layer's module path would be ambiguous
     // (`SPEC.md` 4.2).
-    let rival = layer_dir.with_extension("crol");
+    let rival = layer_dir.with_extension(Mode::Data.extension());
     if rival.exists() {
         return Err(format!(
             "{} is in the way: the layer `data::base` would name both it and the directory {}",
@@ -82,7 +85,6 @@ fn init(reporter: &mut Reporter) -> Result<(), String> {
             layer_dir.display()
         ));
     }
-    let other_project = Project::find(&current);
     let project_text = formatted(PROJECT)?;
     let document_text = formatted(DOCUMENT)?;
 

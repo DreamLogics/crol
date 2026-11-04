@@ -95,7 +95,7 @@ pub enum Moves {
 fn a_field_written_by_an_alias_is_complete() {
     let compose = |text: &str, with_schema: bool| {
         let mut composer = crol::CrolComposer::new()
-            .load_layer(crol::CrolLayer::from_sources("base", [("a.crol", text)]));
+            .load_layer(crol::CrolLayer::from_sources("base", [("a.crod", text)]));
         if with_schema {
             composer = composer.schema(schema::build::<Moves>());
         }
@@ -197,14 +197,14 @@ fn variant_names() {
 fn schema_files_read_back() {
     let schema = schema::build::<Definition>();
     let text = schema.to_text().unwrap();
-    expect_test::expect_file!["schema.expected.crol"].assert_eq(&text);
+    expect_test::expect_file!["schema.expected.crov"].assert_eq(&text);
     let read = SchemaFile::from_text(&text).unwrap();
     assert_eq!(read, schema);
 }
 
 #[test]
 fn check_file_writes_then_compares() {
-    let path = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("schema/check.crol");
+    let path = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("schema/check.crov");
     let _ = std::fs::remove_file(&path);
     schema::check_file::<Definition>(&path).unwrap();
     schema::check_file::<Definition>(&path).unwrap();
@@ -235,7 +235,7 @@ fn check_agrees_with_the_deserializer() {
     let schema = schema::build::<Definition>();
     for case in cases {
         let data = crol::CrolComposer::new()
-            .load_layer(crol::CrolLayer::from_sources("base", [("a.crol", case)]))
+            .load_layer(crol::CrolLayer::from_sources("base", [("a.crod", case)]))
             .compose_data()
             .unwrap();
         let checked = crol::check(&data, &schema, None, &Default::default());
@@ -255,7 +255,7 @@ fn check_validates_ids() {
         .load_layer(crol::CrolLayer::from_sources(
             "base",
             [(
-                "a.crol",
+                "a.crod",
                 r#"
                 +web: Service { replicas: 1, depends_on: [@db, @nothing, @api], url: None, .. },
                 +db: Volume { size_gb: 1 },
@@ -275,7 +275,7 @@ fn check_validates_ids() {
         .load_layer(crol::CrolLayer::from_sources(
             "base",
             [(
-                "a.crol",
+                "a.crod",
                 "+web: Service { replicas: 1, depends_on: [@n], url: None, .. },\n+n: 5,",
             )],
         ))
@@ -325,7 +325,7 @@ fn default_references() {
     "#;
     let data = crol::CrolComposer::new()
         .schema(schema::build::<Definition>())
-        .load_layer(crol::CrolLayer::from_sources("base", [("a.crol", source)]))
+        .load_layer(crol::CrolLayer::from_sources("base", [("a.crod", source)]))
         .compose_data()
         .unwrap();
     let web: Service = data.get("web").unwrap();
@@ -349,7 +349,7 @@ fn default_references() {
     let error = crol::CrolComposer::new()
         .load_layer(crol::CrolLayer::from_sources(
             "base",
-            [("a.crol", "+x: { a: &default },")],
+            [("a.crod", "+x: { a: &default },")],
         ))
         .compose_data()
         .unwrap_err();
@@ -362,7 +362,7 @@ fn defaults_are_filled_in_as_serde_fills_them() {
         .load_layer(crol::CrolLayer::from_sources(
             "base",
             [(
-                "a.crol",
+                "a.crod",
                 "+web: Service { replicas: 2, depends_on: [], url: None, limits: { cpu: 2.0, memory_mb: 1 }, .. },\n\
                  web: & ~ { -limits },\n\
                  +db: Volume { size_gb: 1 },",
@@ -451,13 +451,13 @@ pub enum Model {
 }
 
 /// Composes `text`, with `require_complete` as given, with the schema or
-/// without, as a `.crol` layer.
+/// without, as a `.crod` layer.
 fn model_data(text: &str, require_complete: bool, with_schema: bool) -> crol::CrolData {
     let mut composer = crol::CrolComposer::with_cfg(crol::CrolConfig {
         require_complete,
         ..Default::default()
     })
-    .load_layer(crol::CrolLayer::from_sources("base", [("a.crol", text)]));
+    .load_layer(crol::CrolLayer::from_sources("base", [("a.crod", text)]));
     if with_schema {
         composer = composer.schema(schema::build::<Model>());
     }
@@ -631,7 +631,7 @@ fn fields_of_a_struct_with_serde_default_have_a_default() {
     let data = crol::CrolComposer::new()
         .load_layer(crol::CrolLayer::from_sources(
             "base",
-            [("a.crol", "+a: Limits { .. },")],
+            [("a.crod", "+a: Limits { .. },")],
         ))
         .compose_data()
         .unwrap();
@@ -714,7 +714,7 @@ pub struct StrictRoot {
 fn the_root_of_data_cannot_write_the_marker() {
     let composer = |text: &str| {
         crol::CrolComposer::new()
-            .load_layer(crol::CrolLayer::from_sources("base", [("a.crol", text)]))
+            .load_layer(crol::CrolLayer::from_sources("base", [("a.crod", text)]))
     };
     // `..` is an error there, so a root struct that needs it must write
     // every field; `explicit_defaults = false` is how it can leave some out.
@@ -752,7 +752,7 @@ fn the_marker_may_come_from_any_layer_or_spread() {
         for (i, text) in layers.iter().enumerate() {
             composer = composer.load_layer(crol::CrolLayer::from_sources(
                 format!("l{i}"),
-                [("a.crol", *text)],
+                [("a.crod", *text)],
             ));
         }
         let data = composer

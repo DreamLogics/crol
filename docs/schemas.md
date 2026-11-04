@@ -88,7 +88,7 @@ happen in `build.rs`, and the usual way is a test:
 // tests/schema.rs
 #[test]
 fn crol_schema() {
-    crol::schema::check_file::<fleet::Definition>("crol/schema.crol").unwrap();
+    crol::schema::check_file::<fleet::Definition>("crol/schema.crov").unwrap();
 }
 ```
 
@@ -103,7 +103,7 @@ $ CROL_UPDATE_SCHEMA=1 cargo test
 Commit the result. It is a CROL file, sorted so that it gives small diffs:
 
 ```console
-$ head -n 12 crol/schema.crol
+$ head -n 12 crol/schema.crov
 #![schema("crate:crol@0.1")]
 
 Schema {
@@ -152,7 +152,7 @@ rejects without it, since their serialized shape is not their type's.
 Hand the schema to `crol check` with `--schema`:
 
 ```crol
-// data/services.crol
+// data/services.crod
 +web: Service {
     image: "web:1.4",
     port: 80,
@@ -163,9 +163,9 @@ Hand the schema to `crol check` with `--schema`:
 ```
 
 ```console
-$ crol check --schema crol/schema.crol data
+$ crol check --schema crol/schema.crov data
 error: `Service` has no field `replica`; its fields are `image`, `port`, `replicas`, `depends_on`, `env`
-  ┌─ /path/to/project/data/services.crol:5:14
+  ┌─ /path/to/project/data/services.crod:5:14
   │
 5 │     replica: 3,
   │              ^
@@ -173,7 +173,7 @@ error: `Service` has no field `replica`; its fields are `image`, `port`, `replic
   = while evaluating web.replica
 
 error: the id `@database` names no root key
-  ┌─ /path/to/project/data/services.crol:6:18
+  ┌─ /path/to/project/data/services.crod:6:18
   │
 6 │     depends_on: [@database],
   │                  ^^^^^^^^^
@@ -189,7 +189,7 @@ checks ids: each must name a root key, of a type that `refers` allows.
 each marked with a comment, so you can see what your program will get:
 
 ```crol
-// data/services.crol
+// data/services.crod
 +web: Service {
     image: "web:1.4",
     port: 80,
@@ -198,7 +198,7 @@ each marked with a comment, so you can see what your program will get:
 ```
 
 ```console
-$ crol eval --schema crol/schema.crol data
+$ crol eval --schema crol/schema.crov data
 web: Service {
     image: "web:1.4",
     port: 80,
@@ -244,11 +244,11 @@ or a crate:
 | `#![schema(::crol::schema)]`                    | a file, by [module path](projects.md#module-paths), from the root directory |
 | `#![schema(crol::schema)]`                      | the same, from the document's own directory                 |
 | `#![schema(super::schema)]`                     | the same, from the parent directory                         |
-| `#![schema("https://example.org/v2/schema.crol")]` | a file [over HTTPS](#remote-schemas)                     |
+| `#![schema("https://example.org/v2/schema.crov")]` | a file [over HTTPS](#remote-schemas)                     |
 | `#![schema("crate:fleet@2.1")]`                 | the schema a [crate publishes](#remote-schemas)             |
 
 ```crol
-// settings.crol
+// settings.crod
 #![schema(crol::schema)]
 
 +web: Service {
@@ -259,9 +259,9 @@ or a crate:
 ```
 
 ```console
-$ crol check settings.crol
+$ crol check settings.crod
 error: expected u16, found "80"
-  ┌─ settings.crol:6:11
+  ┌─ settings.crod:6:11
   │
 6 │     port: "80",
   │           ^^^^
@@ -271,11 +271,11 @@ error: expected u16, found "80"
 
 ### In a project file
 
-The same forms work in `project.crol`, written as a string. A module path there
+The same forms work in `project.crov`, written as a string. A module path there
 always starts at the project's directory:
 
 ```crol
-// project.crol
+// project.crov
 Project {
     layers: List([{ name: "base", dir: "data", .. }]),
     schema: Some("crol::schema"),
@@ -300,7 +300,7 @@ get completion and checks from nothing but the file.
 path, and name it:
 
 ```crol
-#![schema("https://example.org/fleet/v2/schema.crol")]
+#![schema("https://example.org/fleet/v2/schema.crov")]
 
 +web: Service {
     image: "web:1.4",
@@ -310,11 +310,11 @@ path, and name it:
 ```
 
 **From a crate.** Include the file in your package and say where it is. It is
-`crol/schema.crol` by default, so the table can be empty:
+`crol/schema.crov` by default, so the table can be empty:
 
 ```toml
 [package.metadata.crol]
-schema = "crol/schema.crol"
+schema = "crol/schema.crov"
 ```
 
 Then `#![schema("crate:fleet@2.1")]` names it, with a version requirement as in
@@ -370,9 +370,8 @@ A project can name another root with `root: Some("fleet::Definition")`. A plain
 type name works if it is unambiguous.
 
 In value mode, the root type is the type of the whole document, unless the
-document has a top-level type name, which then chooses it. Since the command
-line [does not read value mode](modes.md#tools-and-modes), this check happens in
-your editor.
+document has a top-level type name, which then chooses it. `crol check` on a
+`.crov` file and your editor both do this.
 
 ### Types with the same name
 
@@ -417,7 +416,7 @@ fn main() -> Result<(), crol::Error> {
     "#;
     let definitions: BTreeMap<String, Definition> = CrolComposer::new()
         .schema(crol::schema::build::<Definition>())
-        .load_layer(CrolLayer::from_sources("base", [("a.crol", text)]))
+        .load_layer(CrolLayer::from_sources("base", [("a.crod", text)]))
         .compose()?;
     println!("{:?}", definitions["web"]);
     Ok(())
@@ -466,7 +465,7 @@ use fleet::Definition;
 fn main() -> Result<(), crol::Error> {
     let text = r#"+web: Service { image: "web:1.4", port: 70000, depends_on: [@nothing], .. }"#;
     let data = CrolComposer::new()
-        .load_layer(CrolLayer::from_sources("base", [("a.crol", text)]))
+        .load_layer(CrolLayer::from_sources("base", [("a.crod", text)]))
         .compose_data()?;
     let schema = crol::schema::build::<Definition>();
     for diagnostic in crol::check(&data, &schema, None, &CheckOptions::default()) {
@@ -478,8 +477,8 @@ fn main() -> Result<(), crol::Error> {
 
 ```console
 $ cargo run
-base/a.crol:1:41: expected u16, found 70000 (while evaluating web.port)
-base/a.crol:1:61: the id `@nothing` names no root key (while evaluating web.depends_on[0])
+base/a.crod:1:41: expected u16, found 70000 (while evaluating web.port)
+base/a.crod:1:61: the id `@nothing` names no root key (while evaluating web.depends_on[0])
 ```
 
 The third argument names the root type by its path, and `None` uses the schema's
@@ -519,16 +518,16 @@ pub struct Service {
 ```
 
 ```crol
-// retry.crol
+// retry.crod
 +fast: Retry { limit: 3 }
 +web: Service { port: 80 }
 ```
 
 ```console
 $ CROL_UPDATE_SCHEMA=1 cargo test
-$ crol check --schema crol/schema.crol ./retry.crol
+$ crol check --schema crol/schema.crov ./retry.crod
 error: `Service` is missing the field `replicas`; write it, or end the block with `..` to leave out fields that have defaults
-  ┌─ ./retry.crol:3:7
+  ┌─ ./retry.crod:3:7
   │
 3 │ +web: Service { port: 80 }
   │       ^^^^^^^^^^^^^^^^^^^^
@@ -566,7 +565,7 @@ pub enum Definition {
 
 ```console
 $ CROL_UPDATE_SCHEMA=1 cargo test
-$ grep cpu crol/schema.crol
+$ grep cpu crol/schema.crov
             fields: { cpu: { ty: F64, default: Unrecorded, .. } },
 ```
 

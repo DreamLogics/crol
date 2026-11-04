@@ -1,5 +1,5 @@
-1-base/a.crol:2:8: a variant entry is only allowed in a block whose location is fixed: an entry's value, the right side of `~` there, or a field value in such a block
-1-base/b.crol:1:9: a value bind cannot be inside a variant block; vary the keys that use it instead
-1-base/b.crol:2:5: a variant selector cannot follow `&` or `&default`, which do not depend on the context
-1-base/b.crol:3:12: a variant selector reads a value in another context, so it must follow a late reference (`&root`, `&self`, `&parent` or a bind)
-1-base/b.crol:4:5: a variant selector in a reference may only use names, `!` and `&`, since it must name one context
+1-base/a.crod:2:8: a variant entry is only allowed in a block whose location is fixed: an entry's value, the right side of `~` there, or a field value in such a block
+1-base/b.crod:1:9: a value bind cannot be inside a variant block; vary the keys that use it instead
+1-base/b.crod:2:5: a variant selector cannot follow `&` or `&default`, which do not depend on the context
+1-base/b.crod:3:12: a variant selector reads a value in another context, so it must follow a late reference (`&root`, `&self`, `&parent` or a bind)
+1-base/b.crod:4:5: a variant selector in a reference may only use names, `!` and `&`, since it must name one context

@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use semver::{Version, VersionReq};
 
 use crate::error::Error;
+use crate::mode::Mode;
 
 /// How long a request may take.
 #[cfg(any(feature = "remote-schemas", feature = "remote-schemas-async"))]
@@ -23,7 +24,7 @@ const MAX_CRATE: u64 = 64 << 20;
 /// How long a failed resolution is remembered before it is tried again.
 const RETRY: Duration = Duration::from_secs(60);
 /// The schema path a crate's `[package.metadata.crol]` table defaults to.
-const DEFAULT_SCHEMA: &str = "crol/schema.crol";
+const DEFAULT_SCHEMA: &str = "crol/schema.crov";
 #[cfg(any(feature = "remote-schemas", feature = "remote-schemas-async"))]
 const USER_AGENT: &str = concat!(
     "crol/",
@@ -260,8 +261,9 @@ pub(crate) async fn resolve_in(
 /// A URL's schema: fetched when allowed, else, or when that fails, the
 /// cached copy.
 async fn url(url: &str, fetch: bool, dirs: &Dirs, http: &impl Http) -> Result<PathBuf, Error> {
+    Mode::Value.check(url)?;
     let hash = blake3::hash(url.as_bytes()).to_hex();
-    let path = dirs.cache.join("urls").join(format!("{hash}.crol"));
+    let path = dirs.cache.join("urls").join(format!("{hash}.crov"));
     let mut failed = None;
     if fetch {
         match http.get(url, MAX_SCHEMA).await {
@@ -300,7 +302,7 @@ async fn krate(
         .map_err(|e| Error::new(format!("schema: `{req}` is not a version requirement: {e}")))?;
     let own = Version::parse(env!("CARGO_PKG_VERSION")).expect("crol's version");
     if same_name(name, "crol") && req.matches(&own) {
-        let path = dirs.cache.join("crates").join(format!("crol-{own}.crol"));
+        let path = dirs.cache.join("crates").join(format!("crol-{own}.crov"));
         if !path.is_file() {
             let text = crate::schema::build::<crate::schema::SchemaFile>().to_text()?;
             write(&path, text.as_bytes())?;
@@ -420,6 +422,9 @@ fn schema_path(
         )));
     };
     let path = PathBuf::from(schema.unwrap_or(DEFAULT_SCHEMA));
+    Mode::Value
+        .check_path(&path)
+        .map_err(|e| Error::new(format!("schema: `{name}` {version}: {e}")))?;
     if !path
         .components()
         .all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
@@ -455,7 +460,7 @@ async fn from_crates_io(
                         "schema: no version of `{name}` on crates.io matches `{req}`"
                     )));
                 };
-                let path = cache.join(format!("{name}-{version}.crol"));
+                let path = cache.join(format!("{name}-{version}.crov"));
                 if path.is_file() {
                     return Ok(path);
                 }
@@ -476,7 +481,7 @@ async fn from_crates_io(
         let Some(stem) = path
             .file_name()
             .and_then(|n| n.to_str())
-            .and_then(|n| n.strip_suffix(".crol"))
+            .and_then(|n| n.strip_suffix(".crov"))
         else {
             continue;
         };
@@ -618,14 +623,14 @@ mod tests {
     #[test]
     fn urls_come_from_the_cache_without_fetching() {
         let dirs = dirs("urls");
-        let url = "https://example.org/schema.crol";
+        let url = "https://example.org/schema.crov";
         let error = block_on(resolve_in(url, &outside(), false, &dirs, &Offline)).unwrap_err();
         assert_eq!(
             error.message(),
-            "schema: https://example.org/schema.crol is not cached, and fetching schemas is off"
+            "schema: https://example.org/schema.crov is not cached, and fetching schemas is off"
         );
         let hash = blake3::hash(url.as_bytes()).to_hex();
-        let cached = dirs.cache.join("urls").join(format!("{hash}.crol"));
+        let cached = dirs.cache.join("urls").join(format!("{hash}.crov"));
         file(&cached, "Schema {}");
         assert_eq!(
             block_on(resolve_in(url, &outside(), false, &dirs, &Offline)).unwrap(),
@@ -647,19 +652,19 @@ mod tests {
                 &dir.join("Cargo.toml"),
                 "[package]\nname = \"my_app\"\n\n[package.metadata.crol]\n",
             );
-            file(&dir.join("crol/schema.crol"), version);
+            file(&dir.join("crol/schema.crov"), version);
         }
         file(
             &src.join("plain-1.0.0/Cargo.toml"),
             "[package]\nname = \"plain\"\n",
         );
         let resolve = |source| block_on(resolve_in(source, &outside(), false, &dirs, &Offline));
-        let expected = src.join("my_app-2.1.3/crol/schema.crol");
+        let expected = src.join("my_app-2.1.3/crol/schema.crov");
         assert_eq!(resolve("crate:my_app@2.1").unwrap(), expected);
         assert_eq!(resolve("crate:my-app@2").unwrap(), expected);
         assert_eq!(
             resolve("crate:my_app").unwrap(),
-            src.join("my_app-3.0.0/crol/schema.crol")
+            src.join("my_app-3.0.0/crol/schema.crov")
         );
         assert_eq!(
             resolve("crate:plain").unwrap_err().message(),
@@ -727,10 +732,10 @@ mod tests {
             tar.append_data(&mut header, path, text.as_bytes()).unwrap();
         };
         add("app-1.2.3/src/lib.rs", "");
-        add("app-1.2.3/schema/app.crol", "Schema {}");
+        add("app-1.2.3/schema/app.crov", "Schema {}");
         add(
             "app-1.2.3/Cargo.toml",
-            "[package]\nname = \"app\"\n[package.metadata.crol]\nschema = \"schema/app.crol\"\n",
+            "[package]\nname = \"app\"\n[package.metadata.crol]\nschema = \"schema/app.crov\"\n",
         );
         let tar = tar.into_inner().unwrap();
         let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());

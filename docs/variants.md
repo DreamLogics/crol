@@ -11,7 +11,7 @@ Without variants, you end up with a layer per combination (`prod`, `prod-eu`,
 each difference next to the value it changes:
 
 ```crol
-// services.crol
+// services.crod
 +web: {
     replicas: 2,
     log_level: "info",
@@ -31,9 +31,9 @@ of active variants is called the _context_. With nothing active, you get the
 _base_ context:
 
 ```console
-$ crol eval --group dev,prod services.crol
+$ crol eval --group dev,prod services.crod
 web: { replicas: 2, log_level: "info" }
-$ crol eval --group dev,prod --context prod services.crol
+$ crol eval --group dev,prod --context prod services.crod
 web: { replicas: 8, log_level: "info" }
 ```
 
@@ -76,7 +76,7 @@ fn main() -> Result<(), crol::Error> {
         variants,
         ..Default::default()
     })
-    .load(std::path::Path::new("services.crol"))?
+    .load(std::path::Path::new("services.crod"))?
     .with_variant("prod_eu")?
     .with_variant("cache")?
     .compose()?;
@@ -154,7 +154,7 @@ fn main() -> Result<(), crol::Error> {
         variants,
         ..Default::default()
     })
-    .load(std::path::Path::new("services.crol"))?
+    .load(std::path::Path::new("services.crod"))?
     .with_variant(Env::Prod)?
     .compose()?;
 
@@ -184,7 +184,7 @@ Between `<` and `>` goes a condition:
 You can write one in several places, all meaning the same thing:
 
 ```crol
-// example.crol
+// example.crod
 +web: {
     replicas: 2,
     timeout<dev>: 600, // inside a block
@@ -201,9 +201,9 @@ web.limits<prod>.cpu: 4.0 // anywhere in the path
 ```
 
 ```console
-$ crol eval --group dev,prod --discrete cache --context prod example.crol
+$ crol eval --group dev,prod --discrete cache --context prod example.crod
 web: { replicas: 9, limits: { cpu: 4.0 } }
-$ crol eval --group dev,prod --discrete cache --context dev example.crol
+$ crol eval --group dev,prod --discrete cache --context dev example.crod
 web: { replicas: 2, limits: { cpu: 1.0 }, timeout: 600 }
 ```
 
@@ -232,7 +232,7 @@ ancestor; `!a` is 0; `a & b` adds up; `a | b` and `a ^ b` take the lower of the
 two. Entries of equal specificity keep their normal order.
 
 ```crol
-// example.crol
+// example.crod
 +web: { replicas: 2 }
 
 <prod> {
@@ -249,7 +249,7 @@ two. Entries of equal specificity keep their normal order.
 ```
 
 ```console
-$ crol eval --group prod,prod_eu --discrete cache --parent prod_eu=prod --context prod_eu example.crol
+$ crol eval --group prod,prod_eu --discrete cache --parent prod_eu=prod --context prod_eu example.crod
 web: { replicas: 11 }
 ```
 
@@ -260,12 +260,12 @@ In `{prod_eu}`, the base gives 2. `<prod>` (specificity 1) makes it 8.
 `crol explain` shows this order for any value:
 
 ```console
-$ crol explain --group prod,prod_eu --discrete cache --parent prod_eu=prod --context prod_eu example.crol web.replicas
+$ crol explain --group prod,prod_eu --discrete cache --parent prod_eu=prod --context prod_eu example.crod web.replicas
 web.replicas in {prod_eu}:
-  example.crol:2:2   +web                         definition  2
-  example.crol:5:5   web<prod>.replicas           patch       8
-  example.crol:13:5  web<prod & !cache>.replicas  patch       9
-  example.crol:9:5   web<prod_eu>.replicas        patch       11
+  example.crod:2:2   +web                         definition  2
+  example.crod:5:5   web<prod>.replicas           patch       8
+  example.crod:13:5  web<prod & !cache>.replicas  patch       9
+  example.crod:9:5   web<prod_eu>.replicas        patch       11
 ```
 
 ## References and contexts
@@ -276,7 +276,7 @@ _switches_ context for that one reference. This is how you compare environments
 or copy a value from another one:
 
 ```crol
-// example.crol
+// example.crod
 +database: { host: "db.local" }
 database<prod>.host: "db.internal"
 
@@ -288,7 +288,7 @@ database<prod>.host: "db.internal"
 ```
 
 ```console
-$ crol eval --group dev,prod --context dev example.crol report
+$ crol eval --group dev,prod --context dev example.crod report
 current: "db.local"
 production: "db.internal"
 development: "db.local"
@@ -302,7 +302,7 @@ exactly one context.
 A conditional entry can add a key that the base lacks, or remove one:
 
 ```crol
-// example.crol
+// example.crod
 +web: { port: 80 }
 
 <dev> {
@@ -339,7 +339,7 @@ fn main() -> Result<(), crol::Error> {
     })
     .load_layer(CrolLayer::from_sources(
         "base",
-        [("a.crol", "+web: { replicas: 2 }, web<prod>.replicas: 8")],
+        [("a.crod", "+web: { replicas: 2 }, web<prod>.replicas: 8")],
     ))
     .compose_data()?;
 

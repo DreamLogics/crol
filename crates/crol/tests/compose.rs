@@ -43,22 +43,22 @@ fn layers_from_module_paths_and_directories() {
         "compose-layers",
         &[
             (
-                "data/base/web.crol",
+                "data/base/web.crod",
                 "+web: Service { image: \"web\", port: 80, depends_on: [@db] },",
             ),
             (
-                "data/base/nested/db.crol",
+                "data/base/nested/db.crod",
                 "+db: Service { image: \"pg\", port: 5432, depends_on: [] },",
             ),
-            ("data/base/.hidden.crol", "this is not read"),
+            ("data/base/.hidden.crod", "this is not read"),
             ("data/base/notes.txt", "neither is this"),
-            ("data/local.crol", "web.port: 8080,"),
+            ("data/local.crod", "web.port: 8080,"),
         ],
     );
     let all: BTreeMap<String, Definition> = CrolComposer::with_cfg(config(&root))
         .load("::data::base")
         .unwrap()
-        .load(root.join("data/local.crol"))
+        .load(root.join("data/local.crod"))
         .unwrap()
         .compose()
         .unwrap();
@@ -69,7 +69,7 @@ fn layers_from_module_paths_and_directories() {
 
 #[test]
 fn loading_fails_only_for_sources_that_name_nothing() {
-    let root = tree("compose-missing", &[("a.crol", "+a: 1 +")]);
+    let root = tree("compose-missing", &[("a.crod", "+a: 1 +")]);
     let error = CrolComposer::with_cfg(config(&root))
         .load("::nope")
         .unwrap_err();
@@ -80,7 +80,7 @@ fn loading_fails_only_for_sources_that_name_nothing() {
     assert!(
         error
             .to_string()
-            .contains("a.crol:1:8: expected an expression"),
+            .contains("a.crod:1:8: expected an expression"),
         "{error}"
     );
 }
@@ -91,15 +91,15 @@ fn extends_loads_the_layers_below() {
         "compose-extends",
         &[
             (
-                "defaults/services.crol",
+                "defaults/services.crod",
                 "+web: { port: 80, name: \"web\" },",
             ),
             (
-                "prod/web.crol",
+                "prod/web.crod",
                 "#![extends(super::defaults::services)]\n\nweb.port: 443,",
             ),
-            ("cycle/a.crol", "#![extends(super::cycle::b)]\n+a: 1,"),
-            ("cycle/b.crol", "#![extends(super::cycle::a)]\n+b: 1,"),
+            ("cycle/a.crod", "#![extends(super::cycle::b)]\n+a: 1,"),
+            ("cycle/b.crod", "#![extends(super::cycle::a)]\n+b: 1,"),
         ],
     );
     // Without `load_extends`, `extends` is ignored by the loader.
@@ -139,8 +139,8 @@ fn extends_loads_the_layers_below() {
 #[test]
 fn data_gives_values_warnings_and_ids() {
     let data = CrolComposer::new()
-        .load_layer(CrolLayer::from_sources("base", [("a.crol", "+web: Service { image: \"w\", port: 1, depends_on: [@db] },\n+db: Service { image: \"d\", port: 2, depends_on: [] },")]))
-        .load_layer(CrolLayer::from_sources("local", [("x.crol", "web.port: 10,"), ("y.crol", "web.image: \"w2\",")]))
+        .load_layer(CrolLayer::from_sources("base", [("a.crod", "+web: Service { image: \"w\", port: 1, depends_on: [@db] },\n+db: Service { image: \"d\", port: 2, depends_on: [] },")]))
+        .load_layer(CrolLayer::from_sources("local", [("x.crod", "web.port: 10,"), ("y.crod", "web.image: \"w2\",")]))
         .compose_data()
         .unwrap();
     assert_eq!(data.keys(), ["web", "db"]);
@@ -149,7 +149,7 @@ fn data_gives_values_warnings_and_ids() {
     let warnings = data.warnings();
     assert_eq!(warnings.len(), 1);
     assert!(
-        warnings[0].starts_with("warning: local/x.crol:1:1: `web` is patched from 2 documents"),
+        warnings[0].starts_with("warning: local/x.crod:1:1: `web` is patched from 2 documents"),
         "{}",
         warnings[0]
     );
@@ -164,7 +164,7 @@ fn deserialization_errors_name_the_root_key() {
         .load_layer(CrolLayer::from_sources(
             "base",
             [(
-                "a.crol",
+                "a.crod",
                 "+web: Service { image: \"w\", port: -1, depends_on: [] },",
             )],
         ))
@@ -173,7 +173,7 @@ fn deserialization_errors_name_the_root_key() {
     let error = data.get::<Service>("web").unwrap_err();
     assert_eq!(
         error.to_string(),
-        "expected u16, found -1 (base/a.crol:1:35, while deserializing web.port)"
+        "expected u16, found -1 (base/a.crod:1:35, while deserializing web.port)"
     );
 }
 
@@ -200,7 +200,7 @@ fn variants_and_contexts() {
         ..Default::default()
     };
     let web: BTreeMap<String, Definition> = CrolComposer::with_cfg(config.clone())
-        .load_layer(CrolLayer::from_sources("base", [("a.crol", SERVICES)]))
+        .load_layer(CrolLayer::from_sources("base", [("a.crod", SERVICES)]))
         .with_variant("prod_eu")
         .unwrap()
         .with_variant("cache")
@@ -212,7 +212,7 @@ fn variants_and_contexts() {
     assert_eq!(web.depends_on.len(), 2);
 
     let data = CrolComposer::with_cfg(config.clone())
-        .load_layer(CrolLayer::from_sources("base", [("a.crol", SERVICES)]))
+        .load_layer(CrolLayer::from_sources("base", [("a.crod", SERVICES)]))
         .compose_data()
         .unwrap();
     assert_eq!(data.contexts().count(), 8);
@@ -225,7 +225,7 @@ fn variants_and_contexts() {
     let fingerprint = data.fingerprint();
     // Evaluating again gives the same fingerprint.
     let again = CrolComposer::with_cfg(config.clone())
-        .load_layer(CrolLayer::from_sources("base", [("a.crol", SERVICES)]))
+        .load_layer(CrolLayer::from_sources("base", [("a.crod", SERVICES)]))
         .compose_data()
         .unwrap();
     assert_eq!(again.fingerprint(), fingerprint);
@@ -285,7 +285,7 @@ fn typed_variants() {
         variants,
         ..Default::default()
     })
-    .load_layer(CrolLayer::from_sources("base", [("a.crol", SERVICES)]))
+    .load_layer(CrolLayer::from_sources("base", [("a.crod", SERVICES)]))
     .with_variant(Env::ProdEu)
     .unwrap()
     .compose_data()
@@ -305,13 +305,13 @@ fn explain_lists_the_operations_behind_a_value() {
     let base = CrolLayer::from_sources(
         "base",
         [(
-            "services.crol",
+            "services.crod",
             "+web: { limits: { memory_mb: 512 }, port: 80 },\n<prod> { web.limits.memory_mb: & * 4 },",
         )],
     );
     let local = CrolLayer::from_sources(
         "local",
-        [("a.crol", "web.limits.memory_mb: 1024,\nweb.port: 81,")],
+        [("a.crod", "web.limits.memory_mb: 1024,\nweb.port: 81,")],
     );
     let data = CrolComposer::with_cfg(config)
         .load_layer(base)

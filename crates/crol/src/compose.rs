@@ -15,6 +15,7 @@ use crate::de;
 use crate::error::Error;
 use crate::id::IdUse;
 use crate::loader::{self, FileLoader, FileLoaders, FsLoader, Loaded, Origin, SourceId};
+use crate::mode::Mode;
 
 /// A variant name type: maps values to the names data writes in selectors,
 /// and back (`SPEC.md` 8.1). Implemented for `String`, which accepts every
@@ -245,7 +246,9 @@ impl Document {
 
 impl CrolLayer {
     /// A layer of in-memory documents, for tests, editors and embedded data.
-    /// Each document is a path relative to the layer and its text.
+    /// Each document is a path relative to the layer and its text. Text is
+    /// data mode whatever its path says: the call states the mode
+    /// (`SPEC.md` 4).
     pub fn from_sources<P, T>(
         name: impl Into<String>,
         documents: impl IntoIterator<Item = (P, T)>,
@@ -271,29 +274,43 @@ impl CrolLayer {
         Self { name, documents }
     }
 
-    /// A layer of one file, or of every `.crol` file below a directory
-    /// (`SPEC.md` 7.1). Hidden files and directories are skipped.
+    /// A layer of one file, or of every `.crod` file below a directory
+    /// (`SPEC.md` 7.1). Hidden files and directories are skipped. A `.crov`
+    /// or `.crol` file, given or in the directory, is an error (`SPEC.md` 4).
     pub fn from_path(name: impl Into<String>, path: &Path) -> Result<Self, Error> {
+        Self::from_path_except(name.into(), path, None)
+    }
+
+    /// [`from_path`](Self::from_path), for a directory that may hold the
+    /// project file.
+    fn from_path_except(
+        name: String,
+        path: &Path,
+        project_file: Option<&SourceId>,
+    ) -> Result<Self, Error> {
         let relative = path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         let loader = FsLoader::new(path);
         let id = SourceId::from_path(path);
-        Self::read(name.into(), &loader, &id, relative, None)
+        Self::read(name, &loader, &id, relative, None, project_file)
     }
 
     /// The layer a source holds. `file_name` is its relative path if it is
-    /// a document, and `target` its names from the root, if known.
+    /// a document, and `target` its names from the root, if known. A
+    /// directory's documents leave out `project_file` (`SPEC.md` 12.4).
     pub(crate) fn read(
         name: String,
         loader: &dyn FileLoader,
         id: &SourceId,
         file_name: String,
         target: Option<&[String]>,
+        project_file: Option<&SourceId>,
     ) -> Result<Self, Error> {
         let documents = match loader::load(loader, id)? {
             Loaded::Document(bytes) => {
+                loader::check_mode(id, Mode::Data)?;
                 let directory = target.map(|t| t[..t.len().saturating_sub(1)].to_vec());
                 vec![Document::read(file_name, id, bytes, directory)?]
             }
@@ -303,6 +320,12 @@ impl CrolLayer {
                 entries.sort_by(|(a, _), (b, _)| a.cmp(b));
                 let mut documents = Vec::with_capacity(entries.len());
                 for (relative, entry) in entries {
+                    if project_file == Some(&entry) {
+                        continue;
+                    }
+                    // A directory never hides a document it holds, so that
+                    // one of another mode cannot be lost without a word.
+                    loader::check_mode(&entry, Mode::Data)?;
                     let mut components: Vec<&str> = relative.split('/').collect();
                     if components.iter().any(|c| matches!(*c, "" | "." | "..")) {
                         return Err(Error::new(format!(
@@ -332,16 +355,6 @@ impl CrolLayer {
     /// The layer's name.
     pub fn name(&self) -> &str {
         &self.name
-    }
-
-    /// The layer without the file at `path`: a project file is never read
-    /// as data, even inside a layer's directory (`SPEC.md` 12.4).
-    pub fn without_file(mut self, path: &Path) -> Self {
-        if path.canonicalize().is_ok() {
-            let file = SourceId::from_path(path);
-            self.documents.retain(|d| d.source.as_ref() != Some(&file));
-        }
-        self
     }
 
     /// The layer, renamed.
@@ -394,7 +407,8 @@ impl LayerSource for &Path {
         if !self.exists() {
             return Err(Error::new(format!("{} does not exist", self.display())));
         }
-        CrolLayer::from_path(self.display().to_string(), self)
+        let project_file = config.file_loaders.project_file();
+        CrolLayer::from_path_except(self.display().to_string(), self, project_file)
     }
 }
 
@@ -421,11 +435,11 @@ impl LayerSource for CrolLayer {
 /// ```
 /// use crol::{CrolComposer, CrolLayer};
 ///
-/// let base = CrolLayer::from_sources("base", [("web.crol", r#"
+/// let base = CrolLayer::from_sources("base", [("web.crod", r#"
 ///     +port: 80,
 ///     +url: "http://web:" + &root.port,
 /// "#)]);
-/// let local = CrolLayer::from_sources("local", [("web.crol", "port: & + 1")]);
+/// let local = CrolLayer::from_sources("local", [("web.crod", "port: & + 1")]);
 ///
 /// let data = CrolComposer::new().load_layer(base).load_layer(local).compose_data().unwrap();
 /// let url: String = data.get("url").unwrap();
@@ -562,6 +576,7 @@ impl<T: VariantName> CrolComposer<T> {
                         &module_path,
                         &self.config.root_path,
                         document.origin(),
+                        Mode::Data,
                     )?;
                     let id = resolved.id().clone();
                     if in_progress.contains(&id) || document.source.as_ref() == Some(&id) {

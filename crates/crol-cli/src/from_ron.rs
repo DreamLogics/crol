@@ -1,4 +1,5 @@
-//! `crol from-ron` (`SPEC.md` 11).
+//! `crol from-ron` (`SPEC.md` 11). It writes a value document to standard
+//! output, so the name of the file, which should be `.crov`, is the caller's.
 
 use std::io::Write;
 use std::path::PathBuf;

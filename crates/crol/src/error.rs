@@ -11,7 +11,7 @@ use crate::loader::SourceId;
 /// An evaluation error carries every diagnostic found, rendered as
 /// `file:line:col: message`; a deserialization error says where the value
 /// was written and which part of the Rust value it was for:
-/// `expected u16, found -1 (config.crol:3:12, while deserializing web.port)`.
+/// `expected u16, found -1 (config.crod:3:12, while deserializing web.port)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error(Box<ErrorImpl>);
 

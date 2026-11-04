@@ -12,12 +12,12 @@ In a Cargo project, `crol init` writes a project file and a first layer:
 
 ```console
 $ crol init
-Created /path/to/project/project.crol
-Created /path/to/project/data/base/main.crol
+Created /path/to/project/project.crov
+Created /path/to/project/data/base/main.crod
 
 Next:
   - add `crol = "0.1.0"` to [dependencies] in Cargo.toml, if it is not there yet
-  - write your data in data/base/main.crol
+  - write your data in data/base/main.crod
   - run `crol check`
 ```
 
@@ -25,7 +25,7 @@ It looks for the nearest `Cargo.toml`, from the current directory upwards, and
 writes next to that. The result is ready to use, and explains itself in comments:
 
 ```console
-$ cat project.crol
+$ cat project.crov
 // What `crol` and the language server need to know about this project's data.
 Project {
     // The data, lowest layer first: each layer patches the ones before it.
@@ -36,21 +36,21 @@ Project {
     variants: [],
 
     // The schema file your application writes, to check the data's types:
-    // `Some("schema")` is `schema.crol` next to this file.
+    // `Some("schema")` is `schema.crov` next to this file.
     schema: None,
     ..,
 }
 $ crol check
 ```
 
-`data/base/main.crol` holds only comments. It exists because a layer's directory
+`data/base/main.crod` holds only comments. It exists because a layer's directory
 has to exist, and an empty directory would not survive version control.
 
 `crol init` never overwrites anything, and leaves `Cargo.toml` and your code alone:
 
 ```console
 $ crol init
-error: /path/to/project/project.crol already exists; it was left as it is
+error: /path/to/project/project.crov already exists; it was left as it is
 ```
 
 The dependency on `crol` is yours to add. Until the crate is on crates.io, use the
@@ -59,10 +59,10 @@ command prints.
 
 ## The project file
 
-`project.crol` lives at the top of your project:
+`project.crov` lives at the top of your project:
 
 ```crol
-// project.crol
+// project.crov
 Project {
     layers: List(
         [
@@ -78,7 +78,7 @@ Project {
 ```
 
 ```crol
-// data/base/services.crol
+// data/base/services.crod
 +web: { port: 80 }
 <prod> {
     web.port: 443,
@@ -86,12 +86,12 @@ Project {
 ```
 
 ```crol
-// data/extension/cache.crol
+// data/extension/cache.crod
 web.cached: true
 ```
 
 ```crol
-// data/local/overrides.crol
+// data/local/overrides.crod
 web.port: & + 8000
 ```
 
@@ -124,7 +124,7 @@ type. It is accepted, but no tool reads it yet. Use
 
 ### How it is found
 
-`crol` looks for `project.crol` in the current directory and then in each
+`crol` looks for `project.crov` in the current directory and then in each
 directory above it. The language server starts from your workspace folder. You
 can also be explicit, with `--project <file>`, or the `project`
 [setting](editors.md#settings) of the language server.
@@ -144,8 +144,12 @@ A project file is used only when you do not name layers yourself. With layers on
 the command line, the project file is ignored, unless you pass `--project`.
 
 The project file itself is never read as data, even if it lies inside a layer's
-directory. A file called `project.crol` that is not _the_ project file is
-ordinary data.
+directory. It is the only `.crov` file that may be there: any other one, also one
+called `project.crov` that is not _the_ project file, is [an
+error](modes.md#when-the-extension-does-not-fit).
+
+A leftover `project.crol`, where `project.crov` is looked for, is an error that
+says to rename it, rather than a project that is not found.
 
 ### Layers from a command
 
@@ -169,7 +173,7 @@ Project {
 
 ## Keeping your program and tools in step
 
-**Your program does not read `project.crol` by itself**, and tools do not know
+**Your program does not read `project.crov` by itself**, and tools do not know
 about [file loaders](recipes.md#loading-documents-from-somewhere-else) in your
 program. `CrolComposer` loads what you tell it to. If the two disagree, your editor will show you one thing
 and your program will load another.
@@ -183,7 +187,7 @@ have one source of truth, read the project file in your program. The
 use std::collections::BTreeMap;
 
 use crol::project::Project;
-use crol::{CrolComposer, CrolConfig, CrolLayer, CrolVariants, Variant};
+use crol::{CrolComposer, CrolConfig, CrolVariants, FileLoaders, Variant};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -193,7 +197,7 @@ struct Web {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let file = Project::find(&std::env::current_dir()?).ok_or("no project.crol")?;
+    let file = Project::find(&std::env::current_dir()?)?.ok_or("no project.crov")?;
     let project = Project::read(&file)?;
     let dir = file.parent().ok_or("no parent directory")?;
 
@@ -208,14 +212,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         variants = variants.add_parent(child, parent);
     }
 
+    // The project file may lie in a layer's directory.
+    let loaders = FileLoaders::new().with_project_file(&file);
     let mut composer = CrolComposer::with_cfg(CrolConfig {
         variants,
         root_path: dir.to_path_buf(),
         ..Default::default()
     });
     for layer in project.layer_list(dir)? {
-        let path = crol::resolve_module_path(&layer.dir, dir, None)?;
-        composer = composer.load_layer(CrolLayer::from_path(layer.name, &path)?.without_file(&file));
+        let source = loaders.resolve(&layer.dir, dir)?;
+        composer = composer.load_layer(source.load(layer.name)?);
     }
 
     let root: BTreeMap<String, Web> = composer.with_variant("prod")?.compose()?;
@@ -240,8 +246,12 @@ They use `::` rather than `/`, so that they read the same on every platform.
 | `defaults::services`        | the directory of the document; in code, the root directory |
 | `super::defaults::services` | the parent of that directory; `super` can repeat    |
 
-The last segment names either the file `services.crol` or the directory
+The last segment names either the file `services.crod` or the directory
 `services/`. If both exist, it is an error. Every other segment is a directory.
+
+A module path has no extension, because what it is used for already says which
+one it has: a layer or an `extends` is `.crod`, and a `schema` is the file
+`services.crov`. A file of the other kind is an error that says so.
 
 The **root directory** depends on who is asking:
 
@@ -252,21 +262,21 @@ The **root directory** depends on who is asking:
 | the language server       | the project file's directory, else the workspace folder            |
 
 Module paths can only name files and directories whose names are identifiers
-and not hidden. So `my-file.crol` cannot be reached this way, although your
-program can still load it by file system path. Prefer `my_file.crol`.
+and not hidden. So `my-file.crod` cannot be reached this way, although your
+program can still load it by file system path. Prefer `my_file.crod`.
 
 ## Recommended layouts
 
 ### One settings file
 
-If your program reads one file, you need no project file. Keep it in value mode
-or [plain entries](modes.md#writing-files-that-work-in-both), and if you have a
-schema, name it in the file with `#![schema(...)]`.
+If your program reads one file, you need no project file. Make it a
+[`.crov` file](modes.md), and if you have a schema, name it in the file with
+`#![schema(...)]`.
 
 ```text
 my-app/
 ├── Cargo.toml
-├── config.crol
+├── config.crov
 └── src/
     └── main.rs
 ```
@@ -274,21 +284,21 @@ my-app/
 ### An application with layered data
 
 This is the layout to start from for most applications with real data.
-[`crol init`](#starting-a-project) gives you `project.crol` and `data/base`:
+[`crol init`](#starting-a-project) gives you `project.crov` and `data/base`:
 
 ```text
 my-app/
 ├── Cargo.toml
-├── project.crol            what tools need to know
+├── project.crov            what tools need to know
 ├── crol/
-│   └── schema.crol         generated by the test below; commit it
+│   └── schema.crov         generated by the test below; commit it
 ├── data/
 │   ├── base/               one directory per layer
-│   │   ├── templates.crol
-│   │   ├── services.crol
-│   │   └── volumes.crol
+│   │   ├── templates.crod
+│   │   ├── services.crod
+│   │   └── volumes.crod
 │   └── local/              overrides for one machine
-│       └── overrides.crol
+│       └── overrides.crod
 ├── src/
 │   ├── lib.rs              the types, with #[derive(crol::Schema)]
 │   └── main.rs             CrolComposer
@@ -298,9 +308,9 @@ my-app/
 
 A few things to keep in mind:
 
-- **One directory per layer.** Every `.crol` file below a layer directory is
-  part of it, so keep `crol/schema.crol` out of the layers. A directory that is
-  not listed in the project is not loaded.
+- **One directory per layer.** Every `.crod` file below a layer directory is
+  part of it, and a `.crov` file there is an error, so keep `crol/schema.crov`
+  out of the layers. A directory that is not listed in the project is not loaded.
 - **Split a layer by subject.** Each key can be defined only once per layer, so
   put a key's definition and its patches in the same file, and avoid the
   [warning about patches across files](layers.md#definitions-and-patches).
@@ -315,14 +325,14 @@ A few things to keep in mind:
 
 If others add to your data, ship your data as a `read_only` layer, and let each
 extension be a layer of its own, perhaps through a
-[layer command](#layers-from-a-command). Ship `crol/schema.crol` as well, or
+[layer command](#layers-from-a-command). Ship `crol/schema.crov` as well, or
 publish it, so that people editing the data get the same checks without your
 source.
 
 ```text
 my-game/
-├── project.crol
-├── crol/schema.crol
+├── project.crov
+├── crol/schema.crov
 ├── data/
 │   └── base/               read_only: true
 └── extensions/

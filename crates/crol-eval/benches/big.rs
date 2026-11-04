@@ -29,11 +29,11 @@ fn main() {
     let layers = vec![
         Layer {
             name: "base".into(),
-            documents: vec![("a.crol".into(), sources.add("base.crol", base))],
+            documents: vec![("a.crod".into(), sources.add("base.crod", base))],
         },
         Layer {
             name: "local".into(),
-            documents: vec![("a.crol".into(), sources.add("local.crol", local))],
+            documents: vec![("a.crod".into(), sources.add("local.crod", local))],
         },
     ];
     let mut variants = Variants::new();

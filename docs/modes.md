@@ -1,21 +1,35 @@
 # Data mode and value mode
 
-A CROL file can be read in two ways, and your program chooses which. This page
-explains both, and when to use each. The other pages link here rather than
-repeating it.
+A CROL file is one of two things, and its extension tells you which:
+
+- **`.crov`** is a _value document_: the whole file is one value, like a JSON or
+  RON file.
+- **`.crod`** is a _data document_: the file holds operations on data shared by
+  every file of a composition, in layers.
+
+Look at a file's name and you know how it behaves. This page explains both, and
+when to use each. The other pages link here rather than repeating it.
 
 ## The short version
 
-|                         | Value mode                       | Data mode                                 |
+|                         | `.crov`, value mode              | `.crod`, data mode                        |
 | ----------------------- | -------------------------------- | ----------------------------------------- |
 | You read it with        | `crol::from_str`                 | `CrolComposer`                            |
 | A file is               | one value                        | a list of operations on shared data       |
 | How many files          | one                              | any number, in layers                     |
 | Good for                | a single settings file           | data split over files, sources or environments |
-| The `crol` command line | [`crol fmt` only](#tools-and-modes) | all commands                           |
+| The `crol` command line | [one file at a time](#tools-and-modes) | all commands                        |
 
-If you have one file and always will, use value mode. If you want overrides,
-environments or more than one file, use data mode.
+If you have one file and always will, write a `.crov` file. If you want
+overrides, environments or more than one file, write `.crod` files.
+
+Project files and schema files are single values, so they are `.crov` files:
+`project.crov`, `crol/schema.crov`.
+
+There are two modes because they serve different purposes, and not everything
+fits one shape: a settings file wants to be a value with a type, and layered data
+wants operations that files can stack. The extensions make sure you never have to
+wonder which you are looking at.
 
 ## Value mode: a file is a value
 
@@ -39,6 +53,7 @@ these deserialize to the same `Config`, and the name is checked against your
 Rust type:
 
 ```crol
+// config.crov
 Config {
     port: 8080,
     workers: 4,
@@ -46,6 +61,7 @@ Config {
 ```
 
 ```crol
+// config.crov
 #![type(Config)]
 
 port: 8080
@@ -56,6 +72,7 @@ Because the file is one value, it can use everything a block can, such as `..`
 to leave fields out, and a spread at the top:
 
 ```crol
+// config.crov
 #![type(Config)]
 
 defaults := { workers: 4 }
@@ -70,13 +87,13 @@ replaces an earlier one.
 
 ## Data mode: a file is operations
 
-In data mode, a file does not describe a value. It holds operations on the
-_root_, a set of keys shared by every file. `+web: ...` means "add `web` to
+In a `.crod` file, the file does not describe a value. It holds operations on
+the _root_, a set of keys shared by every file. `+web: ...` means "add `web` to
 the data". The composer gathers the operations of all files, orders them by
 [layer](layers.md), and evaluates the result.
 
 ```crol
-// services.crol
+// services.crod
 +web: Service { port: 8080, .. }
 +database: Service { port: 5432, .. }
 ```
@@ -116,7 +133,7 @@ struct Service {
 fn main() -> Result<(), crol::Error> {
     let layer = CrolLayer::from_sources(
         "base",
-        [("services.crol", "+web: Service { port: 80 }, +db: Service { port: 5432 }")],
+        [("services.crod", "+web: Service { port: 80 }, +db: Service { port: 5432 }")],
     );
     let services: BTreeMap<String, Service> =
         CrolComposer::new().load_layer(layer).compose()?;
@@ -135,7 +152,7 @@ web: port 80
 
 ## Side by side
 
-| You write                      | Value mode                 | Data mode                                 |
+| You write                      | `.crov`, value mode        | `.crod`, data mode                        |
 | ------------------------------ | -------------------------- | ----------------------------------------- |
 | `port: 80, name: "x"`          | works                      | works                                     |
 | `{ port: 80 }`                 | works                      | works; the braces are dropped             |
@@ -153,28 +170,61 @@ web: port 80
 `&self`, `&root` and `&` work the same way in both. At the top level, `&self`
 and `&root` are the same thing, and `&` has nothing below it.
 
-## Writing files that work in both
+## When the extension does not fit
+
+A file whose extension is wrong for how it is loaded is an error, never a silent
+skip:
+
+- A `.crov` file cannot be a layer. This includes a `.crov` file in a layer's
+  directory, so a layer never quietly lacks a file. The one exception is the
+  [project file](projects.md#how-it-is-found) itself, which may lie there.
+- A `.crod` file cannot be a project or schema file.
+- `.crol`, the extension from before the two were separated, is an error
+  everywhere, with the name to rename the file to. There is no fallback.
+
+```console
+$ printf '+port: 80\n' > base.crod
+$ printf '40 + 2\n' > answer.crov
+$ crol check base.crod answer.crov
+error: answer.crov: a `.crov` file is a value document and cannot be a layer; move it out of the layer, or rename it to `answer.crod` if it is data
+```
+
+Other files in a layer's directory, such as a `README.md`, are not documents and
+are ignored.
+
+## Text has no extension
+
+Text does not come with a name, so the function you call states the mode.
+`crol::from_str` is always value mode, and the composer is always data mode,
+also for [`CrolLayer::from_sources`](layers.md#what-a-layer-can-be).
+
+A [file loader](recipes.md#loading-documents-from-somewhere-else) of your own
+names its documents. A name that ends in `.crod`, `.crov` or `.crol` follows the
+same rules as a file. Any other name states nothing, and the call that loaded it
+decides.
+
+## Moving a file between modes
 
 A file of plain entries, with no `#![type]`, no top-level `..` and each key set
-once, reads the same in both modes. That is why the
-[getting started](getting-started.md) example could move from `from_str` to
-`CrolComposer` without changing `config.crol`. If you think your program might
-grow from one file to several, this is the style to write in.
+once, reads the same in both modes. So when one settings file grows into several,
+as in [getting started](getting-started.md), all it takes is a new name:
+`config.crov` becomes `config.crod`. If you think your program might grow, this
+is the style to write in.
 
 ## Tools and modes
 
-Your program chooses the mode, but tools have to work it out for themselves:
+Because the file states its mode, tools need no flags:
 
-- `crol check`, `crol eval`, `crol explain` and `crol fingerprint` read every
-  file as **data mode**, because they work on layers. A value-mode file that
-  happens to be plain entries works; one with `#![type]`, a top-level type
-  name or a top-level `..` is rejected. There is no flag to choose value mode.
-- `crol fmt` handles both.
-- The [language server](editors.md) reads files in a project's layers as data
-  mode, and any other open file as value mode, checked against its
-  `#![schema(...)]` if it has one. This is how to check a value-mode file
-  today, and the reason [layered data needs a project
-  file](editors.md#how-the-server-sees-your-files) in your editor.
+- `crol check`, `crol eval` and `crol fingerprint` read one `.crov` file as a
+  value document, and `.crod` files and directories as layers. With a schema they
+  check a value document against it: `--schema`, or the file's
+  [`#![schema(...)]`](schemas.md#the-schema-attribute). A `.crov` file among
+  other layers is an error.
+- `crol explain` follows a value through layers, so it does not take a `.crov`
+  file. `crol eval file.crov key` prints the value.
+- `crol fmt` handles both, and they format the same.
+- The [language server](editors.md) goes by the extension too, whether a file is
+  in your project's layers or not.
 
 ## Next
 

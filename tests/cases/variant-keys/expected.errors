@@ -1,2 +1,2 @@
-1-base/a.crol:2:9: `cache` does not exist in {dev}, and the variant keys rule is `SameKeys`
-1-base/a.crol:4:19: in {dev}: `debug_tools` does not exist in the base, and the variant keys rule is `SameKeys`
+1-base/a.crod:2:9: `cache` does not exist in {dev}, and the variant keys rule is `SameKeys`
+1-base/a.crod:4:19: in {dev}: `debug_tools` does not exist in the base, and the variant keys rule is `SameKeys`

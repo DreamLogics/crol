@@ -14,6 +14,15 @@ pub fn fingerprint(base: &Value, contexts: &[ContextData], variants: &Variants) 
     *blake3::hash(&out).as_bytes()
 }
 
+/// The fingerprint of a value-mode document's value: it has no root keys or
+/// contexts, so the value is encoded as it is, after a header of its own
+/// (appendix B).
+pub fn fingerprint_value(value: &Value) -> [u8; 32] {
+    let mut out = b"CROLV1".to_vec();
+    encode(&mut out, value);
+    *blake3::hash(&out).as_bytes()
+}
+
 /// The canonical encoding of the data (appendix B).
 pub fn encode_data(out: &mut Vec<u8>, base: &Value, contexts: &[ContextData], variants: &Variants) {
     out.extend_from_slice(b"CROL1");

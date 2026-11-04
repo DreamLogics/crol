@@ -131,9 +131,9 @@ fn workspace(name: &str, files: &[(&str, &str)]) -> PathBuf {
 
 #[test]
 fn diagnostics_symbols_and_formatting_for_a_document_on_its_own() {
-    let dir = workspace("lsp-single", &[("config.crol", "")]);
+    let dir = workspace("lsp-single", &[("config.crov", "")]);
     let mut client = Client::start(&dir);
-    let file = uri(&dir.join("config.crol"));
+    let file = uri(&dir.join("config.crov"));
     client.notify(
         "textDocument/didOpen",
         json!({ "textDocument": { "uri": file, "languageId": "crol", "version": 1, "text": "web: { port: 1 / 0 }" } }),
@@ -188,22 +188,22 @@ fn hover_completion_and_definition_in_a_project() {
         "lsp-project",
         &[
             (
-                "project.crol",
+                "project.crov",
                 r#"Project { layers: List([{ name: "base", dir: "base", .. }, { name: "local", dir: "local", .. }]), .. }"#,
             ),
             (
-                "base/a.crol",
+                "base/a.crod",
                 "t := { port: 80 },\n+web: Service { ..&t, url: \"x:\" + &self.port, .. },\n+db: { host: \"db\" },",
             ),
             (
-                "local/a.crol",
+                "local/a.crod",
                 "web.port: 8080,\nmirror: &root.db.host,\nlink: @web,",
             ),
         ],
     );
     let mut client = Client::start(&dir);
-    let local = uri(&dir.join("local/a.crol"));
-    let text = std::fs::read_to_string(dir.join("local/a.crol")).unwrap();
+    let local = uri(&dir.join("local/a.crod"));
+    let text = std::fs::read_to_string(dir.join("local/a.crod")).unwrap();
     client.notify(
         "textDocument/didOpen",
         json!({ "textDocument": { "uri": local, "languageId": "crol", "version": 1, "text": text } }),
@@ -253,7 +253,7 @@ fn hover_completion_and_definition_in_a_project() {
         "textDocument/definition",
         json!({ "textDocument": { "uri": local }, "position": { "line": 2, "character": 7 } }),
     );
-    assert_eq!(location["uri"], uri(&dir.join("base/a.crol")));
+    assert_eq!(location["uri"], uri(&dir.join("base/a.crod")));
     assert_eq!(
         location["range"]["start"],
         json!({ "line": 1, "character": 1 })
@@ -268,23 +268,23 @@ fn references_rename_and_workspace_symbols() {
         "lsp-navigate",
         &[
             (
-                "project.crol",
+                "project.crov",
                 r#"Project { layers: List([{ name: "base", dir: "base", .. }, { name: "local", dir: "local", .. }]), .. }"#,
             ),
             (
-                "base/a.crol",
+                "base/a.crod",
                 "t := 80,\n+web: Service { p = port: &t, url: \"x:\" + &p, admin: { u: &p }, .. },",
             ),
             (
-                "local/a.crol",
+                "local/a.crod",
                 "web.port: 8080,\nother: &t,\nlink: @web,\nm: &root.web.url,",
             ),
         ],
     );
     let mut client = Client::start(&dir);
-    let base = uri(&dir.join("base/a.crol"));
-    let local = uri(&dir.join("local/a.crol"));
-    let text = std::fs::read_to_string(dir.join("local/a.crol")).unwrap();
+    let base = uri(&dir.join("base/a.crod"));
+    let local = uri(&dir.join("local/a.crod"));
+    let text = std::fs::read_to_string(dir.join("local/a.crod")).unwrap();
     client.notify(
         "textDocument/didOpen",
         json!({ "textDocument": { "uri": local, "languageId": "crol", "version": 1, "text": text } }),
@@ -439,14 +439,14 @@ fn inlay_hints_show_what_entries_compute() {
         "lsp-hints",
         &[
             (
-                "project.crol",
+                "project.crov",
                 r#"Project { layers: List([{ name: "base", dir: "base", .. }, { name: "local", dir: "local", .. }]), .. }"#,
             ),
             (
-                "base/a.crol",
+                "base/a.crod",
                 "+web: { replicas: 2, port: 8000 + 80, max: &self.replicas * 4, name: \"web\" },",
             ),
-            ("local/a.crol", "web.replicas: & * 3,"),
+            ("local/a.crod", "web.replicas: & * 3,"),
         ],
     );
     let hints_in = |client: &mut Client, uri: &str| {
@@ -469,8 +469,8 @@ fn inlay_hints_show_what_entries_compute() {
             })
             .collect::<Vec<_>>()
     };
-    let base = uri(&dir.join("base/a.crol"));
-    let local = uri(&dir.join("local/a.crol"));
+    let base = uri(&dir.join("base/a.crod"));
+    let local = uri(&dir.join("local/a.crod"));
 
     // Off by default.
     let mut client = Client::start(&dir);
@@ -523,11 +523,11 @@ fn code_actions_fix_what_the_diagnostics_say() {
         "lsp-actions",
         &[
             (
-                "project.crol",
+                "project.crov",
                 r#"Project { layers: List([{ name: "base", dir: "base", .. }, { name: "local", dir: "local", .. }]), schema: Some("schema"), .. }"#,
             ),
             (
-                "schema.crol",
+                "schema.crov",
                 r#"Schema {
                     format: 1,
                     root: "app::Service",
@@ -552,14 +552,14 @@ fn code_actions_fix_what_the_diagnostics_say() {
                 }"#,
             ),
             (
-                "base/a.crol",
+                "base/a.crod",
                 "+web: Service { replicas: 2, port: 80, limits: Limits { cpu: 1.0, memory_mb: 512 } },",
             ),
-            ("local/a.crol", ""),
+            ("local/a.crod", ""),
         ],
     );
     let mut client = Client::start(&dir);
-    let local = uri(&dir.join("local/a.crol"));
+    let local = uri(&dir.join("local/a.crod"));
     let mut version = 1;
     let mut open = |client: &mut Client, text: &str, errors: bool| {
         if version == 1 {
@@ -681,11 +681,11 @@ fn completion_and_hover_from_the_schema() {
         "lsp-schema",
         &[
             (
-                "project.crol",
+                "project.crov",
                 r#"Project { layers: List([{ name: "base", dir: "base", .. }, { name: "local", dir: "local", .. }]), schema: Some("schema"), .. }"#,
             ),
             (
-                "schema.crol",
+                "schema.crov",
                 r#"Schema {
                     format: 1,
                     root: "app::Definition",
@@ -737,15 +737,15 @@ fn completion_and_hover_from_the_schema() {
                 }"#,
             ),
             (
-                "base/a.crol",
+                "base/a.crod",
                 "+web: Service { replicas: 2, port: 80, limits: Limits { cpu: 1.0, memory_mb: 512 }, mode: Fast, url: None, depends_on: [] },\n+data: Volume { size_gb: 10 },",
             ),
-            ("local/a.crol", "web.port: 81,"),
+            ("local/a.crod", "web.port: 81,"),
         ],
     );
     let mut client = Client::start(&dir);
-    let base = uri(&dir.join("base/a.crol"));
-    let local = uri(&dir.join("local/a.crol"));
+    let base = uri(&dir.join("base/a.crod"));
+    let local = uri(&dir.join("local/a.crod"));
     client.notify(
         "textDocument/didOpen",
         json!({ "textDocument": { "uri": local, "languageId": "crol", "version": 1, "text": "web.port: 81," } }),
@@ -836,7 +836,7 @@ fn documents_on_their_own_are_checked_against_their_schema() {
         "lsp-document-schema",
         &[
             (
-                "schema.crol",
+                "schema.crov",
                 r#"Schema {
                     format: 1,
                     root: "app::Service",
@@ -850,11 +850,11 @@ fn documents_on_their_own_are_checked_against_their_schema() {
                     },
                 }"#,
             ),
-            ("config.crol", ""),
+            ("config.crov", ""),
         ],
     );
     let mut client = Client::start(&dir);
-    let config = uri(&dir.join("config.crol"));
+    let config = uri(&dir.join("config.crov"));
     let open = |client: &mut Client, version: i32, text: &str| {
         if version == 1 {
             client.notify(
@@ -903,7 +903,7 @@ fn diagnostics_follow_a_types_explicit_defaults() {
         "lsp-explicit-defaults",
         &[
             (
-                "schema.crol",
+                "schema.crov",
                 r#"Schema {
                     format: 1,
                     root: "app::Relaxed",
@@ -918,11 +918,11 @@ fn diagnostics_follow_a_types_explicit_defaults() {
                     },
                 }"#,
             ),
-            ("config.crol", ""),
+            ("config.crov", ""),
         ],
     );
     let client = Client::start(&dir);
-    let config = uri(&dir.join("config.crol"));
+    let config = uri(&dir.join("config.crov"));
     client.notify(
         "textDocument/didOpen",
         json!({ "textDocument": { "uri": config, "languageId": "crol", "version": 1, "text": "#![schema(::schema)]\n\nRelaxed { port: 1 }" } }),
@@ -948,10 +948,10 @@ fn the_project_file_is_checked_against_its_schema() {
     let project = r#"Project { layers: List([{ name: "base", dir: "base", .. }]), .. }"#;
     let dir = workspace(
         "lsp-project-file",
-        &[("project.crol", project), ("base/a.crol", "+web: 1,")],
+        &[("project.crov", project), ("base/a.crod", "+web: 1,")],
     );
     let client = Client::start(&dir);
-    let file = uri(&dir.join("project.crol"));
+    let file = uri(&dir.join("project.crov"));
     let text = r#"Project { layers: List([{ name: "base", dir: "base", .. }]), options: { max_contexts: -1, .. }, .. }"#;
     client.notify(
         "textDocument/didOpen",
@@ -970,10 +970,10 @@ fn the_project_file_is_checked_against_its_schema() {
 
 #[test]
 fn remote_schemas_are_fetched_without_blocking() {
-    let dir = workspace("lsp-remote-schema", &[("config.crol", "")]);
-    let config = uri(&dir.join("config.crol"));
+    let dir = workspace("lsp-remote-schema", &[("config.crov", "")]);
+    let config = uri(&dir.join("config.crov"));
     // Nothing listens there, so fetching fails at once.
-    let text = "#![schema(\"https://127.0.0.1:9/schema.crol\")]\n\n{ replicas: 2 }";
+    let text = "#![schema(\"https://127.0.0.1:9/schema.crov\")]\n\n{ replicas: 2 }";
     let open = |client: &Client| {
         client.notify(
             "textDocument/didOpen",
@@ -1002,7 +1002,7 @@ fn remote_schemas_are_fetched_without_blocking() {
     let diagnostics = client.diagnostics_for(&config, |d| !d.is_empty());
     assert_eq!(
         message(&diagnostics),
-        "schema: fetching `https://127.0.0.1:9/schema.crol`"
+        "schema: fetching `https://127.0.0.1:9/schema.crov`"
     );
     let diagnostics =
         client.diagnostics_for(&config, |d| message(d).starts_with("schema: cannot fetch"));
@@ -1016,28 +1016,28 @@ fn go_to_value_below() {
         "lsp-value-below",
         &[
             (
-                "project.crol",
+                "project.crov",
                 r#"Project { layers: List([{ name: "base", dir: "base", .. }, { name: "local", dir: "local", .. }]), .. }"#,
             ),
             (
-                "base/a.crol",
+                "base/a.crod",
                 "+web: { replicas: 2, limits: { cpu: 1 } },\nweb.limits: & ~ { memory: 2 },",
             ),
             (
-                "local/a.crol",
+                "local/a.crod",
                 "web.replicas: & + 1,\nweb: & ~ { limits: { cpu: & * 2 } },",
             ),
         ],
     );
     let mut client = Client::start(&dir);
-    let local = uri(&dir.join("local/a.crol"));
-    let text = std::fs::read_to_string(dir.join("local/a.crol")).unwrap();
+    let local = uri(&dir.join("local/a.crod"));
+    let text = std::fs::read_to_string(dir.join("local/a.crod")).unwrap();
     client.notify(
         "textDocument/didOpen",
         json!({ "textDocument": { "uri": local, "languageId": "crol", "version": 1, "text": text } }),
     );
     client.diagnostics_for(&local, |d| d.is_empty());
-    let base = uri(&dir.join("base/a.crol"));
+    let base = uri(&dir.join("base/a.crod"));
     let mut definition = |line: u32, character: u32| {
         let location = client.request(
             "textDocument/definition",
@@ -1066,16 +1066,16 @@ fn layer_documents_that_name_another_schema_get_a_warning() {
         "lsp-other-schema",
         &[
             (
-                "project.crol",
+                "project.crov",
                 r#"Project { layers: List([{ name: "base", dir: "base", .. }]), schema: Some("schema"), .. }"#,
             ),
-            ("schema.crol", schema),
-            ("other.crol", schema),
-            ("base/a.crol", "#![schema(super::other)]\n+a: 1,"),
+            ("schema.crov", schema),
+            ("other.crov", schema),
+            ("base/a.crod", "#![schema(super::other)]\n+a: 1,"),
         ],
     );
     let client = Client::start(&dir);
-    let a = uri(&dir.join("base/a.crol"));
+    let a = uri(&dir.join("base/a.crod"));
     client.notify(
         "textDocument/didOpen",
         json!({ "textDocument": { "uri": a, "languageId": "crol", "version": 1, "text": "#![schema(super::other)]\n+a: 1," } }),
@@ -1096,7 +1096,7 @@ fn documents_on_their_own_complete_from_their_schema() {
         "lsp-own-schema",
         &[
             (
-                "schema.crol",
+                "schema.crov",
                 r#"Schema {
                     format: 1,
                     root: "app::Config",
@@ -1119,12 +1119,12 @@ fn documents_on_their_own_complete_from_their_schema() {
                     },
                 }"#,
             ),
-            ("config.crol", ""),
+            ("config.crov", ""),
             (
-                "project.crol",
+                "project.crov",
                 r#"Project { layers: List([{ name: "base", dir: "base", .. }]), .. }"#,
             ),
-            ("base/a.crol", "+a: 1,"),
+            ("base/a.crod", "+a: 1,"),
         ],
     );
     let mut client = Client::start(&dir);
@@ -1156,7 +1156,7 @@ fn documents_on_their_own_complete_from_their_schema() {
     };
 
     // The fields of the root type, and inside them.
-    let config = uri(&dir.join("config.crol"));
+    let config = uri(&dir.join("config.crov"));
     let start = "#![schema(schema)]\n\n{ listen: \"x\", limits: { cpu: 1.0 } }";
     let labels = complete(&mut client, &config, start, "#![schema(schema)]\n\n{ lim");
     assert_eq!(labels, ["listen", "limits"]);
@@ -1197,7 +1197,7 @@ fn documents_on_their_own_complete_from_their_schema() {
     assert!(markdown.contains("`String` — Where to listen."), "{hover}");
 
     // The project file: the fields of `Project` crol provides.
-    let project = uri(&dir.join("project.crol"));
+    let project = uri(&dir.join("project.crov"));
     let text = r#"Project { layers: List([{ name: "base", dir: "base", .. }]), "#;
     let labels = complete(
         &mut client,
@@ -1450,12 +1450,12 @@ fn nested_document(name: &str) -> (Client, Buffer) {
     let dir = workspace(
         name,
         &[
-            ("schema.crol", NESTED_SCHEMA),
-            ("config.crol", "#![schema(schema)]\n\n{ name: \"x\" }"),
+            ("schema.crov", NESTED_SCHEMA),
+            ("config.crov", "#![schema(schema)]\n\n{ name: \"x\" }"),
         ],
     );
     let client = Client::start(&dir);
-    let buffer = Buffer::open(&client, &dir, "config.crol");
+    let buffer = Buffer::open(&client, &dir, "config.crov");
     (client, buffer)
 }
 
@@ -1777,7 +1777,7 @@ fn completion_from_the_project_at_any_depth() {
         "lsp-nested-project",
         &[
             (
-                "project.crol",
+                "project.crov",
                 r#"Project {
                     layers: List([{ name: "base", dir: "base", .. }, { name: "local", dir: "local", .. }]),
                     variants: [Discrete("eu")],
@@ -1786,13 +1786,13 @@ fn completion_from_the_project_at_any_depth() {
                     ..
                 }"#,
             ),
-            ("schema.crol", NESTED_SCHEMA),
-            ("base/a.crol", base),
-            ("local/a.crol", "prod.name: \"q\",\n"),
+            ("schema.crov", NESTED_SCHEMA),
+            ("base/a.crod", base),
+            ("local/a.crod", "prod.name: \"q\",\n"),
         ],
     );
     let mut client = Client::start(&dir);
-    let mut local = Buffer::open(&client, &dir, "local/a.crol");
+    let mut local = Buffer::open(&client, &dir, "local/a.crod");
     let tls: &[&str] = &["cert", "enabled"];
     let cert: &[&str] = &["path", "mode"];
     let backoff: &[&str] = &["seconds", "jitter"];
@@ -1881,7 +1881,7 @@ fn completion_from_the_project_at_any_depth() {
     // `&self` and `&parent` in blocks in lists.
     local.change(&client, "prod.name: \"q\",\n");
     client.diagnostics_for(&local.uri, |d| d.is_empty());
-    let mut base_buffer = Buffer::open(&client, &dir, "base/a.crol");
+    let mut base_buffer = Buffer::open(&client, &dir, "base/a.crod");
     let marked = base.replace("name: \"first\",", "name: \"first\", port: &self.|");
     let items = base_buffer.complete(&mut client, &marked);
     assert!(labels(&items).contains(&"server"), "{items:?}");
@@ -2005,10 +2005,10 @@ fn inlay_hints_at_any_depth() {
 ";
     let dir = workspace(
         "lsp-nested-hints",
-        &[("schema.crol", NESTED_SCHEMA), ("config.crol", text)],
+        &[("schema.crov", NESTED_SCHEMA), ("config.crov", text)],
     );
     let mut client = Client::start_with(&dir, json!({ "debounce_ms": 10, "inlay_hints": true }));
-    let buffer = Buffer::open(&client, &dir, "config.crol");
+    let buffer = Buffer::open(&client, &dir, "config.crov");
     assert_eq!(
         inlay_labels(&mut client, &buffer),
         [
@@ -2025,17 +2025,17 @@ fn inlay_hints_in_lists_in_a_layer() {
         "lsp-nested-layer-hints",
         &[
             (
-                "project.crol",
+                "project.crov",
                 r#"Project { layers: List([{ name: "base", dir: "base", .. }]), .. }"#,
             ),
             (
-                "base/a.crol",
+                "base/a.crod",
                 "+a: { list: [{ deep: [{ x: 1 + 1 }] }], opt: Some({ y: 2 + 2 }) },\n",
             ),
         ],
     );
     let mut client = Client::start_with(&dir, json!({ "debounce_ms": 10, "inlay_hints": true }));
-    let buffer = Buffer::open(&client, &dir, "base/a.crol");
+    let buffer = Buffer::open(&client, &dir, "base/a.crod");
     assert_eq!(inlay_labels(&mut client, &buffer), ["= 2", "= 4"]);
     client.stop();
 }
@@ -2045,10 +2045,10 @@ fn code_actions_know_the_type_of_blocks_in_lists() {
     let text = "#![schema(schema)]\n\n{ backends: [Remote { host: \"h\" }] }";
     let dir = workspace(
         "lsp-nested-actions",
-        &[("schema.crol", NESTED_SCHEMA), ("config.crol", text)],
+        &[("schema.crov", NESTED_SCHEMA), ("config.crov", text)],
     );
     let mut client = Client::start(&dir);
-    let file = uri(&dir.join("config.crol"));
+    let file = uri(&dir.join("config.crov"));
     client.notify(
         "textDocument/didOpen",
         json!({ "textDocument": { "uri": file, "languageId": "crol", "version": 1, "text": text } }),
@@ -2074,7 +2074,7 @@ fn code_actions_know_the_type_of_blocks_in_lists() {
 
 #[test]
 fn completion_is_triggered_where_fields_and_values_start() {
-    let dir = workspace("lsp-triggers", &[("config.crol", "")]);
+    let dir = workspace("lsp-triggers", &[("config.crov", "")]);
     let (server_side, client_side) = Connection::memory();
     let server = thread::spawn(move || {
         let server = crol_lsp::Server::start(server_side, None).unwrap();
@@ -2243,12 +2243,12 @@ fn completion_answers_at_the_end_of_every_prefix() {
 fn a_document_just_opened_is_answered_at_once() {
     let dir = workspace(
         "lsp-just-opened",
-        &[("schema.crol", NESTED_SCHEMA), ("config.crol", "")],
+        &[("schema.crov", NESTED_SCHEMA), ("config.crov", "")],
     );
     // An evaluation after a pause would come too late.
     let mut client = Client::start_with(&dir, json!({ "debounce_ms": 60000 }));
     let (text, position) = at_marker("#![schema(schema)]\n\n{ server: { tls: { | } } }");
-    let file = uri(&dir.join("config.crol"));
+    let file = uri(&dir.join("config.crov"));
     client.notify(
         "textDocument/didOpen",
         json!({ "textDocument": { "uri": file, "languageId": "crol", "version": 1, "text": text } }),
@@ -2262,5 +2262,126 @@ fn a_document_just_opened_is_answered_at_once() {
         ["cert", "enabled"],
         "{items}"
     );
+    client.stop();
+}
+
+#[test]
+fn a_standalone_crod_file_is_data_mode() {
+    let text = "#![type(Config)]\n\n+port: 80\n";
+    let dir = workspace("lsp-standalone-data-errors", &[("data.crod", text)]);
+    let client = Client::start(&dir);
+    let file = uri(&dir.join("data.crod"));
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": file, "languageId": "crol", "version": 1, "text": text } }),
+    );
+    client.diagnostics_for(&file, |d| {
+        d.iter()
+            .any(|d| d["message"].as_str().unwrap().contains("type"))
+    });
+    client.stop();
+}
+
+#[test]
+fn a_standalone_crod_file_completes_its_own_variants() {
+    let text = "+port: 80\n+name: \"a\"\n<prod> { port: 443 }\n<prod> { name: \"b\" }\n";
+    let dir = workspace("lsp-standalone-variants", &[("data.crod", text)]);
+    let mut buffer_client = Client::start(&dir);
+    let file = uri(&dir.join("data.crod"));
+    buffer_client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": file, "languageId": "crol", "version": 1, "text": text } }),
+    );
+    let at = json!({
+        "textDocument": { "uri": file },
+        "position": { "line": 3, "character": 1 },
+    });
+    // Requests are answered from the latest finished evaluation.
+    let mut found = false;
+    for _ in 0..200 {
+        let items = buffer_client.request("textDocument/completion", at.clone());
+        if items.to_string().contains("prod") {
+            found = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(found);
+    buffer_client.stop();
+}
+
+#[test]
+fn a_standalone_crov_file_is_value_mode() {
+    let text = "<prod> { port: 443 }\n";
+    let dir = workspace("lsp-standalone-value", &[("value.crov", text)]);
+    let client = Client::start(&dir);
+    let file = uri(&dir.join("value.crov"));
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": file, "languageId": "crol", "version": 1, "text": text } }),
+    );
+    // Variants are data mode's.
+    client.diagnostics_for(&file, |d| !d.is_empty());
+    client.stop();
+}
+
+#[test]
+fn a_crov_file_in_a_layer_directory_is_reported_on_it() {
+    let dir = workspace(
+        "lsp-crov-in-layer",
+        &[
+            (
+                "project.crov",
+                "Project { layers: List([{ name: \"base\", dir: \"base\", .. }]), .. }",
+            ),
+            ("base/a.crod", "+a: 1\n"),
+            ("base/stray.crov", "1\n"),
+        ],
+    );
+    let client = Client::start(&dir);
+    client.diagnostics_for(&uri(&dir.join("base/stray.crov")), |d| {
+        d.iter()
+            .any(|d| d["message"].as_str().unwrap().contains("cannot be a layer"))
+    });
+    client.stop();
+}
+
+#[test]
+fn a_leftover_project_crol_is_reported_on_it() {
+    let dir = workspace(
+        "lsp-leftover",
+        &[
+            (
+                "project.crol",
+                "Project { layers: List([{ name: \"base\", dir: \"base\", .. }]), .. }",
+            ),
+            ("base/a.crod", "+a: 1\n"),
+        ],
+    );
+    let client = Client::start(&dir);
+    client.diagnostics_for(&uri(&dir.join("project.crol")), |d| {
+        d.iter().any(|d| {
+            d["message"]
+                .as_str()
+                .unwrap()
+                .contains("rename it to `project.crov`")
+        })
+    });
+    client.stop();
+}
+
+#[test]
+fn an_open_crol_file_says_to_rename_it() {
+    let dir = workspace("lsp-retired", &[("old.crol", "+a: 1\n")]);
+    let client = Client::start(&dir);
+    let file = uri(&dir.join("old.crol"));
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": file, "languageId": "crol", "version": 1, "text": "+a: 1\n" } }),
+    );
+    let diagnostics = client.diagnostics_for(&file, |d| !d.is_empty());
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    let message = diagnostics[0]["message"].as_str().unwrap();
+    assert!(message.contains("`.crod`") && message.contains("`.crov`"));
     client.stop();
 }

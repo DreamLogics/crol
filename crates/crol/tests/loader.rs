@@ -14,7 +14,8 @@ use crol::{
 type Asked = (Vec<String>, String);
 
 /// Documents in memory, by path, as a file system would have them: a module
-/// path names `name.crol` or the directory `name`.
+/// path names `name.crod`, `name.crov` for a value document, or the directory
+/// `name`.
 #[derive(Default, Clone)]
 struct Memory {
     files: BTreeMap<String, String>,
@@ -47,7 +48,7 @@ impl FileLoader for Memory {
             .unwrap()
             .push((path.segments().to_vec(), path.written().to_owned()));
         let name = path.segments().join("/");
-        let file = format!("{name}.crol");
+        let file = format!("{name}.{}", path.mode().extension());
         if self.files.contains_key(&file) {
             return Ok(Some(Self::id(&file)));
         }
@@ -106,9 +107,9 @@ fn tree(name: &str, files: &[(&str, &str)]) -> PathBuf {
 #[test]
 fn composes_layers_with_no_file_system() {
     let memory = Memory::new(&[
-        ("data/base/web.crol", "+port: 80,"),
-        ("data/base/nested/db.crol", "+db: 5432,"),
-        ("data/local.crol", "port: & + 1,"),
+        ("data/base/web.crod", "+port: 80,"),
+        ("data/base/nested/db.crod", "+db: 5432,"),
+        ("data/local.crod", "port: & + 1,"),
     ]);
     let composed = composer(memory)
         .load("::data::base")
@@ -123,11 +124,11 @@ fn composes_layers_with_no_file_system() {
     assert_eq!(
         names,
         [
-            ("nested/db.crol", "mem:data/base/nested/db.crol"),
-            ("web.crol", "mem:data/base/web.crol"),
+            ("nested/db.crod", "mem:data/base/nested/db.crod"),
+            ("web.crod", "mem:data/base/web.crod"),
         ]
     );
-    assert_eq!(layers[1].documents().next().unwrap().0, "local.crol");
+    assert_eq!(layers[1].documents().next().unwrap().0, "local.crod");
     let data = composed.compose_data().unwrap();
     assert_eq!(data.get::<u16>("port").unwrap(), 81);
     assert_eq!(data.get::<u16>("db").unwrap(), 5432);
@@ -135,15 +136,15 @@ fn composes_layers_with_no_file_system() {
 
 #[test]
 fn identities_reach_diagnostics_and_provenance() {
-    let memory = Memory::new(&[("a.crol", "+port: 80,\n+bad: &nope,")]);
+    let memory = Memory::new(&[("a.crod", "+port: 80,\n+bad: &nope,")]);
     let error = composer(memory)
         .load("::a")
         .unwrap()
         .compose_data()
         .unwrap_err();
-    assert!(error.to_string().contains("mem:a.crol:2:"), "{error}");
+    assert!(error.to_string().contains("mem:a.crod:2:"), "{error}");
 
-    let memory = Memory::new(&[("a.crol", "+port: 80,")]);
+    let memory = Memory::new(&[("a.crod", "+port: 80,")]);
     let data = composer(memory)
         .load("::a")
         .unwrap()
@@ -152,22 +153,22 @@ fn identities_reach_diagnostics_and_provenance() {
     let context = data.context(Vec::<String>::new()).unwrap();
     let steps = data.explain("port", &context).unwrap();
     let location = data.sources().location(steps[0].span).to_string();
-    assert!(location.starts_with("mem:a.crol:1:"), "{location}");
+    assert!(location.starts_with("mem:a.crod:1:"), "{location}");
 }
 
 #[test]
 fn extends_goes_through_the_loader() {
     let memory = Memory::new(&[
-        ("data/base/defaults.crol", "+port: 80,"),
+        ("data/base/defaults.crod", "+port: 80,"),
         (
-            "data/top/a.crol",
+            "data/top/a.crod",
             "#![extends(super::base::defaults)]\nport: & + 1,",
         ),
         (
-            "data/top/nested/b.crol",
+            "data/top/nested/b.crod",
             "#![extends(sibling)]\nport: & + 10,",
         ),
-        ("data/top/nested/sibling.crol", "port: & + 100,"),
+        ("data/top/nested/sibling.crod", "port: & + 100,"),
     ]);
     let asked = Arc::clone(&memory.asked);
     let composed = composer(memory).load("::data::top").unwrap();
@@ -192,16 +193,16 @@ fn extends_goes_through_the_loader() {
 #[test]
 fn memory_and_the_file_system_agree() {
     let files = [
-        ("data/base/defaults.crol", "+port: 80,"),
+        ("data/base/defaults.crod", "+port: 80,"),
         (
-            "data/top/z.crol",
+            "data/top/z.crod",
             "#![extends(super::base::defaults)]\nport: & + 1,",
         ),
         (
-            "data/top/a/b.crol",
+            "data/top/a/b.crod",
             "#![extends(super::super::c)]\nport: & * 2,",
         ),
-        ("data/c.crol", "+c: 1,"),
+        ("data/c.crod", "+c: 1,"),
     ];
     let root = tree("loader-agree", &files);
     let layers = |composer: CrolComposer| {
@@ -227,16 +228,16 @@ fn memory_and_the_file_system_agree() {
 #[test]
 fn a_document_is_loaded_once_and_a_cycle_is_an_error() {
     let once = Memory::new(&[
-        ("base.crol", "+port: 80,"),
-        ("a.crol", "#![extends(base)]\nport: & + 1,"),
-        ("b.crol", "#![extends(base)]\nport: & + 1,"),
+        ("base.crod", "+port: 80,"),
+        ("a.crod", "#![extends(base)]\nport: & + 1,"),
+        ("b.crod", "#![extends(base)]\nport: & + 1,"),
     ]);
     let composed = composer(once).load("::a").unwrap().load("::b").unwrap();
     assert_eq!(composed.layers().len(), 3);
 
     let cycle = Memory::new(&[
-        ("a.crol", "#![extends(b)]\n+a: 1,"),
-        ("b.crol", "#![extends(a)]\n+b: 1,"),
+        ("a.crod", "#![extends(b)]\n+a: 1,"),
+        ("b.crod", "#![extends(a)]\n+b: 1,"),
     ]);
     let error = composer(cycle).load("::a").unwrap_err();
     assert!(error.to_string().contains("cycle"), "{error}");
@@ -245,7 +246,7 @@ fn a_document_is_loaded_once_and_a_cycle_is_an_error() {
 
 #[test]
 fn super_above_the_root_never_reaches_a_loader() {
-    let memory = Memory::new(&[("a.crol", "#![extends(super::secret)]\n+a: 1,")]);
+    let memory = Memory::new(&[("a.crod", "#![extends(super::secret)]\n+a: 1,")]);
     let asked = Arc::clone(&memory.asked);
     let error = composer(memory).load("::a").unwrap_err();
     assert!(error.to_string().contains("above the root"), "{error}");
@@ -268,7 +269,7 @@ fn a_directory_listing_cannot_leave_its_directory() {
         }
         fn load(&self, _: &SourceId) -> Result<Loaded, LoaderError> {
             Ok(Loaded::Directory(vec![(
-                "../../secret.crol".to_owned(),
+                "../../secret.crod".to_owned(),
                 SourceId::new("list:secret"),
             )]))
         }
@@ -282,18 +283,18 @@ fn falls_through_to_the_default_in_order() {
     let root = tree(
         "loader-chain",
         &[
-            ("disk.crol", "+disk: 1,"),
-            ("both.crol", "+from: \"disk\","),
-            ("data/shared.crol", "+shared: 1,"),
+            ("disk.crod", "+disk: 1,"),
+            ("both.crod", "+from: \"disk\","),
+            ("data/shared.crod", "+shared: 1,"),
         ],
     );
     let first = Memory::new(&[
-        ("both.crol", "+from: \"first\","),
-        ("data/top.crol", "#![extends(shared)]\n+top: 1,"),
+        ("both.crod", "+from: \"first\","),
+        ("data/top.crod", "#![extends(shared)]\n+top: 1,"),
     ]);
     let second = Memory::new(&[
-        ("both.crol", "+from: \"second\","),
-        ("only.crol", "+only: 1,"),
+        ("both.crod", "+from: \"second\","),
+        ("only.crod", "+only: 1,"),
     ]);
     let data = CrolComposer::with_cfg(CrolConfig::<String> {
         root_path: root.clone(),
@@ -322,7 +323,7 @@ fn falls_through_to_the_default_in_order() {
 
 #[test]
 fn nothing_found_says_so_as_it_did() {
-    let root = tree("loader-nothing", &[("a.crol", "")]);
+    let root = tree("loader-nothing", &[("a.crod", "")]);
     let config = || CrolConfig::<String> {
         root_path: root.clone(),
         ..Default::default()
@@ -346,8 +347,8 @@ fn nothing_found_says_so_as_it_did() {
 
 #[test]
 fn turning_the_file_system_off_keeps_files_out() {
-    let root = tree("loader-closed", &[("secret.crol", "+secret: 1,")]);
-    let memory = Memory::new(&[("a.crol", "#![extends(::secret)]\n+a: 1,")]);
+    let root = tree("loader-closed", &[("secret.crod", "+secret: 1,")]);
+    let memory = Memory::new(&[("a.crod", "#![extends(::secret)]\n+a: 1,")]);
     let closed = || {
         CrolComposer::with_cfg(CrolConfig::<String> {
             root_path: root.clone(),
@@ -358,16 +359,16 @@ fn turning_the_file_system_off_keeps_files_out() {
         .without_file_system()
     };
     assert!(closed().load("::secret").is_err());
-    assert!(closed().load(root.join("secret.crol")).is_err());
+    assert!(closed().load(root.join("secret.crod")).is_err());
     let error = closed().load("::a").unwrap_err();
     assert!(error.to_string().contains("names nothing"), "{error}");
 }
 
 #[test]
 fn load_errors_carry_the_source() {
-    let mut memory = Memory::new(&[("a.crol", "+a: 1,"), ("dir/b.crol", "+b: 1,")]);
-    memory.failing = vec!["a.crol".to_owned(), "dir/b.crol".to_owned()];
-    for (path, id) in [("::a", "mem:a.crol"), ("::dir", "mem:dir/b.crol")] {
+    let mut memory = Memory::new(&[("a.crod", "+a: 1,"), ("dir/b.crod", "+b: 1,")]);
+    memory.failing = vec!["a.crod".to_owned(), "dir/b.crod".to_owned()];
+    for (path, id) in [("::a", "mem:a.crod"), ("::dir", "mem:dir/b.crod")] {
         let error = composer(memory.clone()).load(path).unwrap_err();
         assert_eq!(
             error.to_string(),
@@ -405,10 +406,10 @@ fn load_errors_carry_the_source() {
 
 #[test]
 fn a_second_tree_comes_before_the_default() {
-    let site = tree("loader-site", &[("a.crol", "+from: \"site\",")]);
+    let site = tree("loader-site", &[("a.crod", "+from: \"site\",")]);
     let root = tree(
         "loader-default",
-        &[("a.crol", "+from: \"default\","), ("b.crol", "+b: 1,")],
+        &[("a.crod", "+from: \"default\","), ("b.crod", "+b: 1,")],
     );
     let data = CrolComposer::with_cfg(CrolConfig::<String> {
         root_path: root,
@@ -430,8 +431,8 @@ fn a_file_system_document_keeps_its_own_directory() {
     let outside = tree(
         "loader-outside",
         &[
-            ("top.crol", "#![extends(below)]\nport: & + 1,"),
-            ("below.crol", "+port: 80,"),
+            ("top.crod", "#![extends(below)]\nport: & + 1,"),
+            ("below.crod", "+port: 80,"),
         ],
     );
     let root = tree("loader-outside-root", &[]);
@@ -440,8 +441,8 @@ fn a_file_system_document_keeps_its_own_directory() {
         load_extends: true,
         ..Default::default()
     })
-    .with_file_loader(Memory::new(&[("below.crol", "+port: 0,")]))
-    .load(outside.join("top.crol"))
+    .with_file_loader(Memory::new(&[("below.crod", "+port: 0,")]))
+    .load(outside.join("top.crod"))
     .unwrap()
     .compose_data()
     .unwrap();
@@ -454,19 +455,27 @@ fn schemas_and_project_files_read_through_loaders() {
         .to_text()
         .unwrap();
     let memory = Memory::new(&[
-        ("schema.crol", &schema),
+        ("schema.crov", &schema),
         (
-            "app.crol",
+            "app.crov",
             "Project { layers: List([{ name: \"base\", dir: \"data\", .. }]), .. }",
         ),
-        ("data/a.crol", "+a: 1,"),
+        ("data/a.crod", "+a: 1,"),
     ]);
     let loaders = FileLoaders::new().with(memory).without_file_system();
     let root = std::path::Path::new("");
-    let read = loaders.resolve("::schema", root).unwrap().text().unwrap();
+    let read = loaders
+        .resolve_value("::schema", root)
+        .unwrap()
+        .text()
+        .unwrap();
     assert!(SchemaFile::from_text(&read).is_ok());
 
-    let project = loaders.resolve("::app", root).unwrap().text().unwrap();
+    let project = loaders
+        .resolve_value("::app", root)
+        .unwrap()
+        .text()
+        .unwrap();
     let project: crol::project::Project = crol::from_str(&project).unwrap();
     let crol::project::ProjectLayers::List(layers) = &project.layers else {
         panic!();

@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use crate::compose::CrolLayer;
 use crate::error::Error;
+use crate::mode::{self, Mode};
 use crate::module_path;
 
 /// What a [`FileLoader`] fails with: any error. `crol` adds the source or
@@ -22,8 +23,10 @@ pub type LoaderError = Box<dyn std::error::Error + Send + Sync>;
 ///
 /// It is a name of the loader's choosing, or a file system path. A name
 /// identifies its source among those of every loader, so it starts with
-/// something of the loader's own: `embedded:data/base.crol`,
-/// `https://example.org/base.crol`.
+/// something of the loader's own: `embedded:data/base.crod`,
+/// `https://example.org/base.crod`. Its extension states the document's mode
+/// as a file's does (`SPEC.md` 4); without `.crod`, `.crov` or `.crol`, the
+/// API that loads it does.
 #[derive(Debug, Clone)]
 pub struct SourceId(Repr);
 
@@ -115,12 +118,13 @@ pub struct ModulePath<'a> {
     written: &'a str,
     segments: &'a [String],
     from: Option<&'a SourceId>,
+    mode: Mode,
 }
 
 impl<'a> ModulePath<'a> {
     /// The names from the root to what the path names, with `super` and
     /// the document's directory applied: `super::defaults` written in
-    /// `data/base/web.crol` is `["data", "defaults"]`.
+    /// `data/base/web.crod` is `["data", "defaults"]`.
     ///
     /// A path cannot leave the root this way: `crol` rejects one that goes
     /// above it before any loader sees it, and no segment is empty, `.`,
@@ -138,6 +142,14 @@ impl<'a> ModulePath<'a> {
     /// built in code.
     pub fn from(&self) -> Option<&'a SourceId> {
         self.from
+    }
+
+    /// What is looked for: [`Mode::Data`] for a layer or an `extends`,
+    /// [`Mode::Value`] for a schema or project file, which
+    /// [`FileLoaders::resolve_value`] finds. A path has no extension, so
+    /// this is what says which one the file has (`SPEC.md` 4.2).
+    pub fn mode(&self) -> Mode {
+        self.mode
     }
 }
 
@@ -181,7 +193,7 @@ pub enum Loaded {
 ///
 /// impl FileLoader for Embedded {
 ///     fn resolve(&self, path: &ModulePath<'_>) -> Result<Option<SourceId>, LoaderError> {
-///         let file = format!("{}.crol", path.segments().join("/"));
+///         let file = format!("{}.crod", path.segments().join("/"));
 ///         Ok(self
 ///             .0
 ///             .contains_key(file.as_str())
@@ -198,8 +210,8 @@ pub enum Loaded {
 /// }
 ///
 /// let embedded = Embedded(BTreeMap::from([
-///     ("data/base.crol", "+port: 80,"),
-///     ("data/local.crol", "#![extends(base)]\n\nport: & + 1,"),
+///     ("data/base.crod", "+port: 80,"),
+///     ("data/local.crod", "#![extends(base)]\n\nport: & + 1,"),
 /// ]));
 /// let data = CrolComposer::with_cfg(crol::CrolConfig::<String> {
 ///     load_extends: true,
@@ -220,12 +232,18 @@ pub trait FileLoader: Send + Sync {
     /// [`resolve`](Self::resolve), and those a [`Loaded::Directory`] lists,
     /// which must be documents. The error is reported with the source; a
     /// [`crol::Error`](crate::Error) is reported as it is.
+    ///
+    /// A source whose name ends in `.crov` or `.crol` is refused as a
+    /// layer's document, and one that ends in `.crod` or `.crol` as a value
+    /// document, however it is loaded (`SPEC.md` 4).
     fn load(&self, source: &SourceId) -> Result<Loaded, LoaderError>;
 }
 
 /// The file loader that reads the file system: module paths name
-/// `name.crol` or `name/` below its root (`SPEC.md` 4.2), and a directory
-/// holds every `.crol` file below it (`SPEC.md` 7.1).
+/// `name.crod` or `name/` below its root, and `name.crov` for a value
+/// document (`SPEC.md` 4.2), and a directory holds every `.crod` file below
+/// it (`SPEC.md` 7.1). It lists `.crov` and `.crol` files as well, which
+/// then fail: a directory never hides a document in it.
 ///
 /// One for [`CrolConfig::root_path`](crate::CrolConfig::root_path) is the
 /// default, after every registered loader. Register another for a second
@@ -260,10 +278,10 @@ impl FileLoader for FsLoader {
         let base = directories
             .iter()
             .fold(self.root.clone(), |base, directory| base.join(directory));
-        if !base.join(format!("{last}.crol")).is_file() && !base.join(last).is_dir() {
+        if !module_path::exists(&base, last) {
             return Ok(None);
         }
-        let found = module_path::named(path.written, &base, last)?;
+        let found = module_path::named(path.written, &base, last, path.mode)?;
         Ok(Some(SourceId::from_path(found)))
     }
 
@@ -295,7 +313,7 @@ fn read_directory(
         // `is_dir` and `is_file` follow symbolic links.
         if path.is_dir() {
             read_directory(base, &path, documents)?;
-        } else if path.is_file() && path.extension().is_some_and(|e| e == "crol") {
+        } else if path.is_file() && mode::is_document(&entry.file_name().to_string_lossy()) {
             let relative = path
                 .strip_prefix(base)
                 .unwrap_or(&path)
@@ -316,6 +334,8 @@ fn read_directory(
 pub struct FileLoaders {
     registered: Vec<Arc<dyn FileLoader>>,
     file_system: bool,
+    /// The project file, which a layer's directory may hold.
+    project_file: Option<SourceId>,
 }
 
 impl Default for FileLoaders {
@@ -329,6 +349,7 @@ impl fmt::Debug for FileLoaders {
         f.debug_struct("FileLoaders")
             .field("registered", &self.registered.len())
             .field("file_system", &self.file_system)
+            .field("project_file", &self.project_file)
             .finish()
     }
 }
@@ -336,6 +357,7 @@ impl fmt::Debug for FileLoaders {
 impl PartialEq for FileLoaders {
     fn eq(&self, other: &Self) -> bool {
         self.file_system == other.file_system
+            && self.project_file == other.project_file
             && self.registered.len() == other.registered.len()
             && self
                 .registered
@@ -357,12 +379,21 @@ pub(crate) struct Origin<'a> {
     pub(crate) directory: Option<&'a [String]>,
 }
 
+impl Origin<'_> {
+    /// Written in code: at the root, in no document.
+    const CODE: Self = Self {
+        from: None,
+        directory: Some(&[]),
+    };
+}
+
 impl FileLoaders {
     /// The default: the file system alone.
     pub fn new() -> Self {
         Self {
             registered: Vec::new(),
             file_system: true,
+            project_file: None,
         }
     }
 
@@ -387,28 +418,43 @@ impl FileLoaders {
         self.file_system
     }
 
-    /// Resolves a module path written in code: relative paths start from
-    /// `root`, which is also the default loader's root.
-    pub fn resolve(&self, module_path: &str, root: &Path) -> Result<ResolvedSource, Error> {
-        self.resolve_from(
-            module_path,
-            root,
-            Origin {
-                from: None,
-                directory: Some(&[]),
-            },
-        )
+    /// Names the project file (`SPEC.md` 12.4). It is the one `.crov` file a
+    /// layer's directory may hold: it is left out of the layer, where any
+    /// other is an error.
+    pub fn with_project_file(mut self, path: impl Into<PathBuf>) -> Self {
+        self.project_file = Some(SourceId::from_path(path));
+        self
     }
 
-    /// Resolves a module path written at `origin`.
+    /// The project file, if one was named.
+    pub(crate) fn project_file(&self) -> Option<&SourceId> {
+        self.project_file.as_ref()
+    }
+
+    /// Resolves a module path written in code to a layer: a `.crod` file or
+    /// a directory. Relative paths start from `root`, which is also the
+    /// default loader's root.
+    pub fn resolve(&self, module_path: &str, root: &Path) -> Result<ResolvedSource, Error> {
+        self.resolve_from(module_path, root, Origin::CODE, Mode::Data)
+    }
+
+    /// [`resolve`](Self::resolve) for a value document: a `.crov` file, such
+    /// as a schema or project file (`SPEC.md` 4.2).
+    pub fn resolve_value(&self, module_path: &str, root: &Path) -> Result<ResolvedSource, Error> {
+        self.resolve_from(module_path, root, Origin::CODE, Mode::Value)
+    }
+
+    /// Resolves a module path written at `origin`, to a document of `mode`.
     pub(crate) fn resolve_from(
         &self,
         written: &str,
         root: &Path,
         origin: Origin<'_>,
+        mode: Mode,
     ) -> Result<ResolvedSource, Error> {
         let parsed = module_path::parse(written)?;
-        let file_name = format!("{}.crol", parsed.segments.last().expect("not empty"));
+        let last = parsed.segments.last().expect("not empty");
+        let file_name = format!("{last}.{}", mode.extension());
         let base = if parsed.rooted {
             Some(&[][..])
         } else {
@@ -430,6 +476,7 @@ impl FileLoaders {
                 written,
                 segments: target,
                 from: origin.from,
+                mode,
             };
             for loader in &self.registered {
                 let found = loader
@@ -441,6 +488,8 @@ impl FileLoaders {
                         id,
                         file_name,
                         target: Some(target.clone()),
+                        mode,
+                        project_file: self.project_file.clone(),
                     });
                 }
             }
@@ -454,11 +503,11 @@ impl FileLoaders {
             // A document that is not a file has no directory to start
             // from: its paths are those of the tree.
             (Some(from), Some(target)) if from.as_path().is_none() => {
-                module_path::resolve(&format!("::{}", target.join("::")), root, None)
+                module_path::resolve(&format!("::{}", target.join("::")), root, None, mode)
             }
             _ => {
                 let here = origin.from.and_then(SourceId::as_path);
-                module_path::resolve(written, root, here.and_then(Path::parent))
+                module_path::resolve(written, root, here.and_then(Path::parent), mode)
             }
         }?;
         Ok(ResolvedSource {
@@ -466,6 +515,8 @@ impl FileLoaders {
             id: SourceId::from_path(path),
             file_name,
             target,
+            mode,
+            project_file: self.project_file.clone(),
         })
     }
 }
@@ -487,6 +538,10 @@ pub struct ResolvedSource {
     file_name: String,
     /// Its names from the root, if known.
     target: Option<Vec<String>>,
+    /// What was looked for.
+    mode: Mode,
+    /// The file a directory may hold that is no document of the layer.
+    project_file: Option<SourceId>,
 }
 
 impl fmt::Debug for ResolvedSource {
@@ -511,12 +566,15 @@ impl ResolvedSource {
             &self.id,
             self.file_name.clone(),
             self.target.as_deref(),
+            self.project_file.as_ref(),
         )
     }
 
     /// The text of the source, for one that is a single document, such as
-    /// a schema file or a project file that is not on the file system.
+    /// a schema file or a project file that is not on the file system. Its
+    /// extension must not contradict what was resolved (`SPEC.md` 4).
     pub fn text(&self) -> Result<String, Error> {
+        check_mode(&self.id, self.mode)?;
         match load(&*self.loader, &self.id)? {
             Loaded::Document(bytes) => text(&self.id, bytes),
             Loaded::Directory(_) => {
@@ -525,6 +583,12 @@ impl ResolvedSource {
             }
         }
     }
+}
+
+/// Checks a source's extension against the mode it is read in (`SPEC.md` 4).
+pub(crate) fn check_mode(id: &SourceId, mode: Mode) -> Result<(), Error> {
+    mode.check(&id.to_string())
+        .map_err(|error| error.with_source_id(id.clone()))
 }
 
 /// Asks `loader` for a source; the error says which.

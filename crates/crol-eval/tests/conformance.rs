@@ -4,13 +4,13 @@
 //! Each case is a directory:
 //!
 //! - `layers/<n>-<name>/`: the layers, in the order of `<n>`, each holding
-//!   `.crol` files at any depth;
-//! - `options.crol` (optional): options, as a value-mode document:
+//!   `.crod` files at any depth;
+//! - `options.crov` (optional): options, as a value-mode document:
 //!   `variants: [Grouped(["dev", "prod"]), Discrete("cache")]`, `parents: {
 //!   prod_eu: "prod" }`, `contexts: [["prod", "cache"]]`, `variant_keys:
 //!   NoNewKeys`, `max_contexts: 16`, `warn_cross_file_patches: false`, and
 //!   `schema: "services"` for `crol`'s test of the schema checks;
-//! - `expected.crol`: the evaluated data as `crol eval --all-contexts`
+//! - `expected.crod`: the evaluated data as `crol eval --all-contexts`
 //!   prints it, if evaluation succeeds;
 //! - `expected.fingerprint`: the data's fingerprint in hex, so that CI
 //!   checks that every platform evaluates the same (`SPEC.md` 7.6, 14.2);
@@ -41,7 +41,7 @@ fn crol_files(dir: &Path, base: &Path, out: &mut Vec<(String, PathBuf)>) {
     for path in entries {
         if path.is_dir() {
             crol_files(&path, base, out);
-        } else if path.extension().is_some_and(|e| e == "crol") {
+        } else if path.extension().is_some_and(|e| e == "crod") {
             let relative = path
                 .strip_prefix(base)
                 .unwrap()
@@ -67,24 +67,24 @@ fn strings(value: &Value) -> Vec<String> {
 
 fn options(case: &Path) -> DataOptions {
     let mut options = DataOptions::default();
-    let path = case.join("options.crol");
+    let path = case.join("options.crov");
     let Ok(text) = fs::read_to_string(&path) else {
         return options;
     };
     let mut sources = Sources::new();
-    let file = sources.add("options.crol", text);
+    let file = sources.add("options.crov", text);
     let evaluation = evaluate_value(&sources, file);
     let value = evaluation
         .value
-        .unwrap_or_else(|| panic!("options.crol: {:?}", evaluation.diagnostics));
+        .unwrap_or_else(|| panic!("options.crov: {:?}", evaluation.diagnostics));
     let ValueKind::Keyed(keyed) = value.kind else {
-        panic!("options.crol is not a keyed value")
+        panic!("options.crov is not a keyed value")
     };
     let mut variants = Variants::new();
     let mut parents = Vec::new();
     for (key, value) in keyed.entries {
         let Key::Str(key) = key else {
-            panic!("integer key in options.crol")
+            panic!("integer key in options.crov")
         };
         match (key.as_str(), &value.kind) {
             ("warn_cross_file_patches", ValueKind::Bool(b)) => options.warn_cross_file_patches = *b,
@@ -202,7 +202,7 @@ fn copy_formatted(from: &Path, to: &Path) {
         let target = to.join(path.file_name().unwrap());
         if path.is_dir() {
             copy_formatted(&path, &target);
-        } else if path.extension().is_some_and(|e| e == "crol") {
+        } else if path.extension().is_some_and(|e| e == "crod") {
             let text = fs::read_to_string(&path).unwrap();
             let config = crol_syntax::format::FormatConfig::default();
             let text = crol_syntax::format::format(&text, &config).unwrap_or(text);
@@ -247,13 +247,13 @@ fn conformance() {
     for case in &cases {
         let name = case.file_name().unwrap().to_string_lossy().into_owned();
         let (data, fingerprint, errors) = run(case);
-        let expected_data = fs::read_to_string(case.join("expected.crol")).ok();
+        let expected_data = fs::read_to_string(case.join("expected.crod")).ok();
         let expected_fingerprint = fs::read_to_string(case.join("expected.fingerprint")).ok();
         let expected_errors = fs::read_to_string(case.join("expected.errors")).ok();
         let errors = (!errors.is_empty()).then_some(errors);
         if update {
             for (file, content) in [
-                ("expected.crol", &data),
+                ("expected.crod", &data),
                 ("expected.fingerprint", &fingerprint),
                 ("expected.errors", &errors),
             ] {

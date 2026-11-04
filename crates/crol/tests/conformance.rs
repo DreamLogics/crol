@@ -2,7 +2,7 @@
 //! both by deserializing into the test types below and by `crol::check`,
 //! and both must give the same errors.
 //!
-//! A case has a schema when its `options.crol` has `schema: "services"`.
+//! A case has a schema when its `options.crov` has `schema: "services"`.
 //! The errors `crol::check` reports are in `expected.schema-errors`, one
 //! per line, as `<layer dir>/<path>:line:col: message`;
 //! `UPDATE_EXPECT=1 cargo test` writes them. The evaluation itself is
@@ -92,7 +92,7 @@ fn crol_files(dir: &Path, base: &Path, out: &mut Vec<(String, PathBuf)>) {
     for path in entries {
         if path.is_dir() {
             crol_files(&path, base, out);
-        } else if path.extension().is_some_and(|e| e == "crol") {
+        } else if path.extension().is_some_and(|e| e == "crod") {
             let relative = path
                 .strip_prefix(base)
                 .unwrap()
@@ -106,9 +106,9 @@ fn crol_files(dir: &Path, base: &Path, out: &mut Vec<(String, PathBuf)>) {
 /// The schema a case names in its options, if any; `crol-eval`'s test
 /// reads the other options.
 fn schema_of(case: &Path) -> Option<String> {
-    let text = fs::read_to_string(case.join("options.crol")).ok()?;
+    let text = fs::read_to_string(case.join("options.crov")).ok()?;
     let mut sources = crol_eval::Sources::new();
-    let file = sources.add("options.crol", text);
+    let file = sources.add("options.crov", text);
     let value = crol_eval::evaluate_value(&sources, file).value?;
     let crol_eval::ValueKind::Keyed(keyed) = value.kind else {
         return None;
@@ -132,7 +132,7 @@ fn load(case: &Path) -> CrolData {
     layer_dirs.sort();
     let mut composer = CrolComposer::new();
     for dir in layer_dirs {
-        // Named by its directory, so that files show as `1-base/a.crol`.
+        // Named by its directory, so that files show as `1-base/a.crod`.
         let name = dir.file_name().unwrap().to_string_lossy().into_owned();
         let mut files = Vec::new();
         crol_files(&dir, &dir, &mut files);

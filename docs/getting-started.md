@@ -47,10 +47,10 @@ serde = { version = "1", features = ["derive"] }
 
 ## Your first file
 
-Create `config.crol` next to `Cargo.toml`:
+Create `config.crov` next to `Cargo.toml`:
 
 ```crol
-// config.crol
+// config.crov
 port: 8080
 listen: "0.0.0.0:" + &root.port
 admin: "127.0.0.1:" + (&root.port + 1)
@@ -63,10 +63,12 @@ that gives a key a value. Two things are new:
 - `&root.port` is a _reference_: it reads the value of `port`.
 - `+` works on values: strings concatenate, and numbers add up.
 
+The extension matters. `.crov` says that this file is one _value_, on its own.
+
 Ask `crol` what the file evaluates to:
 
 ```console
-$ crol eval config.crol
+$ crol eval config.crov
 port: 8080
 listen: "0.0.0.0:8080"
 admin: "127.0.0.1:8081"
@@ -94,7 +96,7 @@ struct Config {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let text = std::fs::read_to_string("config.crol")?;
+    let text = std::fs::read_to_string("config.crov")?;
     let config: Config = crol::from_str(&text)?;
     println!(
         "{} and {} (port {}), workers: {}",
@@ -112,18 +114,18 @@ $ cargo run
 Your program never sees the `+` or the `&root.port`. By the time serde runs,
 the file has been evaluated to plain values.
 
-`crol::from_str` reads one document on its own. That is all many programs
+`crol::from_str` reads one value document on its own. That is all many programs
 need. If yours is one of them, you can stop here, and read
 [the language by example](language.md) when you want to know more.
 
 ## Add a second file
 
 Now say that on your machine you want another port and fewer workers. You
-could edit `config.crol`, but that file is shared. Instead, write only what
+could edit your config file, but that file is shared. Instead, write only what
 differs:
 
 ```crol
-// local.crol
+// local.crod
 port: 9000
 workers: & - 3
 ```
@@ -131,18 +133,26 @@ workers: & - 3
 `workers: & - 3` uses `&` on its own, which means _the value below_: whatever
 `workers` was before this entry. `port: 9000` simply replaces the old value.
 
-Files stacked like this are called [_layers_](layers.md). Give `crol eval`
-both, lowest first:
+Files stacked like this are called [_layers_](layers.md). A layer is another
+kind of file than a value: it holds operations on data that all layers share.
+Those files end in `.crod`, so rename yours. It can stay as it is, since [plain
+entries work in both](modes.md#moving-a-file-between-modes):
 
 ```console
-$ crol eval config.crol local.crol
+$ mv config.crov config.crod
+```
+
+Give `crol eval` both, lowest first:
+
+```console
+$ crol eval config.crod local.crod
 port: 9000
 listen: "0.0.0.0:9000"
 admin: "127.0.0.1:9001"
 workers: 1
 ```
 
-Look at `listen`. `local.crol` never mentions it, and yet it changed. That is
+Look at `listen`. `local.crod` never mentions it, and yet it changed. That is
 the difference between `&` and the other references: `&` looks down, at what
 came before, and `&root.port` looks at the final value, after every layer has
 had its say. So one change in a top layer reaches everything that depends on
@@ -151,10 +161,10 @@ it.
 If you ever wonder where a value came from, ask:
 
 ```console
-$ crol explain config.crol local.crol workers
+$ crol explain config.crod local.crod workers
 workers:
-  config.crol:5:1  workers  definition  4
-  local.crol:3:1   workers  patch       1
+  config.crod:5:1  workers  definition  4
+  local.crod:3:1   workers  patch       1
 ```
 
 To load layers in Rust, use `CrolComposer` instead of `from_str`. Each `load`
@@ -178,8 +188,8 @@ struct Config {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config: Config = CrolComposer::new()
-        .load(Path::new("config.crol"))?
-        .load(Path::new("local.crol"))?
+        .load(Path::new("config.crod"))?
+        .load(Path::new("local.crod"))?
         .compose()?;
     println!(
         "{} and {} (port {}), workers: {}",
@@ -194,24 +204,24 @@ $ cargo run
 0.0.0.0:9000 and 127.0.0.1:9001 (port 9000), workers: 1
 ```
 
-`load` also takes a directory, in which case every `.crol` file below it is
+`load` also takes a directory, in which case every `.crod` file below it is
 part of the layer. Real projects usually have a directory per layer.
 
 ## When something is wrong
 
 Mistakes are reported with the place they happened. Say you misspell a key in
-`local.crol`, in a path that reaches into a value:
+`local.crod`, in a path that reaches into a value:
 
 ```crol
-// local.crol
+// local.crod
 port: 9000
 worker.count: 1
 ```
 
 ```console
-$ crol check config.crol local.crol
+$ crol check config.crod local.crod
 error: worker.count: `worker` does not exist, so it cannot be patched
-  ┌─ local.crol:3:1
+  ┌─ local.crod:3:1
   │
 3 │ worker.count: 1
   │ ^^^^^^^^^^^^
@@ -230,7 +240,7 @@ is caught when deserializing, and with a [schema](schemas.md) also by
 `crol fmt` formats files in place, like `rustfmt`:
 
 ```console
-$ crol fmt config.crol local.crol
+$ crol fmt config.crod local.crod
 ```
 
 ## Set up a project
@@ -241,24 +251,24 @@ bigger, tell the tools about your layers once, in a _project file_. `crol init`
 
 ```console
 $ crol init
-Created /path/to/project/project.crol
-Created /path/to/project/data/base/main.crol
+Created /path/to/project/project.crov
+Created /path/to/project/data/base/main.crod
 
 Next:
   - add `crol = "0.1.0"` to [dependencies] in Cargo.toml, if it is not there yet
-  - write your data in data/base/main.crol
+  - write your data in data/base/main.crod
   - run `crol check`
 ```
 
 You already have the dependency, from the repository, so skip the first step.
 `crol init` changes neither your manifest nor your code. It wrote a commented
-`project.crol` with one layer, `base`, in the directory `data/base`, and a
-`main.crol` there that holds only comments.
+`project.crov` with one layer, `base`, in the directory `data/base`, and a
+`main.crod` there that holds only comments.
 
 Move your settings into the layer:
 
 ```crol
-// data/base/main.crol
+// data/base/main.crod
 port: 8080
 listen: "0.0.0.0:" + &root.port
 admin: "127.0.0.1:" + (&root.port + 1)
@@ -276,15 +286,15 @@ admin: "127.0.0.1:8081"
 workers: 4
 ```
 
-To add a layer, create a directory and list it in `project.crol`, lowest first:
+To add a layer, create a directory and list it in `project.crov`, lowest first:
 
 ```crol
-// data/local/overrides.crol
+// data/local/overrides.crod
 port: 9000
 ```
 
 ```crol
-// project.crol
+// project.crov
 Project {
     layers: List(
         [{ name: "base", dir: "data::base", .. }, { name: "local", dir: "data::local", .. }],
@@ -340,8 +350,8 @@ $ cargo run
 ## Where to go next
 
 - [The language by example](language.md): everything you can write in a file.
-- [Data mode and value mode](modes.md): why `from_str` and `CrolComposer` read
-  a file differently.
+- [Data mode and value mode](modes.md): what `.crov` and `.crod` mean, and why
+  `from_str` and `CrolComposer` read a file differently.
 - [Layers](layers.md) and [variants](variants.md): the two ways of combining
   data, by stacking files and by environment.
 - [Schemas](schemas.md) and [editor setup](editors.md): completion, hover and

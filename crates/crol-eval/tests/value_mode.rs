@@ -6,7 +6,7 @@ use expect_test::{Expect, expect};
 
 fn check(text: &str, expect: Expect) {
     let mut sources = Sources::new();
-    let file = sources.add("test.crol", text);
+    let file = sources.add("test.crov", text);
     let evaluation = evaluate_value(&sources, file);
     let mut out = String::new();
     if let Some(value) = &evaluation.value {

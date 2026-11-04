@@ -8,9 +8,9 @@ to use what you get back.
 
 | You have                              | Use                                                 |
 | ------------------------------------- | --------------------------------------------------- |
-| one document                          | [`crol::from_str`](modes.md#value-mode-a-file-is-a-value) |
+| one document (`.crov`)                | [`crol::from_str`](modes.md#value-mode-a-file-is-a-value) |
 | one document and a [schema](schemas.md) | `crol::from_str_with_schema`                      |
-| layers, variants or several files     | `CrolComposer`, then `compose` or `compose_data`    |
+| layers, variants or several files (`.crod`) | `CrolComposer`, then `compose` or `compose_data` |
 
 [Data mode and value mode](modes.md) explains the difference. Everything below
 about types applies to both.
@@ -124,7 +124,7 @@ External tagging, serde's default, fits CROL best, and lets you load a root of
 mixed types into one map. Each type name selects the enum variant of that name:
 
 ```crol
-// fleet.crol
+// fleet.crod
 +web: Service { port: 8080, image: "web:1.4" }
 +uploads: Volume { size_gb: 20 }
 ```
@@ -156,7 +156,7 @@ enum Definition {
 
 fn main() -> Result<(), crol::Error> {
     let fleet: BTreeMap<String, Definition> =
-        CrolComposer::new().load(Path::new("fleet.crol"))?.compose()?;
+        CrolComposer::new().load(Path::new("fleet.crod"))?.compose()?;
     for (name, definition) in &fleet {
         match definition {
             Definition::Service(s) => println!("{name}: {} on port {}", s.image, s.port),
@@ -207,7 +207,7 @@ struct Config {
 fn main() -> Result<(), crol::Error> {
     let config: Config = CrolComposer::new()
         .schema(crol::schema::build::<Config>())
-        .load_layer(CrolLayer::from_sources("base", [("a.crol", "port: 80")]))
+        .load_layer(CrolLayer::from_sources("base", [("a.crod", "port: 80")]))
         .compose()?;
     println!("port {}, workers {:?}", config.port, config.workers);
     Ok(())
@@ -243,7 +243,7 @@ struct Service {
 fn main() -> Result<(), crol::Error> {
     let layer = CrolLayer::from_sources(
         "base",
-        [("a.crol", "+web: { depends_on: [@db, @cache] }, +db: { depends_on: [] }")],
+        [("a.crod", "+web: { depends_on: [@db, @cache] }, +db: { depends_on: [] }")],
     );
     let data = CrolComposer::new().load_layer(layer).compose_data()?;
 
@@ -289,7 +289,7 @@ fn main() -> Result<(), crol::Error> {
         variant_keys: VariantKeys::SameKeys,
         ..Default::default()
     })
-    .load_layer(CrolLayer::from_sources("base", [("a.crol", "port: 80")]))
+    .load_layer(CrolLayer::from_sources("base", [("a.crod", "port: 80")]))
     .compose()?;
     println!("port {}, workers {:?}", config.port, config.workers);
     Ok(())
@@ -328,8 +328,8 @@ context and returns a `CrolData`, which you can ask more of:
 use crol::{CrolComposer, CrolLayer};
 
 fn main() -> Result<(), crol::Error> {
-    let base = CrolLayer::from_sources("base", [("web.crol", "+web: { port: 80 }")]);
-    let local = CrolLayer::from_sources("local", [("web.crol", "web.port: & + 1")]);
+    let base = CrolLayer::from_sources("base", [("web.crod", "+web: { port: 80 }")]);
+    let local = CrolLayer::from_sources("local", [("web.crod", "web.port: & + 1")]);
     let data = CrolComposer::new()
         .load_layer(base)
         .load_layer(local)
@@ -431,7 +431,7 @@ without stopping, use [`crol::check`](schemas.md#checking-from-rust).
 ## Writing CROL
 
 `crol::to_string` and `crol::to_string_pretty` write any `Serialize` value as a
-plain value-mode document. The output has no operators, and reads back to the
+plain value document, for a `.crov` file. The output has no operators, and reads back to the
 same value:
 
 ```rust

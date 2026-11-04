@@ -15,8 +15,8 @@ fuzz_target!(|text: &str| {
         .map(|(i, document)| crol_eval::Layer {
             name: format!("layer{i}"),
             documents: vec![(
-                "a.crol".to_owned(),
-                sources.add(format!("layer{i}/a.crol"), document),
+                "a.crod".to_owned(),
+                sources.add(format!("layer{i}/a.crod"), document),
             )],
         })
         .collect();

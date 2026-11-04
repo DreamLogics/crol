@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crol::project::{FILE_NAME, Project};
 use crol::schema::SchemaFile;
-use crol::{CheckOptions, CrolComposer, CrolConfig, CrolLayer, LayerSource};
+use crol::{CheckOptions, CrolComposer, CrolConfig, FileLoaders, LayerSource};
 use crol_eval::{DataOptions, Diagnostic, Evaluation, Layer, Sources, Span, Variants};
 
 use crate::diagnostics::Reporter;
@@ -26,7 +26,7 @@ pub(crate) struct InputArgs {
     #[arg(long, value_name = "CHILD=PARENT")]
     parent: Vec<String>,
 
-    /// The project file; default: `project.crol` in the current directory or
+    /// The project file; default: `project.crov` in the current directory or
     /// above, used when no layers are given.
     #[arg(long, value_name = "FILE")]
     project: Option<PathBuf>,
@@ -42,7 +42,22 @@ pub(crate) struct InputArgs {
 }
 
 impl InputArgs {
-    fn declares_variants(&self) -> bool {
+    /// `--schema`.
+    pub(crate) fn schema(&self) -> Option<&Path> {
+        self.schema.as_deref()
+    }
+
+    /// `--project`.
+    pub(crate) fn project(&self) -> Option<&Path> {
+        self.project.as_deref()
+    }
+
+    /// `--offline`.
+    pub(crate) fn offline(&self) -> bool {
+        self.offline
+    }
+
+    pub(crate) fn declares_variants(&self) -> bool {
         !self.discrete.is_empty() || !self.group.is_empty() || !self.parent.is_empty()
     }
 
@@ -108,9 +123,11 @@ pub(crate) fn inputs(
     };
     let project_path = match &args.project {
         Some(path) => Some(path.clone()),
-        None => std::env::current_dir()
-            .ok()
-            .and_then(|dir| Project::find(&dir)),
+        None => match std::env::current_dir().map(|dir| Project::find(&dir)) {
+            Ok(Ok(path)) => path,
+            Ok(Err(error)) => return fail(reporter, error.to_string()),
+            Err(_) => None,
+        },
     };
     let project = match &project_path {
         Some(path) if arguments.is_empty() || args.project.is_some() => match Project::read(path) {
@@ -131,13 +148,22 @@ pub(crate) fn inputs(
     } else {
         std::env::current_dir().unwrap_or_default()
     };
+    // The project file is never read as data (`SPEC.md` 12.4).
+    let file_loaders = match &project_path {
+        Some(file) => FileLoaders::new().with_project_file(file),
+        None => FileLoaders::new(),
+    };
     let mut composer = CrolComposer::with_cfg(CrolConfig {
         // Tools always follow `extends` (`SPEC.md` 4.1).
         load_extends: true,
         root_path: root_dir.clone(),
+        file_loaders: file_loaders.clone(),
         ..CrolConfig::<String>::default()
     });
-    let config = CrolConfig::<String>::default();
+    let config = CrolConfig::<String> {
+        file_loaders: file_loaders.clone(),
+        ..CrolConfig::default()
+    };
     if arguments.is_empty() {
         let Some(project) = &project else {
             return fail(
@@ -150,8 +176,8 @@ pub(crate) fn inputs(
             Err(error) => return fail(reporter, error.to_string()),
         };
         for layer in layers {
-            let path = match crol::resolve_module_path(&layer.dir, &project_dir, None) {
-                Ok(path) => path,
+            let source = match file_loaders.resolve(&layer.dir, &project_dir) {
+                Ok(source) => source,
                 Err(error) => {
                     return fail(
                         reporter,
@@ -159,14 +185,8 @@ pub(crate) fn inputs(
                     );
                 }
             };
-            match CrolLayer::from_path(layer.name.clone(), &path) {
-                Ok(loaded) => {
-                    let loaded = match &project_path {
-                        Some(file) => loaded.without_file(file),
-                        None => loaded,
-                    };
-                    composer = composer.load_layer(loaded);
-                }
+            match source.load(layer.name.clone()) {
+                Ok(loaded) => composer = composer.load_layer(loaded),
                 Err(error) => return fail(reporter, error.to_string()),
             }
         }
@@ -187,10 +207,6 @@ pub(crate) fn inputs(
             Ok(layer) => {
                 let layer = match name {
                     Some(name) => layer.with_name(name),
-                    None => layer,
-                };
-                let layer = match &project_path {
-                    Some(file) => layer.without_file(file),
                     None => layer,
                 };
                 composer = composer.load_layer(layer);

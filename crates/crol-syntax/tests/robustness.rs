@@ -106,7 +106,7 @@ fn random_documents_parse_losslessly() {
 
 #[test]
 fn every_prefix_of_an_example_parses_losslessly() {
-    let text = include_str!("fixtures/services.crol");
+    let text = include_str!("fixtures/services.crod");
     for (i, _) in text.char_indices() {
         let prefix = &text[..i];
         assert_eq!(crol_syntax::parse(prefix).syntax().to_string(), prefix);

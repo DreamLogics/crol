@@ -13,7 +13,7 @@ use crol_eval::{Sources, evaluate_value};
 
 fn main() {
     let mut sources = Sources::new();
-    let file = sources.add("example.crol", "port: 8000 + 80");
+    let file = sources.add("example.crov", "port: 8000 + 80");
     let evaluation = evaluate_value(&sources, file);
     assert!(!evaluation.has_errors());
     assert!(evaluation.value.is_some());

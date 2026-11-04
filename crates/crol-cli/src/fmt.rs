@@ -1,4 +1,4 @@
-//! `crol fmt` (`SPEC.md` 11, 12.2).
+//! `crol fmt` (`SPEC.md` 11, 12.2). Formatting does not depend on the mode.
 
 use std::path::PathBuf;
 
@@ -17,7 +17,7 @@ pub(crate) struct Args {
     #[arg(long, default_value_t = FormatConfig::default().max_width)]
     max_width: usize,
 
-    /// The files to format.
+    /// The files to format: `.crod` and `.crov`.
     #[arg(required = true)]
     files: Vec<PathBuf>,
 }
@@ -29,6 +29,15 @@ pub(crate) fn run(args: &Args, reporter: &mut Reporter) -> bool {
     let mut ok = true;
     for path in &args.files {
         let name = path.display().to_string();
+        // It states no mode, so it is refused with the choice of both.
+        if crol::is_retired(&name) {
+            reporter.error(&format!(
+                "{name}: the `.crol` extension is retired; \
+                 rename it to `.crod` if it is data, or to `.crov` if it is a value document"
+            ));
+            ok = false;
+            continue;
+        }
         let bytes = match std::fs::read(path) {
             Ok(bytes) => bytes,
             Err(error) => {

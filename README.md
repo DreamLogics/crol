@@ -26,6 +26,9 @@ with fixed rules, and load into your Rust types through
 
 ## Overview
 
+A file's extension says how it behaves: a `.crov` file is one value, and a
+`.crod` file is data that [stacks in layers](docs/modes.md).
+
 CROL looks like [RON](https://github.com/ron-rs/ron), but a document holds
 _operations_ as well as values: it can declare, replace, patch and remove
 definitions, including ones written in other files. At a high level, it gives
@@ -47,7 +50,7 @@ A base file defines two services. `..&service_defaults` copies in a template,
 and `&self.port` reads the final value of `port`, whichever file sets it:
 
 ```crol
-// data/base/services.crol
+// data/base/services.crod
 service_defaults := { replicas: 1, port: 8080 }
 
 +web: Service {
@@ -70,7 +73,7 @@ service_defaults := { replicas: 1, port: 8080 }
 A second file, in a higher layer, changes what it needs to and nothing else:
 
 ```crol
-// data/local/overrides.crol
+// data/local/overrides.crod
 web.port: 9090
 web.replicas: & + 1
 ```
