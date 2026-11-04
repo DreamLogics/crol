@@ -1,7 +1,7 @@
 //! `crol::check`: the deserializer's rules applied to evaluated data with
 //! only a schema, and id checks (`SPEC.md` 10.9).
 
-use crol_eval::{Diagnostic, Key, Keyed, Span, Value, ValueKind};
+use crol_eval::{Context, ContextData, Diagnostic, Key, Keyed, Span, Value, ValueKind, Variants};
 
 use crate::compose::{CrolData, VariantName};
 use crate::schema::{FieldDefault, Repr, SchemaFile, TypeDef, TypeExpr, VariantShape};
@@ -28,6 +28,51 @@ impl Default for CheckOptions {
     }
 }
 
+/// Evaluated data to check: the base root, how each other context differs
+/// from it, and the variants. [`CrolData::view`] gives one, and so does an
+/// evaluation from `crol-eval`.
+#[derive(Debug, Clone, Copy)]
+pub struct DataView<'a> {
+    /// The base root.
+    pub base: &'a Value,
+    /// The other evaluated contexts.
+    pub contexts: &'a [ContextData],
+    /// The variants.
+    pub variants: &'a Variants,
+}
+
+impl<'a> DataView<'a> {
+    fn value(&self, key: &str, context: Option<&'a ContextData>) -> Option<&'a Value> {
+        let key = Key::Str(key.to_owned());
+        match context {
+            Some(data) => data.get(self.base, &key),
+            None => match &self.base.kind {
+                ValueKind::Keyed(keyed) => keyed.entries.get(&key),
+                _ => None,
+            },
+        }
+    }
+
+    fn keys(&self, context: Option<&ContextData>) -> Vec<String> {
+        let root = context.map_or_else(|| self.base.clone(), |data| data.root(self.base));
+        match &root.kind {
+            ValueKind::Keyed(keyed) => keyed
+                .entries
+                .keys()
+                .filter_map(|k| match k {
+                    Key::Str(s) => Some(s.clone()),
+                    Key::Int(_) => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn names(&self, context: &Context) -> String {
+        format!("{{{}}}", self.variants.chosen_names(context).join(", "))
+    }
+}
+
 /// Checks evaluated data against a schema (`SPEC.md` 10.9): each root
 /// value against the type at `root` (`None`: the schema's root type), with
 /// the rules of the deserializer, and every id: it must name a root key in
@@ -39,8 +84,20 @@ pub fn check<T: VariantName>(
     root: Option<&str>,
     options: &CheckOptions,
 ) -> Vec<Diagnostic> {
+    check_view(data.view(), schema, root, options)
+}
+
+/// [`check`], on a [`DataView`].
+pub fn check_view(
+    data: DataView<'_>,
+    schema: &SchemaFile,
+    root: Option<&str>,
+    options: &CheckOptions,
+) -> Vec<Diagnostic> {
     let root_type = TypeExpr::Named(root.unwrap_or(&schema.root).to_owned());
-    let contexts: Vec<crate::CrolContext> = data.contexts().collect();
+    let contexts: Vec<Option<&ContextData>> = std::iter::once(None)
+        .chain(data.contexts.iter().map(Some))
+        .collect();
     // Each error with the contexts it occurs in.
     let mut found: Vec<(Diagnostic, Vec<usize>)> = Vec::new();
     for (index, context) in contexts.iter().enumerate() {
@@ -48,11 +105,11 @@ pub fn check<T: VariantName>(
             schema,
             options,
             data,
-            context,
+            context: *context,
             found: Vec::new(),
         };
-        for key in data.keys_in(context) {
-            if let Some(value) = data.value(&key, context) {
+        for key in data.keys(*context) {
+            if let Some(value) = data.value(&key, *context) {
                 checker.value(value, &root_type, &key, None);
             }
         }
@@ -71,7 +128,10 @@ pub fn check<T: VariantName>(
                 let mut names: Vec<String> = in_contexts
                     .iter()
                     .take(3)
-                    .map(|&i| format!("{{{}}}", data.context_names(&contexts[i]).join(", ")))
+                    .map(|&i| match contexts[i] {
+                        Some(context) => data.names(&context.context),
+                        None => "{}".to_owned(),
+                    })
                     .collect();
                 if in_contexts.len() > 3 {
                     names.push(format!("and {} more", in_contexts.len() - 3));
@@ -83,11 +143,11 @@ pub fn check<T: VariantName>(
         .collect()
 }
 
-struct Checker<'a, T> {
+struct Checker<'a> {
     schema: &'a SchemaFile,
     options: &'a CheckOptions,
-    data: &'a CrolData<T>,
-    context: &'a crate::CrolContext,
+    data: DataView<'a>,
+    context: Option<&'a ContextData>,
     found: Vec<Diagnostic>,
 }
 
@@ -105,7 +165,7 @@ fn found(value: &Value) -> String {
     }
 }
 
-impl<T: VariantName> Checker<'_, T> {
+impl Checker<'_> {
     fn error(&mut self, span: Span, message: String, path: &str) {
         let mut diagnostic = Diagnostic::error(span, message);
         if !path.is_empty() {

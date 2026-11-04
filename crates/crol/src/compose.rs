@@ -39,7 +39,7 @@ impl VariantName for String {
 }
 
 /// A variant declaration (`SPEC.md` 8.1).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Variant<T = String> {
     /// A flag: on or off, independent of the rest.
     Discrete(T),
@@ -258,6 +258,16 @@ impl CrolLayer {
         &self.name
     }
 
+    /// The layer without the file at `path`: a project file is never read
+    /// as data, even inside a layer's directory (`SPEC.md` 12.4).
+    pub fn without_file(mut self, path: &Path) -> Self {
+        if let Ok(path) = path.canonicalize() {
+            self.documents
+                .retain(|d| d.canonical.as_ref() != Some(&path));
+        }
+        self
+    }
+
     /// The layer, renamed.
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = name.into();
@@ -385,6 +395,8 @@ pub struct CrolComposer<T = String> {
     loaded: HashSet<PathBuf>,
     /// An error from `load_layer` or `with_variant`, reported by `compose`.
     error: Option<Error>,
+    /// The schema, for `&default`.
+    schema: Option<crol_eval::Defaults>,
     /// The variants made active with `with_variant`.
     chosen: Vec<T>,
 }
@@ -411,6 +423,7 @@ impl<T: VariantName> CrolComposer<T> {
             loaded: HashSet::new(),
             error: None,
             chosen: Vec::new(),
+            schema: None,
         }
     }
 
@@ -429,6 +442,15 @@ impl<T: VariantName> CrolComposer<T> {
         if let Err(error) = self.add(layer, &mut Vec::new()) {
             self.error.get_or_insert(error);
         }
+        self
+    }
+
+    /// Gives the composer a schema, from which `&default` reads defaults
+    /// (`SPEC.md` 6.1.3): `.schema(crol::schema::build::<Definition>())`.
+    pub fn schema(mut self, schema: crate::schema::SchemaFile) -> Self {
+        self.schema = Some(crol_eval::Defaults(std::sync::Arc::new(
+            crate::schema::SchemaDefaults(schema),
+        )));
         self
     }
 
@@ -563,7 +585,8 @@ impl<T: VariantName> CrolComposer<T> {
             .with_variants(variants)
             .with_contexts(contexts)
             .with_max_contexts(self.config.max_contexts)
-            .with_variant_keys(self.config.variant_keys);
+            .with_variant_keys(self.config.variant_keys)
+            .with_defaults(self.schema.clone());
         let evaluation = evaluate_data(&sources, &layers, &options);
         let Some(base) = evaluation.value.clone() else {
             return Err(Error::from_diagnostics(&sources, &evaluation.diagnostics));
@@ -828,6 +851,15 @@ impl<T: VariantName> CrolData<T> {
                 .ok_or_else(|| Error::new("this context was not evaluated"))?,
         };
         crate::deserialize(&root, &self.sources, self.options.clone(), None).map(|(value, _)| value)
+    }
+
+    /// The data as a [`DataView`](crate::DataView), for [`crate::check`].
+    pub fn view(&self) -> crate::DataView<'_> {
+        crate::DataView {
+            base: &self.base,
+            contexts: &self.contexts,
+            variants: &self.variants,
+        }
     }
 
     /// The fingerprint of all evaluated data (`SPEC.md` 7.6): BLAKE3-256 of

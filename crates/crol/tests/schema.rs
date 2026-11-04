@@ -248,3 +248,65 @@ fn check_validates_ids() {
         ]
     );
 }
+
+/// `&default` reads the Rust defaults from the schema (`SPEC.md` 6.1.3).
+#[test]
+fn default_references() {
+    let source = r#"
+        +web: Service {
+            // `Service` has no struct-level default, so this is missing.
+            ..(&default | {}),
+            replicas: 2,
+            depends_on: [],
+            url: None,
+            limits: Limits { ..&default, cpu: 2.0 },
+            ..
+        },
+        +big: Service {
+            replicas: 1,
+            depends_on: [],
+            url: None,
+            limits: &default ~ { cpu: 4.0 },
+            tags: &default + ["big"],
+        },
+        +nested: Service {
+            replicas: 1,
+            depends_on: [],
+            url: None,
+            limits: { cpu: &default * 2, memory_mb: &default },
+            ..
+        },
+        +fallback: Service { replicas: &default | 3, depends_on: [], url: None, .. },
+    "#;
+    let data = crol::CrolComposer::new()
+        .schema(schema::build::<Definition>())
+        .load_layer(crol::CrolLayer::from_sources("base", [("a.crol", source)]))
+        .compose_data()
+        .unwrap();
+    let web: Service = data.get("web").unwrap();
+    assert_eq!(
+        web.limits,
+        Limits {
+            cpu: 2.0,
+            memory_mb: 512
+        }
+    );
+    let big: Service = data.get("big").unwrap();
+    assert_eq!((big.limits.cpu, big.limits.memory_mb), (4.0, 512));
+    assert_eq!(big.tags, ["big"]);
+    let nested: Service = data.get("nested").unwrap();
+    assert_eq!((nested.limits.cpu, nested.limits.memory_mb), (2.0, 512));
+    // `replicas` has no default, so `&default` is missing and `|` falls back.
+    let fallback: Service = data.get("fallback").unwrap();
+    assert_eq!(fallback.replicas, 3);
+
+    // Without a schema, `&default` is an error.
+    let error = crol::CrolComposer::new()
+        .load_layer(crol::CrolLayer::from_sources(
+            "base",
+            [("a.crol", "+x: { a: &default },")],
+        ))
+        .compose_data()
+        .unwrap_err();
+    assert!(error.to_string().contains("no schema is given"), "{error}");
+}

@@ -4,7 +4,7 @@
 use std::fmt::Write as _;
 use std::io::Write;
 
-use crol_eval::{DataOptions, StepKind, print};
+use crol_eval::{StepKind, print};
 
 use crate::diagnostics::Reporter;
 
@@ -21,7 +21,7 @@ pub(crate) struct Args {
     context: Option<Vec<String>>,
 
     #[command(flatten)]
-    variants: crate::layers::VariantArgs,
+    inputs: crate::layers::InputArgs,
 }
 
 /// Returns whether it succeeded.
@@ -35,23 +35,16 @@ pub(crate) fn run(args: &Args, reporter: &mut Reporter) -> bool {
         return false;
     };
     let context = args.context.clone().unwrap_or_default();
-    let declared = match args.variants.variants() {
-        Ok(declared) => declared,
-        Err(message) => {
-            reporter.error(&message);
-            return false;
-        }
-    };
-    let Some((sources, layers)) = crate::layers::loaded_layers(layers, reporter) else {
+    let Some(inputs) =
+        crate::layers::inputs(layers, &args.inputs, Some(vec![context.clone()]), reporter)
+    else {
         return false;
     };
-    let options = DataOptions::default()
-        .with_variants(declared)
-        .with_contexts(Some(vec![context.clone()]));
-    let steps = match crol_eval::explain(&sources, &layers, &options, path, &context) {
+    let (sources, layers, options) = (&inputs.sources, &inputs.layers, &inputs.options);
+    let steps = match crol_eval::explain(sources, layers, options, path, &context) {
         Ok(steps) => steps,
         Err(diagnostics) => {
-            reporter.diagnostics(&sources, &diagnostics);
+            reporter.diagnostics(sources, &diagnostics);
             return false;
         }
     };

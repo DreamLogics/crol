@@ -36,7 +36,9 @@ pub use source::{FileId, Location, SourceFile, Sources, Span};
 pub use value::{Key, Keyed, Value, ValueKind, format_float, is_identifier, quote, quote_char};
 pub use variants::{Context, VariantId, Variants};
 
-pub use eval::{ContextData, ExplainStep, PathStep, StepKind, VariantKeys, value_at_path};
+pub use eval::{
+    ContextData, DefaultsProvider, ExplainStep, PathStep, StepKind, VariantKeys, value_at_path,
+};
 
 /// The result of evaluating: the value, unless an error made that
 /// impossible, and every diagnostic.
@@ -91,7 +93,22 @@ pub struct DataOptions {
     /// differ from the base. For testing that the two agree.
     #[doc(hidden)]
     pub evaluate_every_key: bool,
+    /// Where `&default` finds defaults (`SPEC.md` 6.1.3); without one,
+    /// `&default` is an error.
+    pub defaults: Option<Defaults>,
 }
+
+/// A shared [`DefaultsProvider`], for [`DataOptions::defaults`].
+#[derive(Debug, Clone)]
+pub struct Defaults(pub std::sync::Arc<dyn DefaultsProvider>);
+
+impl PartialEq for Defaults {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for Defaults {}
 
 impl Default for DataOptions {
     fn default() -> Self {
@@ -102,6 +119,7 @@ impl Default for DataOptions {
             max_contexts: 4096,
             variant_keys: VariantKeys::Any,
             evaluate_every_key: false,
+            defaults: None,
         }
     }
 }
@@ -128,6 +146,12 @@ impl DataOptions {
     /// Sets [`DataOptions::max_contexts`].
     pub fn with_max_contexts(mut self, max_contexts: usize) -> Self {
         self.max_contexts = max_contexts;
+        self
+    }
+
+    /// Sets [`DataOptions::defaults`].
+    pub fn with_defaults(mut self, defaults: Option<Defaults>) -> Self {
+        self.defaults = defaults;
         self
     }
 
@@ -203,6 +227,7 @@ pub fn evaluate_data(sources: &Sources, layers: &[Layer], options: &DataOptions)
         max_contexts: options.max_contexts,
         variant_keys: options.variant_keys,
         evaluate_every_key: options.evaluate_every_key,
+        defaults: options.defaults.as_ref().map(|d| &*d.0),
     };
     let (result, mut errors) = eval::evaluate_data(&lowered.ir, &input);
     diagnostics.append(&mut errors);
@@ -325,6 +350,7 @@ pub fn explain(
         max_contexts: options.max_contexts,
         variant_keys: options.variant_keys,
         evaluate_every_key: false,
+        defaults: options.defaults.as_ref().map(|d| &*d.0),
     };
     eval::explain(&lowered.ir, &input, &key, &steps, context)
 }

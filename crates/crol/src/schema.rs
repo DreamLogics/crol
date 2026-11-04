@@ -443,6 +443,91 @@ pub fn check_file<T: Schema + ?Sized>(path: impl AsRef<Path>) -> Result<(), Erro
     }
 }
 
+// ---- Defaults for `&default` ----
+
+/// The defaults a schema records, for `&default` (`SPEC.md` 6.1.3).
+#[derive(Debug, Clone)]
+pub(crate) struct SchemaDefaults(pub(crate) SchemaFile);
+
+impl SchemaDefaults {
+    /// The default at `path` in the type at `type_path`.
+    fn resolve(&self, type_path: &str, path: &[String], depth: usize) -> Option<crate::Value> {
+        if depth > 64 {
+            return None;
+        }
+        match self.0.get(type_path)? {
+            TypeDef::Struct {
+                fields, default, ..
+            } => {
+                let Some((first, rest)) = path.split_first() else {
+                    return default.as_ref().map(|d| d.0.clone());
+                };
+                let field = fields.get(first)?;
+                // A field's default is its own, or its value in the
+                // struct's default.
+                let own = match &field.default {
+                    FieldDefault::Value(value) => Some(value.0.clone()),
+                    _ => None,
+                }
+                .or_else(|| {
+                    let default = default.as_ref()?;
+                    crol_eval::value_at_path(
+                        &default.0,
+                        &[crol_eval::PathStep::Field(first.clone())],
+                    )
+                    .cloned()
+                });
+                if rest.is_empty() {
+                    return own;
+                }
+                if let Some(inner) = named_type(&field.ty)
+                    && let Some(value) = self.resolve(inner, rest, depth + 1)
+                {
+                    return Some(value);
+                }
+                let steps: Vec<crol_eval::PathStep> = rest
+                    .iter()
+                    .cloned()
+                    .map(crol_eval::PathStep::Field)
+                    .collect();
+                own.and_then(|value| crol_eval::value_at_path(&value, &steps).cloned())
+            }
+            TypeDef::Newtype { inner, .. } | TypeDef::Transparent { inner, .. } => {
+                self.resolve(named_type(inner)?, path, depth + 1)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// The named type a type expression stands for, through `Option`.
+fn named_type(expr: &TypeExpr) -> Option<&str> {
+    match expr {
+        TypeExpr::Named(path) => Some(path),
+        TypeExpr::Option(inner) => named_type(inner),
+        _ => None,
+    }
+}
+
+impl crol_eval::DefaultsProvider for SchemaDefaults {
+    fn default_of(&self, type_name: Option<&str>, path: &[String]) -> Option<crate::Value> {
+        let type_path = match type_name {
+            // A type name must name one type; an ambiguous one needs `use`,
+            // which tools resolve.
+            Some(name) => {
+                let mut found = self.0.by_name(name);
+                let (path, _) = found.next()?;
+                if found.next().is_some() {
+                    return None;
+                }
+                path.to_owned()
+            }
+            None => self.0.root.clone(),
+        };
+        self.resolve(&type_path, path, 0)
+    }
+}
+
 // ---- Helpers for `#[derive(Schema)]` ----
 
 /// A type expression's text, as schema paths name generic arguments:
