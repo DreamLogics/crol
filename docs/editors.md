@@ -57,8 +57,16 @@ on the `extends` itself. A `.crod` file with no `extends` only knows itself, so 
 patch to a key from another file has nothing below it. Name what it builds on, or
 list your layers in `project.crov`.
 
-A wrong file in a layer, such as a `.crov` file, is reported on that file. The
-server shows a `.crol` file only an error that says to rename it.
+A layer that does not load does not stop the others, as it does for `crol check`.
+A wrong file in a layer, such as a `.crov` or a `.crol` file, is reported on that
+file and left out, and the rest of the layer loads. A layer that cannot be read at
+all, such as one whose `dir` names nothing, is reported on the file to blame or on
+`project.crov`, and adds nothing: its keys have no values, and the layers after it
+are evaluated without it. Errors in those layers are then warnings that say so,
+since what is missing may be why. Hover and completion keep working, from the last
+evaluation that succeeded or else from the layers below.
+
+The server shows a `.crol` file only an error that says to rename it.
 
 `project.crov` itself is checked against the schema of project files.
 

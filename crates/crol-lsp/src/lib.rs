@@ -452,9 +452,11 @@ impl Server {
         if snapshot.evaluation.value.is_none()
             && let Some(previous) = self.snapshot.take()
         {
+            // Better than what is below a layer that did not load, if
+            // that is all there is now.
             snapshot.last_good = match previous.evaluation.value {
                 Some(_) => Some(previous.evaluation),
-                None => previous.last_good,
+                None => snapshot.last_good.take().or(previous.last_good),
             };
         }
         let by_file = snapshot.diagnostics(self.encoding);

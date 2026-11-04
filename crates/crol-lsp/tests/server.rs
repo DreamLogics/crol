@@ -2661,6 +2661,66 @@ fn three_layers(name: &str, middle: &[(&str, &str)], middle_dir: &str) -> PathBu
 }
 
 #[test]
+fn a_stray_file_leaves_the_rest_of_its_layer_and_the_layers_after_it() {
+    let dir = three_layers(
+        "lsp-failed-file",
+        &[
+            ("middle/a.crod", "+cache: 1\n"),
+            ("middle/stray.crov", "1\n"),
+        ],
+        "middle",
+    );
+    let mut client = Client::start(&dir);
+    client.diagnostics_for(&uri(&dir.join("middle/stray.crov")), |d| {
+        says(d, "cannot be a layer")
+    });
+    let mut buffer = Buffer::open(&client, &dir, "top/a.crod");
+    let hover = buffer.hover(&mut client, "web.po|rt: & + 1\n+db: 2\n");
+    assert!(hover.contains("`81`"), "{hover}");
+    let items = buffer.complete(&mut client, "web.port: & + 1\n+db: 2\nx: &root.|\n");
+    let found = labels(&items);
+    assert!(
+        found.contains(&"cache") && found.contains(&"db"),
+        "{found:?}"
+    );
+    client.stop();
+}
+
+#[test]
+fn a_layer_that_cannot_be_found_leaves_the_layers_after_it() {
+    let dir = three_layers("lsp-failed-layer", &[], "nothing");
+    let mut client = Client::start(&dir);
+    client.diagnostics_for(&uri(&dir.join("project.crov")), |d| {
+        says(d, "layer `middle`")
+    });
+    let mut buffer = Buffer::open(&client, &dir, "top/a.crod");
+    let hover = buffer.hover(&mut client, "web.po|rt: & + 1\n+db: 2\n");
+    assert!(hover.contains("`81`"), "{hover}");
+    client.stop();
+}
+
+#[test]
+fn what_a_failed_layer_would_have_defined_is_no_error_above_it() {
+    let dir = three_layers("lsp-failed-gap", &[], "nothing");
+    std::fs::write(dir.join("top/a.crod"), "cache.size: 1\nweb.port: & + 1\n").unwrap();
+    let mut client = Client::start(&dir);
+    let file = uri(&dir.join("top/a.crod"));
+    let diagnostics = client.diagnostics_for(&file, |d| !d.is_empty());
+    assert!(says(&diagnostics, "cannot be patched"), "{diagnostics:?}");
+    assert!(says(&diagnostics, "`middle`"), "{diagnostics:?}");
+    assert_eq!(diagnostics[0]["severity"], 2, "{diagnostics:?}");
+    // The layers below the gap still evaluate.
+    open_text(&client, &file, "cache.size: 1\nweb.port: & + 1\n");
+    let mut buffer = Buffer {
+        uri: file,
+        version: 1,
+    };
+    let items = buffer.complete(&mut client, "cache.size: 1\nx: &root.|\n");
+    assert!(labels(&items).contains(&"web"), "{items:?}");
+    client.stop();
+}
+
+#[test]
 fn default_reads_the_project_schema() {
     let project = r#"Project {
         layers: List([{ name: "base", dir: "data", .. }]),

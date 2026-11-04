@@ -45,6 +45,11 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   attribute. It asks the client to watch the workspace's CROL files.
   `CrolComposer::load_layer_tolerant`, `FileLoaders::with_file_reader` and
   `FileLoaders::resolve_path` are what it uses.
+- A layer that does not load no longer stops the language server loading the
+  ones after it. A stray `.crov` or `.crol` file is left out of its layer and has
+  the error; a layer that cannot be loaded adds nothing, and has the error on the
+  file to blame. Errors above what is missing are warnings that say why, and every
+  problem is shown, not only the first (`SPEC.md` 12.5).
 - `&default` works in `crol` and in the language server, not only through
   `CrolComposer::schema`: they read defaults from the schema they check against
   (`SPEC.md` 6.1.3). `SchemaFile::defaults` gives them to a tool of your own.

@@ -2445,8 +2445,28 @@ only final values are checked. Diagnostics are published for all files
 of writable layers, not only open ones, and every diagnostic that has
 secondary spans (cycles, two definitions) links to them as related
 information. A problem with the project as a whole is put on the file to
-blame, such as a `.crov` file in a layer's directory or a leftover
-`project.crol`, else on the project file.
+blame, such as a leftover `project.crol`, else on the project file.
+
+**A layer that does not load** stops nothing, unlike in `crol check`, for
+which it is an error. The problem is put on the file to blame, else on the
+project file, and what can be evaluated still is:
+
+- A `.crov` or `.crol` file in a layer's directory is left out, and has
+  the error. The rest of the layer loads. A `.crov` file was never data, so
+  everything else is as it would be without it. A `.crol` file may have
+  been, as for the next case.
+- A layer that cannot be loaded at all (its `dir` names nothing, or both a
+  file and a directory, or a file in it is not UTF-8) adds nothing: its
+  files are not evaluated as part of the project, so an open one is served
+  on its own, its keys have no values, and hover and completion do not
+  offer them. The layers after it are evaluated without it. So are those
+  on top of an `extends` that cannot be followed.
+- What is missing may be why a layer above it fails, so errors in those
+  layers (a patch to a key the missing layer defines, say) are warnings
+  that say so until it loads, and the real errors reappear then.
+- While the layers do not evaluate this way, hover and completion use the
+  latest evaluation that had a value (below), else that of the layers below
+  what is missing.
 
 **Hover.**
 

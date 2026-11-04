@@ -254,9 +254,13 @@ names has errors of its own, of which the message shows the first. Other errors 
 the document are then warnings when the `extends` cannot be followed at all, since
 what is missing may be why.
 
-**A `.crov` file or a `project.crol` has one error, and the rest shows nothing.**
-A problem with the project stops the server from loading its layers, and is shown
-on the file to blame. Fix that one first.
+**A `project.crov` or a `project.crol` has one error, and the rest shows nothing.**
+A problem with the project file itself stops the server from loading the layers,
+and is shown on the file to blame. Fix that one first.
+
+**Warnings that end in `which may be why`.** A layer or an `extends` did not load,
+and this may only be a result of that. Fix the error on the file it names, or on
+`project.crov`; what is still wrong then shows as an error again.
 
 **Zed cannot start the server.** Zed looks for `crol` in your settings and on the
 `PATH`. With no `crol` there, it tries to download a release, and none exists yet.
