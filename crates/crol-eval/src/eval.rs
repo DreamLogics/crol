@@ -975,17 +975,16 @@ pub fn value_at_path<'v>(value: &'v Value, path: &[PathStep]) -> Option<&'v Valu
     Some(value)
 }
 
-/// The operations that produced the value at `key` + `path` in `context`,
-/// in order, with the value after each (`SPEC.md` 12.3). Each step's value
-/// is the chain up to that operation, with late references reading the
-/// final data, as they do.
+/// For each `key` + `path` in `requests`, the operations that produced the
+/// value there in `context`, in order, with the value after each
+/// (`SPEC.md` 12.3). Each step's value is the chain up to that operation,
+/// with late references reading the final data, as they do.
 pub(crate) fn explain(
     ir: &Ir,
     input: &DataInput<'_>,
-    key: &str,
-    path: &[PathStep],
+    requests: &[(&str, &[PathStep])],
     context: &[String],
-) -> Result<Vec<ExplainStep>, Vec<Diagnostic>> {
+) -> Result<Vec<Vec<ExplainStep>>, Vec<Diagnostic>> {
     let mut diagnostics = Vec::new();
     let Some(plan) = DataPlan::new(ir, input, &mut diagnostics) else {
         return Err(diagnostics);
@@ -1022,10 +1021,25 @@ pub(crate) fn explain(
         defaults: input.defaults,
     };
     let id = evaluator.context_state(&context);
+    Ok(requests
+        .iter()
+        .map(|(key, path)| explain_key(&mut evaluator, &plan, input, key, path, &context, id))
+        .collect())
+}
+
+fn explain_key(
+    evaluator: &mut Evaluator<'_>,
+    plan: &DataPlan<'_>,
+    input: &DataInput<'_>,
+    key: &str,
+    path: &[PathStep],
+    context: &Context,
+    id: usize,
+) -> Vec<ExplainStep> {
     let Some(key_plan) = plan.keys.get(key) else {
-        return Ok(Vec::new());
+        return Vec::new();
     };
-    let order = plan.chain(key_plan, &context);
+    let order = plan.chain(key_plan, context);
     let root = evaluator.contexts[id].root.clone();
     let templates = evaluator.contexts[id].templates.clone();
     let chain = Some(Rc::new(ChainLink {
@@ -1073,7 +1087,7 @@ pub(crate) fn explain(
             value: value.as_ref().and_then(|v| value_at_path(v, path)).cloned(),
         });
     }
-    Ok(steps)
+    steps
 }
 
 impl<'a> DataPlan<'a> {
