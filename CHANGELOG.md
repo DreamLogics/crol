@@ -172,6 +172,8 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   exist``.
 - Errors in a project file or a schema file point at that file, not at
   `<string>:1:1`, and errors in what a layer command prints at `<output>`.
+- `crol --init` says to add `crol` from the repository, as it is not on crates.io
+  yet, and its project file suggests `crol/schema.crov`, as the guide does.
 - ``unexpected `:` after an entry`` says what to look for: a key was read as part
   of the value before it, as in `+a: 1 +b: 2`.
 - `SPEC.md` 10.9 now shows the four arguments of `crol::check`, says that

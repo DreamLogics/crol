@@ -44,7 +44,7 @@ Created /path/to/project/project.crov
 Created /path/to/project/data/base/main.crod
 
 Next:
-  - add `crol = "0.1.0"` to [dependencies] in Cargo.toml, if it is not there yet
+  - add `crol = { git = "https://github.com/DreamLogics/crol" }` to [dependencies] in Cargo.toml, if it is not there yet
   - write your data in data/base/main.crod
   - run `crol check`
 ```

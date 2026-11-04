@@ -16,7 +16,7 @@ Created /path/to/project/project.crov
 Created /path/to/project/data/base/main.crod
 
 Next:
-  - add `crol = "0.1.0"` to [dependencies] in Cargo.toml, if it is not there yet
+  - add `crol = { git = "https://github.com/DreamLogics/crol" }` to [dependencies] in Cargo.toml, if it is not there yet
   - write your data in data/base/main.crod
   - run `crol check`
 ```
@@ -36,7 +36,7 @@ Project {
     variants: [],
 
     // The schema file your application writes, to check the data's types:
-    // `Some("schema")` is `schema.crov` next to this file.
+    // `Some("crol::schema")` is `crol/schema.crov` next to this file.
     schema: None,
     ..,
 }

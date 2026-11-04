@@ -44,7 +44,7 @@ fn sets_up_a_cargo_project_that_the_tools_can_load() {
 
     let output = crol(&dir, &["--init"]);
     assert!(output.status.success(), "{output:?}");
-    assert!(stderr(&output).contains("crol = \""), "{output:?}");
+    assert!(stderr(&output).contains("crol = {"), "{output:?}");
     assert_eq!(std::fs::read(dir.join("Cargo.toml")).unwrap(), manifest);
 
     // The application's and the language server's view of the file.
@@ -213,6 +213,32 @@ fn the_flag_goes_alone_and_commands_still_take_global_options() {
     let output = crol(&dir, &["--color", "never", "init"]);
     assert!(output.status.success(), "{output:?}");
     assert!(dir.join("project.crov").is_file());
+}
+
+#[test]
+fn says_what_the_guide_says() {
+    let dir = cargo_project("as-the-guide");
+    let output = crol(&dir, &["--init"]);
+    assert!(output.status.success(), "{output:?}");
+    // `crol` is not on crates.io yet (`docs/getting-started.md`).
+    let dependency = "`crol = { git = \"https://github.com/DreamLogics/crol\" }`";
+    assert!(stderr(&output).contains(dependency), "{output:?}");
+
+    // The schema where `crol::schema::check_file` puts it (`docs/schemas.md`).
+    let project = std::fs::read_to_string(dir.join("project.crov")).unwrap();
+    assert!(project.contains("`Some(\"crol::schema\")`"), "{project}");
+    assert!(project.contains("`crol/schema.crov`"), "{project}");
+
+    // What the comment suggests works.
+    std::fs::create_dir(dir.join("crol")).unwrap();
+    let schema = "Schema { format: 1, root: \"t::T\", types: { \"t::T\": Struct { name: \"T\", \
+                  source: (\"lib.rs\", 1), fields: {}, .. } } }";
+    std::fs::write(dir.join("crol/schema.crov"), schema).unwrap();
+    let edited = project.replace("schema: None", "schema: Some(\"crol::schema\")");
+    assert_ne!(edited, project);
+    std::fs::write(dir.join("project.crov"), edited).unwrap();
+    let output = crol(&dir, &["check"]);
+    assert!(output.status.success(), "{output:?}");
 }
 
 #[test]

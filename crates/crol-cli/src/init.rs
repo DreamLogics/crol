@@ -22,7 +22,7 @@ Project {
     variants: [],
 
     // The schema file your application writes, to check the data's types:
-    // `Some("schema")` is `schema.crov` next to this file.
+    // `Some("crol::schema")` is `crol/schema.crov` next to this file.
     schema: None,
     ..
 }
@@ -119,10 +119,10 @@ fn init(reporter: &mut Reporter) -> Result<(), String> {
     // The application's manifest and code are the user's to change.
     reporter.note(&format!(
         "\nNext:\n  \
-         - add `crol = \"{}\"` to [dependencies] in Cargo.toml, if it is not there yet\n  \
+         - add `crol = {{ git = \"{}\" }}` to [dependencies] in Cargo.toml, if it is not there yet\n  \
          - write your data in {LAYER_DIR}/{DOCUMENT_NAME}\n  \
          - run `crol check`",
-        env!("CARGO_PKG_VERSION"),
+        env!("CARGO_PKG_REPOSITORY"),
     ));
     Ok(())
 }
