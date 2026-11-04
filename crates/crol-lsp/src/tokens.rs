@@ -138,6 +138,11 @@ fn classify(node: &SyntaxNode, found: &mut Vec<(TextRange, u32, u32)>) {
             VARIANT,
             0,
         ),
+        SyntaxKind::MACRO_CALL => push(
+            ast::MacroCall::cast(node.clone()).and_then(|m| m.name()),
+            REFERENCE,
+            0,
+        ),
         SyntaxKind::UNIT_NAME => push(
             ast::UnitName::cast(node.clone()).and_then(|u| u.name()),
             VARIANT,

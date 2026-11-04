@@ -1138,7 +1138,9 @@ impl Parser<'_> {
     fn primary_inner(&mut self) {
         let outer = self.among_entries;
         let kind = self.current();
-        if matches!(kind, L_BRACK | L_PAREN) || kind == IDENT && self.nth(1) == L_PAREN {
+        if matches!(kind, L_BRACK | L_PAREN)
+            || kind == IDENT && matches!(self.nth(1), L_PAREN | BANG)
+        {
             self.among_entries = false;
         }
         self.primary_kinds();
@@ -1174,6 +1176,21 @@ impl Parser<'_> {
                     self.exprs(R_PAREN);
                     self.expect(R_PAREN, "`)`");
                     self.finish();
+                    self.finish();
+                }
+                BANG => {
+                    self.start(MACRO_CALL);
+                    self.bump();
+                    self.bump();
+                    if self.at(L_PAREN) {
+                        self.start(ARG_LIST);
+                        self.bump();
+                        self.exprs(R_PAREN);
+                        self.expect(R_PAREN, "`)`");
+                        self.finish();
+                    } else {
+                        self.error("a macro takes its arguments in `(...)`");
+                    }
                     self.finish();
                 }
                 _ => {

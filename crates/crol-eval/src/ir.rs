@@ -48,6 +48,7 @@ pub(crate) enum ExprKind {
     Path(ExprId, Vec<Selector>),
     Neg(ExprId),
     Binary(BinOp, ExprId, ExprId),
+    Macro(MacroKind, Vec<ExprId>),
     /// An expression that failed to lower; the error is already reported.
     Error,
 }
@@ -105,6 +106,44 @@ impl BinOp {
             BinOp::Merge => "~",
             BinOp::MergeShallow => "~^",
             BinOp::Fallback => "|",
+        }
+    }
+}
+
+/// A built-in macro (`SPEC.md` 6.7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MacroKind {
+    Round,
+    Floor,
+    Ceil,
+    Clamp,
+}
+
+impl MacroKind {
+    pub(crate) fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "round" => MacroKind::Round,
+            "floor" => MacroKind::Floor,
+            "ceil" => MacroKind::Ceil,
+            "clamp" => MacroKind::Clamp,
+            _ => return None,
+        })
+    }
+
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            MacroKind::Round => "round!",
+            MacroKind::Floor => "floor!",
+            MacroKind::Ceil => "ceil!",
+            MacroKind::Clamp => "clamp!",
+        }
+    }
+
+    /// How many arguments the macro takes.
+    pub(crate) fn arity(self) -> usize {
+        match self {
+            MacroKind::Clamp => 3,
+            _ => 1,
         }
     }
 }

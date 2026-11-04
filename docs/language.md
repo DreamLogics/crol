@@ -488,6 +488,31 @@ tags: ["a", "c", "d"]
 Lists only combine with lists, so to append one element, write
 `tags: & + ["x"]`.
 
+Multiplying an integer by a float gives a float, which an integer field does not
+accept. Four built-in macros bring a number back, or keep it in range:
+
+| Macro                 | Gives                                       |
+| --------------------- | ------------------------------------------- |
+| `round!(x)`           | the nearest integer, ties away from zero    |
+| `floor!(x)`           | the largest integer not above `x`           |
+| `ceil!(x)`            | the smallest integer not below `x`          |
+| `clamp!(x, min, max)` | `x`, kept between `min` and `max`           |
+
+```crol
+// example.crod
++hit_points: 1100
+hit_points: round!(& * 1.15)
++armour: clamp!(12 - 20, 0, 10)
++speed: clamp!(2.5, 0, 1.5)
+```
+
+```console
+$ crol eval example.crod
+hit_points: 1265
+armour: 0
+speed: 1.5
+```
+
 The operators bind in the usual order: selectors, unary `-`, `* / %`, `+ -`,
 then `~` and `~^`, then `|`. Parentheses group.
 
@@ -547,8 +572,9 @@ whole:
 
 ## What is not in the language
 
-CROL is data with a little arithmetic, not a programming language. There are
-no functions, conditionals, comparisons, loops or imports, and a file cannot
+CROL is data with a little arithmetic, not a programming language. Apart from the
+[built-in macros](#arithmetic-and-strings), there are no functions, and there are
+no conditionals, comparisons, loops or imports, and a file cannot
 read the environment, the clock or other files. That is what makes evaluation
 predictable: the same files give the same data, on every machine.
 

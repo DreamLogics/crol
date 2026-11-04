@@ -260,6 +260,7 @@ fn place_path(node: &SyntaxNode) -> Option<Vec<PathStep>> {
             | SyntaxKind::BINARY_EXPR
             | SyntaxKind::PAREN_EXPR
             | SyntaxKind::NAMED_TUPLE
+            | SyntaxKind::MACRO_CALL
             | SyntaxKind::SPREAD => {}
             SyntaxKind::ENTRY => {
                 parts.push(target_steps(&ast::Entry::cast(parent.clone())?.target()?)?);

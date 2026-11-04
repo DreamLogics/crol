@@ -1,0 +1,16 @@
++round_half: round!(2.5)
++round_negative: round!(-2.5)
++round_down: round!(2.4)
++floor_positive: floor!(2.9)
++floor_negative: floor!(-2.1)
++ceil_positive: ceil!(2.1)
++ceil_negative: ceil!(-2.9)
++integer_stays: round!(7)
++clamp_integers: clamp!(12, 0, 10)
++clamp_inside: clamp!(5, 0, 10)
++clamp_floats: clamp!(2.5, 0, 1.5)
++clamp_counts_as_floats: clamp!(5, 0.5, 10)
++hit_points: 1100
+hit_points: round!(& * 1.15)
++nested: { value: floor!(&root.hit_points / 3.0) + 1 }
++list: [round!(1.5), floor!(1.5)]

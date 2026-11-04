@@ -174,6 +174,7 @@ fn is_expr(kind: SyntaxKind) -> bool {
             | LIST_EXPR
             | TUPLE_EXPR
             | NAMED_TUPLE
+            | MACRO_CALL
             | UNIT_NAME
             | PAREN_EXPR
             | PATH_EXPR
@@ -476,7 +477,7 @@ impl Formatter {
     /// with `trailing` characters to follow it on its last line.
     fn render(&self, node: &SyntaxNode, indent: usize, col: usize, trailing: usize) -> String {
         match node.kind() {
-            BLOCK | LIST_EXPR | TUPLE_EXPR | NAMED_TUPLE | VARIANT_BLOCK => {
+            BLOCK | LIST_EXPR | TUPLE_EXPR | NAMED_TUPLE | MACRO_CALL | VARIANT_BLOCK => {
                 if let Some(flat) = self.flat(node)
                     && self.fits(col, &flat, trailing)
                 {
@@ -542,7 +543,7 @@ impl Formatter {
                 significant_tokens(node).map(|t| t.to_string()).collect()
             }
             ID_EXPR => format!("@{}", significant_tokens(node).nth(1)?),
-            BLOCK | LIST_EXPR | TUPLE_EXPR | NAMED_TUPLE | VARIANT_BLOCK => {
+            BLOCK | LIST_EXPR | TUPLE_EXPR | NAMED_TUPLE | MACRO_CALL | VARIANT_BLOCK => {
                 self.flat_container(node)?
             }
             PAREN_EXPR => format!("({})", self.flat(&node.children().next()?)?),
@@ -721,6 +722,10 @@ impl Formatter {
                 let name = child_token(node, &[IDENT]).map_or_else(String::new, |t| t.to_string());
                 (name, "(", ")")
             }
+            MACRO_CALL => {
+                let name = child_token(node, &[IDENT]).map_or_else(String::new, |t| t.to_string());
+                (name + "!", "(", ")")
+            }
             _ => (String::new(), "(", ")"),
         }
     }
@@ -729,7 +734,9 @@ impl Formatter {
     /// or the container itself.
     fn items_node(node: &SyntaxNode) -> SyntaxNode {
         match node.kind() {
-            NAMED_TUPLE => child_node(node, |k| k == ARG_LIST).unwrap_or_else(|| node.clone()),
+            NAMED_TUPLE | MACRO_CALL => {
+                child_node(node, |k| k == ARG_LIST).unwrap_or_else(|| node.clone())
+            }
             _ => node.clone(),
         }
     }

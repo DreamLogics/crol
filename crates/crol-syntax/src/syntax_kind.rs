@@ -151,6 +151,7 @@ pub enum SyntaxKind {
     TUPLE_EXPR,
     /// `Name(a, b)`
     NAMED_TUPLE,
+    MACRO_CALL,
     /// `(a, b)` after a named tuple's name.
     ARG_LIST,
     /// `None`, `Red`
@@ -316,6 +317,7 @@ const KINDS: [SyntaxKind; __LAST as usize] = [
     LIST_EXPR,
     TUPLE_EXPR,
     NAMED_TUPLE,
+    MACRO_CALL,
     ARG_LIST,
     UNIT_NAME,
     PAREN_EXPR,

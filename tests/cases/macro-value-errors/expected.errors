@@ -1,0 +1,4 @@
+1-base/a.crod:1:10: round!: takes numbers, not a string
+1-base/a.crod:2:10: clamp!: the minimum 5 is above the maximum 2
+1-base/a.crod:3:16: clamp!: the minimum 5.0 is above the maximum 2.0
+1-base/a.crod:4:12: round!: integer overflow

@@ -181,6 +181,7 @@ module.exports = grammar({
       $.list_expr,
       $.tuple_expr,
       $.named_tuple,
+      $.macro_call,
       $.unit_name,
       $.paren_expr,
     ),
@@ -218,6 +219,7 @@ module.exports = grammar({
     ),
     paren_expr: $ => seq('(', $._expression, ')'),
     named_tuple: $ => seq(field('name', $.identifier), $.arg_list),
+    macro_call: $ => seq(field('name', $.identifier), '!', $.arg_list),
     arg_list: $ => seq('(', commaSep($._expression), ')'),
     unit_name: $ => $.identifier,
 

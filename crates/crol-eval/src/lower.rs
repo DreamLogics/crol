@@ -1203,6 +1203,7 @@ impl Lowerer {
                     self.detached(|this| named.elements().map(|e| this.expr(&e)).collect());
                 self.ir.add_expr(ExprKind::Named(name, elements), span)
             }
+            ast::Expr::MacroCall(call) => self.macro_call(call, span),
             ast::Expr::UnitName(unit) => {
                 let name = unit
                     .name()
@@ -1363,6 +1364,31 @@ impl Lowerer {
         let result = f(self);
         self.reach = saved;
         result
+    }
+
+    /// A built-in macro (`SPEC.md` 6.7).
+    fn macro_call(&mut self, call: &ast::MacroCall, span: Span) -> ExprId {
+        let name = call
+            .name()
+            .map_or_else(String::new, |n| n.text().to_owned());
+        let args: Vec<ExprId> = self.detached(|this| call.args().map(|e| this.expr(&e)).collect());
+        let Some(kind) = MacroKind::from_name(&name) else {
+            self.error(
+                span,
+                format!("there is no macro `{name}!`; the macros are `round!`, `floor!`, `ceil!` and `clamp!`"),
+            );
+            return self.ir.add_expr(ExprKind::Error, span);
+        };
+        if args.len() != kind.arity() {
+            let (name, arity, found) = (kind.name(), kind.arity(), args.len());
+            let s = if arity == 1 { "" } else { "s" };
+            self.error(
+                span,
+                format!("{name} takes {arity} argument{s}, not {found}"),
+            );
+            return self.ir.add_expr(ExprKind::Error, span);
+        }
+        self.ir.add_expr(ExprKind::Macro(kind, args), span)
     }
 
     fn reference(&mut self, reference: &ast::Reference, span: Span) -> ExprId {

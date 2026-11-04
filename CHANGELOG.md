@@ -11,6 +11,7 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Added
 
+- The macros `round!`, `floor!`, `ceil!` and `clamp!` (`SPEC.md` 6.7).
 - `~^`, a shallow merge, and `^key: value`, which replaces a value where a block
   would merge (`SPEC.md` 5, 5.2, 6.4).
 - `init_defaults`, in `CrolConfig` and the project file's `options`: with a schema,

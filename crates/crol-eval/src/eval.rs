@@ -835,7 +835,10 @@ fn collect_reads(
                 collect_reads(ir, ir.value_binds[bind].expr, depth + 1, templates, out);
             }
         }
-        ExprKind::List(items) | ExprKind::Tuple(items) | ExprKind::Named(_, items) => {
+        ExprKind::List(items)
+        | ExprKind::Tuple(items)
+        | ExprKind::Named(_, items)
+        | ExprKind::Macro(_, items) => {
             for &item in items {
                 collect_reads(ir, item, depth, templates, out);
             }
@@ -2309,6 +2312,14 @@ impl Evaluator<'_> {
                 }
             }
             ExprKind::Binary(op, lhs, rhs) => self.binary(*op, *lhs, *rhs, env, span),
+            ExprKind::Macro(kind, args) => {
+                let detached = Self::detached(env);
+                let mut values = Vec::with_capacity(args.len());
+                for &arg in args {
+                    values.push(self.eval(arg, &detached)?);
+                }
+                self.macro_call(*kind, &values, span)
+            }
             ExprKind::Error => Err(Fail::Poison),
         }
     }
@@ -3341,6 +3352,61 @@ impl Evaluator<'_> {
                 ))
             }
         }
+    }
+
+    /// A built-in macro (`SPEC.md` 6.7).
+    fn macro_call(&mut self, kind: MacroKind, args: &[Rc<Shaped>], span: Span) -> Eval<Rc<Shaped>> {
+        let name = kind.name();
+        for arg in args {
+            if !matches!(arg.shape, Shape::Int(_) | Shape::Float(_)) {
+                let found = arg.shape.kind_name();
+                return Err(self.fail(span, format!("{name}: takes numbers, not {found}")));
+            }
+        }
+        if kind == MacroKind::Clamp {
+            return self.clamp(&args[0], &args[1], &args[2], span);
+        }
+        let float = match args[0].shape {
+            Shape::Float(f) => f,
+            _ => return Ok(args[0].clone()),
+        };
+        let whole = match kind {
+            MacroKind::Round => float.round(),
+            MacroKind::Floor => float.floor(),
+            _ => float.ceil(),
+        };
+        // `i128::MAX as f64` rounds up to 2^127, which does not fit.
+        if whole >= -(2f64.powi(127)) && whole < 2f64.powi(127) {
+            Self::shaped(Shape::Int(whole as i128), span)
+        } else {
+            Err(self.fail(span, format!("{name}: integer overflow")))
+        }
+    }
+
+    fn clamp(&mut self, x: &Shaped, lo: &Shaped, hi: &Shaped, span: Span) -> Eval<Rc<Shaped>> {
+        if let (Shape::Int(x), Shape::Int(lo), Shape::Int(hi)) = (&x.shape, &lo.shape, &hi.shape) {
+            if lo > hi {
+                return Err(self.fail(
+                    span,
+                    format!("clamp!: the minimum {lo} is above the maximum {hi}"),
+                ));
+            }
+            return Self::shaped(Shape::Int(*x.clamp(lo, hi)), span);
+        }
+        let float = |shaped: &Shaped| match shaped.shape {
+            Shape::Int(i) => i as f64,
+            Shape::Float(f) => f,
+            _ => unreachable!("checked to be numbers"),
+        };
+        let (x, lo, hi) = (float(x), float(lo), float(hi));
+        if lo > hi {
+            let (lo, hi) = (format_float(lo), format_float(hi));
+            return Err(self.fail(
+                span,
+                format!("clamp!: the minimum {lo} is above the maximum {hi}"),
+            ));
+        }
+        Self::shaped(Shape::Float(x.clamp(lo, hi)), span)
     }
 
     fn arithmetic(

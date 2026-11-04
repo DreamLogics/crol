@@ -33,9 +33,10 @@ RFC 2119 sense.
 
 **Non-goals**
 
-- A programming language. CROL has no functions, conditionals,
-  comparisons, loops, imports or I/O. Every expression is pure
-  arithmetic and structural combination.
+- A programming language. CROL has no functions of your own, no
+  conditionals, comparisons, loops, imports or I/O. Every expression is
+  pure arithmetic and structural combination, with four built-in macros
+  for numbers (section 6.7).
 - A schema language. The format has no types. Types, defaults,
   required fields and the meaning of ids come from the Rust program
   (section 10), and for tools from a schema generated from it (10.9).
@@ -1166,6 +1167,28 @@ values) are an error; write `"..."` around an id's text if needed.
 
 ---
 
+### 6.7 Macros
+
+A macro is written `name!(arguments)`. There are four, all on numbers,
+and a file cannot define more:
+
+| Macro | Result |
+|---|---|
+| `round!(x)` | `x` to the nearest integer, ties away from zero |
+| `floor!(x)` | the largest integer not above `x` |
+| `ceil!(x)` | the smallest integer not below `x` |
+| `clamp!(x, min, max)` | `x`, kept between `min` and `max` |
+
+`round!`, `floor!` and `ceil!` return an integer, and are errors when the
+result does not fit one; an integer argument is returned as it is. So
+`hit_points: round!(& * 1.1)` stays an integer. `clamp!` of integers is an
+integer, and with any float among its arguments it counts as floats, as
+arithmetic does; `min` above `max` is an error. Any argument that is not
+a number is an error naming its kind, and so are a wrong number of
+arguments and a name that is no macro. Arguments are evaluated as
+operands of an arithmetic operator are. The results are exact, so they are
+the same on every platform (section 7.6).
+
 ## 7. Layers and evaluation
 
 ### 7.1 Layers
@@ -1660,6 +1683,7 @@ primary      ::= literal
                | list
                | tuple
                | identifier "(" exprs ")"          (* Some(1), Rgb(1, 2, 3) *)
+               | identifier "!" "(" exprs ")"      (* round!(x), section 6.7 *)
                | identifier                        (* None, Red *)
                | "(" expr ")"
 reference    ::= "&" ( identifier | "self" | "root" | "default" | parents )?

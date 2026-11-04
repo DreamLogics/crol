@@ -17,6 +17,7 @@
 ; Type names, variants and constructors.
 (block type: (identifier) @type)
 (named_tuple name: (identifier) @constructor)
+(macro_call name: (identifier) @function)
 (unit_name (identifier) @constant)
 (type_attr name: (identifier) @type)
 (use_alias name: (identifier) @type)

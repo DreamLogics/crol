@@ -1,0 +1,15 @@
+round_half: 3
+round_negative: -3
+round_down: 2
+floor_positive: 2
+floor_negative: -3
+ceil_positive: 3
+ceil_negative: -2
+integer_stays: 7
+clamp_integers: 10
+clamp_inside: 5
+clamp_floats: 1.5
+clamp_counts_as_floats: 5.0
+hit_points: 1265
+nested: { value: 422 }
+list: [2, 1]

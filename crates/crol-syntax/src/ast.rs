@@ -657,6 +657,7 @@ ast_enum!(
         List(ListExpr),
         Tuple(TupleExpr),
         NamedTuple(NamedTuple),
+        MacroCall(MacroCall),
         UnitName(UnitName),
         Paren(ParenExpr),
         Path(PathExpr),
@@ -779,6 +780,25 @@ impl TupleExpr {
 }
 
 ast_node!(
+    /// `round!(a)`
+    MacroCall, MACRO_CALL
+);
+
+impl MacroCall {
+    /// The macro's name.
+    pub fn name(&self) -> Option<SyntaxToken> {
+        token(&self.0, IDENT)
+    }
+
+    /// The arguments.
+    pub fn args(&self) -> impl Iterator<Item = Expr> + use<> {
+        child::<ArgList>(&self.0)
+            .into_iter()
+            .flat_map(|args| children::<Expr>(&args.0))
+    }
+}
+
+ast_node!(
     /// `Name(a, b)`
     NamedTuple, NAMED_TUPLE
 );
@@ -798,7 +818,7 @@ impl NamedTuple {
 }
 
 ast_node!(
-    /// The parenthesised payload of a [`NamedTuple`].
+    /// The parenthesised payload of a [`NamedTuple`] or [`MacroCall`].
     ArgList, ARG_LIST
 );
 

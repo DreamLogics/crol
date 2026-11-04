@@ -51,6 +51,10 @@
           "named": true
         },
         {
+          "type": "macro_call",
+          "named": true
+        },
+        {
           "type": "named_tuple",
           "named": true
         },
@@ -134,6 +138,10 @@
           },
           {
             "type": "literal",
+            "named": true
+          },
+          {
+            "type": "macro_call",
             "named": true
           },
           {
@@ -226,6 +234,10 @@
           },
           {
             "type": "literal",
+            "named": true
+          },
+          {
+            "type": "macro_call",
             "named": true
           },
           {
@@ -465,6 +477,10 @@
           "named": true
         },
         {
+          "type": "macro_call",
+          "named": true
+        },
+        {
           "type": "named_tuple",
           "named": true
         },
@@ -565,6 +581,10 @@
           },
           {
             "type": "literal",
+            "named": true
+          },
+          {
+            "type": "macro_call",
             "named": true
           },
           {
@@ -731,6 +751,10 @@
           "named": true
         },
         {
+          "type": "macro_call",
+          "named": true
+        },
+        {
           "type": "named_tuple",
           "named": true
         },
@@ -787,6 +811,32 @@
         },
         {
           "type": "string",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "macro_call",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "arg_list",
           "named": true
         }
       ]
@@ -862,6 +912,10 @@
           "named": true
         },
         {
+          "type": "macro_call",
+          "named": true
+        },
+        {
           "type": "named_tuple",
           "named": true
         },
@@ -914,6 +968,10 @@
           },
           {
             "type": "literal",
+            "named": true
+          },
+          {
+            "type": "macro_call",
             "named": true
           },
           {
@@ -988,6 +1046,10 @@
           },
           {
             "type": "literal",
+            "named": true
+          },
+          {
+            "type": "macro_call",
             "named": true
           },
           {
@@ -1117,6 +1179,10 @@
             "named": true
           },
           {
+            "type": "macro_call",
+            "named": true
+          },
+          {
             "type": "named_tuple",
             "named": true
           },
@@ -1208,6 +1274,10 @@
         },
         {
           "type": "literal",
+          "named": true
+        },
+        {
+          "type": "macro_call",
           "named": true
         },
         {
@@ -1400,6 +1470,10 @@
           },
           {
             "type": "literal",
+            "named": true
+          },
+          {
+            "type": "macro_call",
             "named": true
           },
           {
