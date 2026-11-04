@@ -2049,7 +2049,8 @@ context chosen with the `context` setting.
   layer below or at the cursor (with every layer's as alternatives); on
   a bind, the bound entry; on an id, the key's definition; on a
   reference path, the entry that set the final value there.
-- "Go to value below": the operation that produced `&` at the cursor.
+- "Go to value below": the operation that produced `&` at the cursor,
+  through go to definition on a bare `&`.
 - Find references: for a root key, every operation on it in every
   layer, every reference to it, and every id naming it; for a bind, its
   uses.
