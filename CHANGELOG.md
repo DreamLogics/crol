@@ -11,6 +11,8 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Added
 
+- `crol::DataWriter`, which writes data-mode documents: declarations, patches,
+  diffs between two values and variant blocks (`SPEC.md` 10.8).
 - The macros `round!`, `floor!`, `ceil!` and `clamp!` (`SPEC.md` 6.7).
 - `~^`, a shallow merge, and `^key: value`, which replaces a value where a block
   would merge (`SPEC.md` 5, 5.2, 6.4).

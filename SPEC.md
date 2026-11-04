@@ -2157,6 +2157,17 @@ error. A struct whose serialization leaves fields out with
 only if it has `explicit_defaults = false` (section 10.3). The output has no operators; it is
 plain data that reads back to the same value.
 
+`crol::DataWriter` writes a data-mode document, for a program that
+generates a layer, with values serialized the same way. `declare`, `set`,
+`ensure`, `remove`, `template` and `comment` write what they say, and
+`variant(condition, |writer| ...)` a variant block, left out if it is empty.
+`patch(key, value)` writes `key: & ~ value`, without any `..` in it,
+since a field left out of a patch is not changed. `diff(key, from, to)` writes the
+smallest entry that makes `from` into `to`: nothing if they are equal,
+else a patch of what differs, at any depth, with `-key` for what is gone,
+or a set where `to` cannot be merged into `from`. `finish` formats the
+document, and is an error if it does not parse.
+
 ### 10.9 Schema
 
 Evaluation and deserialization need no schema, except `&default`

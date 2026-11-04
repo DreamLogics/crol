@@ -278,6 +278,7 @@ mod raw;
 mod remote;
 pub mod schema;
 mod ser;
+mod writer;
 
 use crol_eval::evaluate_value;
 use serde::{Deserialize, Serialize};
@@ -305,6 +306,7 @@ pub use schema::Schema;
 #[cfg(feature = "derive")]
 pub use crol_derive::{Schema, VariantName};
 pub use ser::PrettyConfig;
+pub use writer::DataWriter;
 
 /// The result type of this crate.
 pub type Result<T, E = Error> = std::result::Result<T, E>;

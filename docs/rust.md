@@ -520,7 +520,43 @@ tags: ["a"]
 
 CROL does not edit files for you: there is no way to change a value and keep
 the file's layout and comments. To change data from a program, write a new
-layer on top instead.
+layer on top instead, with `crol::DataWriter`:
+
+```rust
+// src/main.rs
+use crol::DataWriter;
+use serde::Serialize;
+
+#[derive(Serialize)]
+struct Service {
+    port: u16,
+    replicas: u32,
+}
+
+fn main() -> Result<(), crol::Error> {
+    let web = Service { port: 80, replicas: 2 };
+    let scaled = Service { port: 80, replicas: 8 };
+
+    let mut writer = DataWriter::new();
+    writer.comment("Generated; do not edit.");
+    writer.declare("web", &web)?;
+    writer.variant("prod", |w| w.diff("web", &web, &scaled))?;
+    print!("{}", writer.finish()?);
+    Ok(())
+}
+```
+
+```console
+$ cargo run
+// Generated; do not edit.
++web: Service { port: 80, replicas: 2 }
+<prod> {
+    web: & ~ Service { replicas: 8 },
+}
+```
+
+`diff` writes only what differs, at any depth. A struct that leaves fields out with
+`skip_serializing_if` gets `..`, so the output reads back.
 
 ## Cargo features
 
