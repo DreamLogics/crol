@@ -1,0 +1,6 @@
+// Each `+` list doubles the operations of the entries inside it; nine levels
+// would be 512, over the limit of 256.
+<a + b> { <c + d> { <e + f> { <g + h> { <i + j> { <k + l> { <m + n> { <o + p> {
+    eight: 1,
+    <q + r> { nine: 1 },
+} } } } } } } },

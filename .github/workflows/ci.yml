@@ -143,3 +143,29 @@ jobs:
         with:
           workspaces: editors/zed
       - run: cargo build --manifest-path editors/zed/Cargo.toml --target wasm32-wasip2
+
+  fuzz:
+    name: Fuzzing (a minute per target)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - name: Run each target, seeded with the test files
+        run: |
+          for target in parse evaluate_value evaluate_data; do
+            mkdir -p "fuzz/corpus/$target"
+            cargo fuzz run "$target" "fuzz/corpus/$target" tests/syntax/valid tests/cases \
+              -- -max_total_time=60 -timeout=10 -rss_limit_mb=2048 -max_len=4096
+          done
+      - name: Keep what crashed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts

@@ -29,7 +29,8 @@ committing it.
   must be licensed compatibly with both MIT and Apache-2.0 (`cargo deny check`).
 - Every rule in the specification should get at least one passing and one
   error test case.
-- The parser and evaluator must never panic or loop, on any input.
+- The parser and evaluator must never panic or loop, on any input. The fuzz
+  targets in [`fuzz/`](fuzz/README.md) look for inputs that make them.
 
 ## Releasing
 

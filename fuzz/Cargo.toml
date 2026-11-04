@@ -1,0 +1,39 @@
+[package]
+name = "crol-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Fuzz targets for CROL (SPEC.md 14.2), run with cargo fuzz"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+crol-eval = { path = "../crates/crol-eval" }
+crol-syntax = { path = "../crates/crol-syntax" }
+libfuzzer-sys = "0.4.13"
+
+# Not a member of the main workspace: it builds only with cargo fuzz, on
+# nightly.
+[workspace]
+
+[[bin]]
+name = "parse"
+path = "fuzz_targets/parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "evaluate_value"
+path = "fuzz_targets/evaluate_value.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "evaluate_data"
+path = "fuzz_targets/evaluate_data.rs"
+test = false
+doc = false
+bench = false

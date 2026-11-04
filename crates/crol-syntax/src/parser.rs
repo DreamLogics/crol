@@ -244,6 +244,16 @@ impl Parser<'_> {
         if self.at(EOF) || stop.contains(&self.current()) {
             return;
         }
+        // Skipped tokens are always an error; the caller may have reported
+        // it already, at the last token or here.
+        if self
+            .errors
+            .last()
+            .is_none_or(|e| e.range().end() < self.last_end)
+        {
+            let message = format!("unexpected `{}`", self.nth_text(0));
+            self.error(message);
+        }
         self.start(ERROR);
         let mut depth = 0usize;
         let mut first = true;
