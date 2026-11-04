@@ -1,0 +1,417 @@
+# The language by example
+
+If you know Rust, you can already read most of CROL. This page goes through
+what you can write in a file, from plain values to references and templates.
+Every example here runs: save it to a file and try `crol eval` on it.
+
+## Entries
+
+A file is a list of _entries_, separated by commas. A trailing comma is
+allowed, and a missing comma is an error. Comments are written as in Rust:
+`// to the end of the line`, or `/* like this */`, which can nest.
+
+An entry is an operation on a key. There are four, and the prefix says which
+one you mean:
+
+```crol
+// example.crol
++name: "web", // declare: create `name`; an error if it already exists
+port: 8080, // set: create `port`, or replace it
+?replicas: 2, // ensure: create `replicas` unless it already exists
+```
+
+The fourth removes a key, and is an error if the key does not exist:
+
+```crol
+-replicas,
+```
+
+Why have several ways of writing a key? Because your intent is checked. In a
+project with many files, `+web` says "I am introducing `web`", and you get an
+error if someone else already did, rather than a silent overwrite.
+
+## Values
+
+| Kind       | Examples                                                    |
+| ---------- | ----------------------------------------------------------- |
+| boolean    | `true`, `false`                                             |
+| integer    | `12`, `-3`, `0x1F`, `0o17`, `0b1010`, `1_000`               |
+| float      | `1.5`, `1e3`, `2.5E-3`                                      |
+| char       | `'a'`, `'\n'`, `'\u{E9}'`                                   |
+| string     | `"text"`, `"line\n"`, `r"raw"`, `r#"with "quotes""#`        |
+| list       | `[1, 2, 3]`                                                 |
+| tuple      | `(1, "a")`, `(1,)`, `()`                                    |
+| keyed      | `{ port: 80 }`, `Service { port: 80 }`                      |
+| unit name  | `None`, `Red`: a unit enum variant or unit struct           |
+| named tuple | `Some(1)`, `Rgb(1, 2, 3)`: a tuple variant or tuple struct |
+| id         | `@web`, `@"odd id"`                                         |
+
+Numbers have no suffixes (`1u8` is an error), and floats need a digit on both
+sides of the dot. Strings can span several lines.
+
+## Structs and maps
+
+Structs and maps look the same in CROL, with one notation, a _keyed value_.
+Your Rust type decides which it becomes.
+
+```crol
+// example.crol
++web: Service {
+    replicas: 2,
+    limits: Limits { cpu: 1.5, memory_mb: 512 },
+    env: { LOG_LEVEL: "info", "odd key": "yes" },
+    ports: { 80: "http", 443: "https" },
+},
+```
+
+The name before the braces is the _type name_. It is optional, but when you
+write it, it has to match the Rust type. Writing `Limits` on a `Service` field
+is an error, so the name acts as a check and tells readers what they are
+looking at. It also decides which variant of an enum a value is, as the next
+section shows.
+
+Keys are identifiers, quoted strings (for anything that is not an identifier)
+or integers. `port` and `"port"` are the same key; `12` and `"12"` are not.
+
+## Enums and options
+
+Enum values are written as in Rust:
+
+```crol
+// example.crol
++mode: Fast, // a unit variant
++colour: Rgb(255, 128, 0), // a tuple variant
++shape: Circle { radius: 2.0 }, // a struct variant
++cache: Some("redis://cache:6379"), // Option
++proxy: None,
+```
+
+An `Option<T>` field also accepts a plain value, so `timeout: 30` is the same
+as `timeout: Some(30)`.
+
+## Changing what is already there
+
+A _path_ reaches inside a value. This is how you change one field without
+repeating the rest:
+
+```crol
+// example.crol
++web: {
+    limits: { cpu: 1.0, memory_mb: 512 },
+    tags: ["a", "b"],
+    point: (1, 2),
+    env: { "LOG LEVEL": "info" },
+},
+
+web.limits.cpu: 2.0, // a field
+web.tags[0]: "first", // a list element
+web.point.1: 3, // a tuple element
+web.env["LOG LEVEL"]: "debug", // a key that needs quotes
+```
+
+```console
+$ crol eval example.crol
+web: {
+    limits: { cpu: 2.0, memory_mb: 512 },
+    tags: ["first", "b"],
+    point: (1, 3),
+    env: { "LOG LEVEL": "debug" },
+},
+```
+
+Every step of the path but the last must exist, or you get an error that
+names the missing step. Removing works the same way: `-web.limits.memory_mb`.
+
+To change several fields at once, use `~`, the _merge_ operator, with `&` for
+the value below. The block on the right is applied on top of the value on the
+left:
+
+```crol
+// example.crol
++web: { replicas: 1, port: 80, limits: { cpu: 1.0, memory_mb: 512 } },
+
+web: & ~ {
+    replicas: 2,
+    limits.cpu: 2.0,
+},
+```
+
+```console
+$ crol eval example.crol
+web: { replicas: 2, port: 80, limits: { cpu: 2.0, memory_mb: 512 } },
+```
+
+Merging is shallow. If the patch had said `limits: { cpu: 2.0 }`, it would
+have replaced `limits` as a whole, and `memory_mb` would be gone. To change
+something deeper, write a path, as above, or merge again:
+`limits: & ~ { cpu: 2.0 }`.
+
+## References
+
+References read other values. They all start with `&`:
+
+| Reference    | Reads                                                   |
+| ------------ | ------------------------------------------------------- |
+| `&`          | the value below: this target before this entry applied  |
+| `&self`      | the block this entry is in                              |
+| `&parent`    | the block around that; `&parent.&parent` goes further   |
+| `&root`      | the top level of the data                               |
+| `&name`      | a bind or template, see below                           |
+| `&default`   | the Rust default of this field, see [below][defaults]   |
+
+[defaults]: #leaving-fields-out
+
+```crol
+// example.crol
++web: {
+    port: 8080,
+    url: "http://web:" + &self.port,
+    health: {
+        probe: "http://localhost:" + &parent.port,
+    },
+},
++proxy: {
+    upstream: &root.web.url,
+},
+```
+
+```console
+$ crol eval example.crol
+web: { port: 8080, url: "http://web:8080", health: { probe: "http://localhost:8080" } },
+proxy: { upstream: "http://web:8080" },
+```
+
+The order of entries does not matter for these references: they read the
+_final_ value, wherever it was written. `&` is the exception, and reads what
+came _before_ this entry. [Layers](layers.md#early-and-late-references)
+explains why that difference is the heart of CROL.
+
+There is no implicit lookup. `&port` never means "`port` from somewhere
+around here". It names a bind, or it is an error that suggests `&self.port`.
+
+### Binds
+
+If counting `&parent`s gets tiresome, give an entry a name with `name =`, and
+use it from any block nested inside:
+
+```crol
+// example.crol
++web: {
+    port = port: 8080,
+    health: {
+        probe: {
+            url: "http://localhost:" + &port,
+        },
+    },
+},
+```
+
+`name := value` binds a name to a value that is not stored under any key:
+
+```crol
+// example.crol
++web: {
+    base := 8000,
+    port: &base,
+    admin_port: &base + 1,
+},
+```
+
+```console
+$ crol eval example.crol
+web: { port: 8000, admin_port: 8001 },
+```
+
+## Templates and spreads
+
+At the top level, `name := value` makes a _template_: a value that belongs to
+no key, for other values to be built from. `..` _spreads_ a template into a
+block, copying its entries in. Entries you write yourself win over spread
+ones, wherever you put them:
+
+```crol
+// example.crol
+service_defaults := {
+    replicas: 1,
+    port: 8080,
+    url: "http://localhost:" + &self.port,
+},
+
++web: {
+    ..&service_defaults,
+    replicas: 3,
+},
+
++admin: {
+    ..&service_defaults,
+    port: 9000,
+},
+```
+
+```console
+$ crol eval example.crol
+web: { replicas: 3, port: 8080, url: "http://localhost:8080" },
+admin: { replicas: 1, port: 9000, url: "http://localhost:9000" },
+```
+
+Look at `admin.url`. The `&self.port` in the template was evaluated where it
+landed, so it read `admin`'s port. A template can describe its fields in terms
+of each other, and every value that spreads it gets them computed from its own
+fields.
+
+Templates are not data: they do not show up in the output, and your program
+never sees them. In layered data they are visible in every file of every
+layer, and can be defined only once.
+
+## Leaving fields out
+
+When CROL loads a struct, **every field must be written**, `Option` fields
+included. That is on purpose: a field that goes missing because of a typo
+should not silently become its default.
+
+When you do mean to leave fields out, say so with `..` at the end of the
+block. Then serde decides, as usual: `Option` fields become `None`, and fields
+with `#[serde(default)]` take their default. A field with neither is still an
+error.
+
+```crol
+// example.crol
++web: Service {
+    port: 8080,
+    ..,
+},
+```
+
+A field removed with `-field` also takes its default, without `..`. Use it to
+drop a value that a lower layer or a template set:
+
+```crol
+// example.crol
+base := { port: 80, limits: { cpu: 1.0 } },
+
++web: {
+    ..&base,
+    -limits,
+},
+```
+
+`&default` reads the default itself, so you can compute with it:
+
+```crol
++web: Service {
+    replicas: &default * 2,
+    limits: &default ~ { cpu: 2.0 },
+    ..,
+},
+```
+
+`&default` needs to know your types, so it works only when your program hands
+the composer a schema. [Schemas](schemas.md#using-default) has the details and
+the current limits.
+
+## Arithmetic and strings
+
+| Operands                  | Operators                                         |
+| ------------------------- | ------------------------------------------------- |
+| integer, float            | `+`, `-`, `*`, `/`, `%`, and `-x`                 |
+| string, string            | `+` concatenates                                  |
+| string, number/char/bool  | `+` formats the value into the string             |
+| list, list                | `+` concatenates, `-` removes the elements on the right |
+
+An integer and a float together count as floats. Integer division truncates.
+Overflow and division by zero are errors, not surprises.
+
+```crol
+// example.crol
++memory: 512 * 4,
++half: 7 / 2,
++ratio: 7 / 2.0,
++label: "port " + 8080,
++tags: ["a", "b", "c"] - ["b"] + ["d"],
+```
+
+```console
+$ crol eval example.crol
+memory: 2048,
+half: 3,
+ratio: 3.5,
+label: "port 8080",
+tags: ["a", "c", "d"],
+```
+
+Lists only combine with lists, so to append one element, write
+`tags: & + ["x"]`.
+
+The operators bind in the usual order: selectors, unary `-`, `* / %`, `+ -`,
+then `~`, then `|`. Parentheses group.
+
+## Fallback
+
+`a | b` is `a`, unless a value in `a` is missing, in which case it is `b`:
+
+```crol
+// example.crol
++settings: { timeout: 30 },
++timeout: &root.settings.timeout | 60,
++retries: &root.settings.retries | 3,
+counter: & + 1 | 1,
+```
+
+```console
+$ crol eval example.crol
+settings: { timeout: 30 },
+timeout: 30,
+retries: 3,
+counter: 1,
+```
+
+The last line counts: it adds one if a lower layer wrote `counter`, and starts
+at 1 if not.
+
+`|` catches only missing values. Other errors, such as adding a string to a
+list, are still reported.
+
+## Ids
+
+An id, written `@web`, is a value that names a root key. Use one wherever one
+definition points at another:
+
+```crol
+// example.crol
++database: { port: 5432 },
++web: { depends_on: [@database] },
+```
+
+An id is not a lookup: it evaluates to the name, and your program decides what
+to do with it. What ids buy you is checking. Declare the field as
+[`crol::Id`](rust.md#ids), and a [schema](schemas.md) makes `crol check` and
+your editor report ids that name nothing.
+
+## Attributes
+
+A document can start with attributes, which say something about the file as a
+whole:
+
+| Attribute                       | Says                                         | Read more                                      |
+| ------------------------------- | -------------------------------------------- | ---------------------------------------------- |
+| `#![schema(...)]`               | which schema tools check this file against   | [Schemas](schemas.md#how-schemas-are-found)    |
+| `#![extends(path)]`             | which files this one is written on top of    | [Layers](layers.md#declaring-what-a-file-builds-on) |
+| `#![use(path as Alias)]`        | which type a name means                      | [Schemas](schemas.md#types-with-the-same-name) |
+| `#![type(Name)]`                | the type of a whole value-mode document      | [Modes](modes.md)                              |
+
+## What is not in the language
+
+CROL is data with a little arithmetic, not a programming language. There are
+no functions, conditionals, comparisons, loops or imports, and a file cannot
+read the environment, the clock or other files. That is what makes evaluation
+predictable: the same files give the same data, on every machine.
+
+- For values that differ per environment, use [variants](variants.md).
+- For values that come from outside, such as secrets, have your program fill
+  them in after loading, or generate a layer.
+- For validation, such as ranges or rules across fields, use Rust: wrapper
+  types with their own `Deserialize`, or a check after loading.
+
+## Next
+
+[Data mode and value mode](modes.md) explains the two ways a file can be read.

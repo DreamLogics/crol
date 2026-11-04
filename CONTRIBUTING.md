@@ -7,6 +7,9 @@ the specification in the same pull request; a behaviour the specification
 does not describe is a bug in one of the two. Code comments refer to it by
 section (`SPEC.md` 6.1.2).
 
+The guide in [`docs/`](docs/README.md) is written for users, and describes what
+the code does today. A change that users can see updates the guide as well.
+
 ## Checks
 
 CI runs these on every pull request; run them before pushing:

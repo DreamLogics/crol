@@ -1,0 +1,482 @@
+# Schemas
+
+Your program knows the types of its data. Tools do not: without help, `crol
+check` and your editor can only see that a file parses and evaluates, not that
+`replicas` is a number or that `Service` has no field `replica`. A schema is a
+description of your Rust types that tools can read. With one, you get type
+errors, completion and hover docs without running your program.
+
+You never write a schema by hand. **It is generated from your Rust types**, and
+stored in a file that you commit.
+
+Loading does not need a schema. `crol::from_str` and `CrolComposer` work without
+one, and you can add one at any time.
+
+## Generating a schema
+
+This section builds one from scratch. Enable the `derive` feature:
+
+```toml
+# Cargo.toml
+[package]
+name = "fleet"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+crol = { git = "https://github.com/DreamLogics/crol", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+```
+
+Then add `crol::Schema` to the derives of the types your data loads into. Doc
+comments are kept, and become the docs your editor shows:
+
+```rust
+// src/lib.rs
+use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
+
+/// Everything the data can define.
+#[derive(Debug, Deserialize, Serialize, crol::Schema)]
+pub enum Definition {
+    Service(Service),
+    Volume(Volume),
+}
+
+/// A service that runs one container image.
+#[derive(Debug, Deserialize, Serialize, crol::Schema)]
+#[crol(defaults)]
+pub struct Service {
+    /// The image to run.
+    pub image: String,
+    /// The port it listens on.
+    pub port: u16,
+    /// Number of copies to run.
+    #[serde(default = "one")]
+    pub replicas: u32,
+    /// What must be running first.
+    #[serde(default)]
+    #[crol(refers(Service, Volume))]
+    pub depends_on: Vec<crol::Id>,
+    /// Extra environment variables.
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+}
+
+/// Storage that services can mount.
+#[derive(Debug, Deserialize, Serialize, crol::Schema)]
+pub struct Volume {
+    /// The size in gigabytes.
+    pub size_gb: u32,
+}
+
+fn one() -> u32 {
+    1
+}
+```
+
+Every type reachable from the root must implement `crol::Schema`. `crol`
+provides it for the scalars, `String`, `Option`, `Box`, `Rc`, `Arc`, `Cow`, the
+standard collections, `IndexMap`, tuples, arrays, `PathBuf`, `Duration` and
+`crol::Id`.
+
+Then write the schema to a file. Building it runs your code, so it cannot
+happen in `build.rs`, and the usual way is a test:
+
+```rust
+// tests/schema.rs
+#[test]
+fn crol_schema() {
+    crol::schema::check_file::<fleet::Definition>("crol/schema.crol").unwrap();
+}
+```
+
+`check_file` writes the file if it does not exist yet, and fails if the file
+differs from your types. So `cargo test` tells you when the file is out of date,
+in CI as well. To update it after changing your types:
+
+```console
+$ CROL_UPDATE_SCHEMA=1 cargo test
+```
+
+Commit the result. It is a CROL file, sorted so that it gives small diffs:
+
+```console
+$ head -n 12 crol/schema.crol
+#![schema("crate:crol@0.1")]
+
+Schema {
+    format: 1,
+    root: "fleet::Definition",
+    types: {
+        "fleet::Definition": Enum {
+            name: "Definition",
+            doc: "Everything the data can define.",
+            source: ("src/lib.rs", 7),
+            variants: {
+                Service: { shape: Newtype(Named("fleet::Service")), .. },
+```
+
+The type you pass (`Definition` here) is the schema's _root type_: the type of
+each root value in layered data, or of the whole document in value mode. For
+layered data that is normally an [enum of everything the data can
+define](rust.md#enums).
+
+If you would rather have a flag than a test, `crol::schema::write::<T>(path)`
+writes the file unconditionally, for an `--export-schema` option of your own.
+
+### Attributes
+
+Serde's attributes are understood: `rename`, `rename_all`, `alias`, `default`,
+`skip`, `flatten`, `tag`, `content`, `untagged`, `transparent` and
+`deny_unknown_fields`. `crol` adds these:
+
+| Attribute                        | On         | Means                                                       |
+| -------------------------------- | ---------- | ----------------------------------------------------------- |
+| `#[crol(defaults)]`              | a type     | record default values, for `&default` and tools             |
+| `#[crol(refers(Service, Volume))]` | an id field | which root types its ids may name, also in lists, options and maps |
+| `#[crol(schema = OtherType)]`    | a field    | describe it as a type with the same serialized shape        |
+| `#[crol(schema = any)]`          | a field    | accept anything here, unchecked                             |
+
+Use `schema = ...` for a field whose type has no `Schema`, such as a type from
+another crate, and for fields with `#[serde(with = "...")]`, which the derive
+rejects without it, since their serialized shape is not their type's.
+
+`#[crol(defaults)]` needs the types involved to implement `Serialize`.
+
+## Checking data against it
+
+Hand the schema to `crol check` with `--schema`:
+
+```crol
+// data/services.crol
++web: Service {
+    image: "web:1.4",
+    port: 80,
+    replica: 3,
+    depends_on: [@database],
+    ..,
+},
+```
+
+```console
+$ crol check --schema crol/schema.crol data
+error: `Service` has no field `replica`; its fields are `image`, `port`, `replicas`, `depends_on`, `env`
+  ┌─ /path/to/project/data/services.crol:5:14
+  │
+5 │     replica: 3,
+  │              ^
+  │
+  = while evaluating web.replica
+
+error: the id `@database` names no root key
+  ┌─ /path/to/project/data/services.crol:6:18
+  │
+6 │     depends_on: [@database],
+  │                  ^^^^^^^^^
+  │
+  = while evaluating web.depends_on[0]
+```
+
+Every problem appears at once, in every context, with the same rules and
+messages as loading the data in your program. Unlike your program, it also
+checks ids: each must name a root key, of a type that `refers` allows.
+
+`crol eval` uses a schema too. Fields that take their defaults are written out,
+each marked with a comment, so you can see what your program will get:
+
+```crol
+// data/services.crol
++web: Service {
+    image: "web:1.4",
+    port: 80,
+    ..,
+},
+```
+
+```console
+$ crol eval --schema crol/schema.crol data
+web: Service {
+    image: "web:1.4",
+    port: 80,
+    replicas: 1, // default
+    depends_on: [], // default
+    env: {}, // default
+},
+```
+
+Pass `--no-defaults` to print the data as it is.
+
+## How schemas are found
+
+Only tools look for a schema. Your program has the types, so it ignores
+`#![schema(...)]` and the project file, and uses only what you give
+`CrolComposer::schema`.
+
+Tools take the first of these that applies:
+
+1. The `--schema` option (command line only).
+2. The `schema` of the [project file](projects.md#the-project-file). The usual
+   choice for a project: it covers every layer, and there is nothing to repeat.
+3. A `#![schema(...)]` attribute in the document. The usual choice for a single
+   file that people edit on its own.
+
+The command line reads the project file only when you give it no layers, or
+pass `--project`.
+
+When several documents name a schema with the attribute and there is no project
+or `--schema`, they must agree: otherwise `crol check` stops and asks you to
+choose with `--schema`. A document whose attribute disagrees with the project's
+schema or `--schema` gets a warning, and is checked against that schema anyway.
+
+Without any schema, tools check syntax and evaluation, but not types.
+
+### The schema attribute
+
+`#![schema(...)]` goes at the top of a document, and takes a module path, a URL
+or a crate:
+
+| Form                                            | Finds                                                       |
+| ----------------------------------------------- | ----------------------------------------------------------- |
+| `#![schema(::crol::schema)]`                    | a file, by [module path](projects.md#module-paths), from the root directory |
+| `#![schema(crol::schema)]`                      | the same, from the document's own directory                 |
+| `#![schema(super::schema)]`                     | the same, from the parent directory                         |
+| `#![schema("https://example.org/v2/schema.crol")]` | a file [over HTTPS](#remote-schemas)                     |
+| `#![schema("crate:fleet@2.1")]`                 | the schema a [crate publishes](#remote-schemas)             |
+
+```crol
+// settings.crol
+#![schema(crol::schema)]
+
++web: Service {
+    image: "web:1.4",
+    port: "80",
+    ..,
+},
+```
+
+```console
+$ crol check settings.crol
+error: expected u16, found "80"
+  ┌─ settings.crol:6:11
+  │
+6 │     port: "80",
+  │           ^^^^
+  │
+  = while evaluating web.port
+```
+
+### In a project file
+
+The same forms work in `project.crol`, written as a string. A module path there
+always starts at the project's directory:
+
+```crol
+// project.crol
+Project {
+    layers: List([{ name: "base", dir: "data", .. }]),
+    schema: Some("crol::schema"),
+    ..,
+}
+```
+
+With no layers on the command line, `crol` reads all of this from the project
+file:
+
+```console
+$ crol check
+```
+
+### Remote schemas
+
+A schema does not have to be on disk. This is for files whose users do not have
+your source: a configuration file for an application they installed, say. They
+get completion and checks from nothing but the file.
+
+**From a URL.** Put the schema file on any HTTPS server, with a version in the
+path, and name it:
+
+```crol
+#![schema("https://example.org/fleet/v2/schema.crol")]
+
++web: Service {
+    image: "web:1.4",
+    port: 80,
+    ..,
+},
+```
+
+**From a crate.** Include the file in your package and say where it is. It is
+`crol/schema.crol` by default, so the table can be empty:
+
+```toml
+[package.metadata.crol]
+schema = "crol/schema.crol"
+```
+
+Then `#![schema("crate:fleet@2.1")]` names it, with a version requirement as in
+`Cargo.toml`. Leave out `@...` to accept any version. Tools look for the crate
+in this order:
+
+1. the current Cargo workspace and its dependencies;
+2. the local Cargo registry cache (`~/.cargo/registry/src`);
+3. crates.io, taking the highest matching version.
+
+`crate:crol` is built in: it is the schema of CROL's own schema files.
+
+**Caching.** Remote schemas are fetched over HTTPS only, and cached in
+`CROL_CACHE_DIR` if set, or else a `crol` directory in your platform's cache
+directory (`$XDG_CACHE_HOME` or `~/.cache`, `~/Library/Caches`,
+`%LOCALAPPDATA%`). A URL is fetched again once per `crol` run or language
+server session, falling back to the cached copy if that fails. A crate's schema
+is fetched once per version, since published versions do not change.
+
+**Offline.** `crol --offline` and the language server's `remote_schemas: false`
+turn fetching off. Cached copies and local crates are still used.
+
+The `crol` tool and language server fetch out of the box. In your own tools,
+enable [a `remote-schemas` feature](rust.md#cargo-features), and use
+`crol::schema::resolve_remote`.
+
+## What is checked
+
+A schema makes tools apply the same rules as your program:
+
+- type names, and values of the wrong kind or out of range;
+- unknown fields;
+- missing fields, on final values only, so a patch can leave out what it does
+  not change;
+- enum variants;
+- ids: each must name a root key in the same context, of an allowed type.
+
+Templates are not root values, so they are not checked as data.
+
+### Which type a document has
+
+In layered data, every root value is checked against the root type. With
+`Definition` as the root, `+web: Service { ... }` picks the `Service` variant.
+
+The root type therefore has to describe the _values_, not the root as a whole.
+A struct whose fields are the root keys, as in
+[getting started](getting-started.md), cannot be described today: if you build a
+schema from such a struct, `crol check` expects every root value to be that
+struct, and reports `expected Config { ... }, found 8080`. Use the map-of-enum
+shape for layered data that you want to check.
+
+A project can name another root with `root: Some("fleet::Definition")`. A plain
+type name works if it is unambiguous.
+
+In value mode, the root type is the type of the whole document, unless the
+document has a top-level type name, which then chooses it. Since the command
+line [does not read value mode](modes.md#tools-and-modes), this check happens in
+your editor.
+
+### Types with the same name
+
+Data refers to types by name, but two schema types can share one, like
+`net::Config` and `db::Config`. In that case, tools ask you to say which one you
+mean. `#![use(...)]` at the top of the document does that, and `as` gives a type
+a name of its own in that file:
+
+```crol
+#![use(app::net::Config, app::db::Config as DbConfig)]
+
+listener: Config { port: 8080 },
+database: DbConfig { url: "postgres://db" },
+```
+
+A path is the Rust module path followed by the type's name as data writes it.
+Your program replaces `DbConfig` by `Config` when it reads the file, so
+`#[derive(Deserialize)]` needs no change.
+
+## Using `&default`
+
+`&default` reads the Rust default of the field it is written in, so data can
+build on it. It is the one feature of the language that needs a schema when
+loading, because serde has no way to ask a type for its defaults. Mark the types
+with `#[crol(defaults)]`, and give the composer the schema:
+
+```rust
+// src/main.rs
+use std::collections::BTreeMap;
+
+use crol::{CrolComposer, CrolLayer};
+use fleet::Definition;
+
+fn main() -> Result<(), crol::Error> {
+    let text = r#"
+        +web: Service {
+            image: "web:1.4",
+            port: 80,
+            replicas: &default * 3,
+            ..,
+        },
+    "#;
+    let definitions: BTreeMap<String, Definition> = CrolComposer::new()
+        .schema(crol::schema::build::<Definition>())
+        .load_layer(CrolLayer::from_sources("base", [("a.crol", text)]))
+        .compose()?;
+    println!("{:?}", definitions["web"]);
+    Ok(())
+}
+```
+
+```console
+$ cargo run
+Service(Service { image: "web:1.4", port: 80, replicas: 3, depends_on: [], env: {} })
+```
+
+A field's default is its own `#[serde(default)]` if it has one, or else that
+field's value in the struct's default. Directly under a type name, `&default` is
+the whole default value, so `..&default` writes every default into the block.
+The difference with `..` is when the defaults are filled in: `..` leaves fields
+out for serde, and `..&default` copies them into the data.
+
+Where no default is recorded, `&default` counts as missing, so `&default | 1`
+falls back.
+
+**Limits.** `&default` works only through `CrolComposer::schema`. `crol::from_str`
+has no schema, and neither `crol check` and `crol eval` nor the language server
+hand their schema to the evaluator yet, so in those a document with `&default`
+reports `defaults come from a schema, and no schema is given`.
+
+`CrolComposer::schema` has a second use: it tells the deserializer which field
+names are `#[serde(alias)]`es of one field. A field written by its alias then
+counts as present.
+
+## Checking from Rust
+
+`crol::check` applies the same checks to evaluated data, without deserializing,
+and reports everything it finds:
+
+```rust
+// src/main.rs
+use crol::{CheckOptions, CrolComposer, CrolLayer};
+use fleet::Definition;
+
+fn main() -> Result<(), crol::Error> {
+    let text = r#"+web: Service { image: "web:1.4", port: 70000, depends_on: [@nothing], .. }"#;
+    let data = CrolComposer::new()
+        .load_layer(CrolLayer::from_sources("base", [("a.crol", text)]))
+        .compose_data()?;
+    let schema = crol::schema::build::<Definition>();
+    for diagnostic in crol::check(&data, &schema, None, &CheckOptions::default()) {
+        println!("{}", diagnostic.display(data.sources()));
+    }
+    Ok(())
+}
+```
+
+```console
+$ cargo run
+base/a.crol:1:41: expected u16, found 70000 (while evaluating web.port)
+base/a.crol:1:61: the id `@nothing` names no root key (while evaluating web.depends_on[0])
+```
+
+The third argument names the root type by its path, and `None` uses the schema's
+own. `crol::check_value` does the same for a value-mode document.
+
+## Next
+
+[Project structure](projects.md) shows where all these files go.

@@ -1,18 +1,48 @@
-//! CROL, the Composable Rust Object Language.
+//! CROL, the Composable Rust Object Language: configuration and data files
+//! that combine with fixed rules, and load into your types through serde.
 //!
-//! CROL is a text format for configuration and data files that load into
-//! Rust data models through serde. It looks like RON, but a document holds
-//! operations as well as values: it can declare, replace, patch and remove
-//! definitions, including ones written in other files and in
-//! lower-priority layers. See `SPEC.md` in the repository for the format.
+//! CROL looks like RON, but a document holds _operations_ as well as values:
+//! it can declare, replace, patch and remove definitions, including ones
+//! written in other files. At a high level, this crate provides:
 //!
-//! This release reads and writes single documents (value mode, `SPEC.md`
-//! 4); layers, variants and the composer come in later releases.
+//! * Functions for [reading and writing one document][one-document], much like
+//!   `serde_json`.
+//! * A [composer][layers] that stacks files in layers and loads the result into
+//!   your types.
+//! * [Variants][variants], for differences per environment, region or feature.
+//! * [Schemas][schemas], generated from your Rust types, which let tools check
+//!   data without running your program.
+//!
+//! Guide-level documentation is found in the [guide].
+//!
+//! [one-document]: #reading-one-document
+//! [layers]: #layers
+//! [variants]: #variants
+//! [schemas]: #schemas
+//! [guide]: https://github.com/DreamLogics/crol/blob/main/docs/README.md
+//!
+//! # A tour of CROL
+//!
+//! This section is a brief tour of the crate's main APIs and when to use them.
+//! CROL is not on crates.io yet, so add it from the repository, along with
+//! serde:
+//!
+//! ```toml
+//! [dependencies]
+//! crol = { git = "https://github.com/DreamLogics/crol" }
+//! serde = { version = "1", features = ["derive"] }
+//! ```
+//!
+//! ## Reading one document
+//!
+//! If your program reads a single settings file, [`from_str`] is all you need.
+//! The file is evaluated first, so it can compute values, and your type only
+//! sees the result:
 //!
 //! ```
-//! use serde_derive::{Deserialize, Serialize};
+//! use serde::Deserialize;
 //!
-//! #[derive(Debug, PartialEq, Deserialize, Serialize)]
+//! #[derive(Debug, PartialEq, Deserialize)]
 //! struct Config {
 //!     listen: String,
 //!     admin: String,
@@ -26,13 +56,201 @@
 //!     listen: "0.0.0.0:" + &port,
 //!     admin: "127.0.0.1:" + (&port + 1),
 //!     ..
-//! "#).unwrap();
+//! "#)?;
+//!
 //! assert_eq!(config.admin, "127.0.0.1:8081");
 //! assert_eq!(config.workers, None);
-//!
-//! let text = crol::to_string_pretty(&config, crol::PrettyConfig::default()).unwrap();
-//! assert_eq!(text, "Config { listen: \"0.0.0.0:8080\", admin: \"127.0.0.1:8081\", workers: None }\n");
+//! # Ok::<(), crol::Error>(())
 //! ```
+//!
+//! Every field of a struct must be written, `Option` fields included, so that a
+//! typo cannot quietly turn into a default. The `..` at the end says that
+//! leaving out `workers` is on purpose.
+//!
+//! [`to_string`] and [`to_string_pretty`] write any `Serialize` value back:
+//!
+//! ```
+//! # use serde::Serialize;
+//! #[derive(Serialize)]
+//! struct Config {
+//!     port: u16,
+//! }
+//!
+//! let text = crol::to_string_pretty(&Config { port: 80 }, crol::PrettyConfig::default())?;
+//! assert_eq!(text, "Config { port: 80 }\n");
+//! # Ok::<(), crol::Error>(())
+//! ```
+//!
+//! ## Layers
+//!
+//! To combine several files, use [`CrolComposer`]. Each [`load`] adds a layer
+//! on top of the ones before it, from a directory, a file, or a [`CrolLayer`]
+//! built in code, and [`compose`] evaluates them and deserializes the result:
+//!
+//! ```
+//! use std::collections::BTreeMap;
+//!
+//! use crol::{CrolComposer, CrolLayer};
+//! use serde::Deserialize;
+//!
+//! #[derive(Deserialize)]
+//! struct Service {
+//!     port: u16,
+//!     url: String,
+//! }
+//!
+//! let base = CrolLayer::from_sources("base", [("services.crol", r#"
+//!     +web: Service {
+//!         port: 80,
+//!         url: "http://web:" + &self.port,
+//!     },
+//! "#)]);
+//! let local = CrolLayer::from_sources("local", [("overrides.crol", "web.port: 8080")]);
+//!
+//! let services: BTreeMap<String, Service> = CrolComposer::new()
+//!     .load_layer(base)
+//!     .load_layer(local)
+//!     .compose()?;
+//!
+//! assert_eq!(services["web"].url, "http://web:8080");
+//! # assert_eq!(services["web"].port, 8080);
+//! # Ok::<(), crol::Error>(())
+//! ```
+//!
+//! `url` changed even though the `local` layer never mentions it: `&self.port`
+//! reads the final value, after all layers.
+//!
+//! A composer reads files in _data mode_, where a file is a list of operations
+//! on shared data, and [`from_str`] in _value mode_, where a file is one value.
+//! [Data mode and value mode][modes] explains the difference.
+//!
+//! To read more than one value, use [`compose_data`], which returns a
+//! [`CrolData`]. It also gives you warnings, a [fingerprint] of the data, and
+//! the [history][explain] of any value.
+//!
+//! [`load`]: CrolComposer::load
+//! [`compose`]: CrolComposer::compose
+//! [`compose_data`]: CrolComposer::compose_data
+//! [fingerprint]: CrolData::fingerprint
+//! [explain]: CrolData::explain
+//! [modes]: https://github.com/DreamLogics/crol/blob/main/docs/modes.md
+//!
+//! ## Variants
+//!
+//! A variant is a named alternative of the data, such as an environment. Your
+//! program declares them with [`CrolVariants`], and chooses the active ones
+//! with [`with_variant`]:
+//!
+//! ```
+//! use crol::{CrolComposer, CrolConfig, CrolLayer, CrolVariants};
+//! use serde::Deserialize;
+//!
+//! #[derive(Deserialize)]
+//! struct Root {
+//!     replicas: u32,
+//! }
+//!
+//! let variants = CrolVariants::new()
+//!     .add_grouped(["dev", "prod", "prod_eu"])
+//!     .add_parent("prod_eu", "prod");
+//!
+//! let layer = CrolLayer::from_sources("base", [("root.crol", r#"
+//!     replicas: 2,
+//!     <prod> {
+//!         replicas: & * 4,
+//!     },
+//!     <prod_eu> {
+//!         replicas: & + 1,
+//!     },
+//! "#)]);
+//!
+//! let root: Root = CrolComposer::with_cfg(CrolConfig { variants, ..Default::default() })
+//!     .load_layer(layer)
+//!     .with_variant("prod_eu")?
+//!     .compose()?;
+//!
+//! assert_eq!(root.replicas, 9);
+//! # Ok::<(), crol::Error>(())
+//! ```
+//!
+//! With the `derive` feature, `#[derive(crol::VariantName)]` lets you use an
+//! enum of your own instead of strings, so the compiler checks what you pass.
+//!
+//! [`with_variant`]: CrolComposer::with_variant
+//!
+//! ## Ids
+//!
+//! An id, `@web`, names a root key. Deserialize one into [`Id`], which accepts
+//! only ids. CROL does not check what an id points at:
+//! [`get_with_ids`](CrolData::get_with_ids) reports the ids it saw, so that you
+//! can, and [`check()`] does it for you with a schema.
+//!
+//! ## Schemas
+//!
+//! Loading needs no schema, but tools do: a schema tells `crol check` and the
+//! language server what your types look like. You do not write one. With the
+//! `derive` feature, derive it, and write the file from a test:
+//!
+//! ```no_run
+//! use serde::Deserialize;
+//! # use crol_derive::Schema;
+//!
+//! /// A service that runs one container image.
+//! #[derive(Deserialize, Schema)] // `crol::Schema`
+//! pub struct Service {
+//!     /// The port it listens on.
+//!     pub port: u16,
+//! }
+//!
+//! #[derive(Deserialize, Schema)]
+//! pub enum Definition {
+//!     Service(Service),
+//! }
+//!
+//! // In a test. It fails if the file is out of date;
+//! // `CROL_UPDATE_SCHEMA=1 cargo test` updates it.
+//! crol::schema::check_file::<Definition>("crol/schema.crol").unwrap();
+//! ```
+//!
+//! The [`schema`] module has the model and functions, and [`check()`] applies
+//! a schema to evaluated data from Rust. The [`project`] module reads
+//! `project.crol`, the file that tells tools about your layers. The guide's
+//! pages on [schemas][schema-guide] and [projects][project-guide] explain how
+//! it all fits together.
+//!
+//! [schema-guide]: https://github.com/DreamLogics/crol/blob/main/docs/schemas.md
+//! [project-guide]: https://github.com/DreamLogics/crol/blob/main/docs/projects.md
+//!
+//! # Errors
+//!
+//! Everything fails with [`Error`], whose `Display` says what went wrong and
+//! where. An error from evaluating carries every problem found, in
+//! [`Error::diagnostics`]:
+//!
+//! ```
+//! let error = crol::from_str::<u16>("-1").unwrap_err();
+//! assert_eq!(error.to_string(), "expected u16, found -1 (<string>:1:1)");
+//! ```
+//!
+//! # Feature flags
+//!
+//! CROL has no default features, and needs none to load data.
+//!
+//! - `derive`: `#[derive(crol::Schema)]` and `#[derive(crol::VariantName)]`.
+//! - `remote-schemas`: fetch schemas named by URL or crate, with a blocking
+//!   client, for tools of your own.
+//! - `remote-schemas-async`: the same, without blocking, using Tokio and
+//!   reqwest.
+//!
+//! # Where to go next
+//!
+//! - [Getting started](https://github.com/DreamLogics/crol/blob/main/docs/getting-started.md)
+//! - [The language by example](https://github.com/DreamLogics/crol/blob/main/docs/language.md)
+//! - [Layers](https://github.com/DreamLogics/crol/blob/main/docs/layers.md)
+//!   and [variants](https://github.com/DreamLogics/crol/blob/main/docs/variants.md)
+//! - [Loading data in Rust](https://github.com/DreamLogics/crol/blob/main/docs/rust.md)
+//! - [The command-line tool](https://github.com/DreamLogics/crol/blob/main/docs/cli.md)
+//!   and [editor setup](https://github.com/DreamLogics/crol/blob/main/docs/editors.md)
 
 #![forbid(unsafe_code)]
 
