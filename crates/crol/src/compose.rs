@@ -856,6 +856,17 @@ fn extends_attributes(text: &str) -> Vec<(String, TextRange)> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CrolContext(Context);
 
+impl CrolContext {
+    pub(crate) fn base() -> Self {
+        Self(Context::base())
+    }
+
+    /// Whether this is the base context, with no variant active.
+    pub fn is_base(&self) -> bool {
+        self.0.is_base()
+    }
+}
+
 /// Evaluated data (`SPEC.md` 10.7): the root keys and their values in every
 /// evaluated context, and the warnings found.
 #[derive(Debug, Clone)]
@@ -997,6 +1008,14 @@ impl<T: VariantName> CrolData<T> {
             .ok_or_else(|| Error::new("this context was not evaluated"))?;
         self.contexts.push(evaluated);
         Ok(CrolContext(context))
+    }
+
+    pub(crate) fn deserialize_options(&self) -> &de::Options {
+        &self.options
+    }
+
+    pub(crate) fn defaults(&self) -> Option<&crol_eval::Defaults> {
+        self.data_options.defaults.as_ref()
     }
 
     /// The context of these variants, evaluated or not.

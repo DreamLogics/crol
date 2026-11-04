@@ -1,6 +1,6 @@
-//! Derive macros for CROL: `#[derive(Schema)]` and `#[derive(VariantName)]`,
-//! re-exported by `crol` with the cargo feature `derive` (`SPEC.md` 8.1,
-//! 10.9).
+//! Derive macros for CROL: `#[derive(Schema)]`, `#[derive(VariantName)]` and
+//! `#[derive(View)]`, re-exported by `crol` with the cargo feature `derive`
+//! (`SPEC.md` 8.1, 10.9, 10.11).
 
 #![forbid(unsafe_code)]
 
@@ -45,6 +45,87 @@ pub fn derive_variant_name(input: TokenStream) -> TokenStream {
     variant_name(&input)
         .unwrap_or_else(Error::into_compile_error)
         .into()
+}
+
+/// Implements `crol::View`: each field reads the value's field of its own
+/// name, or the path in `#[crol(path = "combat.range.max")]`, from a struct
+/// with named fields (`SPEC.md` 10.11). An `Option` is `None` where the path
+/// is missing, and `#[crol(default)]` on a field takes its `Default` there.
+#[proc_macro_derive(View, attributes(crol))]
+pub fn derive_view(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    view(&input)
+        .unwrap_or_else(Error::into_compile_error)
+        .into()
+}
+
+fn view(input: &DeriveInput) -> syn::Result<TokenStream2> {
+    let Data::Struct(data) = &input.data else {
+        return Err(Error::new_spanned(
+            input,
+            "View is derived for a struct with named fields",
+        ));
+    };
+    let Fields::Named(fields) = &data.fields else {
+        return Err(Error::new_spanned(
+            input,
+            "View is derived for a struct with named fields",
+        ));
+    };
+    let mut reads = Vec::new();
+    for field in &fields.named {
+        let ident = field.ident.as_ref().expect("a named field");
+        let mut path = ident.to_string();
+        let mut default = false;
+        for attr in field.attrs.iter().filter(|a| a.path().is_ident("crol")) {
+            attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("path") {
+                    path = meta.value()?.parse::<LitStr>()?.value();
+                    Ok(())
+                } else if meta.path.is_ident("default") {
+                    default = true;
+                    Ok(())
+                } else {
+                    Err(meta.error("expected `path = \"...\"` or `default`"))
+                }
+            })?;
+        }
+        let steps = path.split('.');
+        let ty = &field.ty;
+        let read = if let Some(inner) = option_inner(ty) {
+            quote!(source.optional::<#inner>(&[#(#steps),*])?)
+        } else if default {
+            quote!(source.optional::<#ty>(&[#(#steps),*])?.unwrap_or_default())
+        } else {
+            quote!(source.field::<#ty>(&[#(#steps),*])?)
+        };
+        reads.push(quote!(#ident: #read));
+    }
+    let name = &input.ident;
+    let (impl_generics, type_generics, where_clause) = input.generics.split_for_impl();
+    Ok(quote! {
+        impl #impl_generics ::crol::View for #name #type_generics #where_clause {
+            fn read(source: &::crol::ViewSource<'_>) -> ::std::result::Result<Self, ::crol::Error> {
+                ::std::result::Result::Ok(Self { #(#reads),* })
+            }
+        }
+    })
+}
+
+/// `T` of an `Option<T>`.
+fn option_inner(ty: &Type) -> Option<&Type> {
+    let Type::Path(path) = ty else { return None };
+    let last = path.path.segments.last()?;
+    if last.ident != "Option" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &last.arguments else {
+        return None;
+    };
+    match args.args.first()? {
+        syn::GenericArgument::Type(inner) => Some(inner),
+        _ => None,
+    }
 }
 
 // ---- Attributes ----

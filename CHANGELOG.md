@@ -11,6 +11,9 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Added
 
+- Views and queries (`SPEC.md` 10.11): `#[derive(crol::View)]` reads fields by path,
+  `CrolData::distinct` and `variations` give a key's distinct values across contexts,
+  and `CrolData::query` chooses keys by type or by what they hold.
 - `CrolData::evaluate`, which evaluates another context later without reading the
   layers again, and `each_variant`, which evaluates the base and one context for
   each variant instead of every combination (`SPEC.md` 8.1). `CrolData` is `Send`

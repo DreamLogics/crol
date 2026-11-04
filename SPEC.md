@@ -2424,6 +2424,37 @@ is such a field. A file that does not use it is the same as before, and
 a tool that does not know it rejects the files that do, as an unknown
 field, instead of checking them by other rules.
 
+
+### 10.11 Views and queries
+
+Deserializing a root key gives a whole value in one context. A program
+that wants a few fields of many values, or how a value differs across
+contexts, reads the evaluated data through these instead:
+
+- **`CrolData::distinct(key)`** gives the distinct values of a root key
+  across the evaluated contexts, each a `Variation` with the contexts it
+  has that value in. Values are compared as in section 3.3. The order does
+  not depend on the order contexts were evaluated in: contexts by their
+  names, the base first, and values by their first context.
+- **`View`** is a type that reads fields by path.
+  `#[derive(crol::View)]` implements it for a struct with named fields:
+  a field reads the value's field of its own name, or
+  `#[crol(path = "combat.range.max")]`, through `Some(...)`. Where a path
+  is missing, the field takes the default the schema records for it from
+  the value's type name (section 6.1.3). Failing that an `Option` is
+  `None`, `#[crol(default)]` takes the field type's `Default`, and
+  anything else is an error. `CrolData::variations::<V>(key)` is
+  `distinct` with each value read into `V`.
+- **`CrolData::query()`** chooses root keys in one context, the base
+  unless `in_context` names another: `of_type(name)` by type name, and
+  `holding(path, value)` by a value at a field path, or a list that holds
+  it. An id counts as its text there. `keys()` and `views::<V>()` give the
+  result in the order of the keys, compared byte by byte, so it is the
+  same on every machine.
+
+A query only reads evaluated data. Data cannot select keys by what they
+hold, since what a patch selects would depend on what patches do.
+
 ---
 
 ## 11. Command-line tool

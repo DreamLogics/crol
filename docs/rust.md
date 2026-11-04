@@ -422,12 +422,72 @@ The most useful methods:
 | `value(key, &context)`             | the raw evaluated `crol::Value`                    |
 | `warnings()`                       | warnings, which `compose` drops                    |
 | `explain(path, &context)`          | the operations behind a value                      |
+| `distinct(key)`, `variations(key)` | a key's [distinct values](#views-and-queries) across contexts |
+| `query()`                          | [keys chosen](#views-and-queries) by what they hold |
 | `fingerprint()`                    | a BLAKE3 hash of all evaluated data                |
 
 The fingerprint covers values, not source text. Two data sets written
 differently but with the same values have the same fingerprint, on every
 platform. Use it to check that two machines loaded the same data, or to see
 whether a change really changed anything.
+
+## Views and queries
+
+Deserializing gives you a whole value in one context. For a few fields of many
+values, or to see how a value differs between contexts, read the data through a
+_view_ instead: a small struct whose fields read by path. This needs the `derive`
+feature.
+
+```rust
+// src/main.rs
+use crol::{CrolComposer, CrolConfig, CrolLayer, CrolVariants, View};
+
+#[derive(Debug, View)]
+struct Stats {
+    hp: u32,
+    #[crol(path = "combat.range")]
+    range: u32,
+    armour: Option<u32>,
+}
+
+fn main() -> Result<(), crol::Error> {
+    let text = r#"
+        +artillery: Unit { hp: 1100, combat: { range: 12 }, tags: ["mech"] }
+        +trooper: Unit { hp: 50, combat: { range: 5 }, tags: [] }
+        artillery<empire>.hp: 1200
+    "#;
+    let data = CrolComposer::with_cfg(CrolConfig {
+        variants: CrolVariants::new().add_grouped(["empire", "rebel"]),
+        ..Default::default()
+    })
+    .load_layer(CrolLayer::from_sources("base", [("a.crod", text)]))
+    .compose_data()?;
+
+    // Each distinct value of a key, and the contexts that have it.
+    for variation in data.variations::<Stats>("artillery")? {
+        let contexts: Vec<_> = variation.contexts.iter().map(|c| data.context_names(c)).collect();
+        println!("{:?}: {:?}", contexts, variation.value);
+    }
+
+    // The keys that match, in key order.
+    let mechs = data.query().of_type("Unit").holding("tags", "mech");
+    println!("{:?}", mechs.keys()?);
+    Ok(())
+}
+```
+
+```console
+$ cargo run
+[[], ["rebel"]]: Stats { hp: 1100, range: 12, armour: None }
+[["empire"]]: Stats { hp: 1200, range: 12, armour: None }
+["artillery"]
+```
+
+Where a path is missing, a field takes the default your [schema](schemas.md) records
+for it. Failing that, an `Option` is `None`, `#[crol(default)]` on a field takes its
+`Default`, and any other field is an error. `distinct` gives the same variations as
+raw values, and `in_context` makes a query read another context. Results do not depend
+on the order contexts were evaluated in.
 
 ## Errors
 
@@ -566,7 +626,7 @@ $ cargo run
 
 | Feature                | Gives                                                      |
 | ---------------------- | ---------------------------------------------------------- |
-| `derive`               | `#[derive(crol::Schema)]` and `#[derive(crol::VariantName)]` |
+| `derive`               | `#[derive(crol::Schema)]`, `#[derive(crol::VariantName)]` and `#[derive(crol::View)]` |
 | `remote-schemas`       | [fetch schemas](schemas.md#remote-schemas) with a blocking client, for tools of your own |
 | `remote-schemas-async` | the same, without blocking, using Tokio and reqwest        |
 

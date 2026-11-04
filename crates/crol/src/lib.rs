@@ -278,6 +278,7 @@ mod raw;
 mod remote;
 pub mod schema;
 mod ser;
+mod view;
 mod writer;
 
 use crol_eval::evaluate_value;
@@ -304,8 +305,9 @@ pub use raw::RawValue;
 pub use schema::Schema;
 
 #[cfg(feature = "derive")]
-pub use crol_derive::{Schema, VariantName};
+pub use crol_derive::{Schema, VariantName, View};
 pub use ser::PrettyConfig;
+pub use view::{Query, Variation, View, ViewSource};
 pub use writer::DataWriter;
 
 /// The result type of this crate.
