@@ -88,7 +88,13 @@ pub(crate) fn uri_to_path(uri: &Uri) -> Option<PathBuf> {
 /// The `file:` URI of a path.
 pub(crate) fn path_to_uri(path: &Path) -> Option<Uri> {
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let text = path.to_string_lossy().replace('\\', "/");
+    let text = path.to_string_lossy();
+    // Canonical paths on Windows are verbatim: `\\?\C:\x`, `\\?\UNC\host\x`.
+    let text = match text.strip_prefix(r"\\?\UNC\") {
+        Some(rest) => format!(r"\\{rest}"),
+        None => text.strip_prefix(r"\\?\").unwrap_or(&text).to_owned(),
+    };
+    let text = text.replace('\\', "/");
     let mut uri = String::from("file://");
     if !text.starts_with('/') {
         uri.push('/');
