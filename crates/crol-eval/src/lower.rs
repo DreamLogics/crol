@@ -992,24 +992,29 @@ impl Lowerer {
                         continue;
                     };
                     let target_span = self.span(target.syntax());
-                    let mut entry_target = block_target.clone();
-                    if let Key::Str(key) = &key {
-                        entry_target.path.push(key.clone());
+                    let value = entry.value();
+                    // Most values are literals, which read neither of these.
+                    if !matches!(value, Some(ast::Expr::Literal(_))) {
+                        let mut entry_target = block_target.clone();
+                        if let Key::Str(key) = &key {
+                            entry_target.path.push(key.clone());
+                        }
+                        entry_target.path.extend(field_names(&path));
+                        self.default_target = entry_target;
+                        self.fixed = fixed.as_ref().map(|f| {
+                            let conditions = f.conditions.clone();
+                            f.child(&key, &path, target_span, conditions)
+                        });
                     }
-                    entry_target.path.extend(field_names(&path));
-                    self.default_target = entry_target;
-                    self.fixed = fixed.as_ref().map(|f| {
-                        let conditions = f.conditions.clone();
-                        f.child(&key, &path, target_span, conditions)
-                    });
-                    let value = entry.value().map(|value| self.expr(&value));
+                    let value = value.map(|value| self.expr(&value));
+                    let op = entry.op();
                     lowered.push(Entry {
-                        op: Some(set_op(entry.op())),
-                        replace: entry.op() == ast::EntryOp::Replace,
+                        op: Some(set_op(op)),
+                        replace: op == ast::EntryOp::Replace,
                         key,
                         path,
                         value,
-                        span: self.span(target.syntax()),
+                        span: target_span,
                     });
                 }
                 ast::AnyEntry::Remove(entry) => {
