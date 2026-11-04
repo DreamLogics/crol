@@ -2228,6 +2228,14 @@ Common flags: `--discrete a,b`, `--group a,b,c` (repeatable), `--parent child=pa
 Without layer arguments, every command that needs layers reads them, with
 the variants and options, from the project file.
 
+**Errors.** `check`, `eval` and `fingerprint` treat every error alike, in
+data and in value documents, whether it comes from reading, evaluating or
+the schema: they print the diagnostics, exit 1, and print no data and no
+fingerprint, since neither would be fit to use. With `--message-format
+json`, standard output then holds the diagnostics only. Warnings change
+none of this. `explain` shows how a value came about, which may be how to
+find a mistake, so it does not check the schema.
+
 **Layers and keys.** `eval` and `explain` take a key after the layers, so
 their last argument is told apart by its form alone, never by what exists
 on disk, and a command means the same wherever it is run. It is a key if

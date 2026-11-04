@@ -288,9 +288,9 @@ A problem that is about no place in a file, such as a key that is not a path, ha
 ## Exit status
 
 `crol check`, `crol fmt --check` and all other commands exit with status 1 when
-they fail. One case to watch for: `crol eval` reports problems that a schema
-finds, but still prints the data and exits with status 0, so use `crol check` in
-scripts.
+they fail. Any error counts, also one that a schema finds: `crol eval` and
+`crol fingerprint` then print the problems, but no data and no fingerprint.
+Warnings do not count.
 
 ## Next
 

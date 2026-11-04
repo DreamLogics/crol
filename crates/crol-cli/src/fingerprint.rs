@@ -32,6 +32,9 @@ pub(crate) fn run(args: &Args, reporter: &mut Reporter) -> bool {
     };
     let evaluation = crate::layers::evaluate(&inputs);
     reporter.diagnostics(&inputs.sources, &evaluation.diagnostics);
+    if evaluation.has_errors() {
+        return false;
+    }
     let Some(base) = &evaluation.value else {
         return false;
     };

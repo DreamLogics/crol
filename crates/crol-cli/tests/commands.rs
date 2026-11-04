@@ -251,6 +251,93 @@ fn an_extends_that_fails_is_reported() {
     }
 }
 
+// ---- Exit status (`SPEC.md` 11) ----
+
+const SERVICE_SCHEMA: &str = r#"Schema {
+    format: 1,
+    root: "app::Service",
+    types: {
+        "app::Service": Struct {
+            name: "Service",
+            source: ("src/lib.rs", 1),
+            fields: { replicas: { ty: U32, .. } },
+            ..
+        },
+    },
+}"#;
+
+fn schema_tree(name: &str) -> PathBuf {
+    tree(
+        name,
+        &[
+            ("schema.crov", SERVICE_SCHEMA),
+            ("good.crod", "+web: Service { replicas: 2 }\n"),
+            ("bad.crod", "+web: Service { replicas: -2 }\n"),
+            ("good.crov", "Service { replicas: 2 }\n"),
+            ("bad.crov", "Service { replicas: -2 }\n"),
+            ("warned/a.crod", "+web: { port: 1, tag: \"a\" }\n"),
+            ("warned/b.crod", "web.port: 2\n"),
+            ("warned/c.crod", "web.tag: \"c\"\nweb.port: 3\n"),
+        ],
+    )
+}
+
+#[test]
+fn every_command_fails_on_schema_errors_and_prints_no_data() {
+    let dir = schema_tree("schema-errors");
+    for file in ["bad.crod", "bad.crov"] {
+        for command in ["check", "eval", "fingerprint"] {
+            let args = [command, file, "--schema", "schema.crov"];
+            let output = crol(&dir, &args);
+            assert!(failed(&output), "{args:?}: {output:?}");
+            assert_eq!(stdout(&output), "", "{args:?}");
+            assert!(stderr(&output).contains("-2"), "{args:?}: {output:?}");
+
+            let mut json = vec!["--message-format", "json"];
+            json.extend(args);
+            let output = crol(&dir, &json);
+            assert!(failed(&output), "{args:?}: {output:?}");
+            // The diagnostic, and nothing else.
+            let text = stdout(&output);
+            assert_eq!(text.lines().count(), 1, "{args:?}: {text}");
+            assert!(text.starts_with("{\"severity\":\"error\""), "{text}");
+        }
+    }
+    let output = crol(
+        &dir,
+        &["eval", "bad.crod", "web", "--schema", "schema.crov"],
+    );
+    assert!(failed(&output), "{output:?}");
+    assert_eq!(stdout(&output), "");
+    let args = ["eval", "--all-contexts", "bad.crod"];
+    let output = crol(&dir, &[&args[..], &["--schema", "schema.crov"]].concat());
+    assert!(failed(&output), "{output:?}");
+    assert_eq!(stdout(&output), "");
+}
+
+#[test]
+fn every_command_passes_data_the_schema_accepts() {
+    let dir = schema_tree("schema-good");
+    for file in ["good.crod", "good.crov"] {
+        for command in ["check", "eval", "fingerprint"] {
+            let output = crol(&dir, &[command, file, "--schema", "schema.crov"]);
+            assert!(output.status.success(), "{command} {file}: {output:?}");
+        }
+    }
+}
+
+#[test]
+fn warnings_do_not_fail_a_command() {
+    let dir = schema_tree("warnings");
+    for command in ["check", "eval", "fingerprint"] {
+        let output = crol(&dir, &[command, "./warned"]);
+        assert!(output.status.success(), "{command}: {output:?}");
+        assert!(stderr(&output).contains("patched from"), "{output:?}");
+    }
+    let output = crol(&dir, &["eval", "./warned"]);
+    assert!(stdout(&output).contains("port: 3"), "{output:?}");
+}
+
 // ---- Layers and keys (`SPEC.md` 11) ----
 
 const PROJECT: &str = "Project { layers: List([{ name: \"base\", dir: \"data\", .. }]), .. }";

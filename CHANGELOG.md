@@ -42,6 +42,9 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   argument, not by what exists on disk (`SPEC.md` 11), so `crol eval web.port` and
   `crol explain web.port` work in a project. A bare name in the last place is now
   always a key: write `./base` or `::base` for a layer there.
+- `crol eval` and `crol fingerprint` of layers exit with status 1 on schema errors,
+  and print no data or fingerprint, as they already did for a value document and
+  for every other error (`SPEC.md` 11).
 - `CrolLayer::without_file` is gone: `FileLoaders::with_project_file` names the
   one `.crov` file a layer's directory may hold.
 

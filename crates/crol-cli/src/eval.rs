@@ -69,6 +69,10 @@ pub(crate) fn run(args: &Args, reporter: &mut Reporter) -> bool {
     };
     let evaluation = crate::layers::evaluate(&inputs);
     reporter.diagnostics(&inputs.sources, &evaluation.diagnostics);
+    // Data with errors is not printed, as it is not fit to use (`SPEC.md` 11).
+    if evaluation.has_errors() {
+        return false;
+    }
     let Some(base) = evaluation.value else {
         return false;
     };
