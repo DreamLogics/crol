@@ -14,8 +14,17 @@ struct Client {
     next_id: i32,
 }
 
+/// The URI the server gives a path: `file:///C:/x` for `\\?\C:\x` on
+/// Windows.
 fn uri(path: &Path) -> String {
-    format!("file://{}", path.canonicalize().unwrap().display())
+    let path = path.canonicalize().unwrap();
+    let text = path.to_string_lossy();
+    let text = text
+        .strip_prefix(r"\\?\")
+        .unwrap_or(&text)
+        .replace('\\', "/");
+    let slash = if text.starts_with('/') { "" } else { "/" };
+    format!("file://{slash}{text}")
 }
 
 impl Client {
