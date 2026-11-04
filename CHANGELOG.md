@@ -167,6 +167,10 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   does `--project project.crov`, whose layer command runs too. `super::` works
   from a relative path, such as `crol check sub/x.crod`. `crol::directory_of` is
   new.
+- `SPEC.md` 10.9 now shows the four arguments of `crol::check`, says that
+  `IndexMap` needs no feature, and no longer promises `Schema` implementations
+  for `glam` and `chrono`, which never existed: such fields take
+  `#[crol(schema = ...)]`.
 - A directory named by two `extends` is loaded once, and an `extends` of a
   directory leaves out the documents already loaded (`SPEC.md` 4.1).
 - The command line reports an `extends` that fails. It dropped the layer and went

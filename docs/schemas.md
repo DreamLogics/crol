@@ -79,7 +79,9 @@ fn one() -> u32 {
 Every type reachable from the root must implement `crol::Schema`. `crol`
 provides it for the scalars, `String`, `Option`, `Box`, `Rc`, `Arc`, `Cow`, the
 standard collections, `IndexMap`, tuples, arrays, `PathBuf`, `Duration` and
-`crol::Id`.
+`crol::Id`. For a type from another crate, such as a `chrono` date, say what it
+looks like in the data, with [`#[crol(schema = String)]`](#attributes) or
+`#[crol(schema = any)]`.
 
 Then write the schema to a file. Building it runs your code, so it cannot
 happen in `build.rs`, and the usual way is a test:

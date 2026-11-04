@@ -2042,13 +2042,16 @@ pub trait Schema {
   `deny_unknown_fields`), with doc comments and the source file and line
   of the type (`file!()`, `line!()`).
 - `crol` implements it for the scalars, `String`, `Option`, `Box`, `Rc`,
-  `Arc`, `Cow`, std's collections, tuples, arrays, `PathBuf`, `Duration`
-  and `crol::Id`, and, behind cargo features, for common crates' types
-  (`indexmap`, `glam`, `chrono`, ...).
-- A field whose type has no implementation, or uses
-  `#[serde(with = "...")]`, takes `#[crol(schema = OtherType)]`, naming a
-  type with the same serialized shape, or `#[crol(schema = any)]`, which
-  tools accept without checks. A hand-written `Deserialize` can come
+  `Arc`, `Cow`, std's collections, `IndexMap`, tuples, arrays, `PathBuf`,
+  `Duration` and `crol::Id`. `IndexMap` needs no feature, as `crol`
+  depends on `indexmap` anyway. Other crates' types have no
+  implementation, so that `crol` needs no dependency on them, nor a
+  release for each of theirs.
+- A field whose type has no implementation, such as a `chrono` or `glam`
+  type, or uses `#[serde(with = "...")]`, takes
+  `#[crol(schema = OtherType)]`, naming a type with the same serialized
+  shape (`String` for `chrono::NaiveDate`), or `#[crol(schema = any)]`,
+  which tools accept without checks. A hand-written `Deserialize` can come
   with a hand-written `Schema`.
 
 **Writing the schema file.** Building the schema runs code, so it is
@@ -2082,9 +2085,11 @@ with the same name are allowed; a document that uses an ambiguous name
 must say which type it means with `#![use(...)]` (section 4.1), and
 tools report an ambiguous name without one.
 
-**Checking without the types.** `crol::check(&data, &schema, root)`
+**Checking without the types.** `crol::check(&data, &schema, root, &options)`
 (`root`: the path of the root values' type, or `None` for the schema's
-root type) applies the deserializer's rules (sections 10.1 to 10.5) to evaluated
+root type; `options`: a `CheckOptions`, with the `implicit_some`,
+`allow_unknown_fields` and `require_complete` of `CrolConfig`) applies the
+deserializer's rules (sections 10.1 to 10.5) to evaluated
 data using only the schema, and checks ids: every id must name a root
 key in the same context, whose type is one of the allowed ones. It gives
 the same errors, with the same spans, as deserializing would, and is

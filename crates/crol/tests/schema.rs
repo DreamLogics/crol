@@ -850,3 +850,38 @@ fn written_values_pass_their_own_check() {
         "{text}"
     );
 }
+
+/// A type of another crate, as far as `crol` knows: it has no `Schema`.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(transparent)]
+pub struct Foreign(String);
+
+#[derive(Debug, Deserialize, Serialize, Schema)]
+pub struct Stamped {
+    #[crol(schema = String)]
+    pub at: Foreign,
+    #[crol(schema = any)]
+    pub anything: Foreign,
+    pub ordered: indexmap::IndexMap<String, u8>,
+}
+
+#[test]
+fn a_type_without_a_schema_is_described_by_the_field() {
+    let schema = schema::build::<Stamped>();
+    let mut found = schema.by_name("Stamped");
+    let Some((_, TypeDef::Struct { fields, .. })) = found.next() else {
+        panic!("no struct `Stamped`");
+    };
+    assert_eq!(fields["at"].ty, TypeExpr::String);
+    assert_eq!(fields["anything"].ty, TypeExpr::Any);
+    assert!(matches!(fields["ordered"].ty, TypeExpr::Map(..)));
+
+    let check = |text: &str| {
+        let value: crol::RawValue = crol::from_str(text).unwrap();
+        crol::check_value(&value.0, &schema, None, &Default::default())
+    };
+    let good = "Stamped { at: \"2026\", anything: 1, ordered: { a: 1 } }";
+    assert!(check(good).is_empty());
+    let bad = "Stamped { at: 2026, anything: 1, ordered: { a: 1 } }";
+    assert_eq!(check(bad).len(), 1);
+}
