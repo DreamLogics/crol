@@ -738,8 +738,16 @@ pub(crate) struct SchemaDefaults {
 }
 
 impl SchemaDefaults {
-    /// The default at `path` in the type at `type_path`.
-    fn resolve(&self, type_path: &str, path: &[String], depth: usize) -> Option<crate::Value> {
+    /// The default at `path` in the type at `type_path`. With `start`, an
+    /// `Option` field with no default of its own is the default of what it
+    /// holds.
+    fn resolve(
+        &self,
+        type_path: &str,
+        path: &[String],
+        start: bool,
+        depth: usize,
+    ) -> Option<crate::Value> {
         if depth > 64 {
             return None;
         }
@@ -766,10 +774,16 @@ impl SchemaDefaults {
                     .cloned()
                 });
                 if rest.is_empty() {
-                    return own;
+                    let empty = own.as_ref().is_none_or(is_none);
+                    return match named_type(&field.ty) {
+                        Some(inner) if start && empty => {
+                            self.resolve(inner, &[], start, depth + 1).or(own)
+                        }
+                        _ => own,
+                    };
                 }
                 if let Some(inner) = named_type(&field.ty)
-                    && let Some(value) = self.resolve(inner, rest, depth + 1)
+                    && let Some(value) = self.resolve(inner, rest, start, depth + 1)
                 {
                     return Some(value);
                 }
@@ -783,13 +797,18 @@ impl SchemaDefaults {
             TypeDef::Newtype { inner, .. } | TypeDef::Transparent { inner, .. } => match inner {
                 // A key is no field: what is below it is a field of the value.
                 TypeExpr::Map(_, value) => {
-                    self.resolve(named_type(value)?, path.get(1..)?, depth + 1)
+                    self.resolve(named_type(value)?, path.get(1..)?, start, depth + 1)
                 }
-                _ => self.resolve(named_type(inner)?, path, depth + 1),
+                _ => self.resolve(named_type(inner)?, path, start, depth + 1),
             },
             _ => None,
         }
     }
+}
+
+/// Whether a value is an `Option`'s `None`.
+fn is_none(value: &crate::Value) -> bool {
+    matches!(&value.kind, crate::ValueKind::UnitName(name) if name == "None")
 }
 
 /// The named type a type expression stands for, through `Option`.
@@ -801,9 +820,10 @@ fn named_type(expr: &TypeExpr) -> Option<&str> {
     }
 }
 
-impl crol_eval::DefaultsProvider for SchemaDefaults {
-    fn default_of(&self, type_name: Option<&str>, path: &[String]) -> Option<crate::Value> {
-        let type_path = match type_name {
+impl SchemaDefaults {
+    /// The type a default's path starts from.
+    fn start_type(&self, type_name: Option<&str>) -> Option<String> {
+        Some(match type_name {
             // A type name must name one type; an ambiguous one needs `use`,
             // which tools resolve.
             Some(name) => {
@@ -815,8 +835,17 @@ impl crol_eval::DefaultsProvider for SchemaDefaults {
                 path.to_owned()
             }
             None => self.root.clone().unwrap_or(self.schema.root.clone()),
-        };
-        self.resolve(&type_path, path, 0)
+        })
+    }
+}
+
+impl crol_eval::DefaultsProvider for SchemaDefaults {
+    fn default_of(&self, type_name: Option<&str>, path: &[String]) -> Option<crate::Value> {
+        self.resolve(&self.start_type(type_name)?, path, false, 0)
+    }
+
+    fn start_of(&self, type_name: Option<&str>, path: &[String]) -> Option<crate::Value> {
+        self.resolve(&self.start_type(type_name)?, path, true, 0)
     }
 
     fn root_is_document(&self) -> bool {

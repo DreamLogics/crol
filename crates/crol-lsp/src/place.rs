@@ -419,7 +419,10 @@ fn significant_tokens(text: &str) -> Vec<Tok> {
 
 /// Whether a token ends with an operand still to come.
 fn expects_operand(kind: SyntaxKind) -> bool {
-    matches!(kind, PLUS | MINUS | STAR | SLASH | PERCENT | TILDE | PIPE)
+    matches!(
+        kind,
+        PLUS | MINUS | STAR | SLASH | PERCENT | TILDE | TILDE_CARET | PIPE
+    )
 }
 
 /// Whether a token can be the key of an entry.
@@ -535,7 +538,7 @@ impl<'a> Walker<'_, 'a> {
         let next = self.kind(i + 1);
         let root = self.top().bracket == Bracket::Root;
         match kind {
-            PLUS | QUESTION => {}
+            PLUS | QUESTION | CARET => {}
             MINUS => self.top().removing = true,
             DOT2 => {
                 let top = self.top();
@@ -695,7 +698,7 @@ impl<'a> Walker<'_, 'a> {
     /// expression has.
     fn target_with_colon(&self, i: usize) -> bool {
         let first = match self.kind(i) {
-            Some(PLUS | QUESTION) => i + 1,
+            Some(PLUS | QUESTION | CARET) => i + 1,
             _ => i,
         };
         if !self.kind(first).is_some_and(is_key) {

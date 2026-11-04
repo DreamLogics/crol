@@ -96,6 +96,9 @@ pub struct DataOptions {
     /// Where `&default` finds defaults (`SPEC.md` 6.1.3); without one,
     /// `&default` is an error.
     pub defaults: Option<Defaults>,
+    /// Let a path go through a field left out, from its default
+    /// (`SPEC.md` 5.1). Needs `defaults`.
+    pub init_defaults: bool,
 }
 
 /// A shared [`DefaultsProvider`], for [`DataOptions::defaults`].
@@ -120,11 +123,18 @@ impl Default for DataOptions {
             variant_keys: VariantKeys::Any,
             evaluate_every_key: false,
             defaults: None,
+            init_defaults: false,
         }
     }
 }
 
 impl DataOptions {
+    /// Sets [`DataOptions::init_defaults`].
+    pub fn with_init_defaults(mut self, init: bool) -> Self {
+        self.init_defaults = init;
+        self
+    }
+
     /// Sets [`DataOptions::warn_cross_file_patches`].
     pub fn with_warn_cross_file_patches(mut self, warn: bool) -> Self {
         self.warn_cross_file_patches = warn;
@@ -230,6 +240,7 @@ pub fn evaluate_data(sources: &Sources, layers: &[Layer], options: &DataOptions)
         variant_keys: options.variant_keys,
         evaluate_every_key: options.evaluate_every_key,
         defaults: options.defaults.as_ref().map(|d| &*d.0),
+        init_defaults: options.init_defaults,
     };
     let (result, mut errors) = eval::evaluate_data(&lowered.ir, &input);
     diagnostics.append(&mut errors);
@@ -419,6 +430,7 @@ fn explain_paths(
         variant_keys: options.variant_keys,
         evaluate_every_key: false,
         defaults: options.defaults.as_ref().map(|d| &*d.0),
+        init_defaults: options.init_defaults,
     };
     eval::explain(&lowered.ir, &input, requests, context)
 }

@@ -1,0 +1,6 @@
+a: { limits: { cpu: 4 }, name: "a" }
+b: { limits: { cpu: 4 }, name: "b" }
+c: { limits: { cpu: 4 } }
+d: { limits: { cpu: 4 } }
+e: { limits: { cpu: 4, memory: 2 } }
+f: { limits: { memory: 2 } }

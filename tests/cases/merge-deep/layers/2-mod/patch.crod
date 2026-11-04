@@ -1,0 +1,13 @@
+// Nested blocks merge at any depth; a list is replaced.
+unit: & ~ {
+    combat: { range: 6, ammo: { count: 2 } },
+    tags: ["c"],
+    extra: { new: { deep: 1 } },
+    slot: Conditional { delay: 3 },
+}
+
+// A different struct variant replaces.
+other: & ~ { slot: Manual { key: "x" } }
+
+// A path to a block merges too.
+pathed.limits: { cpu: 4 }

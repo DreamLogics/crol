@@ -1,0 +1,2 @@
+stronger := { hp: & + 5 }
++unit: { ..&stronger }

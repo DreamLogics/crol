@@ -1,0 +1,20 @@
++a: { limits: { cpu: 1, memory: 2 }, name: "a" }
+a: & ~^ { limits: { cpu: 4 } }
+
++b: { limits: { cpu: 1, memory: 2 }, name: "b" }
+b: & ~ { ^limits: { cpu: 4 } }
+
++c: { limits: { cpu: 1, memory: 2 } }
+^c.limits: { cpu: 4 }
+
+// `^` keeps its meaning in a template.
+t := { ^limits: { cpu: 4 } }
++d: { limits: { cpu: 1, memory: 2 } }
+d: & ~ &t
+
+// A path in a shallow merge sets what it names.
++e: { limits: { cpu: 1, memory: 2 } }
+e: & ~^ { limits.cpu: 4 }
+
+// Without a start value or a spread nothing merges: the last entry wins.
++f: { limits: { cpu: 1 }, limits: { memory: 2 } }

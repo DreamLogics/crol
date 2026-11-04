@@ -90,6 +90,7 @@ pub(crate) enum BinOp {
     Div,
     Rem,
     Merge,
+    MergeShallow,
     Fallback,
 }
 
@@ -102,6 +103,7 @@ impl BinOp {
             BinOp::Div => "/",
             BinOp::Rem => "%",
             BinOp::Merge => "~",
+            BinOp::MergeShallow => "~^",
             BinOp::Fallback => "|",
         }
     }
@@ -160,6 +162,8 @@ impl SetOp {
 pub(crate) struct Entry {
     /// `None` for a remove.
     pub(crate) op: Option<SetOp>,
+    /// `^target: expr`: a set that never merges (`SPEC.md` 5.2).
+    pub(crate) replace: bool,
     pub(crate) key: Key,
     pub(crate) path: Vec<Selector>,
     /// The value; `None` for a remove.
@@ -180,6 +184,8 @@ pub(crate) struct RootOp {
     pub(crate) key: Rc<str>,
     /// `None` for a remove.
     pub(crate) op: Option<SetOp>,
+    /// `^target: expr`: a set that never merges (`SPEC.md` 5.2).
+    pub(crate) replace: bool,
     pub(crate) path: Vec<Selector>,
     pub(crate) value: Option<ExprId>,
     /// The target's span.

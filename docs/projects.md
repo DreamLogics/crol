@@ -121,7 +121,7 @@ vendored data: the layer is loaded, but your editor does not report problems in
 it.
 
 `options` takes `implicit_some`, `allow_unknown_fields`, `require_complete`,
-`warn_cross_file_patches`, `max_contexts`, `contexts`, and `variant_keys`, which
+`warn_cross_file_patches`, `init_defaults`, `max_contexts`, `contexts`, and `variant_keys`, which
 is written as a string here: `"NoNewKeys"`.
 
 ### Value documents in a project

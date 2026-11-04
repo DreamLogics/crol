@@ -9,8 +9,25 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ## [Unreleased]
 
+### Added
+
+- `~^`, a shallow merge, and `^key: value`, which replaces a value where a block
+  would merge (`SPEC.md` 5, 5.2, 6.4).
+- `init_defaults`, in `CrolConfig` and the project file's `options`: with a schema,
+  a path goes through a field that was left out, or an `Option` that is `None`, from
+  its default, and `&` and merging blocks start from it (`SPEC.md` 5.1).
+
 ### Changed
 
+- **Breaking:** `~` merges deep: a block inside a patch merges with what the key
+  holds, at any depth, where it used to replace it. So do a path that ends in a
+  block, a spread, and a block after a spread. A block of another type replaces,
+  as a value that is no block does. To keep the old meaning, write `^key` or `~^`
+  (`SPEC.md` 5.2, 6.4). Data that relied on the old meaning changes value, and so
+  does its fingerprint.
+- **Breaking:** `&` in an entry with nothing below where it was written, as in a
+  template, reads the value below where the entry lands, so a template can be a
+  patch: `stronger := { hp: & + 5 }`, `unit: & ~ &stronger` (`SPEC.md` 6.1).
 - **Breaking:** in layered data, a struct as the schema's root type is the whole
   document: a root key is a field of it, in `crol check`, `crol::check`,
   `fill_defaults`, `&default` and the language server, and completeness is that of

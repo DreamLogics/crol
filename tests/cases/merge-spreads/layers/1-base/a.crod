@@ -1,0 +1,19 @@
+a := { limits: { cpu: 1, memory: 2 }, name: "a" }
+b := { limits: { cpu: 3 } }
+
+// A block after a spread merges with what the spread put there.
++one: { ..&a, limits: { cpu: 2 } }
+
+// So does a second spread.
++two: { ..&a, ..&b }
+
+// A value that is no block replaces.
++three: { ..&a, limits: &b.limits }
+
+// A value spread over one of another type replaces it.
+c := { shape: Circle { radius: 1 } }
+d := { shape: Square { side: 2 } }
++four: { ..&c, ..&d }
+
+// Merging a value merges at depth as well.
++five: &a ~ &b

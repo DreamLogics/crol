@@ -1,0 +1,23 @@
+// `&` with nothing below where it is written reads what is below where it
+// lands.
+stronger := { hp: & + 5, combat: { range: & * 2 }, tags: & + ["strong"] }
++unit: { hp: 1, combat: { range: 5, reload: 2 }, tags: [] }
++tank: { hp: 10, combat: { range: 1, reload: 2 }, tags: ["big"] }
+unit: & ~ &stronger
+tank: & ~ &stronger
+
+// In a spread as well.
+plain := { hp: 1, combat: { range: 3 }, tags: [] }
++spread: { ..&plain, ..&stronger }
+
+// A value that had something below keeps it.
++parent: { hp: 1 }
+parent: & ~ { hp: & + 1 }
+hundred := { hp: 100 }
++child: { ..&hundred, ..&root.parent }
+
+// Nothing below it here either: the fallback applies.
+counted := { count: & + 1 | 1 }
++first: { ..&counted }
++second: { count: 5 }
+second: & ~ &counted

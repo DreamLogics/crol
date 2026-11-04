@@ -464,6 +464,16 @@ or the one a document names. Generate the schema from types with
 With a struct as the root type, a root key is a field like any other, so
 `retries: &default + 1` is one more than the default of that field.
 
+### Paths through fields left out
+
+Data that leaves defaults out is short, but a path cannot go through what is not
+there: `web.limits.cpu: 2.0` fails when `limits` was left out. With
+`CrolConfig::init_defaults`, or `init_defaults: true` in the project file's
+`options`, such a step starts from its default, found as `&default` finds it. So
+the path works, `&` in it reads the default, and a block merged into the field
+starts from the default as well. An `Option` that is `None` starts from the default
+of what it holds. A step with no default stays an error.
+
 **Limits.** `&default` works in layered data only. In a value-mode document it is
 an error, with `crol::from_str`, `crol::from_str_with_schema`, a `.crol` file given
 to `crol` and in the language server alike. There, and in data with no schema at

@@ -569,8 +569,11 @@ impl Formatter {
     }
 
     fn binary_op(&self, node: &SyntaxNode) -> String {
-        child_token(node, &[PLUS, MINUS, STAR, SLASH, PERCENT, TILDE, PIPE])
-            .map_or_else(String::new, |t| t.to_string())
+        child_token(
+            node,
+            &[PLUS, MINUS, STAR, SLASH, PERCENT, TILDE, TILDE_CARET, PIPE],
+        )
+        .map_or_else(String::new, |t| t.to_string())
     }
 
     /// What comes before an entry's value: `name = +target: `, `name := ` or
@@ -585,7 +588,7 @@ impl Formatter {
                     prefix.push_str(name.text());
                     prefix.push_str(" = ");
                 }
-                if let Some(op) = child_token(node, &[PLUS, QUESTION]) {
+                if let Some(op) = child_token(node, &[PLUS, QUESTION, CARET]) {
                     prefix.push_str(op.text());
                 }
                 if let Some(target) = child_node(node, |k| k == TARGET) {

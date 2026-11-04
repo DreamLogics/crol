@@ -1,0 +1,3 @@
+// At the top of a merge a type mismatch stays an error.
++unit: Unit { hp: 1 }
+unit: & ~ Tech { cost: 1 }

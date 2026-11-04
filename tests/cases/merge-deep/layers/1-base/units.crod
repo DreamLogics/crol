@@ -1,0 +1,18 @@
++unit: Unit {
+    hp: 1,
+    combat: { range: 5, reload: 2, ammo: { kind: "shell", count: 1 } },
+    tags: ["a", "b"],
+    slot: Conditional { weapon: "gun", delay: 2 },
+}
+
++other: Unit {
+    combat: { range: 5, reload: 2 },
+    slot: Conditional { weapon: "gun", delay: 2 },
+}
+
++pathed: { limits: { cpu: 1, memory: 2 } }
++conditional: { limits: { cpu: 1, memory: 2 } }
+
+<prod> {
+    conditional.limits: { cpu: 8 },
+}

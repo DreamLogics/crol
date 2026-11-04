@@ -73,8 +73,8 @@ total: 115
 sum: 3
 ```
 
-Most lines are not in doubt: `?`, `..`, a key or a bind can only start an entry,
-and `.`, `*`, `/`, `%`, `~` and `|` can only continue a value. Four tokens can do
+Most lines are not in doubt: `?`, `^`, `..`, a key or a bind can only start an
+entry, and `.`, `*`, `/`, `%`, `~`, `~^` and `|` can only continue a value. Four tokens can do
 both, and what follows them on the same line decides:
 
 | Line starts with | Begins an entry when...                       | Otherwise it continues the value |
@@ -215,6 +215,8 @@ web: {
 
 Every step of the path but the last must exist, or you get an error that
 names the missing step. Removing works the same way: `-web.limits.memory_mb`.
+With a schema, [`init_defaults`](rust.md#configuration) lets a path go through a
+field that was left out, from its default.
 
 To change several fields at once, use `~`, the _merge_ operator, with `&` for
 the value below. The block on the right is applied on top of the value on the
@@ -235,10 +237,32 @@ $ crol eval example.crod
 web: { replicas: 2, port: 80, limits: { cpu: 2.0, memory_mb: 512 } }
 ```
 
-Merging is shallow. If the patch had said `limits: { cpu: 2.0 }`, it would
-have replaced `limits` as a whole, and `memory_mb` would be gone. To change
-something deeper, write a path, as above, or merge again:
-`limits: & ~ { cpu: 2.0 }`.
+Merging is deep: a block inside the patch merges with what is there, at any
+depth. So `limits: { cpu: 2.0 }` in the patch means the same as `limits.cpu: 2.0`
+above, and `memory_mb` stays. The same goes for a path that ends in a block,
+`web.limits: { cpu: 2.0 }`. Lists are replaced, and so is any value that is not
+written as a block.
+
+Two things replace instead. `^` in front of a key replaces that one value, and
+`~^` is a _shallow_ merge, where no block inside merges:
+
+```crol
+// example.crod
++a: { limits: { cpu: 1.0, memory_mb: 512 }, port: 80 }
++b: { limits: { cpu: 1.0, memory_mb: 512 }, port: 80 }
+
+a: & ~ { ^limits: { cpu: 2.0 } }
+b: & ~^ { limits: { cpu: 2.0 } }
+```
+
+```console
+$ crol eval example.crod
+a: { limits: { cpu: 2.0 }, port: 80 }
+b: { limits: { cpu: 2.0 }, port: 80 }
+```
+
+A block of another type replaces too, which is how you change an enum's struct
+variant: `shape: Square { side: 2 }` over a `Circle`.
 
 ## References
 
@@ -353,6 +377,31 @@ landed, so it read `admin`'s port. A template can describe its fields in terms
 of each other, and every value that spreads it gets them computed from its own
 fields.
 
+Spreads merge like `~` does: a block after a spread merges with what the spread
+put there, so `combat: { range: 7 }` keeps the other fields of `combat`. Write
+`^combat: { ... }` to replace it.
+
+A template can also be a patch, for changes that several values share. `&` in a
+template has nothing below it where it is written, so it reads the value below
+where it lands:
+
+```crol
+// example.crod
+stronger := { hp: & + 5, tags: & + ["strong"] }
+
++trooper: { hp: 10, tags: [] }
++tank: { hp: 100, tags: ["big"] }
+
+trooper: & ~ &stronger
+tank: & ~ &stronger
+```
+
+```console
+$ crol eval example.crod
+trooper: { hp: 15, tags: ["strong"] }
+tank: { hp: 105, tags: ["big", "strong"] }
+```
+
 Templates are not data: they do not show up in the output, and your program
 never sees them. In layered data they are visible in every file of every
 layer, and can be defined only once.
@@ -440,7 +489,7 @@ Lists only combine with lists, so to append one element, write
 `tags: & + ["x"]`.
 
 The operators bind in the usual order: selectors, unary `-`, `* / %`, `+ -`,
-then `~`, then `|`. Parentheses group.
+then `~` and `~^`, then `|`. Parentheses group.
 
 ## Fallback
 

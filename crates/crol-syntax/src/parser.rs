@@ -382,7 +382,7 @@ impl Parser<'_> {
     /// (`SPEC.md` section 4).
     fn document_is_entries(&self) -> bool {
         match self.current() {
-            EOF | PLUS | QUESTION | DOT2 | L_ANGLE => true,
+            EOF | PLUS | QUESTION | CARET | DOT2 | L_ANGLE => true,
             IDENT if matches!(self.nth(1), EQ | COLON_EQ) => true,
             MINUS => matches!(self.nth(1), IDENT | STRING | RAW_STRING | L_BRACK),
             _ => self.at_target_then_colon(),
@@ -659,7 +659,7 @@ impl Parser<'_> {
 
     fn at_entry_start(&self) -> bool {
         match self.current() {
-            MINUS | PLUS | QUESTION | DOT2 | L_ANGLE | POUND => true,
+            MINUS | PLUS | QUESTION | CARET | DOT2 | L_ANGLE | POUND => true,
             kind => starts_key(kind),
         }
     }
@@ -676,7 +676,7 @@ impl Parser<'_> {
     fn has_entry_shape(&self, n: usize) -> bool {
         let same_line = |n: usize| !self.nth_starts_line(n);
         match self.nth(n) {
-            QUESTION | DOT2 => true,
+            QUESTION | CARET | DOT2 => true,
             PLUS => same_line(n + 1) && self.has_target_and_colon(n + 1),
             // Not `-12` or `-[key]`: those read as subtracting an integer or
             // a list too, while subtracting a name or a string is an error.
@@ -765,7 +765,7 @@ impl Parser<'_> {
                 self.bump();
                 self.finish();
                 match self.current() {
-                    PLUS | QUESTION => {}
+                    PLUS | QUESTION | CARET => {}
                     kind if starts_key(kind) => {}
                     MINUS => self.error("a bind cannot name a remove"),
                     L_ANGLE => self.error("a bind cannot name a variant block"),
@@ -793,7 +793,7 @@ impl Parser<'_> {
                 self.finish();
                 self.finish();
             }
-            PLUS | QUESTION => {
+            PLUS | QUESTION | CARET => {
                 self.start_at(checkpoint, ENTRY);
                 self.bump();
                 self.target();
@@ -1068,8 +1068,12 @@ impl Parser<'_> {
 
     /// Binary operators, loosest first (`SPEC.md` 6.2).
     fn binary(&mut self, level: usize) {
-        const LEVELS: [&[SyntaxKind]; 4] =
-            [&[PIPE], &[TILDE], &[PLUS, MINUS], &[STAR, SLASH, PERCENT]];
+        const LEVELS: [&[SyntaxKind]; 4] = [
+            &[PIPE],
+            &[TILDE, TILDE_CARET],
+            &[PLUS, MINUS],
+            &[STAR, SLASH, PERCENT],
+        ];
         let Some(ops) = LEVELS.get(level) else {
             self.unary();
             return;

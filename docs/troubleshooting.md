@@ -18,6 +18,8 @@ create the key, write `+web: { port: 80 }`.
 
 The same goes for every step of a longer path: `web.limits.cpu: 2` with no `limits`
 gives ``web.limits.cpu: `web.limits` does not exist, so it cannot be patched``.
+If `limits` is a field with a default, [`init_defaults`](schemas.md#paths-through-fields-left-out)
+lets the path start from it.
 
 **`` +: `web` already exists ``**
 
@@ -74,8 +76,8 @@ field of this block, `&root.web.port` for one elsewhere, or
 **`&: there is no value below here`**
 
 `&` means the value before this entry, and there is none. If a value below is
-optional, add a fallback: `counter: & + 1 | 1`. Note that a template has nothing
-below it, since it is no key.
+optional, add a fallback: `counter: & + 1 | 1`. In a template, `&` reads the value
+below where the template lands, so this means nothing was below there either.
 
 **`cycle: this value depends on itself`**
 

@@ -116,7 +116,7 @@ module.exports = grammar({
 
     entry: $ => seq(
       optional($.bind),
-      optional(field('op', choice('+', '?'))),
+      optional(field('op', choice('+', '?', '^'))),
       field('target', $.target),
       ':',
       field('value', $._expression),
@@ -164,7 +164,7 @@ module.exports = grammar({
 
     binary_expr: $ => choice(
       prec.left(PREC.fallback, seq(field('lhs', $._expression), field('op', '|'), field('rhs', $._expression))),
-      prec.left(PREC.merge, seq(field('lhs', $._expression), field('op', '~'), field('rhs', $._expression))),
+      prec.left(PREC.merge, seq(field('lhs', $._expression), field('op', choice('~', '~^')), field('rhs', $._expression))),
       prec.left(PREC.sum, seq(field('lhs', $._expression), field('op', choice('+', '-')), field('rhs', $._expression))),
       prec.left(PREC.product, seq(field('lhs', $._expression), field('op', choice('*', '/', '%')), field('rhs', $._expression))),
     ),

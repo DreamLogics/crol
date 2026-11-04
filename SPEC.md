@@ -195,7 +195,7 @@ result counts as a literal.
 ### 2.5 Punctuation and adjacency
 
 ```
-{ } [ ] ( ) < > , : :: := . .. + - * / % ~ | & ^ @ ? = # !
+{ } [ ] ( ) < > , : :: := . .. + - * / % ~ ~^ | & ^ @ ? = # !
 ```
 
 Two adjacency rules, both to keep one-token lookahead:
@@ -611,6 +611,7 @@ optional path into its value.
 | `+target: expr` | declare | create the target | it exists |
 | `target: expr` | set | replace the target, or create it | |
 | `?target: expr` | ensure | create the target if missing; otherwise nothing | |
+| `^target: expr` | replace | as set, but the value never merges with what is there (section 5.2) | |
 | `-target` | remove | remove the target | it does not exist |
 | `<c> { entries }` | variant block | the entries apply under condition `c` (section 8.2) | |
 | `..operand` | spread | copy the keyed value's entries in | it is not a keyed value |
@@ -647,25 +648,47 @@ reach them. An integer key at the root is an error.
 must exist; a missing step is an error naming it. The operation then
 applies at the last step:
 
-- set, declare and ensure work on keys. On list indices and tuple
-  elements only set works, and the index must exist. Whether a key is a
-  known field of a struct, the deserializer decides later.
+- set, replace, declare and ensure work on keys. On list indices and
+  tuple elements only set and replace work, and the index must exist.
+  Whether a key is a known field of a struct, the deserializer decides
+  later. A set to a block merges, as in section 5.2, unless the path is
+  in the entries of a `~^`.
 - remove works on keys, and on list indices (later elements move down).
   Removing a tuple element is an error.
 
 A path entry is always a patch: `web.replicas: 4` needs `web` to exist.
+
+**Initialising defaults.** With the option `init_defaults` and a schema
+that records defaults (section 6.1.3), a field that was left out does
+not stop a path. In a data-mode document, where a step of a path would be
+missing, or is an `Option` that is `None`, it holds its default instead,
+so that `web.limits.cpu: 2.0` works when `limits` was left out:
+
+- A field's default is found as `&default` finds it, from the nearest
+  type name: of the value the path goes through, else of the blocks
+  around the entry, else the root type.
+- An `Option` with no default of its own, or `None` as its default,
+  starts from the default of the type it holds.
+- `&` in such an entry reads the default, and a block that merges
+  (section 5.2) with a field left out starts from it.
+- A step with no default is missing as before, and an error.
+
+The default is part of the context the entry applies in: under a
+condition it fills in the field in that context only. The option changes
+nothing for data whose paths all exist.
 
 ### 5.2 Blocks
 
 A block `Name? { entries }` builds a keyed value in three steps:
 
 1. Start from the block's **start value**: the left operand when the
-   block is the right side of `~` (a *patch block*), and an empty keyed
-   value otherwise (a *whole-value block*).
+   block is the right side of `~` or `~^` (a *patch block*), the value
+   below when the block merges (below), and an empty keyed value
+   otherwise (a *whole-value block*).
 2. Apply every spread, in source order, wherever it is written. A
-   spread sets each of the source's entries (as `key: value`), ORs its
-   defaults flag into the block's, and adds its defaulted fields to the
-   block's. A spread's operand is a postfix expression (section 9):
+   spread merges the source's entries into the block as `~` does
+   (section 6.4), ORs its defaults flag into the block's, and adds its
+   defaulted fields to the block's. A spread's operand is a postfix expression (section 9):
    `..&root.x`, `..{ ... }`, or in parentheses, `..(&root.a ~ { b: 1 })`.
 3. Apply the other entries in source order. `..` sets the defaults
    flag, wherever in the block it is written.
@@ -680,10 +703,26 @@ struct field takes its default. Setting the key again (`+key`, `?key`,
 Entries inside a block may have paths (`limits.cpu: 2.0`), which
 navigate into what the block holds at that point.
 
-**Merging is shallow.** In a patch, `limits: { cpu: 2.0 }` *replaces*
-`limits`. To change one field deep inside, write a path
-(`limits.cpu: 2.0`) or patch the nested value explicitly
-(`limits: & ~ { cpu: 2.0 }`).
+**Merging is deep.** A block with a start value or a spread is a
+*merging block*. In one, an entry `key: { ... }` whose value is written
+as a block merges with what `key` holds: the nested block is a patch
+block with that as its start value, and so on at any depth. So in a
+patch, `limits: { cpu: 2.0 }` changes `cpu` and leaves the rest of
+`limits`. The same goes for a path entry whose value is a block
+(`web.limits: { cpu: 2.0 }`).
+
+It merges only when what the key holds is a keyed value and the type
+names agree (equal, or one absent). Otherwise the block replaces it, so
+a struct variant replaces another variant, and over nothing it is a
+whole-value block. A value that is not written as a block
+(`limits: &root.x`, `tags: ["a"]`) replaces what is there; lists never
+merge.
+
+To replace a value in a merging block, write `^limits: { cpu: 2.0 }`.
+`~^` is a *shallow* merge: the entries of its block set their keys, and
+blocks in them do not merge. A whole-value block with no spread does not
+merge:
+`{ a: { x: 1 }, a: { y: 2 } }` is `{ a: { y: 2 } }`.
 
 **Type names.** A block's type name is checked against the start value
 when the block is a patch (section 6.4), and against the Rust type at
@@ -733,9 +772,9 @@ start an entry; what follows them, on that same line, decides:
 | `[` | it is an accessor, with any selectors, and `:` follows: `["a b"]: 1` | `[0]`, `["key"].name` |
 | `<` | it is a variant and `{` follows: `<prod> {` | `<prod>`, `<prod>.name` |
 
-Any other line needs no such look: `?`, `..`, a key or a bind can only
-start an entry, and `.`, `*`, `/`, `%`, `~`, `|` can only continue a
-value. A `(` or `{` continues a bare name, as a named tuple or a block's
+Any other line needs no such look: `?`, `^`, `..`, a key or a bind can
+only start an entry, and `.`, `*`, `/`, `%`, `~`, `~^`, `|` can only
+continue a value. A `(` or `{` continues a bare name, as a named tuple or a block's
 type name, and otherwise is an error. A value also goes on when what is
 before the line break needs it: a line that ends with a binary operator,
 `:` or `:=`. After a `:`, a line that begins an entry is an error for
@@ -861,11 +900,14 @@ level is an error.
 **Rebinding through spreads.** An entry that a spread copies in is
 evaluated at its *new* location. `&self`, `&parent` and binds in it,
 and in the blocks nested in it, refer to the value it was copied into,
-not to the one it was written in. `&` does not move: in a copied entry it
-is still the value below where the entry was written (so `replicas: & +
-1` in a template adds to the template's own value below, which in a
-template is missing, section 6.1.2). `&root` paths are absolute either
-way.
+not to the one it was written in. `&` stays where the entry was written:
+in a copied entry it is still the value below there. But an entry with
+*nothing* below where it was written, as in a template (section 6.1.2),
+reads the value below where it lands. So `replicas: & + 1` in a template
+adds to the replicas of whatever it is merged into or spread over, and a
+template can be a patch: `stronger := { hp: & + 5 }`, then
+`unit: & ~ &stronger`. Where nothing is below at the new location either,
+`&` is missing. `&root` paths are absolute either way.
 
 ```rust
 service_defaults := {
@@ -1030,7 +1072,7 @@ From tightest to loosest:
 | 2 | unary `-` | right |
 | 3 | `*`, `/`, `%` | left |
 | 4 | `+`, `-` | left |
-| 5 | `~` (merge) | left |
+| 5 | `~`, `~^` (merge) | left |
 | 6 | `\|` (fallback) | left |
 
 Parentheses group. `&-1` is `&` minus 1, and `-&` negates `&`.
@@ -1063,23 +1105,31 @@ Postfix selectors apply to any expression: `(&root.a ~ { b: 1 }).b`,
   from a list to append.
 - Any other combination is an error naming both kinds.
 
-### 6.4 Merge `a ~ b`
+### 6.4 Merge `a ~ b`, `a ~^ b`
 
 `b` is normally a block (a patch), and section 5.2 gives the rules.
-In general:
+`~` merges at any depth, and `~^` only at the top level. In general:
 
 | `a` | `b` | Result |
 |---|---|---|
 | keyed value | block | the block applied with `a` as its start value |
-| keyed value | other keyed value (e.g. `& ~ &root.x`) | as if `b` were a block that sets each of its entries, plus its defaults flag and defaulted fields |
+| keyed value | other keyed value (e.g. `& ~ &root.x`) | each of `b`'s entries applied over `a`, below, plus its defaults flag and defaulted fields |
 | named tuple `N(...)` | named tuple `N(...)` | `b` |
 | unit name `N` | unit name `N` | `N` |
 | anything else | | error; use `:`, `+`, `-` or a path |
 
 - If both sides have a type name they must be equal, else it is an
   error ("cannot merge `Service` with `Limits`"). This also rejects
-  merging different enum variants; replace them with `:` instead.
+  merging different enum variants; replace them with `:` instead. It
+  holds for the two operands of `~`, not for the values nested in them,
+  where a value of another type replaces (section 5.2).
 - The result's type name is `a`'s, or `b`'s if `a` has none.
+
+With `~`, an entry of `b` over a key that `a` holds merges: where both
+values are keyed and their type names agree, the same way, at any depth,
+and otherwise `b`'s value replaces. An entry written `^key` in `b`
+replaces. With `~^`, every entry of `b` replaces. A spread is the
+same as `~` (section 5.2).
 
 ### 6.5 Fallback `a | b`
 
@@ -1201,7 +1251,7 @@ Let `v` be *missing*. Apply each operation in order:
 | Operation | Result |
 |---|---|
 | declare `+k: e` | error if `v` exists; else `e` evaluated (`&` missing) |
-| set `k: e` | `e`, evaluated with `&` = `v` |
+| set `k: e`, replace `^k: e` | `e`, evaluated with `&` = `v` |
 | ensure `?k: e` | `v` if it exists; else `e` (`&` missing) |
 | remove `-k` | error if `v` is missing; else missing |
 | path entry `k.p…: e` | error if `v` is missing; else `v` with the path entry applied (section 5.1) |
@@ -1532,8 +1582,8 @@ is not the same as a parent: the copy is evaluated in `{prod}`, so its
 
 Applying one key's variant operations to another key is deliberately not
 supported: it would make operations into reusable functions. A patch
-without `&` can be shared as a template instead: `shared_patch := { ... }`,
-then `x<b>: & ~ &shared_patch`.
+can be shared as a template instead: `shared_patch := { ... }`, then
+`x<b>: & ~ &shared_patch`.
 
 ### 8.4 Context in references
 
@@ -1582,7 +1632,7 @@ block        ::= identifier? "{" entries "}"
 entries      ::= ( entry ( separator entry )* ","? )?
 separator    ::= "," | line_break                    (* section 5.3 *)
 entry        ::= "-" target
-               | bind? ( "+" | "?" )? target ":" expr
+               | bind? ( "+" | "?" | "^" )? target ":" expr
                | identifier ":=" expr                (* value bind, 6.1.2 *)
                | variant "{" entries "}"
                | ".." postfix?
@@ -1598,7 +1648,7 @@ cond_not     ::= "!" cond_not | identifier | "(" condition ")"
 tuple_index  ::= decimal digits, no underscore or sign
 
 expr         ::= merge ( "|" merge )*
-merge        ::= sum ( "~" sum )*
+merge        ::= sum ( ( "~" | "~^" ) sum )*
 sum          ::= product ( ( "+" | "-" ) product )*
 product      ::= unary ( ( "*" | "/" | "%" ) unary )*
 unary        ::= "-" unary | postfix
@@ -2067,6 +2117,7 @@ are fetched to a cache and read from there.
 | `allow_unknown_fields: bool` | `false` | 10.2 |
 | `require_complete: bool` | `true` | 10.2 |
 | `warn_cross_file_patches: bool` | `true` | 7.2 |
+| `init_defaults: bool` | `false` | 5.1 |
 
 ### 10.8 Serializer
 
@@ -3040,7 +3091,7 @@ where it is not obvious.
   several files may patch one key with `x: & ~ {...}`.
 - `&` binding inside blocks, block locations, and `self`/`parent`
   defined (6.1).
-- Merging is shallow, and `~` takes any keyed value on the right (6.4).
+- `~` takes any keyed value on the right (6.4).
 - The defaults flag and defaulted fields replace "complete unless it
   spreads a value": a spread passes on the flag of what it spreads
   instead of always allowing defaults (3.1, 5.2). `Option` fields must

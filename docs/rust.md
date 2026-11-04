@@ -360,6 +360,7 @@ that out when you do not set `variants`.
 | `allow_unknown_fields`    | `false`            | ignore fields a struct does not have                         |
 | `require_complete`        | `true`             | require every field of a struct without `..`, unless the [type decides](#types-that-decide-for-themselves) |
 | `warn_cross_file_patches` | `true`             | warn about [patches from several files](layers.md#definitions-and-patches) of a layer |
+| `init_defaults`           | `false`            | let a path go through a field left out, from its default; needs a [schema](schemas.md#using-default) |
 
 ## Inspecting the result
 

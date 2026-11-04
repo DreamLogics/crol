@@ -278,6 +278,7 @@ static bool at_target_and_colon(TSLexer *lexer) {
 static bool at_entry_shape(TSLexer *lexer) {
   switch (lexer->lookahead) {
     case '?':
+    case '^':
       return true;
     case '.':
       advance(lexer);

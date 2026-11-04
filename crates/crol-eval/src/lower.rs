@@ -245,6 +245,16 @@ impl FixedBlock {
 }
 
 /// The field names of a path, for a `&default` target.
+/// What an entry's operation does to its target; `^` is a set that never
+/// merges, which the entry records apart.
+fn set_op(op: ast::EntryOp) -> SetOp {
+    match op {
+        ast::EntryOp::Set | ast::EntryOp::Replace => SetOp::Set,
+        ast::EntryOp::Declare => SetOp::Declare,
+        ast::EntryOp::Ensure => SetOp::Ensure,
+    }
+}
+
 fn field_names(path: &[Selector]) -> Vec<Rc<str>> {
     path.iter()
         .filter_map(|s| match &s.kind {
@@ -389,6 +399,7 @@ impl Lowerer {
         ops: &mut Vec<RootOp>,
     ) {
         let conditional = conditions.iter().any(Option::is_some);
+        let mut replace = false;
         let (target, op, value) = match entry {
             ast::AnyEntry::Entry(entry) => {
                 if let Some(bind) = entry.bind() {
@@ -398,11 +409,8 @@ impl Lowerer {
                         "a bind at the top level of a data-mode document is not needed: write `&root.key`",
                     );
                 }
-                let op = match entry.op() {
-                    ast::EntryOp::Set => SetOp::Set,
-                    ast::EntryOp::Declare => SetOp::Declare,
-                    ast::EntryOp::Ensure => SetOp::Ensure,
-                };
+                let op = set_op(entry.op());
+                replace = entry.op() == ast::EntryOp::Replace;
                 (entry.target(), Some(op), entry.value())
             }
             ast::AnyEntry::Remove(entry) => (entry.target(), None, None),
@@ -531,6 +539,7 @@ impl Lowerer {
             ops.push(RootOp {
                 key: key.clone(),
                 op,
+                replace,
                 path: path.clone(),
                 value,
                 span,
@@ -548,17 +557,15 @@ impl Lowerer {
     /// Lifts a variant entry in a fixed block to root operations: `field<c>:
     /// e` in the block at `web` is `web<c>.field: e` (`SPEC.md` 8.2).
     fn lift(&mut self, entry: &ast::AnyEntry, fixed: &FixedBlock, conditions: &[Option<Cond>]) {
+        let mut replace = false;
         let (target, op, value) = match entry {
             ast::AnyEntry::Entry(e) => {
                 if let Some(bind) = e.bind() {
                     let span = self.span(bind.syntax());
                     self.error(span, "a bind cannot name a variant entry");
                 }
-                let op = match e.op() {
-                    ast::EntryOp::Set => SetOp::Set,
-                    ast::EntryOp::Declare => SetOp::Declare,
-                    ast::EntryOp::Ensure => SetOp::Ensure,
-                };
+                let op = set_op(e.op());
+                replace = e.op() == ast::EntryOp::Replace;
                 (e.target(), Some(op), e.value())
             }
             ast::AnyEntry::Remove(e) => (e.target(), None, None),
@@ -634,6 +641,7 @@ impl Lowerer {
             self.lifted.push(RootOp {
                 key: fixed.key.clone(),
                 op,
+                replace,
                 path: full_path.clone(),
                 value,
                 span,
@@ -944,14 +952,10 @@ impl Lowerer {
                         let conditions = f.conditions.clone();
                         f.child(&key, &path, target_span, conditions)
                     });
-                    let op = match entry.op() {
-                        ast::EntryOp::Set => SetOp::Set,
-                        ast::EntryOp::Declare => SetOp::Declare,
-                        ast::EntryOp::Ensure => SetOp::Ensure,
-                    };
                     let value = entry.value().map(|value| self.expr(&value));
                     lowered.push(Entry {
-                        op: Some(op),
+                        op: Some(set_op(entry.op())),
+                        replace: entry.op() == ast::EntryOp::Replace,
                         key,
                         path,
                         value,
@@ -965,6 +969,7 @@ impl Lowerer {
                     if let Some((key, path)) = self.target(&target) {
                         lowered.push(Entry {
                             op: None,
+                            replace: false,
                             key,
                             path,
                             value: None,
@@ -1243,6 +1248,7 @@ impl Lowerer {
                     Some(ast::BinaryOp::Div) => BinOp::Div,
                     Some(ast::BinaryOp::Rem) => BinOp::Rem,
                     Some(ast::BinaryOp::Merge) => BinOp::Merge,
+                    Some(ast::BinaryOp::MergeShallow) => BinOp::MergeShallow,
                     Some(ast::BinaryOp::Fallback) => BinOp::Fallback,
                     None => return self.ir.add_expr(ExprKind::Error, span),
                 };
@@ -1254,7 +1260,7 @@ impl Lowerer {
                     BinOp::Fallback => (self.expr(&lhs), self.expr(&rhs)),
                     // A block on the right is a patch block: its entries see
                     // the left operand, not the value below.
-                    BinOp::Merge => {
+                    BinOp::Merge | BinOp::MergeShallow => {
                         let lhs = self.expr(&lhs);
                         self.fixed = fixed;
                         let rhs = if matches!(rhs, ast::Expr::Block(_)) {

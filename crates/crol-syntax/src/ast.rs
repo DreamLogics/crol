@@ -298,8 +298,8 @@ ast_enum!(
 );
 
 ast_node!(
-    /// `target: expr`, `+target: expr` or `?target: expr`, optionally with a
-    /// bind before it.
+    /// `target: expr`, `+target: expr`, `?target: expr` or `^target: expr`,
+    /// optionally with a bind before it.
     Entry, ENTRY
 );
 
@@ -312,6 +312,8 @@ pub enum EntryOp {
     Declare,
     /// `?target: expr`
     Ensure,
+    /// `^target: expr`: a set that never merges (`SPEC.md` 5.2).
+    Replace,
 }
 
 impl Entry {
@@ -325,13 +327,16 @@ impl Entry {
         match self.op_token().map(|t| t.kind()) {
             Some(PLUS) => EntryOp::Declare,
             Some(QUESTION) => EntryOp::Ensure,
+            Some(CARET) => EntryOp::Replace,
             _ => EntryOp::Set,
         }
     }
 
-    /// The `+` or `?` token, if any.
+    /// The `+`, `?` or `^` token, if any.
     pub fn op_token(&self) -> Option<SyntaxToken> {
-        token(&self.0, PLUS).or_else(|| token(&self.0, QUESTION))
+        token(&self.0, PLUS)
+            .or_else(|| token(&self.0, QUESTION))
+            .or_else(|| token(&self.0, CARET))
     }
 
     /// The target.
@@ -866,6 +871,8 @@ pub enum BinaryOp {
     Rem,
     /// `~`
     Merge,
+    /// `~^`
+    MergeShallow,
     /// `|`
     Fallback,
 }
@@ -898,6 +905,7 @@ impl BinaryExpr {
             SLASH => BinaryOp::Div,
             PERCENT => BinaryOp::Rem,
             TILDE => BinaryOp::Merge,
+            TILDE_CARET => BinaryOp::MergeShallow,
             PIPE => BinaryOp::Fallback,
             _ => return None,
         })

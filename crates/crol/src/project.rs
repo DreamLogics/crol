@@ -80,6 +80,8 @@ pub struct ProjectOptions {
     pub require_complete: bool,
     /// Warn about patches to a key from several documents of one layer.
     pub warn_cross_file_patches: bool,
+    /// Let a path go through a field left out, from its default.
+    pub init_defaults: bool,
     /// How many contexts may be evaluated.
     pub max_contexts: usize,
     /// The contexts to evaluate; default: every one.
@@ -95,6 +97,7 @@ impl Default for ProjectOptions {
             allow_unknown_fields: false,
             require_complete: true,
             warn_cross_file_patches: true,
+            init_defaults: false,
             max_contexts: 4096,
             contexts: None,
             variant_keys: "Any".to_owned(),
@@ -466,6 +469,14 @@ impl Schema for ProjectOptions {
                             TypeExpr::Bool,
                             "Warn about patches to a key from several documents of one layer.",
                             recorded_default(&d.warn_cross_file_patches),
+                        ),
+                    ),
+                    (
+                        "init_defaults",
+                        field(
+                            TypeExpr::Bool,
+                            "Let a path go through a field left out, from its default.",
+                            recorded_default(&d.init_defaults),
                         ),
                     ),
                     (

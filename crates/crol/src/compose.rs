@@ -169,6 +169,9 @@ pub struct CrolConfig<T = String> {
     /// Warn when one key is patched from several documents of one layer.
     /// Default: `true`.
     pub warn_cross_file_patches: bool,
+    /// Let a path go through a field left out, from its default. Needs a
+    /// [schema](CrolComposer::schema) (`SPEC.md` 5.1).
+    pub init_defaults: bool,
 }
 
 impl<T> Default for CrolConfig<T> {
@@ -185,6 +188,7 @@ impl<T> Default for CrolConfig<T> {
             allow_unknown_fields: false,
             require_complete: true,
             warn_cross_file_patches: true,
+            init_defaults: false,
         }
     }
 }
@@ -764,6 +768,7 @@ impl<T: VariantName> CrolComposer<T> {
         }
         let options = DataOptions::default()
             .with_warn_cross_file_patches(self.config.warn_cross_file_patches)
+            .with_init_defaults(self.config.init_defaults)
             .with_variants(variants)
             .with_contexts(contexts)
             .with_max_contexts(self.config.max_contexts)

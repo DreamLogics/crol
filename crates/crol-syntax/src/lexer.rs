@@ -168,6 +168,7 @@ impl Lexer<'_> {
             '*' => STAR,
             '/' => SLASH,
             '%' => PERCENT,
+            '~' if self.eat('^') => TILDE_CARET,
             '~' => TILDE,
             '|' => PIPE,
             '&' => AMP,

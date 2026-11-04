@@ -3,3 +3,4 @@ b: (&root.a ~ { b: 1 }).b,
 c: [1, 2][0],
 d: Some(1) ~ Some(2),
 e: Rgb(1, 2, 3).0,
+shallow: & ~^ { a: 1 }

@@ -1,0 +1,7 @@
+unit: { hp: 6, combat: { range: 10, reload: 2 }, tags: ["strong"] }
+tank: { hp: 15, combat: { range: 2, reload: 2 }, tags: ["big", "strong"] }
+spread: { hp: 6, combat: { range: 6 }, tags: ["strong"] }
+parent: { hp: 2 }
+child: { hp: 2 }
+first: { count: 1 }
+second: { count: 6 }

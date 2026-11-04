@@ -244,6 +244,7 @@ pub(crate) fn inputs(
         let project_options = &project.options;
         options = options
             .with_warn_cross_file_patches(project_options.warn_cross_file_patches)
+            .with_init_defaults(project_options.init_defaults)
             .with_max_contexts(project_options.max_contexts)
             .with_contexts(project_options.contexts.clone());
         match project_options.variant_keys() {

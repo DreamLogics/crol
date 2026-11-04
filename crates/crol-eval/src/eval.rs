@@ -90,6 +90,15 @@ enum Job {
         here: Option<Location>,
         context: usize,
     },
+    /// Two copies of a value at one place (`Recipe::Merge`).
+    Merge {
+        left: Lazy,
+        right: Lazy,
+        chain: Chain,
+        here: Option<Location>,
+        context: usize,
+        span: Span,
+    },
 }
 
 impl Cell {
@@ -165,12 +174,27 @@ enum Recipe {
     Path(Rc<PathRecipe>),
     /// A value that stays what it is wherever it is copied.
     Fixed,
+    /// A value copied over another by a deep merge or a spread: where both
+    /// are keyed they merge, and otherwise the right one wins.
+    Merge(Rc<MergeRecipe>),
+}
+
+struct MergeRecipe {
+    left: Slot,
+    right: Slot,
+    span: Span,
 }
 
 struct EntryRecipe {
     expr: ExprId,
-    /// `&`, which does not move when the entry is copied.
+    /// `&`. It stays where the entry was written when the entry is copied,
+    /// unless there is nothing there (`SPEC.md` 6.1).
     below: Below,
+    /// Whether the expression is a block that merges with `below`
+    /// (`SPEC.md` 5.2).
+    merge: bool,
+    /// `^target: expr`: never merged.
+    replace: bool,
     /// Value binds, which do not move either (`SPEC.md` 6.1.1).
     vbinds: VBinds,
 }
@@ -195,6 +219,8 @@ struct Env {
     below: Below,
     /// The value below that a whole-value block here sees through to.
     outer_below: Below,
+    /// Whether a block here merges with the value below.
+    merge: bool,
     vbinds: VBinds,
     /// The context the expression is evaluated in, as an index into the
     /// evaluator's contexts.
@@ -207,6 +233,8 @@ struct ChainLink {
     location: Option<Location>,
     /// The block of a value bind: `&parent` cannot go above it.
     bind_root: bool,
+    /// The block's type name, if it has one.
+    name: Option<Rc<str>>,
     next: Chain,
 }
 
@@ -215,6 +243,28 @@ enum Below {
     Missing,
     Value(Lazy),
     Select(Rc<Below>, Selector),
+    /// With `init_defaults`: what this is, or where that is missing, the
+    /// default there (`SPEC.md` 5.1).
+    Defaulted(Rc<DefaultedBelow>),
+}
+
+struct DefaultedBelow {
+    below: Below,
+    chain: Chain,
+    here: Option<Location>,
+}
+
+impl Below {
+    /// Whether this can only ever be missing: nothing was below the entry
+    /// where it was written.
+    fn is_nothing(&self) -> bool {
+        match self {
+            Below::Missing => true,
+            Below::Value(_) => false,
+            Below::Select(inner, _) => inner.is_nothing(),
+            Below::Defaulted(defaulted) => defaulted.below.is_nothing(),
+        }
+    }
 }
 
 type VBinds = Option<Rc<VBindLink>>;
@@ -337,6 +387,22 @@ fn child_location(location: &Option<Location>, step: Step) -> Option<Location> {
     location.as_ref().map(|l| l.child(step))
 }
 
+/// Whether two type names allow a merge: they are equal, or one is absent.
+fn names_agree(a: &Option<Rc<str>>, b: &Option<Rc<str>>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => a == b,
+        _ => true,
+    }
+}
+
+/// The field a selector names, if it names one.
+fn selector_field(selector: &Selector) -> Option<String> {
+    match &selector.kind {
+        SelectorKind::Field(name) => Some(name.to_string()),
+        _ => None,
+    }
+}
+
 fn key_selector(key: &Key, span: Span) -> Selector {
     let kind = match key {
         Key::Str(s) => SelectorKind::Field(Rc::from(s.as_str())),
@@ -418,6 +484,8 @@ pub(crate) struct Evaluator<'ir> {
     base_created: Vec<usize>,
     /// Where `&default` finds defaults.
     defaults: Option<&'ir dyn DefaultsProvider>,
+    /// Whether paths start from the defaults of the fields left out.
+    init_defaults: bool,
     /// Every cell that starts pending. Cells can hold each other in a
     /// cycle (a value bind never read holds its job, whose binds hold the
     /// cell; `a: &self` holds itself), so their states are cleared when
@@ -438,8 +506,26 @@ struct BlockScope {
     chain: Chain,
     location: Option<Location>,
     outer_below: Below,
+    /// Whether this block merges at all: `~^` does not, in its own entries.
+    deep: bool,
+    /// Whether a block as an entry's value merges with what the key holds:
+    /// in a block with a start value or a spread.
+    merging: bool,
     vbinds: VBinds,
     context: usize,
+}
+
+/// Where a keyed value's entries are copied to.
+#[derive(Clone, Copy)]
+struct CopyTo<'a> {
+    chain: &'a Chain,
+    location: &'a Option<Location>,
+    context: usize,
+    /// Whether keyed values merge with what the target holds, at any depth.
+    deep: bool,
+    /// What a key the target lacks has below it.
+    outer_below: &'a Below,
+    span: Span,
 }
 
 /// The root and templates of one context.
@@ -466,6 +552,13 @@ pub trait DefaultsProvider: std::fmt::Debug + Send + Sync {
     /// (`None`: the root type), or with an empty path the type's own
     /// default; `None` if no default is recorded.
     fn default_of(&self, type_name: Option<&str>, path: &[String]) -> Option<Value>;
+
+    /// What a field that was left out starts from when a path goes through
+    /// it (`SPEC.md` 5.1): its default, or for an `Option` that is `None`
+    /// by default, the default of what it holds.
+    fn start_of(&self, type_name: Option<&str>, path: &[String]) -> Option<Value> {
+        self.default_of(type_name, path)
+    }
 
     /// Whether the root type is the whole of a data-mode document, so that a
     /// root key is the first step of a path from it, rather than the type
@@ -533,6 +626,7 @@ pub(crate) fn evaluate(ir: &Ir, root: ExprId) -> (Option<Value>, Vec<Diagnostic>
         share: false,
         base_created: Vec::new(),
         defaults: None,
+        init_defaults: false,
         cells: RefCell::new(Vec::new()),
     };
     let root_cell = Rc::new(Cell {
@@ -549,6 +643,7 @@ pub(crate) fn evaluate(ir: &Ir, root: ExprId) -> (Option<Value>, Vec<Diagnostic>
             here: Some(location.clone()),
             below: Below::Missing,
             outer_below: Below::Missing,
+            merge: false,
             vbinds: None,
             context: 0,
         },
@@ -592,6 +687,7 @@ pub(crate) struct DataInput<'a> {
     pub(crate) variant_keys: VariantKeys,
     pub(crate) evaluate_every_key: bool,
     pub(crate) defaults: Option<&'a dyn DefaultsProvider>,
+    pub(crate) init_defaults: bool,
 }
 
 /// The evaluated data: the variants (declared, or found in the data), the
@@ -822,6 +918,7 @@ pub(crate) fn evaluate_data(
         share: false,
         base_created: Vec::new(),
         defaults: input.defaults,
+        init_defaults: input.init_defaults,
         cells: RefCell::new(Vec::new()),
     };
     // Errors in the static structure of the chains are reported once.
@@ -1081,6 +1178,7 @@ pub(crate) fn explain(
         share: false,
         base_created: Vec::new(),
         defaults: input.defaults,
+        init_defaults: input.init_defaults,
         cells: RefCell::new(Vec::new()),
     };
     let id = evaluator.context_state(&context);
@@ -1108,6 +1206,7 @@ fn explain_key(
     let chain = Some(Rc::new(ChainLink {
         location: Some(root.clone()),
         bind_root: false,
+        name: None,
         next: None,
     }));
     let relevant = |op: &RootOp| {
@@ -1404,7 +1503,7 @@ impl Evaluator<'_> {
     fn cell(&self, job: Job, location: Option<Location>) -> Lazy {
         let expr = match &job {
             Job::Expr { expr, .. } => Some(*expr),
-            Job::Path { .. } => None,
+            Job::Path { .. } | Job::Merge { .. } => None,
         };
         let cell = Rc::new(Cell {
             state: RefCell::new(State::Pending(Box::new(job))),
@@ -1538,6 +1637,7 @@ impl Evaluator<'_> {
         let chain = Some(Rc::new(ChainLink {
             location: Some(root.clone()),
             bind_root: false,
+            name: None,
             next: None,
         }));
         self.contexts.push(ContextState {
@@ -1625,6 +1725,7 @@ impl Evaluator<'_> {
             chain = Some(Rc::new(ChainLink {
                 location: Some(location),
                 bind_root: false,
+                name: None,
                 next: chain,
             }));
         }
@@ -1649,7 +1750,17 @@ impl Evaluator<'_> {
             let op = &ops[i];
             let chain = self.op_chain(root, root_chain, key, &op.blocks);
             if !op.path.is_empty() {
-                let Some((created, base)) = value.clone() else {
+                let filled = if value.is_none() {
+                    let below = DefaultedBelow {
+                        below: Below::Missing,
+                        chain: chain.clone(),
+                        here: Some(here.clone()),
+                    };
+                    self.default_cell(&below, op.span).map(|cell| (i, cell))
+                } else {
+                    None
+                };
+                let Some((created, base)) = value.clone().or(filled) else {
                     let mut target = match op.op {
                         None => format!("-{key}"),
                         Some(SetOp::Set) => key.to_owned(),
@@ -1665,13 +1776,12 @@ impl Evaluator<'_> {
                     continue;
                 };
                 let entry = op.value.map(|expr| {
-                    let mut below = Below::Value(base.clone());
-                    for selector in &op.path {
-                        below = Below::Select(Rc::new(below), selector.clone());
-                    }
+                    let below = self.path_below(&base, &op.path, &chain, &Some(here.clone()));
                     Rc::new(EntryRecipe {
                         expr,
                         below,
+                        merge: !op.replace && self.is_block(expr),
+                        replace: op.replace,
                         vbinds: vbinds.clone(),
                     })
                 });
@@ -1720,6 +1830,9 @@ impl Evaluator<'_> {
                     }
                     let below = match (&value, set) {
                         (Some((_, cell)), SetOp::Set) => Below::Value(cell.clone()),
+                        (None, SetOp::Set) => {
+                            self.defaulted(Below::Missing, &chain, &Some(here.clone()))
+                        }
                         _ => Below::Missing,
                     };
                     let cell = self.cell(
@@ -1730,6 +1843,7 @@ impl Evaluator<'_> {
                                 here: Some(here.clone()),
                                 below: below.clone(),
                                 outer_below: below,
+                                merge: false,
                                 vbinds: vbinds.clone(),
                                 context,
                             },
@@ -1798,6 +1912,7 @@ impl Evaluator<'_> {
                     here: Some(here),
                     below: Below::Missing,
                     outer_below: Below::Missing,
+                    merge: false,
                     vbinds: vbinds.clone(),
                     context,
                 },
@@ -2022,7 +2137,37 @@ impl Evaluator<'_> {
                 context,
             } => {
                 let shaped = self.force(&base, recipe.span)?;
-                self.apply_path(&shaped, &recipe.path, &recipe, &chain, here, context)
+                let at = Below::Value(base);
+                self.apply_path(&shaped, &at, &recipe.path, &recipe, &chain, here, context)
+            }
+            Job::Merge {
+                left,
+                right,
+                chain,
+                here,
+                context,
+                span,
+            } => {
+                let new = self.force(&right, span)?;
+                let old = match self.force(&left, span) {
+                    Ok(old) => old,
+                    Err(Fail::Missing(..)) => return Ok(new),
+                    Err(fail) => return Err(fail),
+                };
+                match (&old.shape, &new.shape) {
+                    (Shape::Keyed(a), Shape::Keyed(b)) if names_agree(&a.name, &b.name) => {
+                        let copy = CopyTo {
+                            chain: &chain,
+                            location: &here,
+                            context,
+                            deep: true,
+                            outer_below: &Below::Missing,
+                            span,
+                        };
+                        self.merge_keyed(a, b, &copy)
+                    }
+                    _ => Ok(new),
+                }
             }
         }
     }
@@ -2045,12 +2190,39 @@ impl Evaluator<'_> {
                         here: here.clone(),
                         below: entry.below.clone(),
                         outer_below: entry.below.clone(),
+                        merge: entry.merge,
                         vbinds: entry.vbinds.clone(),
                         context,
                     },
                 },
                 here,
             ),
+            Recipe::Merge(merge) => {
+                let MergeRecipe { left, right, span } = &**merge;
+                self.cell(
+                    Job::Merge {
+                        left: self.instantiate(
+                            &left.recipe,
+                            &left.value,
+                            chain,
+                            here.clone(),
+                            context,
+                        ),
+                        right: self.instantiate(
+                            &right.recipe,
+                            &right.value,
+                            chain,
+                            here.clone(),
+                            context,
+                        ),
+                        chain: chain.clone(),
+                        here: here.clone(),
+                        context,
+                        span: *span,
+                    },
+                    here,
+                )
+            }
             Recipe::Path(path) => {
                 let base =
                     self.instantiate(&path.base, &path.base_value, chain, here.clone(), context);
@@ -2087,7 +2259,14 @@ impl Evaluator<'_> {
             ExprKind::Id(s) => Self::shaped(Shape::Id(s.clone()), span),
             ExprKind::UnitName(n) => Self::shaped(Shape::UnitName(n.clone()), span),
             ExprKind::Ref(kind) => self.reference(kind, env, span),
-            ExprKind::Block(block) => self.block(*block, None, env, span),
+            ExprKind::Block(block) => {
+                let start = if env.merge {
+                    self.merge_start(*block, env, span)?
+                } else {
+                    None
+                };
+                self.block(*block, start, true, env, span)
+            }
             ExprKind::List(elements) => {
                 let cells = self.elements(elements, env);
                 Self::shaped(Shape::List(cells), span)
@@ -2315,6 +2494,12 @@ impl Evaluator<'_> {
             Below::Select(inner, selector) => {
                 let cell = self.resolve_below(inner, span)?;
                 let value = self.force(&cell, span)?;
+                if self.is_unset(&value) {
+                    return Err(Fail::Missing(
+                        span,
+                        "&: there is no value below here".to_owned(),
+                    ));
+                }
                 let selector = Selector {
                     kind: selector.kind.clone(),
                     span,
@@ -2327,7 +2512,135 @@ impl Evaluator<'_> {
                     result => result,
                 }
             }
+            Below::Defaulted(defaulted) => match self.resolve_below(&defaulted.below, span) {
+                Err(Fail::Missing(at, message)) => match self.default_cell(defaulted, span) {
+                    Some(cell) => Ok(cell),
+                    None => Err(Fail::Missing(at, message)),
+                },
+                result => result,
+            },
         }
+    }
+
+    /// Whether a path goes through this value from a default instead: with
+    /// `init_defaults`, an `Option` that is `None` (`SPEC.md` 5.1).
+    fn is_unset(&self, value: &Shaped) -> bool {
+        self.init_defaults && matches!(&value.shape, Shape::UnitName(name) if &**name == "None")
+    }
+
+    /// `below` at `here`, or with `init_defaults`, its default where it is
+    /// missing.
+    fn defaulted(&self, below: Below, chain: &Chain, here: &Option<Location>) -> Below {
+        if self.init_defaults && self.defaults.is_some() {
+            Below::Defaulted(Rc::new(DefaultedBelow {
+                below,
+                chain: chain.clone(),
+                here: here.clone(),
+            }))
+        } else {
+            below
+        }
+    }
+
+    /// What is below a path from `base`, which is at `here`.
+    fn path_below(
+        &self,
+        base: &Lazy,
+        path: &[Selector],
+        chain: &Chain,
+        here: &Option<Location>,
+    ) -> Below {
+        let mut below = Below::Value(base.clone());
+        let mut here = here.clone();
+        for selector in path {
+            if let Some(step) = selector_step(selector) {
+                here = child_location(&here, step);
+            }
+            below = self.defaulted(
+                Below::Select(Rc::new(below), selector.clone()),
+                chain,
+                &here,
+            );
+        }
+        below
+    }
+
+    /// The default of what is missing at `defaulted`, if it has one
+    /// (`SPEC.md` 5.1).
+    fn default_cell(&mut self, defaulted: &DefaultedBelow, span: Span) -> Option<Lazy> {
+        if !self.init_defaults {
+            return None;
+        }
+        let defaults = self.defaults?;
+        let from_values = match &defaulted.below {
+            Below::Select(parent, selector) => {
+                let field = selector_field(selector)?;
+                self.type_path(parent, span).map(|(name, mut path)| {
+                    path.push(field);
+                    (Some(name), path)
+                })
+            }
+            _ => None,
+        };
+        let (name, path) = from_values.or_else(|| {
+            let here = defaulted.here.as_ref()?;
+            self.chain_path(&defaulted.chain, here)
+        })?;
+        let value = defaults.start_of(name.as_deref(), &path)?;
+        Some(Cell::done(shaped_from_value(&value)))
+    }
+
+    /// The nearest type name at or around what is at `below`, with the
+    /// fields from there to it.
+    fn type_path(&mut self, below: &Below, span: Span) -> Option<(Rc<str>, Vec<String>)> {
+        let value = match self.resolve_below(below, span) {
+            Ok(cell) => self.force(&cell, span).ok(),
+            Err(_) => None,
+        };
+        if let Some(value) = value
+            && let Shape::Keyed(keyed) = &value.shape
+            && let Some(name) = &keyed.name
+        {
+            return Some((name.clone(), Vec::new()));
+        }
+        match below {
+            Below::Select(inner, selector) => {
+                let (name, mut path) = self.type_path(inner, span)?;
+                path.push(selector_field(selector)?);
+                Some((name, path))
+            }
+            Below::Defaulted(defaulted) => self.type_path(&defaulted.below, span),
+            Below::Missing | Below::Value(_) => None,
+        }
+    }
+
+    /// The path to `here` from the nearest block with a type name, or from
+    /// the root type (`SPEC.md` 6.1.3).
+    fn chain_path(&self, chain: &Chain, here: &Location) -> Option<(Option<Rc<str>>, Vec<String>)> {
+        let fields = |steps: &[&Step]| -> Option<Vec<String>> {
+            steps
+                .iter()
+                .map(|step| match step {
+                    Step::Key(Key::Str(name)) => Some(name.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let steps = here.step_refs();
+        let mut link = chain.as_ref();
+        while let Some(l) = link {
+            if let (Some(name), Some(location)) = (&l.name, &l.location) {
+                let depth = location.step_refs().len();
+                return Some((Some(name.clone()), fields(steps.get(depth..)?)?));
+            }
+            link = l.next.as_ref();
+        }
+        if here.anchor != Anchor::Root {
+            return None;
+        }
+        // A root key is a step only where the root type is the document.
+        let skip = usize::from(!self.defaults?.root_is_document());
+        Some((None, fields(steps.get(skip..)?)?))
     }
 
     /// The cell a selector names in a value. Missing keys and elements are
@@ -2371,10 +2684,33 @@ impl Evaluator<'_> {
 
     // ---- Blocks (`SPEC.md` 5.2) ----
 
+    /// What a block that merges starts from: the value below, if that is
+    /// a keyed value of the block's type (`SPEC.md` 5.2). Anything else is
+    /// replaced, so a struct variant replaces another one.
+    fn merge_start(&mut self, id: BlockId, env: &Env, span: Span) -> Eval<Option<Rc<Shaped>>> {
+        let below = match self.resolve_below(&env.below, span) {
+            Ok(cell) => self.force(&cell, span),
+            Err(fail) => Err(fail),
+        };
+        let below = match below {
+            Ok(below) => below,
+            Err(Fail::Missing(..)) => return Ok(None),
+            Err(fail) => return Err(fail),
+        };
+        let name = &self.ir.blocks[id].name;
+        Ok(match &below.shape {
+            Shape::Keyed(keyed) if names_agree(&keyed.name, name) => Some(below),
+            _ => None,
+        })
+    }
+
+    /// `deep` says whether the block merges nested values with what it
+    /// starts from: `~^` does not.
     fn block(
         &mut self,
         id: BlockId,
         start: Option<Rc<Shaped>>,
+        deep: bool,
         env: &Env,
         span: Span,
     ) -> Eval<Rc<Shaped>> {
@@ -2407,6 +2743,7 @@ impl Evaluator<'_> {
         let chain = Some(Rc::new(ChainLink {
             location: location.clone(),
             bind_root,
+            name: keyed.name.clone(),
             next: env.chain.clone(),
         }));
         let outer_below = if is_patch {
@@ -2430,6 +2767,7 @@ impl Evaluator<'_> {
                 here: location.clone(),
                 below: env.below.clone(),
                 outer_below: Below::Missing,
+                merge: false,
                 vbinds: vbinds.clone(),
                 context: env.context,
             };
@@ -2442,13 +2780,23 @@ impl Evaluator<'_> {
                     format!("..: cannot spread {kind}; only keyed values can be spread"),
                 ));
             };
-            self.copy_entries(source, &mut keyed, &chain, &location, env.context);
+            let copy = CopyTo {
+                chain: &chain,
+                location: &location,
+                context: env.context,
+                deep,
+                outer_below: &outer_below,
+                span: spread_span,
+            };
+            self.copy_entries(source, &mut keyed, &copy);
         }
 
         let scope = BlockScope {
             chain,
             location,
             outer_below,
+            deep,
+            merging: deep && (is_patch || !block.spreads.is_empty()),
             vbinds,
             context: env.context,
         };
@@ -2463,28 +2811,73 @@ impl Evaluator<'_> {
 
     /// Sets each of `source`'s entries in `target`, evaluated again at the
     /// target's location, and passes on its defaults (`SPEC.md` 5.2).
-    fn copy_entries(
-        &mut self,
-        source: &KeyedShape,
-        target: &mut KeyedShape,
-        chain: &Chain,
-        location: &Option<Location>,
-        context: usize,
-    ) {
+    fn copy_entries(&mut self, source: &KeyedShape, target: &mut KeyedShape, copy: &CopyTo<'_>) {
         for (key, slot) in &source.slots {
-            let here = child_location(location, Step::Key(key.clone()));
-            let value = self.instantiate(&slot.recipe, &slot.value, chain, here, context);
-            target.slots.insert(
-                key.clone(),
-                Slot {
-                    value,
-                    recipe: slot.recipe.clone(),
-                },
-            );
+            let here = child_location(copy.location, Step::Key(key.clone()));
+            let recipe = self.landed(key, slot, target.slots.get(key), copy);
+            let value = self.instantiate(&recipe, &slot.value, copy.chain, here, copy.context);
+            target.slots.insert(key.clone(), Slot { value, recipe });
             target.defaulted.remove(key);
         }
         target.defaults |= source.defaults;
         target.defaulted.extend(source.defaulted.iter().cloned());
+    }
+
+    /// How a copied entry is produced where it lands: `&` with nothing
+    /// below where it was written reads what is below here (`SPEC.md` 6.1),
+    /// and a value over one the key already holds merges, if deep.
+    fn landed(&self, key: &Key, slot: &Slot, existing: Option<&Slot>, copy: &CopyTo<'_>) -> Recipe {
+        let merged = |recipe: Recipe| match existing {
+            Some(old) if copy.deep => Recipe::Merge(Rc::new(MergeRecipe {
+                left: old.clone(),
+                right: Slot {
+                    value: slot.value.clone(),
+                    recipe,
+                },
+                span: copy.span,
+            })),
+            _ => recipe,
+        };
+        let Recipe::Entry(entry) = &slot.recipe else {
+            return merged(slot.recipe.clone());
+        };
+        if entry.replace {
+            return slot.recipe.clone();
+        }
+        if !entry.below.is_nothing() {
+            return merged(slot.recipe.clone());
+        }
+        // Nothing below there and nothing here: the common spread of a
+        // template, which needs no recipe of its own.
+        if existing.is_none() && copy.outer_below.is_nothing() && !self.init_defaults {
+            return slot.recipe.clone();
+        }
+        let below = match existing {
+            Some(old) => Below::Value(old.value.clone()),
+            None => {
+                let span = self.ir.exprs[entry.expr].span;
+                let here = child_location(copy.location, Step::Key(key.clone()));
+                self.defaulted(
+                    Below::Select(Rc::new(copy.outer_below.clone()), key_selector(key, span)),
+                    copy.chain,
+                    &here,
+                )
+            }
+        };
+        let block = self.is_block(entry.expr);
+        let recipe = Recipe::Entry(Rc::new(EntryRecipe {
+            expr: entry.expr,
+            below,
+            merge: copy.deep && block,
+            replace: false,
+            vbinds: entry.vbinds.clone(),
+        }));
+        if block { recipe } else { merged(recipe) }
+    }
+
+    /// Whether an expression is written as a block.
+    fn is_block(&self, expr: ExprId) -> bool {
+        matches!(self.ir.exprs[expr].kind, ExprKind::Block(_))
     }
 
     fn entry(&mut self, entry: &Entry, keyed: &mut KeyedShape, scope: &BlockScope) {
@@ -2492,6 +2885,8 @@ impl Evaluator<'_> {
             chain,
             location,
             outer_below,
+            deep,
+            merging,
             vbinds,
             context,
         } = scope;
@@ -2500,7 +2895,17 @@ impl Evaluator<'_> {
         let existing = keyed.slots.get(key).cloned();
         let here = child_location(location, Step::Key(key.clone()));
         if !entry.path.is_empty() {
-            let Some(slot) = existing else {
+            let filled = existing.is_none().then(|| DefaultedBelow {
+                below: Below::Select(Rc::new(outer_below.clone()), key_selector(key, entry.span)),
+                chain: chain.clone(),
+                here: here.clone(),
+            });
+            let filled = filled.and_then(|below| self.default_cell(&below, entry.span));
+            let filled = filled.map(|value| Slot {
+                value,
+                recipe: Recipe::Fixed,
+            });
+            let Some(slot) = existing.or(filled) else {
                 let target = describe_target(entry);
                 let _ = self.fail(
                     entry.span,
@@ -2509,13 +2914,12 @@ impl Evaluator<'_> {
                 return;
             };
             let value = entry.value.map(|expr| {
-                let mut below = Below::Value(slot.value.clone());
-                for selector in &entry.path {
-                    below = Below::Select(Rc::new(below), selector.clone());
-                }
+                let below = self.path_below(&slot.value, &entry.path, chain, &here);
                 Rc::new(EntryRecipe {
                     expr,
                     below,
+                    merge: *deep && !entry.replace && self.is_block(expr),
+                    replace: entry.replace,
                     vbinds: vbinds.clone(),
                 })
             });
@@ -2559,18 +2963,23 @@ impl Evaluator<'_> {
                 }
                 let below = match &existing {
                     Some(slot) => Below::Value(slot.value.clone()),
-                    None => {
-                        Below::Select(Rc::new(outer_below.clone()), key_selector(key, entry.span))
-                    }
+                    None => self.defaulted(
+                        Below::Select(Rc::new(outer_below.clone()), key_selector(key, entry.span)),
+                        chain,
+                        &here,
+                    ),
                 };
                 let below = if op == SetOp::Set {
                     below
                 } else {
                     Below::Missing
                 };
+                let expr = entry.value.expect("a set entry has a value");
                 let recipe = Recipe::Entry(Rc::new(EntryRecipe {
-                    expr: entry.value.expect("a set entry has a value"),
+                    expr,
                     below,
+                    merge: *merging && !entry.replace && self.is_block(expr),
+                    replace: entry.replace,
                     vbinds: vbinds.clone(),
                 }));
                 let placeholder = Cell::done(Rc::new(Shaped {
@@ -2599,6 +3008,7 @@ impl Evaluator<'_> {
             State::Pending(job) => match &**job {
                 Job::Expr { expr, .. } => Some(self.ir.exprs[*expr].span),
                 Job::Path { .. } => None,
+                Job::Merge { span, .. } => Some(*span),
             },
             _ => None,
         }
@@ -2606,9 +3016,11 @@ impl Evaluator<'_> {
 
     // ---- Path entries (`SPEC.md` 5.1) ----
 
+    #[allow(clippy::too_many_arguments)]
     fn apply_path(
         &mut self,
         value: &Rc<Shaped>,
+        at: &Below,
         path: &[Selector],
         recipe: &PathRecipe,
         chain: &Chain,
@@ -2632,16 +3044,32 @@ impl Evaluator<'_> {
         if rest.is_empty() {
             return self.apply_last(value, selector, recipe, chain, here, context);
         }
-        let child = match self.select(value, selector) {
-            Ok(child) => child,
-            Err(Fail::Missing(..)) => {
-                let message = missing_step(selector, rest, recipe.op, here.as_ref());
-                return Err(self.fail(selector.span, message));
+        let child_at = Below::Select(Rc::new(at.clone()), selector.clone());
+        let found = match self.select(value, selector) {
+            Ok(child) => {
+                let forced = self.force(&child, selector.span)?;
+                (!self.is_unset(&forced)).then_some(child)
             }
+            Err(Fail::Missing(..)) => None,
             Err(fail) => return Err(fail),
         };
+        let child = match found {
+            Some(child) => child,
+            None => {
+                let below = DefaultedBelow {
+                    below: child_at.clone(),
+                    chain: chain.clone(),
+                    here: here.clone(),
+                };
+                let Some(child) = self.default_cell(&below, selector.span) else {
+                    let message = missing_step(selector, rest, recipe.op, here.as_ref());
+                    return Err(self.fail(selector.span, message));
+                };
+                child
+            }
+        };
         let child = self.force(&child, selector.span)?;
-        let new_child = self.apply_path(&child, rest, recipe, chain, here, context)?;
+        let new_child = self.apply_path(&child, &child_at, rest, recipe, chain, here, context)?;
         Ok(self.with_child(value, selector, Cell::done(new_child)))
     }
 
@@ -2774,6 +3202,7 @@ impl Evaluator<'_> {
                     }
                 };
                 let mut keyed = keyed.clone();
+                keyed.defaulted.remove(&key);
                 keyed.slots.insert(
                     key,
                     Slot {
@@ -2822,14 +3251,15 @@ impl Evaluator<'_> {
                 Err(Fail::Missing(..)) => self.eval(rhs, env),
                 result => result,
             },
-            BinOp::Merge => {
+            BinOp::Merge | BinOp::MergeShallow => {
+                let deep = op == BinOp::Merge;
                 let left = self.eval(lhs, env)?;
                 if let ExprKind::Block(block) = ir.exprs[rhs].kind {
                     let rhs_span = ir.exprs[rhs].span;
-                    return self.block(block, Some(left), env, rhs_span);
+                    return self.block(block, Some(left), deep, env, rhs_span);
                 }
                 let right = self.eval(rhs, env)?;
-                self.merge(&left, &right, env, span)
+                self.merge(&left, &right, deep, env, span)
             }
             _ => {
                 let detached = Self::detached(env);
@@ -2840,7 +3270,39 @@ impl Evaluator<'_> {
         }
     }
 
-    fn merge(&mut self, left: &Shaped, right: &Shaped, env: &Env, span: Span) -> Eval<Rc<Shaped>> {
+    /// `b` over `a`: the type names are for the caller to check.
+    fn merge_keyed(
+        &mut self,
+        a: &KeyedShape,
+        b: &KeyedShape,
+        copy: &CopyTo<'_>,
+    ) -> Eval<Rc<Shaped>> {
+        let mut keyed = a.clone();
+        if keyed.name.is_none() {
+            keyed.name = b.name.clone();
+        }
+        let chain = Some(Rc::new(ChainLink {
+            location: copy.location.clone(),
+            bind_root: false,
+            name: keyed.name.clone(),
+            next: copy.chain.clone(),
+        }));
+        let inner = CopyTo {
+            chain: &chain,
+            ..*copy
+        };
+        self.copy_entries(b, &mut keyed, &inner);
+        Self::shaped(Shape::Keyed(keyed), copy.span)
+    }
+
+    fn merge(
+        &mut self,
+        left: &Shaped,
+        right: &Shaped,
+        deep: bool,
+        env: &Env,
+        span: Span,
+    ) -> Eval<Rc<Shaped>> {
         match (&left.shape, &right.shape) {
             (Shape::Keyed(a), Shape::Keyed(b)) => {
                 if let (Some(x), Some(y)) = (&a.name, &b.name)
@@ -2848,17 +3310,15 @@ impl Evaluator<'_> {
                 {
                     return Err(self.fail(span, format!("~: cannot merge `{x}` with `{y}`")));
                 }
-                let mut keyed = a.clone();
-                if keyed.name.is_none() {
-                    keyed.name = b.name.clone();
-                }
-                let chain = Some(Rc::new(ChainLink {
-                    location: env.here.clone(),
-                    bind_root: false,
-                    next: env.chain.clone(),
-                }));
-                self.copy_entries(b, &mut keyed, &chain, &env.here, env.context);
-                Self::shaped(Shape::Keyed(keyed), span)
+                let copy = CopyTo {
+                    chain: &env.chain,
+                    location: &env.here,
+                    context: env.context,
+                    deep,
+                    outer_below: &Below::Missing,
+                    span,
+                };
+                self.merge_keyed(a, b, &copy)
             }
             (Shape::Named(x, _), Shape::Named(y, _)) | (Shape::UnitName(x), Shape::UnitName(y)) => {
                 if x == y {

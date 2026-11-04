@@ -1,0 +1,5 @@
+one: { limits: { cpu: 2, memory: 2 }, name: "a" }
+two: { limits: { cpu: 3, memory: 2 }, name: "a" }
+three: { limits: { cpu: 3 }, name: "a" }
+four: { shape: Square { side: 2 } }
+five: { limits: { cpu: 3, memory: 2 }, name: "a" }
