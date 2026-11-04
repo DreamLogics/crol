@@ -1,7 +1,7 @@
 //! What the schema says about a place in the data (`SPEC.md` 10.9, 12.5).
 
 use crol::schema::{Field, SchemaFile, TypeDef, TypeExpr, VariantShape};
-use crol_eval::PathStep;
+use crol_eval::{PathStep, ValueKind};
 use crol_syntax::SyntaxKind;
 use crol_syntax::ast::{self, AstNode};
 use indexmap::IndexMap;
@@ -14,23 +14,70 @@ use crate::workspace::Snapshot;
 /// elements, and the payloads of options, newtypes and transparent types.
 pub(crate) fn block_type(snapshot: &Snapshot, block: &ast::Block) -> Option<TypeExpr> {
     let schema = snapshot.schema.as_ref()?;
-    let root = snapshot.root_type.as_deref().unwrap_or(&schema.root);
-    block_type_in(schema, root, block, 0)
+    block_type_in(schema, &|key| root_key_type(snapshot, key), block, 0)
 }
+
+/// The type of an entry's value, and the doc of what it sets: the
+/// field's, or the type's for a root entry.
+pub(crate) fn entry_type(snapshot: &Snapshot, entry: &ast::Entry) -> Option<(TypeExpr, String)> {
+    let schema = snapshot.schema.as_ref()?;
+    let (ty, doc) = entry_type_in(schema, &|key| root_key_type(snapshot, key), entry, 0)?;
+    let doc = match doc {
+        Some(doc) => doc,
+        None => named_def(schema, &ty).map_or(String::new(), |d| d.doc().to_owned()),
+    };
+    Some((ty, doc))
+}
+
+/// The type of a root key's value: the root type, or, when that is an
+/// enum (`Definition`), the type the key's value names (`Service`).
+fn root_key_type(snapshot: &Snapshot, key: &str) -> Option<TypeExpr> {
+    let schema = snapshot.schema.as_ref()?;
+    let root = snapshot.root_type.as_deref().unwrap_or(&schema.root);
+    if let Some(TypeDef::Enum { .. }) = schema.get(root) {
+        let evaluation = match (&snapshot.evaluation.value, &snapshot.last_good) {
+            (None, Some(good)) => good,
+            _ => &snapshot.evaluation,
+        };
+        let name = features::value_in(evaluation, key, &[], &[]).and_then(|v| match v.kind {
+            ValueKind::Keyed(k) => k.name,
+            ValueKind::NamedTuple(n, _) | ValueKind::UnitName(n) => Some(n),
+            _ => None,
+        });
+        if let Some(ty) = name.and_then(|n| named(schema, &n)) {
+            return Some(ty);
+        }
+    }
+    Some(TypeExpr::Named(root.to_owned()))
+}
+
+/// The type of each root key's value.
+type RootTypes<'a> = &'a dyn Fn(&str) -> Option<TypeExpr>;
 
 fn block_type_in(
     schema: &SchemaFile,
-    root: &str,
+    root: RootTypes<'_>,
     block: &ast::Block,
     depth: usize,
 ) -> Option<TypeExpr> {
     if let Some(name) = block.type_name() {
         return named(schema, name.text());
     }
+    let entry = block.syntax().parent().and_then(ast::Entry::cast)?;
+    entry_type_in(schema, root, &entry, depth).map(|(ty, _)| ty)
+}
+
+/// The type of an entry's value, and the doc of the last field its
+/// target goes through, if any.
+fn entry_type_in(
+    schema: &SchemaFile,
+    root: RootTypes<'_>,
+    entry: &ast::Entry,
+    depth: usize,
+) -> Option<(TypeExpr, Option<String>)> {
     if depth > crol_syntax::MAX_NESTING {
         return None;
     }
-    let entry = block.syntax().parent().and_then(ast::Entry::cast)?;
     let target = entry.target()?;
     // The block or document the entry is in, through variant blocks.
     let mut container = entry.syntax().parent()?;
@@ -43,20 +90,61 @@ fn block_type_in(
                 .parent()
                 .is_some_and(|p| p.kind() != SyntaxKind::DOCUMENT)
     });
+    let mut doc = None;
     let mut ty = match outer {
         // In a block: the key is one of its fields.
         Some(outer) => {
             let ty = block_type_in(schema, root, &outer, depth + 1)?;
             let key = features::key_text(&target.key()?)?;
-            step(schema, &ty, &PathStep::Field(key))?
+            let (ty, field_doc) = step(schema, &ty, &PathStep::Field(key))?;
+            doc = field_doc;
+            ty
         }
-        // A root entry: the key's value has the root type.
-        None => TypeExpr::Named(root.to_owned()),
+        // A root entry.
+        None => root(&features::key_text(&target.key()?)?)?,
     };
     for s in features::selector_steps(target.selectors()) {
-        ty = step(schema, &ty, &s)?;
+        let (next, field_doc) = step(schema, &ty, &s)?;
+        ty = next;
+        doc = field_doc;
     }
-    Some(ty)
+    Some((ty, doc))
+}
+
+/// The definition of a named type, through options.
+pub(crate) fn named_def<'a>(schema: &'a SchemaFile, ty: &TypeExpr) -> Option<&'a TypeDef> {
+    match ty {
+        TypeExpr::Option(inner) => named_def(schema, inner),
+        TypeExpr::Named(path) => schema.get(path),
+        _ => None,
+    }
+}
+
+/// A type as Rust writes it, with serde names: `u32`, `Option<Limits>`.
+pub(crate) fn rust_type(schema: &SchemaFile, ty: &TypeExpr) -> String {
+    let inner = |t: &TypeExpr| rust_type(schema, t);
+    match ty {
+        TypeExpr::Bool => "bool".to_owned(),
+        TypeExpr::Char => "char".to_owned(),
+        TypeExpr::String => "String".to_owned(),
+        TypeExpr::Unit => "()".to_owned(),
+        TypeExpr::Any => "any value".to_owned(),
+        TypeExpr::Bytes => "bytes".to_owned(),
+        TypeExpr::Id(_) => "Id".to_owned(),
+        TypeExpr::Option(t) => format!("Option<{}>", inner(t)),
+        TypeExpr::List(t) => format!("Vec<{}>", inner(t)),
+        TypeExpr::Set(t) => format!("Set<{}>", inner(t)),
+        TypeExpr::Array(t, n) => format!("[{}; {n}]", inner(t)),
+        TypeExpr::Map(k, v) => format!("Map<{}, {}>", inner(k), inner(v)),
+        TypeExpr::Tuple(items) => {
+            let items: Vec<String> = items.iter().map(inner).collect();
+            format!("({})", items.join(", "))
+        }
+        TypeExpr::Named(path) => schema
+            .get(path)
+            .map_or_else(|| path.clone(), |d| d.name().to_owned()),
+        other => format!("{other:?}").to_lowercase(),
+    }
 }
 
 /// The named type with the serde name `name`, if exactly one has it.
@@ -69,16 +157,19 @@ pub(crate) fn named(schema: &SchemaFile, name: &str) -> Option<TypeExpr> {
         .then(|| TypeExpr::Named(path.to_owned()))
 }
 
-fn step(schema: &SchemaFile, ty: &TypeExpr, step: &PathStep) -> Option<TypeExpr> {
+/// The type one step further in, and the doc of the field stepped into.
+fn step(schema: &SchemaFile, ty: &TypeExpr, step: &PathStep) -> Option<(TypeExpr, Option<String>)> {
     match (ty, step) {
         (TypeExpr::Option(inner), _) => self::step(schema, inner, step),
         (TypeExpr::Named(path), _) => match schema.get(path)? {
             TypeDef::Struct { fields, .. } => match step {
-                PathStep::Field(name) => field(fields, name).map(|f| f.ty.clone()),
+                PathStep::Field(name) => {
+                    field(fields, name).map(|f| (f.ty.clone(), Some(f.doc.clone())))
+                }
                 _ => None,
             },
             TypeDef::TupleStruct { fields, .. } => match step {
-                PathStep::Element(i) => fields.get(*i).cloned(),
+                PathStep::Element(i) => fields.get(*i).map(|t| (t.clone(), None)),
                 _ => None,
             },
             TypeDef::Newtype { inner, .. } | TypeDef::Transparent { inner, .. } => {
@@ -87,13 +178,13 @@ fn step(schema: &SchemaFile, ty: &TypeExpr, step: &PathStep) -> Option<TypeExpr>
             _ => None,
         },
         (TypeExpr::Map(_, value), PathStep::Field(_) | PathStep::Accessor(_)) => {
-            Some((**value).clone())
+            Some(((**value).clone(), None))
         }
         (
             TypeExpr::List(item) | TypeExpr::Set(item) | TypeExpr::Array(item, _),
             PathStep::Accessor(_) | PathStep::Element(_),
-        ) => Some((**item).clone()),
-        (TypeExpr::Tuple(items), PathStep::Element(i)) => items.get(*i).cloned(),
+        ) => Some(((**item).clone(), None)),
+        (TypeExpr::Tuple(items), PathStep::Element(i)) => items.get(*i).map(|t| (t.clone(), None)),
         _ => None,
     }
 }

@@ -4,8 +4,8 @@ use crol_eval::{Key, PathStep, StepKind, Value, ValueKind, print};
 use crol_syntax::ast::{self, AstNode};
 use crol_syntax::{LineIndex, SyntaxKind, SyntaxNode, SyntaxToken, TextRange};
 use lsp_types::{
-    CompletionItem, CompletionItemKind, DocumentSymbol, Hover, HoverContents, Location,
-    MarkupContent, MarkupKind, Position, SymbolKind, TextEdit, Uri,
+    DocumentSymbol, Hover, HoverContents, Location, MarkupContent, MarkupKind, Position,
+    SymbolKind, TextEdit, Uri,
 };
 
 use crate::Settings;
@@ -288,6 +288,12 @@ pub(crate) fn root_key_at(token: &SyntaxToken) -> Option<String> {
     None
 }
 
+/// The root key and path of the entry a block is the value of.
+pub(crate) fn block_path(block: &ast::Block) -> Option<(String, Vec<PathStep>)> {
+    let entry = block.syntax().ancestors().find_map(ast::Entry::cast)?;
+    target_path(&entry.target()?.key()?.token()?)
+}
+
 /// The root key and path a reference names: `&root.db.host`.
 fn reference_path(token: &SyntaxToken) -> Option<(String, Vec<PathStep>)> {
     let path = token.parent_ancestors().find_map(ast::PathExpr::cast)?;
@@ -331,7 +337,16 @@ pub(crate) fn value_at(
     path: &[PathStep],
     context: &[String],
 ) -> Option<Value> {
-    let evaluation = snapshot.evaluation_of(file)?;
+    value_in(snapshot.evaluation_of(file)?, key, path, context)
+}
+
+/// The value at `key` + `path` in an evaluation, in the context `context`.
+pub(crate) fn value_in(
+    evaluation: &crol_eval::Evaluation,
+    key: &str,
+    path: &[PathStep],
+    context: &[String],
+) -> Option<Value> {
     let base = evaluation.value.as_ref()?;
     let root = if context.is_empty() {
         base.clone()
@@ -403,6 +418,21 @@ pub(crate) fn hover(
         Some(value) => format!("**{described}**{in_context}: {}", show(&value)),
         None => format!("**{described}**{in_context}: no value"),
     };
+    // The type and doc from the schema.
+    if is_target
+        && let Some(entry) = token
+            .parent_ancestors()
+            .find_map(ast::Target::cast)
+            .and_then(|t| t.syntax().parent())
+            .and_then(ast::Entry::cast)
+        && let Some((ty, doc)) = crate::schema::entry_type(snapshot, &entry)
+        && let Some(schema) = &snapshot.schema
+    {
+        markdown.push_str(&format!("\n\n`{}`", crate::schema::rust_type(schema, &ty)));
+        if !doc.is_empty() {
+            markdown.push_str(&format!(" — {doc}"));
+        }
+    }
     if is_target && snapshot.in_layers(file) {
         let path_text = described.clone();
         if let Ok(history) = crol_eval::explain(
@@ -447,98 +477,6 @@ pub(crate) fn hover(
 
 fn file_name(path: &str) -> &str {
     path.rsplit(['/', '\\']).next().unwrap_or(path)
-}
-
-// ---- Completion ----
-
-/// Root keys after `&root.` and `@`; names after `&`; variants in `<...>`.
-pub(crate) fn complete(
-    snapshot: &Snapshot,
-    text: &str,
-    position: Position,
-    encoding: Encoding,
-) -> Vec<CompletionItem> {
-    let offset = usize::from(convert::offset(text, position, encoding));
-    let line_start = text[..offset].rfind('\n').map_or(0, |i| i + 1);
-    let before = &text[line_start..offset];
-    let partial_start = before
-        .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-        .map_or(0, |i| i + 1);
-    let lead = &before[..partial_start];
-    let item = |label: String, kind: CompletionItemKind, detail: Option<String>| CompletionItem {
-        label,
-        kind: Some(kind),
-        detail,
-        ..Default::default()
-    };
-    let root_keys = || -> Vec<CompletionItem> {
-        let mut keys = Vec::new();
-        let evaluations =
-            std::iter::once(&snapshot.evaluation).chain(snapshot.documents.iter().map(|(_, e)| e));
-        for evaluation in evaluations {
-            if let Some(ValueKind::Keyed(keyed)) = evaluation.value.as_ref().map(|v| &v.kind) {
-                for (key, value) in &keyed.entries {
-                    let detail = match &value.kind {
-                        ValueKind::Keyed(k) => k.name.clone(),
-                        ValueKind::NamedTuple(n, _) | ValueKind::UnitName(n) => Some(n.clone()),
-                        _ => None,
-                    };
-                    keys.push(item(key.to_string(), CompletionItemKind::FIELD, detail));
-                }
-            }
-        }
-        keys
-    };
-    if lead.ends_with("&root.") || lead.ends_with('@') {
-        return root_keys();
-    }
-    if lead.ends_with('&') {
-        let mut items: Vec<CompletionItem> = ["self", "parent", "root", "default"]
-            .into_iter()
-            .map(|k| item(k.to_owned(), CompletionItemKind::KEYWORD, None))
-            .collect();
-        for name in bind_names(snapshot) {
-            items.push(item(
-                name,
-                CompletionItemKind::VARIABLE,
-                Some("template".to_owned()),
-            ));
-        }
-        return items;
-    }
-    let open_angle = before.rfind('<');
-    if open_angle.is_some_and(|i| !before[i..].contains('>')) {
-        let variants = &snapshot.evaluation.variants;
-        return variants
-            .ids()
-            .map(|id| {
-                item(
-                    variants.name(id).to_owned(),
-                    CompletionItemKind::ENUM_MEMBER,
-                    None,
-                )
-            })
-            .collect();
-    }
-    Vec::new()
-}
-
-/// The names of the templates in every file.
-fn bind_names(snapshot: &Snapshot) -> Vec<String> {
-    let mut names = Vec::new();
-    for (_, file) in snapshot.sources.files() {
-        let parse = crol_syntax::parse(file.text());
-        for entry in parse.document().entries() {
-            if let ast::AnyEntry::ValueBind(bind) = entry
-                && let Some(name) = bind.name()
-            {
-                names.push(name.text().to_owned());
-            }
-        }
-    }
-    names.sort();
-    names.dedup();
-    names
 }
 
 // ---- Go to definition ----
