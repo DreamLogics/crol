@@ -24,8 +24,8 @@ RFC 2119 sense.
 2. Every change says what it means: declare, replace, patch, remove,
    or default, and each is checked.
 3. It maps onto ordinary `serde` types. No schema language; loading
-   needs no derive of its own, except for `&default` (tools use an
-   optional schema derive, section 10.9).
+   needs no derive of its own, except for `&default` and what serde
+   cannot say (tools use an optional schema derive, section 10.9).
 4. Evaluation is deterministic across platforms, so two machines that
    load the same sources get bit-identical data and fingerprints.
 5. It works well in editors: a lossless syntax tree, precise spans,
@@ -238,7 +238,7 @@ A keyed value has:
   deterministic (section 7.6). Setting an existing key keeps its
   position; removing a key and adding it again moves it to the end;
 - a **defaults flag**, set by `..`: fields it does not hold take their
-  defaults (section 10.3);
+  defaults (section 10.3, which also says when a type needs no `..`);
 - a set of **defaulted fields**: fields removed with `-field`, which
   take their defaults even without the flag.
 
@@ -1565,7 +1565,8 @@ For `deserialize_struct(name, fields, visitor)` the deserializer checks:
 - **Completeness.** Every field in `fields` must be present, including
   `Option` fields, unless the value has the defaults flag or the field
   is in its defaulted fields (section 10.3). `CrolConfig::require_complete`
-  turns this check off.
+  turns this check off, for the types that do not decide it themselves
+  (`#[crol(explicit_defaults)]`, section 10.3).
 - **Aliases.** A field written by one of its `#[serde(alias)]` names is
   present. serde puts a field's aliases in `fields` without saying which
   field they belong to, so the deserializer groups them from the schema
@@ -1594,6 +1595,79 @@ not hold is left out, and serde decides what it becomes:
 
 So the data says "I am leaving fields out on purpose", and the type says
 what they become.
+
+**`explicit_defaults`.** A type can decide for itself whether its fields
+take their defaults only with `..`, with `#[crol(explicit_defaults)]`
+from `#[derive(crol::Schema)]` (section 10.9):
+
+| On the type | Fields left out without `..` | |
+|---|---|---|
+| nothing | as `require_complete` says | an error by default |
+| `#[crol(explicit_defaults)]` | an error that names them | whatever `require_complete` says |
+| `#[crol(explicit_defaults = false)]` | take their defaults, as with `..` | whatever `require_complete` says |
+
+```rust
+#[derive(Deserialize, crol::Schema)]
+#[crol(explicit_defaults = false)]
+struct Retry {
+    limit: u32,
+    #[serde(default)]
+    backoff_ms: u32,
+    jitter: Option<f64>,
+}
+```
+
+```rust
++a: Retry { limit: 3 },         // backoff_ms 0, jitter None
++b: Retry { limit: 3, .. },     // the same; `..` is allowed and changes nothing
++c: Retry { backoff_ms: 5 },    // error: missing field `limit`
+```
+
+With `explicit_defaults = false`, every value of the type is read as if
+it had `..`, and the list above applies: a field without a default is
+serde's "missing field" error. The setting is about the type, not the
+data: it does not set the defaults flag, so it changes no value and no
+fingerprint. It says nothing about the types of the fields, which have
+settings of their own.
+
+The attribute goes on a struct with named fields, on a struct variant,
+or on an enum, for its struct variants that have none of their own. It
+is a compile error on anything else, and on what deserializes through
+serde's `any` or as a map, where the deserializer cannot ask for `..`:
+variants of tagged and untagged enums, and, for
+`#[crol(explicit_defaults)]`, a struct with `#[serde(flatten)]`.
+
+**Where `..` counts.** Only the final value is checked (section 10.2),
+and the defaults flag is ORed in by spreads and patches (section 5.2).
+So for a type that needs `..`, one `..` that reaches the final value is
+enough, in any layer or template: a later `web: & ~ { .. }` or a
+`..&template` whose template has it. A block that replaces the whole
+value starts without the flag.
+
+`..` cannot be written at the root of a data-mode document (section 4).
+A struct that `compose::<T>()` reads from the root keys therefore writes
+every field as a root key, unless it has `explicit_defaults = false`,
+which is how such a struct leaves fields out.
+
+**What can see it.** serde does not pass attributes to a deserializer,
+so the setting reaches it through the schema, as aliases do (section
+10.2):
+
+- `crol::check`, `crol check`, the language server and `crol eval` read
+  it from the schema.
+- The loader knows it when given the schema: `CrolComposer::schema`, and
+  `crol::from_str_with_schema` for value-mode documents.
+- Without a schema (`crol::from_str`, `crol::from_value`, a composer not
+  given one) only `require_complete` decides, as for a type without the
+  attribute. By default a type with `explicit_defaults = false` then
+  fails with the error above, instead of loading something else than
+  the tools said; an application that sets the attribute gives the
+  loader its schema.
+
+The deserializer finds a type by its serde name and accepted fields. Two
+schema types that have both in common cannot be told apart there, and
+the setting that asks for the most holds for both (`explicit_defaults`
+before `explicit_defaults = false` before nothing).
 
 ### 10.4 Enums
 
@@ -1667,7 +1741,7 @@ fn load(root_path: PathBuf, local: &Path) -> Result<Config, CrolError> {
     });
 
     let config: Config = composer
-        .schema(crol::schema::build::<Definition>())   // optional; for &default
+        .schema(crol::schema::build::<Definition>())   // optional; for &default, 10.2, 10.3
         .load("::data::base")?     // by module path
         .load(local)?              // by file system path
         .with_variant("prod_eu")?
@@ -1719,6 +1793,7 @@ let history = data.explain("web.limits.memory_mb", &ctx); // section 12.3
 
 // Single documents (value mode)
 let config: Config = crol::from_str(text)?;
+let config: Config = crol::from_str_with_schema(text, &schema)?;  // 10.3
 let text: String = crol::to_string_pretty(&config, crol::PrettyConfig::default())?;
 ```
 
@@ -1828,14 +1903,18 @@ optional, on by default), maps as `{ key: ... }` with keys written as
 section 3.1 shows, `Option` as `Some(x)`/`None` (or bare `x` with
 `implicit_some`), floats with section 6.6's formatting, strings with
 escapes. Map keys that are not strings, integers or unit variants are an
-error. A struct whose serialization leaves fields out (`skip_serializing`,
-`skip_serializing_if`) gets `..`. The output has no operators; it is
+error. A struct whose serialization leaves fields out with
+`skip_serializing_if` gets `..`. serde does not tell the serializer about
+`#[serde(skip_serializing)]`, so a struct with such a field reads back
+only if it has `explicit_defaults = false` (section 10.3). The output has no operators; it is
 plain data that reads back to the same value.
 
 ### 10.9 Schema
 
 Evaluation and deserialization need no schema, except `&default`
-(section 6.1.3), which reads defaults from it. Tools do: a language
+(section 6.1.3), which reads defaults from it, and what serde does not
+tell the deserializer: aliases (section 10.2) and `explicit_defaults`
+(section 10.3). Tools do: a language
 server cannot complete field names, show docs or check types without
 knowing the Rust types. The schema describes them; it is built from the
 Rust types and written to a file.
@@ -1868,6 +1947,10 @@ for `&default` (section 6.1.3) and tools: the struct's
 `#[serde(default)]` (`<T as Default>::default()`) or
 `#[serde(default = "path")]` (`path()`). The values are serialized, so
 the types involved must implement `Serialize`.
+`#[crol(explicit_defaults)]` and `#[crol(explicit_defaults = false)]` say
+whether fields left out take their defaults only with `..` (section
+10.3). It does not depend on `#[crol(defaults)]`: whether a field has a
+default is known without recording its value.
 
 **How the schema is built.** The schema comes from the type system, not
 from parsing source, so it is complete: the compiler has resolved every
@@ -1991,7 +2074,7 @@ Cargo workspace root as `file!()` gives it, and line) and:
 
 | Definition | Rust | Extra fields |
 |---|---|---|
-| `Struct` | struct with named fields | `fields`, `deny_unknown_fields` (default `false`), `default` (the struct's recorded default value, if any) |
+| `Struct` | struct with named fields | `fields`, `deny_unknown_fields` (default `false`), `default` (the struct's recorded default value, if any), `explicit_defaults` (`Some(true)` or `Some(false)` with the attribute of that value, section 10.3; default `None`) |
 | `TupleStruct` | `struct P(A, B)` | `fields`: list of type expressions |
 | `Newtype` | `struct N(A)` | `inner`; data writes `N(x)` or `x` |
 | `Transparent` | `#[serde(transparent)]` | `inner`; data writes only `x` |
@@ -2000,8 +2083,10 @@ Cargo workspace root as `file!()` gives it, and line) and:
 
 `repr` is `External` (serde's default), `Internal { tag }`,
 `Adjacent { tag, content }` or `Untagged`. `variants` maps each variant's
-serde name to `{ shape, doc, aliases }`, where `shape` is `Unit`,
-`Newtype(ty)`, `Tuple([ty, ...])` or `Struct({ fields })`.
+serde name to `{ shape, doc, aliases, explicit_defaults }`, where
+`shape` is `Unit`, `Newtype(ty)`, `Tuple([ty, ...])` or
+`Struct({ fields })`, and `explicit_defaults` is as for a `Struct`, for
+a struct variant, whether its attribute is on the variant or the enum.
 
 **Fields** map each field's serde name to:
 
@@ -2015,8 +2100,11 @@ serde name to `{ shape, doc, aliases }`, where `shape` is `Unit`,
 
 `Option` fields without a `#[serde(default)]` have
 `default: Value(None)`: serde makes them `None` when absent, so with
-`..` they may be left out. Without `..`, CROL's completeness rule
-(section 10.2) requires every field, whatever its default.
+`..` they may be left out. Every field of a struct with
+`#[serde(default)]` has a default: its own, else `Unrecorded`, with its
+value in the struct's `default` if that is recorded. Without `..`,
+CROL's completeness rule (section 10.2) requires every field, whatever
+its default, unless `explicit_defaults` says otherwise (section 10.3).
 
 **Type expressions:**
 
@@ -2039,6 +2127,12 @@ transparent are left out: `Box<Service>` is `Named("app::Service")`.
 
 The generated file writes only the fields that differ from their
 defaults and ends those blocks with `..`, so it stays readable.
+
+**Compatibility.** A field added with a default that leaves the meaning
+of existing files as it was does not change `format`: `explicit_defaults`
+is such a field. A file that does not use it is the same as before, and
+a tool that does not know it rejects the files that do, as an unknown
+field, instead of checking them by other rules.
 
 ---
 
@@ -2571,6 +2665,11 @@ where it is not obvious.
 - Decided: a field written by a serde alias is present for the
   completeness rule; the deserializer learns aliases from the schema
   (10.2).
+- Decided: a type can decide whether its fields need `..` to take their
+  defaults (`#[crol(explicit_defaults)]`, 10.3). Needing it stays the
+  default, and the attribute comes before `require_complete`; the
+  deserializer learns it from the schema, and without one fails rather
+  than load what the tools did not check.
 - Decided: no comparisons or conditionals, now or later; input
   validation belongs on the Rust side (wrapper types, derive
   attributes). `<v>` is final as the variant selector.

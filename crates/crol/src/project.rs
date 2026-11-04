@@ -224,6 +224,7 @@ fn struct_def(
         fields: fields.into_iter().map(|(n, f)| (n.to_owned(), f)).collect(),
         deny_unknown_fields: false,
         default,
+        explicit_defaults: None,
     }
 }
 
@@ -269,6 +270,7 @@ impl Schema for ProjectLayers {
                 shape,
                 doc: doc.to_owned(),
                 aliases: Vec::new(),
+                explicit_defaults: None,
             };
             TypeDef::Enum {
                 name: "ProjectLayers".to_owned(),
@@ -420,6 +422,7 @@ impl<T: Schema> Schema for Variant<T> {
                 shape,
                 doc: doc.to_owned(),
                 aliases: Vec::new(),
+                explicit_defaults: None,
             };
             TypeDef::Enum {
                 name: "Variant".to_owned(),

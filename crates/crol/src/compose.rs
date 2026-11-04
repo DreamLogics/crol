@@ -158,7 +158,9 @@ pub struct CrolConfig<T = String> {
     /// Ignore keys a struct does not have, instead of an error.
     /// Default: `false`.
     pub allow_unknown_fields: bool,
-    /// Require every field of a struct unless it ends with `..`.
+    /// Require every field of a struct unless it ends with `..`. A type's
+    /// `#[crol(explicit_defaults)]` setting, seen through
+    /// [`CrolComposer::schema`], comes first (`SPEC.md` 10.3).
     /// Default: `true`.
     pub require_complete: bool,
     /// Warn when one key is patched from several documents of one layer.
@@ -190,7 +192,7 @@ impl<T> CrolConfig<T> {
             implicit_some: self.implicit_some,
             allow_unknown_fields: self.allow_unknown_fields,
             require_complete: self.require_complete,
-            aliases: None,
+            structs: None,
         }
     }
 }
@@ -439,8 +441,8 @@ pub struct CrolComposer<T = String> {
     error: Option<Error>,
     /// The schema, for `&default`.
     schema: Option<crol_eval::Defaults>,
-    /// The schema's aliases, for completeness.
-    aliases: Option<std::sync::Arc<de::Aliases>>,
+    /// The schema's aliases and settings, for completeness.
+    structs: Option<std::sync::Arc<de::Structs>>,
     /// The variants made active with `with_variant`.
     chosen: Vec<T>,
 }
@@ -468,7 +470,7 @@ impl<T: VariantName> CrolComposer<T> {
             error: None,
             chosen: Vec::new(),
             schema: None,
-            aliases: None,
+            structs: None,
         }
     }
 
@@ -507,10 +509,11 @@ impl<T: VariantName> CrolComposer<T> {
 
     /// Gives the composer a schema, from which `&default` reads defaults
     /// (`SPEC.md` 6.1.3) and the deserializer learns which names are
-    /// aliases of one field (10.2):
+    /// aliases of one field (10.2) and which types set
+    /// `#[crol(explicit_defaults)]` (10.3), which serde does not tell it:
     /// `.schema(crol::schema::build::<Definition>())`.
     pub fn schema(mut self, schema: crate::schema::SchemaFile) -> Self {
-        self.aliases = Some(std::sync::Arc::new(de::Aliases::from_schema(&schema)));
+        self.structs = Some(std::sync::Arc::new(de::Structs::from_schema(&schema)));
         self.schema = Some(crol_eval::Defaults(std::sync::Arc::new(
             crate::schema::SchemaDefaults(schema),
         )));
@@ -680,7 +683,7 @@ impl<T: VariantName> CrolComposer<T> {
             composed,
             diagnostics: evaluation.diagnostics,
             options: de::Options {
-                aliases: self.aliases.clone(),
+                structs: self.structs.clone(),
                 ..self.config.deserialize_options()
             },
             names: std::marker::PhantomData,

@@ -11,8 +11,8 @@ use crol_eval::{Key, Keyed, PathStep, Span, Value, ValueKind};
 const MAX_DEPTH: usize = 64;
 
 /// The data with each struct field that takes its default written out:
-/// fields removed with `-field`, and, in a struct with `..`, fields left
-/// out. Only defaults the schema records are filled in; each filled-in
+/// fields removed with `-field`, and, in a struct with `..` or of a type
+/// with `explicit_defaults: false`, fields left out. Only defaults the schema records are filled in; each filled-in
 /// value has the span `filled`, so a printer can say where it came from.
 /// `root` is the type of each root value (`None`: the schema's root).
 pub fn fill_defaults(data: &Value, schema: &SchemaFile, root: Option<&str>, filled: Span) -> Value {
@@ -84,6 +84,7 @@ impl Filler<'_> {
                 name,
                 fields,
                 default,
+                explicit_defaults,
                 ..
             } => {
                 if let ValueKind::Keyed(keyed) = &mut value.kind
@@ -92,7 +93,7 @@ impl Filler<'_> {
                         .as_ref()
                         .is_none_or(|w| w == name || Some(w.as_str()) == variant)
                 {
-                    self.fields(keyed, fields, default.as_ref(), depth);
+                    self.fields(keyed, fields, default.as_ref(), *explicit_defaults, depth);
                 }
             }
             TypeDef::Newtype { name, inner, .. } => match &mut value.kind {
@@ -141,7 +142,7 @@ impl Filler<'_> {
                         }
                     }
                     (VariantShape::Struct(fields), ValueKind::Keyed(keyed)) => {
-                        self.fields(keyed, fields, None, depth);
+                        self.fields(keyed, fields, None, variant.explicit_defaults, depth);
                     }
                     _ => {}
                 }
@@ -157,6 +158,7 @@ impl Filler<'_> {
         keyed: &mut Keyed,
         fields: &IndexMap<String, Field>,
         struct_default: Option<&RawValue>,
+        explicit_defaults: Option<bool>,
         depth: usize,
     ) {
         let written = |keyed: &Keyed, name: &str, field: &Field| {
@@ -169,7 +171,10 @@ impl Filler<'_> {
                 continue;
             }
             let key = Key::Str(name.clone());
-            if !keyed.defaults && !keyed.defaulted.contains(&key) {
+            if !keyed.defaults
+                && explicit_defaults != Some(false)
+                && !keyed.defaulted.contains(&key)
+            {
                 continue;
             }
             if let Some(mut default) = field_default(name, field, struct_default) {

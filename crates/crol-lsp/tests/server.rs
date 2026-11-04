@@ -898,6 +898,52 @@ fn documents_on_their_own_are_checked_against_their_schema() {
 }
 
 #[test]
+fn diagnostics_follow_a_types_explicit_defaults() {
+    let dir = workspace(
+        "lsp-explicit-defaults",
+        &[
+            (
+                "schema.crol",
+                r#"Schema {
+                    format: 1,
+                    root: "app::Relaxed",
+                    types: {
+                        "app::Relaxed": Struct {
+                            name: "Relaxed",
+                            source: ("src/lib.rs", 1),
+                            fields: { name: { ty: String, .. }, port: { ty: U16, default: Unrecorded, .. } },
+                            explicit_defaults: Some(false),
+                            ..
+                        },
+                    },
+                }"#,
+            ),
+            ("config.crol", ""),
+        ],
+    );
+    let client = Client::start(&dir);
+    let config = uri(&dir.join("config.crol"));
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": config, "languageId": "crol", "version": 1, "text": "#![schema(::schema)]\n\nRelaxed { port: 1 }" } }),
+    );
+    // A field without a default must still be written.
+    let diagnostics = client.diagnostics_for(&config, |d| !d.is_empty());
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert_eq!(diagnostics[0]["message"], "missing field `name`");
+    // The one that has a default may be left out, without `..`.
+    client.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": config, "version": 2 },
+            "contentChanges": [{ "text": "#![schema(::schema)]\n\nRelaxed { name: \"a\" }" }],
+        }),
+    );
+    client.diagnostics_for(&config, <[Value]>::is_empty);
+    client.stop();
+}
+
+#[test]
 fn the_project_file_is_checked_against_its_schema() {
     let project = r#"Project { layers: List([{ name: "base", dir: "base", .. }]), .. }"#;
     let dir = workspace(

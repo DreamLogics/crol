@@ -55,11 +55,28 @@ pub struct Volume {
     pub size_gb: u32,
 }
 
+/// Fields left out take their defaults without `..`.
+#[derive(Debug, Deserialize, Schema)]
+#[crol(explicit_defaults = false)]
+pub struct Relaxed {
+    pub name: String,
+    #[serde(default)]
+    pub port: u16,
+    pub note: Option<String>,
+}
+
 /// Everything the data can define.
 #[derive(Debug, Deserialize, Schema)]
 pub enum Definition {
     Service(Service),
     Volume(Volume),
+    Relaxed(Relaxed),
+    #[crol(explicit_defaults = false)]
+    Job {
+        name: String,
+        #[serde(default)]
+        retries: u32,
+    },
 }
 
 fn cases_dir() -> PathBuf {
@@ -125,7 +142,9 @@ fn load(case: &Path) -> CrolData {
             .collect();
         composer = composer.load_layer(CrolLayer::from_sources(name, documents));
     }
+    // The schema, for what serde does not tell the deserializer.
     composer
+        .schema(crol::schema::build::<Definition>())
         .compose_data()
         .unwrap_or_else(|e| panic!("{}: {e}", case.display()))
 }

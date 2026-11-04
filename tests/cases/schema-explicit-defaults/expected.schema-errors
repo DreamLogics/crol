@@ -1,0 +1,3 @@
+1-base/a.crol:7:14: missing field `name`
+1-base/a.crol:9:22: missing field `name`
+1-base/a.crol:10:16: `Service` is missing the fields `tags`, `limits`, `mode`, `depends_on`; write them, or end the block with `..` to leave out fields that have defaults

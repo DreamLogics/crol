@@ -27,8 +27,8 @@ pub(crate) struct Options {
     pub(crate) allow_unknown_fields: bool,
     /// Every field must be written unless the value has `..`.
     pub(crate) require_complete: bool,
-    /// Which names are one field's, from the schema, if there is one.
-    pub(crate) aliases: Option<Arc<Aliases>>,
+    /// What the schema says about structs, if there is one.
+    pub(crate) structs: Option<Arc<Structs>>,
 }
 
 impl Default for Options {
@@ -37,53 +37,80 @@ impl Default for Options {
             implicit_some: true,
             allow_unknown_fields: false,
             require_complete: true,
-            aliases: None,
+            structs: None,
         }
     }
 }
 
-/// The names of each field of the structs and struct variants whose
-/// fields have serde aliases, by serde name: serde gives the deserializer
-/// every name a struct accepts, without saying which belong to one field
-/// (`SPEC.md` 10.2).
-#[derive(Debug, Default, PartialEq, Eq)]
-pub(crate) struct Aliases(HashMap<String, Vec<Vec<Vec<String>>>>);
+/// What a schema says about a struct or struct variant that serde does not
+/// tell the deserializer.
+#[derive(Debug, PartialEq, Eq)]
+struct StructInfo {
+    /// The names of each field, its own name first: serde gives every name
+    /// a struct accepts, without saying which belong to one field.
+    fields: Vec<Vec<String>>,
+    /// `#[crol(explicit_defaults)]`.
+    explicit_defaults: Option<bool>,
+}
 
-impl Aliases {
+/// The structs and struct variants that have serde aliases or
+/// `#[crol(explicit_defaults)]`, by serde name (`SPEC.md` 10.2).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Structs(HashMap<String, Vec<StructInfo>>);
+
+impl Structs {
     pub(crate) fn from_schema(schema: &SchemaFile) -> Self {
-        let mut aliases = Self::default();
-        let mut add = |name: &str, fields: &indexmap::IndexMap<String, Field>| {
-            if fields.values().all(|f| f.aliases.is_empty()) {
+        let mut structs = Self::default();
+        let mut add = |name: &str,
+                       fields: &indexmap::IndexMap<String, Field>,
+                       explicit_defaults: Option<bool>| {
+            if explicit_defaults.is_none() && fields.values().all(|f| f.aliases.is_empty()) {
                 return;
             }
-            let names = fields
+            let fields: Vec<Vec<String>> = fields
                 .iter()
                 .map(|(n, f)| std::iter::once(n).chain(&f.aliases).cloned().collect())
                 .collect();
-            aliases.0.entry(name.to_owned()).or_default().push(names);
+            let known = structs.0.entry(name.to_owned()).or_default();
+            // Serde cannot tell types of one name and the same fields
+            // apart: of their settings, the one that asks most holds.
+            match known.iter_mut().find(|s| s.fields == fields) {
+                Some(info) => {
+                    info.explicit_defaults = info.explicit_defaults.max(explicit_defaults)
+                }
+                None => known.push(StructInfo {
+                    fields,
+                    explicit_defaults,
+                }),
+            }
         };
         for def in schema.types.values() {
             match def {
-                TypeDef::Struct { name, fields, .. } => add(name, fields),
+                TypeDef::Struct {
+                    name,
+                    fields,
+                    explicit_defaults,
+                    ..
+                } => add(name, fields, *explicit_defaults),
                 TypeDef::Enum { variants, .. } => {
                     for (name, variant) in variants {
                         if let VariantShape::Struct(fields) = &variant.shape {
-                            add(name, fields);
+                            add(name, fields, variant.explicit_defaults);
                         }
                     }
                 }
                 _ => {}
             }
         }
-        aliases
+        structs
     }
 
-    /// The names of each field of the struct `name` that accepts exactly
-    /// `accepted`, its own name first.
-    fn fields_of(&self, name: &str, accepted: &[&str]) -> Option<&[Vec<String>]> {
-        self.0.get(name)?.iter().map(Vec::as_slice).find(|fields| {
-            fields.iter().map(Vec::len).sum::<usize>() == accepted.len()
-                && fields
+    /// The struct `name` that accepts exactly `accepted`.
+    fn find(&self, name: &str, accepted: &[&str]) -> Option<&StructInfo> {
+        self.0.get(name)?.iter().find(|info| {
+            info.fields.iter().map(Vec::len).sum::<usize>() == accepted.len()
+                && info
+                    .fields
                     .iter()
                     .flatten()
                     .all(|n| accepted.contains(&n.as_str()))
@@ -269,15 +296,21 @@ impl<'a> ValueDeserializer<'a> {
                     .error(message));
             }
         }
-        if self.context.options.require_complete && !keyed.defaults {
+        let options = &self.context.options;
+        let info = options.structs.as_ref().and_then(|s| s.find(name, fields));
+        // The type's setting, if the schema gives it, else the option's.
+        let explicit = info
+            .and_then(|i| i.explicit_defaults)
+            .unwrap_or(options.require_complete);
+        if explicit && !keyed.defaults {
             let present = |f: &str| {
                 let key = Key::Str(f.to_owned());
                 keyed.entries.contains_key(&key) || keyed.defaulted.contains(&key)
             };
             // A field is written when one of its names is.
-            let grouped = self.context.options.aliases.as_ref();
-            let missing: Vec<&str> = match grouped.and_then(|a| a.fields_of(name, fields)) {
-                Some(grouped) => grouped
+            let missing: Vec<&str> = match info {
+                Some(info) => info
+                    .fields
                     .iter()
                     .filter(|names| !names.iter().any(|n| present(n)))
                     .map(|names| names[0].as_str())

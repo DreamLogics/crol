@@ -18,7 +18,10 @@ Schema {
             name: "Limits",
             doc: "How much a service may use.",
             source: ("crates/crol/tests/schema.rs", 9),
-            fields: { cpu: { ty: F64, .. }, memory_mb: { ty: U32, .. } },
+            fields: {
+                cpu: { ty: F64, default: Unrecorded, .. },
+                memory_mb: { ty: U32, default: Unrecorded, .. },
+            },
             default: Some(Limits { cpu: 1.0, memory_mb: 512 }),
             ..,
         },

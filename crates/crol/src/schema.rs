@@ -105,6 +105,10 @@ pub enum TypeDef {
         /// `#[serde(default)]` on the struct.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         default: Option<RawValue>,
+        /// `#[crol(explicit_defaults)]`: whether fields take their defaults
+        /// only with `..` (`SPEC.md` 10.3). `None`: `require_complete` says.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        explicit_defaults: Option<bool>,
     },
     /// `struct P(A, B)`
     TupleStruct {
@@ -239,6 +243,9 @@ pub struct VariantDef {
     /// serde aliases.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
+    /// For a struct variant, `#[crol(explicit_defaults)]`, as on a struct.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explicit_defaults: Option<bool>,
 }
 
 /// A variant's payload.
@@ -875,6 +882,7 @@ impl Schema for std::time::Duration {
             .collect(),
             deny_unknown_fields: false,
             default: None,
+            explicit_defaults: None,
         })
     }
 }
@@ -903,6 +911,7 @@ impl Schema for SchemaFile {
             .collect(),
             deny_unknown_fields: false,
             default: None,
+            explicit_defaults: None,
         })
     }
 }

@@ -10,8 +10,8 @@ use quote::quote;
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::{
-    Attribute, Data, DeriveInput, Error, Expr, ExprLit, Fields, Lit, LitStr, Meta, Path, Token,
-    Type, parse_macro_input,
+    Attribute, Data, DeriveInput, Error, Expr, ExprLit, Fields, Lit, LitBool, LitStr, Meta, Path,
+    Token, Type, parse_macro_input,
 };
 
 /// Implements `crol::schema::Schema` from a type's fields and serde
@@ -20,6 +20,9 @@ use syn::{
 /// Attributes, besides serde's own:
 ///
 /// - `#[crol(defaults)]` on the type: record its default values;
+/// - `#[crol(explicit_defaults)]` or `#[crol(explicit_defaults = false)]`
+///   on a struct, an enum (for its struct variants) or a struct variant:
+///   whether fields left out take their defaults only with `..`;
 /// - `#[crol(refers(Service, Volume))]` on an id field: the root types its
 ///   ids may name;
 /// - `#[crol(schema = OtherType)]` or `#[crol(schema = any)]` on a field:
@@ -64,6 +67,7 @@ struct Attrs {
     deny_unknown_fields: bool,
     with: bool,
     defaults: bool,
+    explicit_defaults: Option<bool>,
     refers: Vec<Path>,
     /// `#[crol(schema = T)]`: `Some(Some(T))`; `#[crol(schema = any)]`:
     /// `Some(None)`.
@@ -163,6 +167,12 @@ impl Attrs {
                     let path = &meta.path;
                     if path.is_ident("defaults") {
                         out.defaults = true;
+                    } else if path.is_ident("explicit_defaults") {
+                        out.explicit_defaults = Some(if meta.input.peek(Token![=]) {
+                            meta.value()?.parse::<LitBool>()?.value
+                        } else {
+                            true
+                        });
                     } else if path.is_ident("refers") {
                         let content;
                         syn::parenthesized!(content in meta.input);
@@ -176,7 +186,7 @@ impl Attrs {
                         out.rename = Some(string_value(&meta)?);
                     } else {
                         return Err(meta.error(
-                            "unknown crol attribute; the attributes are `defaults`, `refers(...)`, `schema = ...` and `rename = \"...\"`",
+                            "unknown crol attribute; the attributes are `defaults`, `explicit_defaults`, `refers(...)`, `schema = ...` and `rename = \"...\"`",
                         ));
                     }
                     Ok(())
@@ -260,6 +270,71 @@ fn serde_name(
     }
 }
 
+/// `#[crol(explicit_defaults)]` goes where the deserializer checks that a
+/// struct is complete; elsewhere it could not do what it says.
+fn check_explicit_defaults(input: &DeriveInput, attrs: &Attrs) -> syn::Result<()> {
+    let wrong = |span: Span, message: &str| Err(Error::new(span, message));
+    let no_field_has_it = |fields: &Fields| -> syn::Result<()> {
+        for field in fields {
+            if Attrs::parse(&field.attrs)?.explicit_defaults.is_some() {
+                return wrong(
+                    field.span(),
+                    "`explicit_defaults` goes on a struct, an enum or a struct variant, not on a field",
+                );
+            }
+        }
+        Ok(())
+    };
+    match &input.data {
+        Data::Struct(data) => {
+            no_field_has_it(&data.fields)?;
+            if attrs.explicit_defaults.is_some()
+                && (attrs.transparent || !matches!(data.fields, Fields::Named(_)))
+            {
+                return wrong(input.span(), "`explicit_defaults` needs named fields");
+            }
+            if attrs.explicit_defaults == Some(true) {
+                for field in &data.fields {
+                    if Attrs::parse(&field.attrs)?.flatten {
+                        return wrong(
+                            field.span(),
+                            "a struct with `#[serde(flatten)]` deserializes as a map, which cannot ask for `..`",
+                        );
+                    }
+                }
+            }
+        }
+        Data::Enum(data) => {
+            let mut annotated = attrs.explicit_defaults.is_some();
+            for variant in &data.variants {
+                no_field_has_it(&variant.fields)?;
+                if Attrs::parse(&variant.attrs)?.explicit_defaults.is_some() {
+                    annotated = true;
+                    if !matches!(variant.fields, Fields::Named(_)) {
+                        return wrong(variant.span(), "`explicit_defaults` needs named fields");
+                    }
+                }
+            }
+            if annotated && (attrs.untagged || attrs.tag.is_some()) {
+                return wrong(
+                    input.span(),
+                    "a tagged or untagged enum goes through serde's `any`, which cannot ask for `..`",
+                );
+            }
+        }
+        Data::Union(_) => {}
+    }
+    Ok(())
+}
+
+/// An `Option<bool>` as an expression.
+fn option_bool(value: Option<bool>) -> TokenStream2 {
+    match value {
+        Some(value) => quote!(::std::option::Option::Some(#value)),
+        None => quote!(::std::option::Option::None),
+    }
+}
+
 fn is_option(ty: &Type) -> bool {
     matches!(ty, Type::Path(p) if p.qself.is_none() && p.path.segments.last().is_some_and(|s| s.ident == "Option"))
 }
@@ -268,6 +343,7 @@ fn is_option(ty: &Type) -> bool {
 
 fn schema(input: &DeriveInput) -> syn::Result<TokenStream2> {
     let attrs = Attrs::parse(&input.attrs)?;
+    check_explicit_defaults(input, &attrs)?;
     let ident = &input.ident;
     let name = serde_name(&ident.to_string(), &attrs, None, false)?;
     let doc = &attrs.doc;
@@ -341,17 +417,25 @@ fn schema(input: &DeriveInput) -> syn::Result<TokenStream2> {
                         ))
                     }
                     Fields::Named(_) => {
-                        let fields = named_fields(&variant.fields, None, false)?;
+                        let fields = named_fields(&variant.fields, None, false, false)?;
                         quote!(::crol::schema::VariantShape::Struct(#fields))
                     }
                 };
                 let variant_doc = &variant_attrs.doc;
                 let aliases = &variant_attrs.aliases;
+                // The enum's setting is for its struct variants.
+                let explicit_defaults = option_bool(
+                    variant_attrs
+                        .explicit_defaults
+                        .or(attrs.explicit_defaults)
+                        .filter(|_| matches!(variant.fields, Fields::Named(_))),
+                );
                 variants.push(quote! {
                     (::std::string::String::from(#variant_name), ::crol::schema::VariantDef {
                         shape: #shape,
                         doc: ::std::string::String::from(#variant_doc),
                         aliases: ::std::vec![#(::std::string::String::from(#aliases)),*],
+                        explicit_defaults: #explicit_defaults,
                     })
                 });
             }
@@ -412,8 +496,15 @@ fn field_type(attrs: &Attrs, ty: &Type) -> syn::Result<TokenStream2> {
 }
 
 /// The fields of a struct or struct variant, as an `IndexMap` expression.
-/// `defaults` records the values of fields' defaults (`#[crol(defaults)]`).
-fn named_fields(fields: &Fields, rule: Option<&str>, defaults: bool) -> syn::Result<TokenStream2> {
+/// `defaults` records the values of fields' defaults (`#[crol(defaults)]`);
+/// `struct_default` says the struct has `#[serde(default)]`, so that every
+/// field has one.
+fn named_fields(
+    fields: &Fields,
+    rule: Option<&str>,
+    defaults: bool,
+    struct_default: bool,
+) -> syn::Result<TokenStream2> {
     let mut entries = Vec::new();
     for field in fields {
         let attrs = Attrs::parse(&field.attrs)?;
@@ -430,6 +521,8 @@ fn named_fields(fields: &Fields, rule: Option<&str>, defaults: bool) -> syn::Res
             )),
             (Some(Some(function)), true) => quote!(::crol::schema::recorded_default(&#function())),
             (Some(_), false) => quote!(::crol::schema::FieldDefault::Unrecorded),
+            // Its value is the field's in the struct's default.
+            (None, _) if struct_default => quote!(::crol::schema::FieldDefault::Unrecorded),
             // serde makes a missing `Option` field `None`.
             (None, _) if is_option(&field.ty) => quote!(::crol::schema::none_value()),
             (None, _) => quote!(::crol::schema::FieldDefault::Required),
@@ -476,7 +569,12 @@ fn struct_definition(
             }
         }
         Fields::Named(_) => {
-            let fields_expr = named_fields(fields, attrs.rename_all.as_deref(), attrs.defaults)?;
+            let fields_expr = named_fields(
+                fields,
+                attrs.rename_all.as_deref(),
+                attrs.defaults,
+                attrs.default.is_some(),
+            )?;
             let deny = attrs.deny_unknown_fields;
             let default = if attrs.defaults && matches!(attrs.default, Some(None)) {
                 quote!(::crol::schema::default_value(
@@ -485,6 +583,7 @@ fn struct_definition(
             } else {
                 quote!(::std::option::Option::None)
             };
+            let explicit_defaults = option_bool(attrs.explicit_defaults);
             quote! {
                 ::crol::schema::TypeDef::Struct {
                     name: #name_expr,
@@ -493,6 +592,7 @@ fn struct_definition(
                     fields: #fields_expr,
                     deny_unknown_fields: #deny,
                     default: #default,
+                    explicit_defaults: #explicit_defaults,
                 }
             }
         }
@@ -578,7 +678,128 @@ fn variant_name(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
 #[cfg(test)]
 mod tests {
-    use super::rename;
+    use super::{rename, schema};
+    use syn::parse_quote;
+
+    #[track_caller]
+    fn rejected(input: syn::DeriveInput, message: &str) {
+        let error = schema(&input).unwrap_err().to_string();
+        assert!(error.contains(message), "{error}");
+    }
+
+    #[test]
+    fn explicit_defaults_goes_where_it_can_hold() {
+        for input in [
+            parse_quote!(
+                #[crol(explicit_defaults)]
+                struct S {
+                    a: u8,
+                }
+            ),
+            parse_quote!(
+                #[crol(explicit_defaults = false)]
+                struct S {
+                    a: u8,
+                }
+            ),
+            parse_quote!(
+                #[crol(explicit_defaults = false)]
+                struct S {
+                    #[serde(flatten)]
+                    a: T,
+                }
+            ),
+            parse_quote!(
+                #[crol(explicit_defaults = false)]
+                enum E {
+                    A { a: u8 },
+                    B(u8),
+                }
+            ),
+            parse_quote!(
+                enum E {
+                    #[crol(explicit_defaults)]
+                    A { a: u8 },
+                }
+            ),
+        ] {
+            schema(&input).unwrap();
+        }
+        rejected(
+            parse_quote!(
+                struct S {
+                    #[crol(explicit_defaults)]
+                    a: u8,
+                }
+            ),
+            "not on a field",
+        );
+        rejected(
+            parse_quote!(
+                #[crol(explicit_defaults)]
+                struct S(u8, u8);
+            ),
+            "needs named fields",
+        );
+        rejected(
+            parse_quote!(
+                #[crol(explicit_defaults)]
+                #[serde(transparent)]
+                struct S {
+                    a: u8,
+                }
+            ),
+            "needs named fields",
+        );
+        rejected(
+            parse_quote!(
+                enum E {
+                    #[crol(explicit_defaults)]
+                    A(u8),
+                }
+            ),
+            "needs named fields",
+        );
+        rejected(
+            parse_quote!(
+                #[crol(explicit_defaults)]
+                struct S {
+                    #[serde(flatten)]
+                    a: T,
+                }
+            ),
+            "deserializes as a map",
+        );
+        rejected(
+            parse_quote!(
+                #[crol(explicit_defaults)]
+                #[serde(tag = "t")]
+                enum E {
+                    A { a: u8 },
+                }
+            ),
+            "tagged or untagged",
+        );
+        rejected(
+            parse_quote!(
+                #[serde(untagged)]
+                enum E {
+                    #[crol(explicit_defaults)]
+                    A { a: u8 },
+                }
+            ),
+            "tagged or untagged",
+        );
+        rejected(
+            parse_quote!(
+                #[crol(explicit_defaults = "no")]
+                struct S {
+                    a: u8,
+                }
+            ),
+            "expected boolean literal",
+        );
+    }
 
     #[test]
     fn rename_rules_follow_serde() {

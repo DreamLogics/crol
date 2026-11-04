@@ -81,33 +81,53 @@ pub use ser::PrettyConfig;
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// Reads a value-mode document (`SPEC.md` 4) and deserializes it as `T`.
+///
+/// This sees only what serde gives it: `#[crol(explicit_defaults)]` and
+/// which names are aliases of one field are in the schema, so a struct
+/// must write every field or `..`, whatever its type says. Use
+/// [`from_str_with_schema`] for those (`SPEC.md` 10.3).
 pub fn from_str<T: for<'de> Deserialize<'de>>(text: &str) -> Result<T> {
     from_str_with_ids(text).map(|(value, _)| value)
+}
+
+/// [`from_str`] with a schema, as `CrolComposer::schema` gives one to the
+/// composer: the deserializer learns which names are aliases of one field
+/// and each type's `#[crol(explicit_defaults)]` (`SPEC.md` 10.2, 10.3).
+/// `&default` stays an error, as in every value-mode document.
+pub fn from_str_with_schema<T: for<'de> Deserialize<'de>>(
+    text: &str,
+    schema: &schema::SchemaFile,
+) -> Result<T> {
+    let options = de::Options {
+        structs: Some(std::sync::Arc::new(de::Structs::from_schema(schema))),
+        ..de::Options::default()
+    };
+    from_text(text, options).map(|(value, _)| value)
 }
 
 /// Like [`from_str`], and also returns every id the deserializer produced,
 /// so that the application can check what they name (`SPEC.md` 10.5).
 pub fn from_str_with_ids<T: for<'de> Deserialize<'de>>(text: &str) -> Result<(T, Vec<IdUse>)> {
+    from_text(text, de::Options::default())
+}
+
+fn from_text<T: for<'de> Deserialize<'de>>(
+    text: &str,
+    options: de::Options,
+) -> Result<(T, Vec<IdUse>)> {
     let mut sources = Sources::new();
     let file = sources.add("<string>", text);
     let evaluation = evaluate_value(&sources, file);
     let Some(value) = evaluation.value else {
         return Err(Error::from_diagnostics(&sources, &evaluation.diagnostics));
     };
-    from_value_with_ids(&value, &sources)
+    deserialize(&value, &sources, options, None)
 }
 
 /// Deserializes an evaluated value as `T`. `sources` are the files the
 /// value was read from, for the locations in errors.
 pub fn from_value<T: for<'de> Deserialize<'de>>(value: &Value, sources: &Sources) -> Result<T> {
     deserialize(value, sources, de::Options::default(), None).map(|(value, _)| value)
-}
-
-fn from_value_with_ids<T: for<'de> Deserialize<'de>>(
-    value: &Value,
-    sources: &Sources,
-) -> Result<(T, Vec<IdUse>)> {
-    deserialize(value, sources, de::Options::default(), None)
 }
 
 /// Deserializes `value`, which is at the root key `key` if given, for the

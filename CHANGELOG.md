@@ -114,6 +114,22 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 - The documents of a directory layer, and so the order of the `extends`
   they load, no longer depend on the order the platform lists files in
   (`SPEC.md` 7.1).
+- `#[crol(explicit_defaults)]` and `#[crol(explicit_defaults = false)]`
+  (`SPEC.md` 10.3): a struct, enum or struct variant decides whether fields
+  left out take their defaults only with `..`, before `require_complete`.
+  It is recorded in the schema as `explicit_defaults`, which leaves the
+  format's version and schemas that do not use it as they were, and
+  honoured by `crol::check`, `crol check`, the language server, `crol eval`
+  and, given the schema, the deserializer.
+- `crol::from_str_with_schema`: `from_str` with a schema, for aliases and
+  `explicit_defaults`.
+
+### Fixed
+
+- Fields of a struct with `#[serde(default)]` are no longer `Required` in
+  the schema, so `crol::check` accepts `Limits { .. }` as serde does.
+- `crol::check` with `require_complete` off reports a missing field that
+  has no default, as deserializing does.
 - `#![schema(::path)]` resolves `::` from the root directory (the project
   file's, else the working directory or workspace folder), and relative
   paths from the document's directory (`SPEC.md` 4.2).

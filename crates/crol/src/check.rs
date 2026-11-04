@@ -14,7 +14,8 @@ pub struct CheckOptions {
     pub implicit_some: bool,
     /// Keys a struct does not have are ignored.
     pub allow_unknown_fields: bool,
-    /// Every field must be written unless the value has `..`.
+    /// Every field must be written unless the value has `..`. A type's
+    /// `explicit_defaults` comes first (`SPEC.md` 10.3).
     pub require_complete: bool,
 }
 
@@ -318,7 +319,12 @@ impl Checker<'_> {
             return;
         };
         match definition {
-            TypeDef::Struct { name, fields, .. } => {
+            TypeDef::Struct {
+                name,
+                fields,
+                explicit_defaults,
+                ..
+            } => {
                 let ValueKind::Keyed(keyed) = &value.kind else {
                     return self.expected(value, &format!("`{name} {{ ... }}`"), path);
                 };
@@ -376,19 +382,23 @@ impl Checker<'_> {
                                 || keyed.defaulted.contains(&Key::Str(n.to_owned()))
                         })
                 };
+                // Fields may be left out with `..`, or without it when
+                // neither the type nor the options ask for it.
+                let may_leave_out =
+                    keyed.defaults || !explicit_defaults.unwrap_or(self.options.require_complete);
                 let missing: Vec<&str> = fields
                     .iter()
                     .filter(|(f, field)| !field.flatten && !present(f, field))
                     .filter(|(_, field)| {
-                        // With `..`, serde fills fields that have defaults.
-                        !keyed.defaults || field.default == FieldDefault::Required
+                        // Serde fills fields that have defaults.
+                        !may_leave_out || field.default == FieldDefault::Required
                     })
                     .map(|(f, _)| f.as_str())
                     .collect();
                 if !missing.is_empty() {
-                    if keyed.defaults {
+                    if may_leave_out {
                         self.error(value.span, format!("missing field `{}`", missing[0]), path);
-                    } else if self.options.require_complete {
+                    } else {
                         let s = if missing.len() == 1 { "" } else { "s" };
                         self.error(
                             value.span,
@@ -489,6 +499,7 @@ impl Checker<'_> {
                             fields: fields.clone(),
                             deny_unknown_fields: false,
                             default: None,
+                            explicit_defaults: variant.explicit_defaults,
                         };
                         let mut schema = self.schema.clone();
                         let synthetic = format!("{type_path}::{variant_name}");
