@@ -1,6 +1,8 @@
 //! The fingerprint: a BLAKE3-256 hash of the canonical encoding of all
 //! evaluated data (`SPEC.md` 7.6, appendix B).
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use crate::eval::ContextData;
 use crate::value::{Key, Value, ValueKind};
 use crate::variants::Variants;
@@ -12,6 +14,65 @@ pub fn fingerprint(base: &Value, contexts: &[ContextData], variants: &Variants) 
     let mut out = Vec::new();
     encode_data(&mut out, base, contexts, variants);
     *blake3::hash(&out).as_bytes()
+}
+
+/// A fingerprint for each root key, over its value in every evaluated
+/// context (`SPEC.md` 7.6), to say which keys differ where the
+/// [`fingerprint`]s of two data sets do. Keys are in byte order.
+pub fn key_fingerprints(
+    base: &Value,
+    contexts: &[ContextData],
+    variants: &Variants,
+) -> BTreeMap<String, [u8; 32]> {
+    let mut others: Vec<(Vec<&str>, &ContextData)> = contexts
+        .iter()
+        .filter(|data| !data.context.is_base())
+        .map(|data| (variants.chosen_names(&data.context), data))
+        .collect();
+    others.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut keys: BTreeSet<&Key> = BTreeSet::new();
+    if let ValueKind::Keyed(keyed) = &base.kind {
+        keys.extend(keyed.entries.keys());
+    }
+    for (_, data) in &others {
+        keys.extend(data.changes.keys());
+    }
+    let mut found = BTreeMap::new();
+    let mut out = Vec::new();
+    for key in keys {
+        out.clear();
+        out.extend_from_slice(b"CROLK1");
+        match &base.kind {
+            ValueKind::Keyed(keyed) => encode_entry(&mut out, keyed.entries.get(key)),
+            _ => encode_entry(&mut out, None),
+        }
+        for (names, data) in &others {
+            // A context only counts where it differs from the base.
+            if let Some(change) = data.changes.get(key) {
+                leb128(&mut out, names.len() as u128);
+                for name in names {
+                    encode_name(&mut out, name);
+                }
+                encode_entry(&mut out, change.as_ref());
+            }
+        }
+        let name = match key {
+            Key::Str(name) => name.clone(),
+            Key::Int(i) => i.to_string(),
+        };
+        found.insert(name, *blake3::hash(&out).as_bytes());
+    }
+    found
+}
+
+fn encode_entry(out: &mut Vec<u8>, value: Option<&Value>) {
+    match value {
+        Some(value) => {
+            out.push(1);
+            encode(out, value);
+        }
+        None => out.push(0),
+    }
 }
 
 /// The fingerprint of a value-mode document's value: it has no root keys or

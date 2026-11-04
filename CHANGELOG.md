@@ -11,6 +11,11 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Added
 
+- `CrolData::reload`, which applies changes to documents and evaluates again, says
+  which root keys changed, and leaves the data as it was if the result does not load
+  (`SPEC.md` 10.8).
+- `CrolData::key_fingerprints` and `crol::changed_keys`, which say which root keys
+  differ between two data sets (`SPEC.md` 7.6).
 - Constraints (`SPEC.md` 10.12): `#[crol(constraint = "...")]` and `key_constraint`
   name one, `#[crol(constraints(...))]` and `open_constraints` define `Min`, `Max`,
   `Range`, `OneOf` and `Refers`, and a `schema.crod` at the root of a layer defines

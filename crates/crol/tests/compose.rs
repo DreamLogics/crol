@@ -596,3 +596,135 @@ fn data_can_move_between_threads() {
     fn shared<T: Send + Sync>() {}
     shared::<crol::CrolData>();
 }
+
+fn reloadable() -> crol::CrolData {
+    let base = crol::CrolLayer::from_sources(
+        "base",
+        [
+            (
+                "units.crod",
+                "+a: { hp: 1 }\n+b: { hp: &root.a.hp + 1 }\n+c: { hp: 9 }",
+            ),
+            ("other.crod", "+d: { hp: 1 }"),
+        ],
+    );
+    let top = crol::CrolLayer::from_sources("mod", [("patch.crod", "c.hp: 10")]);
+    let variants = crol::CrolVariants::new().add_grouped(["rebel", "empire"]);
+    crol::CrolComposer::with_cfg(crol::CrolConfig {
+        variants,
+        ..Default::default()
+    })
+    .load_layer(base)
+    .load_layer(top)
+    .compose_data()
+    .unwrap()
+}
+
+fn change<'a>(layer: &'a str, path: &'a str, text: Option<&'a str>) -> crol::DocumentChange<'a> {
+    crol::DocumentChange { layer, path, text }
+}
+
+#[test]
+fn key_fingerprints_say_which_keys_differ() {
+    use crol::KeyChange::{Added, Changed, Removed};
+    let one = reloadable();
+    let mut two = reloadable();
+    assert_eq!(one.key_fingerprints(), two.key_fingerprints());
+    two.reload(&[change(
+        "mod",
+        "patch.crod",
+        Some("a.hp: 5\n-d\n+e: { hp: 1 }"),
+    )])
+    .unwrap();
+    assert_eq!(
+        crol::changed_keys(&one.key_fingerprints(), &two.key_fingerprints()),
+        [
+            Changed("a".to_owned()),
+            Changed("b".to_owned()),
+            Changed("c".to_owned()),
+            Removed("d".to_owned()),
+            Added("e".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn a_key_fingerprint_sees_a_change_in_one_context() {
+    let one = reloadable();
+    let mut two = reloadable();
+    two.reload(&[change(
+        "mod",
+        "patch.crod",
+        Some("c.hp: 10\nd<rebel>.hp: 2"),
+    )])
+    .unwrap();
+    let changed = crol::changed_keys(&one.key_fingerprints(), &two.key_fingerprints());
+    assert_eq!(changed, [crol::KeyChange::Changed("d".to_owned())]);
+}
+
+#[test]
+fn reloading_reports_what_changed_and_keeps_the_contexts() {
+    let mut data = reloadable();
+    let contexts = data.contexts().count();
+    let reloaded = data
+        .reload(&[change(
+            "base",
+            "units.crod",
+            Some("+a: { hp: 3 }\n+b: { hp: &root.a.hp + 1 }\n+c: { hp: 9 }"),
+        )])
+        .unwrap();
+    let changed: Vec<&str> = reloaded.changed.iter().map(|c| c.key()).collect();
+    assert_eq!(changed, ["a", "b"]);
+    assert_eq!(data.contexts().count(), contexts);
+    assert_eq!(
+        data.get::<std::collections::BTreeMap<String, u32>>("b")
+            .unwrap()["hp"],
+        4
+    );
+}
+
+#[test]
+fn reloading_adds_and_removes_documents() {
+    let mut data = reloadable();
+    data.reload(&[change("mod", "new.crod", Some("+z: { hp: 1 }"))])
+        .unwrap();
+    assert!(data.contains("z"));
+    data.reload(&[change("mod", "new.crod", None)]).unwrap();
+    assert!(!data.contains("z"));
+}
+
+#[test]
+fn data_that_does_not_load_leaves_it_as_it_was() {
+    let mut data = reloadable();
+    let fingerprint = data.fingerprint();
+    for text in ["a.hp: ", "nothing.hp: 1", "a.hp: 1 / 0"] {
+        assert!(
+            data.reload(&[change("mod", "patch.crod", Some(text))])
+                .is_err()
+        );
+        assert_eq!(data.fingerprint(), fingerprint);
+    }
+    assert!(
+        data.reload(&[change("nowhere", "a.crod", Some(""))])
+            .is_err()
+    );
+    assert!(data.reload(&[change("mod", "absent.crod", None)]).is_err());
+}
+
+#[test]
+fn a_context_evaluated_later_stays_after_reloading() {
+    let mut data = civs_and_rules(Some(Vec::new()), false)
+        .compose_data()
+        .unwrap();
+    let context = data.evaluate(["empire", "fast"]).unwrap();
+    data.reload(&[change(
+        "base",
+        "a.crod",
+        Some("+unit: { hp: 20, speed: 1 }\nunit<fast>.speed: 3"),
+    )])
+    .unwrap();
+    assert_eq!(
+        data.get_in::<Stats>("unit", &context).unwrap(),
+        Stats { hp: 20, speed: 3 }
+    );
+}

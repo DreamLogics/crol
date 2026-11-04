@@ -1367,6 +1367,12 @@ difference in values (or in the library version's behaviour) shows as a
 mismatch. A value document has a fingerprint too, over its one value, as
 `crol fingerprint` prints it (section 11).
 
+`CrolData::key_fingerprints()` gives a BLAKE3-256 hash for each root key,
+over its value in the base and in each evaluated context where it differs
+from the base. Where the fingerprints of two data sets differ, these say which
+keys do (`crol::changed_keys`), so that a program can name them. They
+are not part of the data's fingerprint.
+
 ### 7.7 Errors and recovery
 
 Errors do not stop evaluation. A value that fails is *poisoned*; values
@@ -2169,6 +2175,14 @@ error. A struct whose serialization leaves fields out with
 `#[serde(skip_serializing)]`, so a struct with such a field reads back
 only if it has `explicit_defaults = false` (section 10.3). The output has no operators; it is
 plain data that reads back to the same value.
+
+`CrolData::reload(changes)` is for a program watching its files: each
+`DocumentChange` gives a layer, a path and the document's new text (`None`
+removes it, and a new path adds it). The layers are evaluated again in the
+contexts evaluated so far, without reading unchanged documents, and a
+`schema.crod` among them counts. `Reloaded::changed` lists the root keys
+that were added, changed or removed. If the result does not load, the
+error is returned and the data stays as it was.
 
 `crol::DataWriter` writes a data-mode document, for a program that
 generates a layer, with values serialized the same way. `declare`, `set`,

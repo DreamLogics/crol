@@ -1,7 +1,7 @@
 //! The composer: layers in, Rust values out (`SPEC.md` 7, 10.7).
 
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -830,6 +830,7 @@ impl<T: VariantName> CrolComposer<T> {
             sources,
             layers,
             compiled: Arc::new(compiled),
+            schema: self.schema.map(Arc::new),
             data_options: options,
             base,
             contexts: evaluation.contexts,
@@ -874,6 +875,69 @@ fn extends_attributes(text: &str) -> Vec<(String, TextRange)> {
         .collect()
 }
 
+/// The root keys whose fingerprints differ between two data sets, or that
+/// only one has, in byte order: from [`CrolData::key_fingerprints`].
+pub fn changed_keys(
+    before: &BTreeMap<String, [u8; 32]>,
+    after: &BTreeMap<String, [u8; 32]>,
+) -> Vec<KeyChange> {
+    let mut changes = Vec::new();
+    for (key, hash) in before {
+        match after.get(key) {
+            None => changes.push(KeyChange::Removed(key.clone())),
+            Some(other) if other != hash => changes.push(KeyChange::Changed(key.clone())),
+            Some(_) => {}
+        }
+    }
+    for key in after.keys() {
+        if !before.contains_key(key) {
+            changes.push(KeyChange::Added(key.clone()));
+        }
+    }
+    changes.sort_by(|a, b| a.key().as_bytes().cmp(b.key().as_bytes()));
+    changes
+}
+
+/// How a root key differs between two data sets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeyChange {
+    /// It is new.
+    Added(String),
+    /// It has another value, in at least one context.
+    Changed(String),
+    /// It is gone.
+    Removed(String),
+}
+
+impl KeyChange {
+    /// The root key.
+    pub fn key(&self) -> &str {
+        match self {
+            KeyChange::Added(key) | KeyChange::Changed(key) | KeyChange::Removed(key) => key,
+        }
+    }
+}
+
+/// A change to one document, for [`CrolData::reload`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DocumentChange<'a> {
+    /// The layer's name.
+    pub layer: &'a str,
+    /// The document's path in the layer, as `/`-separated.
+    pub path: &'a str,
+    /// Its new text; `None` removes it. A path the layer does not have adds
+    /// a document.
+    pub text: Option<&'a str>,
+}
+
+/// What [`CrolData::reload`] changed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Reloaded {
+    /// The root keys that differ now, in byte order.
+    pub changed: Vec<KeyChange>,
+}
+
 /// A context: a set of active variants (`SPEC.md` 8.1), from
 /// [`CrolData::context`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -899,6 +963,8 @@ pub struct CrolData<T = String> {
     layers: Vec<Layer>,
     /// For evaluating another context later.
     compiled: Arc<Compiled>,
+    /// The schema as given, for reloading a `schema.crod`.
+    schema: Option<Arc<crate::schema::SchemaFile>>,
     data_options: DataOptions,
     base: Value,
     contexts: Vec<ContextData>,
@@ -1169,6 +1235,96 @@ impl<T: VariantName> CrolData<T> {
     /// its canonical encoding.
     pub fn fingerprint(&self) -> [u8; 32] {
         crol_eval::fingerprint::fingerprint(&self.base, &self.contexts, &self.variants)
+    }
+
+    /// A fingerprint for each root key, over its value in every evaluated
+    /// context (`SPEC.md` 7.6). Where the [`fingerprint`](Self::fingerprint)s
+    /// of two data sets differ, comparing these says which keys do:
+    /// [`changed_keys`].
+    pub fn key_fingerprints(&self) -> BTreeMap<String, [u8; 32]> {
+        crol_eval::fingerprint::key_fingerprints(&self.base, &self.contexts, &self.variants)
+    }
+
+    /// Applies changes to documents and evaluates again, in the contexts
+    /// evaluated so far (`SPEC.md` 10.7): a program reloading a file it
+    /// watches. If the result does not load, the error is returned and the
+    /// data stays as it was. Unchanged documents are not read again.
+    pub fn reload(&mut self, changes: &[DocumentChange<'_>]) -> Result<Reloaded, Error> {
+        let mut sources = self.sources.clone();
+        let mut layers = self.layers.clone();
+        for change in changes {
+            let layer = layers
+                .iter_mut()
+                .find(|layer| layer.name == change.layer)
+                .ok_or_else(|| Error::new(format!("there is no layer `{}`", change.layer)))?;
+            let at = layer.documents.iter().position(|(p, _)| p == change.path);
+            match (change.text, at) {
+                (Some(text), Some(at)) => {
+                    let name = sources.file(layer.documents[at].1).name().to_owned();
+                    layer.documents[at].1 = sources.add(name, text);
+                }
+                (Some(text), None) => {
+                    let file = sources.add(change.path.to_owned(), text);
+                    layer.documents.push((change.path.to_owned(), file));
+                }
+                (None, Some(at)) => {
+                    layer.documents.remove(at);
+                }
+                (None, None) => {
+                    return Err(Error::new(format!(
+                        "the layer `{}` has no document `{}`",
+                        change.layer, change.path
+                    )));
+                }
+            }
+        }
+        let mut options = self.data_options.clone();
+        if let Some(schema) = &self.schema {
+            let (schema, found) = schema.patched(&mut sources, &layers);
+            if found.iter().any(Diagnostic::is_error) {
+                return Err(Error::from_diagnostics(&sources, &found));
+            }
+            options = options.with_defaults(Some(schema.defaults()));
+        }
+        let (compiled, mut diagnostics) = compile(&sources, &layers);
+        let Some(compiled) = compiled else {
+            return Err(Error::from_diagnostics(&sources, &diagnostics));
+        };
+        let names: Vec<Vec<String>> = self
+            .contexts
+            .iter()
+            .map(|data| {
+                let names = self.variants.chosen_names(&data.context);
+                names.into_iter().map(str::to_owned).collect()
+            })
+            .collect();
+        let evaluated = options.clone().with_contexts(Some(names));
+        let mut evaluation = evaluate_compiled(&compiled, &evaluated);
+        diagnostics.append(&mut evaluation.diagnostics);
+        let Some(base) = evaluation.value else {
+            return Err(Error::from_diagnostics(&sources, &diagnostics));
+        };
+        let before = self.key_fingerprints();
+        let composed = {
+            let names = self.variants.chosen_names(&self.composed);
+            let ids: Vec<_> = names
+                .iter()
+                .filter_map(|n| evaluation.variants.id(n))
+                .collect();
+            evaluation.variants.context(&ids).map_err(Error::new)?
+        };
+        self.sources = sources;
+        self.layers = layers;
+        self.compiled = Arc::new(compiled);
+        self.data_options = options;
+        self.base = base;
+        self.contexts = evaluation.contexts;
+        self.variants = evaluation.variants;
+        self.composed = composed;
+        self.diagnostics = diagnostics;
+        Ok(Reloaded {
+            changed: changed_keys(&before, &self.key_fingerprints()),
+        })
     }
 
     /// The operations that produced a value, in order, with the value after

@@ -425,11 +425,49 @@ The most useful methods:
 | `distinct(key)`, `variations(key)` | a key's [distinct values](#views-and-queries) across contexts |
 | `query()`                          | [keys chosen](#views-and-queries) by what they hold |
 | `fingerprint()`                    | a BLAKE3 hash of all evaluated data                |
+| `key_fingerprints()`               | one for each root key; `crol::changed_keys` compares two |
+| `reload(changes)`                  | [applies changes to documents](#reloading)         |
 
 The fingerprint covers values, not source text. Two data sets written
 differently but with the same values have the same fingerprint, on every
 platform. Use it to check that two machines loaded the same data, or to see
 whether a change really changed anything.
+
+## Reloading
+
+A program that watches its files can give `reload` what changed. Unchanged documents
+are not read again, and data that does not load leaves everything as it was, so a
+mistake in a file does not stop the program:
+
+```rust
+// src/main.rs
+use crol::{CrolComposer, CrolLayer, DocumentChange};
+
+fn main() -> Result<(), crol::Error> {
+    let layer = CrolLayer::from_sources("base", [("a.crod", "+web: { port: 80 }\n+db: { port: 1 }")]);
+    let mut data = CrolComposer::new().load_layer(layer).compose_data()?;
+
+    let reloaded = data.reload(&[DocumentChange {
+        layer: "base",
+        path: "a.crod",
+        text: Some("+web: { port: 81 }\n+db: { port: 1 }"),
+    }])?;
+    println!("{:?}", reloaded.changed);
+
+    let broken = DocumentChange { layer: "base", path: "a.crod", text: Some("web: ") };
+    println!("{}", data.reload(&[broken]).is_err());
+    Ok(())
+}
+```
+
+```console
+$ cargo run
+[Changed("web")]
+true
+```
+
+Keep `CrolContext`s from before a reload only if your variants are declared. Everything
+is evaluated again, so a reload takes about as long as loading.
 
 ## Views and queries
 
