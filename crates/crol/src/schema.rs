@@ -387,17 +387,34 @@ impl SchemaFile {
     /// The schema as the text of a schema file.
     pub fn to_text(&self) -> Result<String, Error> {
         let body = crate::to_string_pretty(self, crate::PrettyConfig::default())?;
-        Ok(format!("#![schema(\"crate:crol@1\")]\n\n{body}"))
+        Ok(format!(
+            "#![schema(\"crate:crol@{}\")]\n\n{body}",
+            own_requirement()
+        ))
+    }
+}
+
+/// The version requirement schema files name crol by: this version's
+/// major, or major and minor before 1.0, as Cargo treats them.
+fn own_requirement() -> String {
+    let mut parts = env!("CARGO_PKG_VERSION").split('.');
+    match (parts.next(), parts.next()) {
+        (Some("0"), Some(minor)) => format!("0.{minor}"),
+        (Some(major), _) => major.to_owned(),
+        _ => unreachable!("crol's version has a major part"),
     }
 }
 
 /// The schema file a document names with `#![schema(...)]` (`SPEC.md`
 /// 4.1), with the attribute's range: `None` without the attribute. A module
-/// path is resolved with the document's directory as the root; schemas
-/// from URLs and crates are not supported yet, and are an error.
+/// path is resolved with the document's directory as the root. URLs and
+/// crates need the `remote-schemas` feature; with it, `fetch` allows
+/// fetching them, and without `fetch` only cached copies and local crates
+/// are used.
 pub fn attribute_path(
     text: &str,
     document: &Path,
+    fetch: bool,
 ) -> Option<(crol_syntax::TextRange, Result<PathBuf, Error>)> {
     use crol_syntax::ast::{AstNode, AttributeKind};
     let parse = crol_syntax::parse(text);
@@ -406,13 +423,16 @@ pub fn attribute_path(
         _ => None,
     })?;
     let range = attr.syntax().text_range();
+    let dir = document.parent().unwrap_or(Path::new("."));
     let Some(module_path) = attr.module_path() else {
-        return Some((
-            range,
-            Err(Error::new(
-                "schema: schemas from URLs and crates are not supported yet",
-            )),
-        ));
+        let source = attr
+            .string()
+            .and_then(|s| crate::from_str::<String>(s.text()).ok());
+        let result = match source {
+            Some(source) => resolve_remote(&source, dir, fetch),
+            None => Err(Error::new("schema: expected a module path or a string")),
+        };
+        return Some((range, result));
     };
     let module_path: String = module_path
         .syntax()
@@ -420,12 +440,27 @@ pub fn attribute_path(
         .to_string()
         .split_whitespace()
         .collect();
-    let dir = document.parent().unwrap_or(Path::new("."));
     Some((
         range,
         crate::resolve_module_path(&module_path, dir, Some(document))
             .map_err(|e| Error::new(format!("schema: {e}"))),
     ))
+}
+
+/// The schema file a URL or a crate names (`SPEC.md` 4.1), for a document
+/// or project in `dir`: fetched over HTTPS if `fetch` allows, and cached.
+#[cfg(feature = "remote-schemas")]
+pub fn resolve_remote(source: &str, dir: &Path, fetch: bool) -> Result<PathBuf, Error> {
+    crate::remote::resolve(source, dir, fetch)
+}
+
+/// The schema file a URL or a crate names (`SPEC.md` 4.1); this build of
+/// crol does not have the `remote-schemas` feature, so it is an error.
+#[cfg(not(feature = "remote-schemas"))]
+pub fn resolve_remote(source: &str, _dir: &Path, _fetch: bool) -> Result<PathBuf, Error> {
+    Err(Error::new(format!(
+        "schema: `{source}`: schemas from URLs and crates need the `remote-schemas` feature of crol"
+    )))
 }
 
 /// Builds the schema of `T` and every type it uses.

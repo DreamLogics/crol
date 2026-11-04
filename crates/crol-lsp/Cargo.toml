@@ -11,6 +11,11 @@ keywords = ["crol", "lsp", "language-server"]
 categories = ["development-tools", "text-editors"]
 readme = "README.md"
 
+[features]
+default = ["remote-schemas"]
+# Schemas from URLs and crates (`SPEC.md` 4.1).
+remote-schemas = ["crol/remote-schemas"]
+
 [dependencies]
 crol.workspace = true
 crol-eval.workspace = true

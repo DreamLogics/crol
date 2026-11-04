@@ -44,6 +44,8 @@ mod id;
 mod module_path;
 pub mod project;
 mod raw;
+#[cfg(feature = "remote-schemas")]
+mod remote;
 pub mod schema;
 mod ser;
 

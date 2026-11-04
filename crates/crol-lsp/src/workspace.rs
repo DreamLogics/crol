@@ -183,7 +183,12 @@ pub(crate) fn evaluate(
         .or_else(|| root.and_then(Project::find));
     let mut check = CheckOptions::default();
     if let Some(project_path) = &project_path {
-        match load_project(&mut snapshot, project_path, &canonical_open) {
+        match load_project(
+            &mut snapshot,
+            project_path,
+            &canonical_open,
+            settings.remote_schemas,
+        ) {
             Ok((schema, root_type, options)) => {
                 snapshot.schema = schema;
                 snapshot.root_type = root_type;
@@ -221,7 +226,7 @@ pub(crate) fn evaluate(
         let schema = if is_project_file {
             Some(Ok(crol::schema::build::<Project>()))
         } else {
-            document_schema(text, path)
+            document_schema(text, path, settings.remote_schemas)
         };
         match schema {
             Some(Ok(schema)) => {
@@ -267,8 +272,9 @@ pub(crate) fn evaluate(
 fn document_schema(
     text: &str,
     path: &Path,
+    fetch: bool,
 ) -> Option<Result<SchemaFile, (crol_syntax::TextRange, String)>> {
-    let (range, schema_path) = crol::schema::attribute_path(text, path)?;
+    let (range, schema_path) = crol::schema::attribute_path(text, path, fetch)?;
     Some(
         schema_path
             .and_then(SchemaFile::read)
@@ -282,6 +288,7 @@ fn load_project(
     snapshot: &mut Snapshot,
     project_path: &Path,
     open: &HashMap<PathBuf, &String>,
+    fetch: bool,
 ) -> Result<(Option<SchemaFile>, Option<String>, CheckOptions), String> {
     let project = Project::read(project_path).map_err(|e| e.to_string())?;
     let dir = project_path
@@ -319,7 +326,10 @@ fn load_project(
         });
     }
     snapshot.options = options;
-    let schema = match project.schema_path(&dir).map_err(|e| e.to_string())? {
+    let schema = match project
+        .schema_path(&dir, fetch)
+        .map_err(|e| e.to_string())?
+    {
         Some(path) => Some(SchemaFile::read(&path).map_err(|e| e.to_string())?),
         None => None,
     };

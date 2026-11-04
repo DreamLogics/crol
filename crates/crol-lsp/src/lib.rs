@@ -53,6 +53,9 @@ pub struct Settings {
     pub max_contexts_in_hover: usize,
     /// A project file, overriding the search from the workspace folder.
     pub project: Option<PathBuf>,
+    /// Whether schemas named by URL or crate may be fetched; without it,
+    /// only cached copies and local crates are used. Default: on.
+    pub remote_schemas: bool,
 }
 
 impl Default for Settings {
@@ -63,6 +66,7 @@ impl Default for Settings {
             debounce_ms: 150,
             max_contexts_in_hover: 8,
             project: None,
+            remote_schemas: true,
         }
     }
 }
@@ -87,6 +91,9 @@ impl Settings {
         }
         if let Some(project) = json.get("project").and_then(Json::as_str) {
             self.project = Some(PathBuf::from(project));
+        }
+        if let Some(on) = json.get("remote_schemas").and_then(Json::as_bool) {
+            self.remote_schemas = on;
         }
     }
 }

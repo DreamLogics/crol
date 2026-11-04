@@ -188,16 +188,16 @@ impl Project {
         Ok(variants)
     }
 
-    /// The schema file, for a schema given as a module path; URLs and
-    /// crates are not supported yet.
-    pub fn schema_path(&self, dir: &Path) -> Result<Option<PathBuf>, Error> {
+    /// The schema file, for a project in `dir`. A URL or crate is resolved
+    /// as [`crate::schema::resolve_remote`] does, with `fetch`.
+    pub fn schema_path(&self, dir: &Path, fetch: bool) -> Result<Option<PathBuf>, Error> {
         let Some(schema) = &self.schema else {
             return Ok(None);
         };
         if schema.starts_with("https://") || schema.starts_with("crate:") {
-            return Err(Error::new(format!(
-                "project: schemas from URLs and crates are not supported yet: `{schema}`"
-            )));
+            return crate::schema::resolve_remote(schema, dir, fetch)
+                .map(Some)
+                .map_err(|e| Error::new(format!("project: {e}")));
         }
         let module = if schema.starts_with("::") {
             schema.clone()

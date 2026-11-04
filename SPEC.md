@@ -411,7 +411,17 @@ Config {
 - A remote schema (a URL, or a crate downloaded from crates.io) is
   fetched over HTTPS only, cached, and used from the cache when
   offline. The language server's `remote_schemas` setting
-  (default on) turns fetching off.
+  (default on) and `crol --offline` turn fetching off; cached copies
+  and local crates are still used.
+- **The cache** is `CROL_CACHE_DIR` if set, else `crol` in the platform's
+  cache directory (`$XDG_CACHE_HOME` or `~/.cache`, `~/Library/Caches`,
+  `%LOCALAPPDATA%`). A URL is fetched again once per process (each
+  `crol` run, each language server session); when that fails, the
+  cached copy is used. A crate's schema is downloaded once per version,
+  since published versions do not change; only the version list is
+  fetched again. Only the schema file is kept, never the package.
+- Fetching needs the `remote-schemas` feature of `crol`, which
+  `crol-cli` and `crol-lsp` enable by default.
 - At most one `schema` attribute per document.
 
 **`type(Name)`** gives the type name of a value-mode document written as
@@ -1852,7 +1862,8 @@ defaults and ends those blocks with `..`, so it stays readable.
 | `crol lsp` | run the language server on standard input and output (section 12.5) |
 
 Common flags: `--discrete a,b`, `--group a,b,c` (repeatable), `--parent child=parent`, `--color auto|always|never`,
-`--message-format human|json`, `--project <file>`, `--schema <file>`.
+`--message-format human|json`, `--project <file>`, `--schema <file>`,
+`--offline` (section 4.1).
 Without layer arguments, every command that needs layers reads them, with
 the variants and options, from the project file.
 

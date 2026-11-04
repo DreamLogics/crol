@@ -34,6 +34,11 @@ pub(crate) struct InputArgs {
     /// A schema file to check the data against.
     #[arg(long, value_name = "FILE")]
     schema: Option<PathBuf>,
+
+    /// Fetch no schemas named by URL or crate; use cached copies and local
+    /// crates only.
+    #[arg(long)]
+    offline: bool,
 }
 
 impl InputArgs {
@@ -219,7 +224,7 @@ pub(crate) fn inputs(
         check.require_complete = project_options.require_complete;
         root.clone_from(&project.root);
         if schema_path.is_none() {
-            match project.schema_path(&project_dir) {
+            match project.schema_path(&project_dir, !args.offline) {
                 Ok(path) => schema_path = path,
                 Err(error) => return fail(reporter, error.to_string()),
             }
@@ -234,7 +239,7 @@ pub(crate) fn inputs(
         let mut named: Vec<PathBuf> = Vec::new();
         for layer in composer.layers() {
             for (_, display, text) in layer.documents() {
-                match crol::schema::attribute_path(text, Path::new(display)) {
+                match crol::schema::attribute_path(text, Path::new(display), !args.offline) {
                     Some((_, Ok(path))) => {
                         let path = path.canonicalize().unwrap_or(path);
                         if !named.contains(&path) {

@@ -15,6 +15,11 @@ readme = "README.md"
 name = "crol"
 path = "src/main.rs"
 
+[features]
+default = ["remote-schemas"]
+# Schemas from URLs and crates (`SPEC.md` 4.1).
+remote-schemas = ["crol-lsp/remote-schemas"]
+
 [lints]
 workspace = true
 

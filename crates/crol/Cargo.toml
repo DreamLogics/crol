@@ -14,13 +14,30 @@ readme = "README.md"
 [features]
 # `#[derive(Schema)]` and `#[derive(VariantName)]`.
 derive = ["dep:crol-derive"]
+# Schemas from URLs and crates (`SPEC.md` 4.1), for tools.
+remote-schemas = [
+    "dep:blake3",
+    "dep:flate2",
+    "dep:semver",
+    "dep:serde_json",
+    "dep:tar",
+    "dep:toml",
+    "dep:ureq",
+]
 
 [dependencies]
+blake3 = { workspace = true, optional = true }
 crol-derive = { workspace = true, optional = true }
 crol-eval.workspace = true
 crol-syntax.workspace = true
+flate2 = { workspace = true, optional = true }
 indexmap = { workspace = true, features = ["serde"] }
+semver = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, optional = true }
+tar = { workspace = true, optional = true }
+toml = { workspace = true, optional = true }
+ureq = { workspace = true, optional = true }
 
 [dev-dependencies]
 crol-derive.workspace = true
