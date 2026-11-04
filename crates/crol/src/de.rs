@@ -13,6 +13,7 @@ use crol_eval::{Key, Keyed, Sources, Value, ValueKind};
 
 use crate::error::Error;
 use crate::id::{ID_TOKEN, IdUse};
+use crate::raw::RAW_TOKEN;
 
 /// Options of the deserializer (`SPEC.md` 10.7's `CrolConfig` fields).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -412,6 +413,15 @@ impl<'a> de::Deserializer<'a> for ValueDeserializer<'a> {
         name: &'static str,
         visitor: V,
     ) -> Result<V::Value, Error> {
+        if name == RAW_TOKEN {
+            // The value as CROL text, which `RawValue` reads back.
+            let text = crol_eval::print::to_text(self.value);
+            let inner: de::value::StringDeserializer<Error> =
+                de::value::StringDeserializer::new(text);
+            return visitor
+                .visit_newtype_struct(inner)
+                .map_err(|e| self.attach(e));
+        }
         if name == ID_TOKEN {
             let ValueKind::Id(id) = &self.value.kind else {
                 return Err(self.expected("an id (`@name`)"));
@@ -499,7 +509,7 @@ impl<'a> de::Deserializer<'a> for ValueDeserializer<'a> {
     fn deserialize_enum<V: Visitor<'a>>(
         self,
         name: &'static str,
-        _variants: &'static [&'static str],
+        variants: &'static [&'static str],
         visitor: V,
     ) -> Result<V::Value, Error> {
         let variant = match &self.value.kind {
@@ -510,6 +520,12 @@ impl<'a> de::Deserializer<'a> for ValueDeserializer<'a> {
             }) => variant.as_str(),
             _ => return Err(self.expected(&format!("a `{name}` variant"))),
         };
+        if !variants.contains(&variant) {
+            return Err(self.error(format!(
+                "`{name}` has no variant `{variant}`; its variants are `{}`",
+                variants.join("`, `")
+            )));
+        }
         visitor
             .visit_enum(EnumDeserializer {
                 parent: &self,

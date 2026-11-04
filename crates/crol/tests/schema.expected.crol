@@ -1,0 +1,49 @@
+#![schema("crate:crol@1")]
+
+Schema {
+    format: 1,
+    root: "schema::Definition",
+    types: {
+        "schema::Definition": Enum {
+            name: "Definition",
+            doc: "Everything the data can define.",
+            source: ("crates/crol/tests/schema.rs", 50),
+            variants: {
+                Service: { shape: Newtype(Named("schema::Service")), .. },
+                Volume: { shape: Newtype(Named("schema::Volume")), .. },
+            },
+            ..,
+        },
+        "schema::Limits": Struct {
+            name: "Limits",
+            doc: "How much a service may use.",
+            source: ("crates/crol/tests/schema.rs", 9),
+            fields: { cpu: { ty: F64, .. }, memory_mb: { ty: U32, .. } },
+            default: Some(Limits { cpu: 1.0, memory_mb: 512 }),
+            ..,
+        },
+        "schema::Service": Struct {
+            name: "Service",
+            doc: "A service that runs one container image.",
+            source: ("crates/crol/tests/schema.rs", 27),
+            fields: {
+                replicas: { ty: U32, doc: "Number of copies to run.", .. },
+                depends_on: { ty: List(Id(["schema::Service", "schema::Volume"])), .. },
+                tags: { ty: List(String), default: Value([]), .. },
+                limits: {
+                    ty: Named("schema::Limits"),
+                    default: Value(Limits { cpu: 1.0, memory_mb: 512 }),
+                    ..,
+                },
+                url: { ty: Option(String), default: Value(None), .. },
+            },
+            ..,
+        },
+        "schema::Volume": Struct {
+            name: "Volume",
+            source: ("crates/crol/tests/schema.rs", 45),
+            fields: { size_gb: { ty: U32, .. } },
+            ..,
+        },
+    },
+}

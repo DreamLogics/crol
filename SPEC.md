@@ -2271,6 +2271,14 @@ only in major releases.
    would cover this without comparisons in the language, but
    `min(a, b)` already parses as a named tuple, so they need their own
    syntax.
+2. **Completeness and serde aliases.** serde gives the deserializer one
+   list of the names a struct accepts, aliases included, without saying
+   which names belong to one field. So the completeness rule (10.2) asks
+   for every alias of a field that is written by another name, unless the
+   block ends with `..`; `crol::check`, which reads the schema, does not.
+   Options: check completeness only with a schema, treat a struct whose
+   fields have aliases as allowing omissions, or forbid `alias` on types
+   loaded from CROL.
 
 ---
 

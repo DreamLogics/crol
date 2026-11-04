@@ -24,6 +24,11 @@ indexmap = "2.14"
 blake3 = "1.8"
 serde = "1.0.228"
 
+# crol-derive only.
+proc-macro2 = "1.0.106"
+quote = "1.0.40"
+syn = { version = "2.0.100", features = ["full"] }
+
 # crol-cli only.
 clap = { version = "4.6", features = ["derive"] }
 codespan-reporting = "0.13"
