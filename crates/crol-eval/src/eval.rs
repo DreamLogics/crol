@@ -93,18 +93,6 @@ enum Job {
 }
 
 impl Cell {
-    fn new(job: Job, location: Option<Location>) -> Lazy {
-        let expr = match &job {
-            Job::Expr { expr, .. } => Some(*expr),
-            Job::Path { .. } => None,
-        };
-        Rc::new(Cell {
-            state: RefCell::new(State::Pending(Box::new(job))),
-            expr,
-            location,
-        })
-    }
-
     fn done(shaped: Rc<Shaped>) -> Lazy {
         Rc::new(Cell {
             state: RefCell::new(State::Done(Ok(shaped))),
@@ -401,6 +389,19 @@ pub(crate) struct Evaluator<'ir> {
     base_created: Vec<usize>,
     /// Where `&default` finds defaults.
     defaults: Option<&'ir dyn DefaultsProvider>,
+    /// Every cell that starts pending. Cells can hold each other in a
+    /// cycle (a value bind never read holds its job, whose binds hold the
+    /// cell; `a: &self` holds itself), so their states are cleared when
+    /// the evaluator is dropped.
+    cells: RefCell<Vec<Lazy>>,
+}
+
+impl Drop for Evaluator<'_> {
+    fn drop(&mut self) {
+        for cell in self.cells.get_mut().drain(..) {
+            *cell.state.borrow_mut() = State::Running;
+        }
+    }
 }
 
 /// What the entries of a block are evaluated in.
@@ -496,12 +497,14 @@ pub(crate) fn evaluate(ir: &Ir, root: ExprId) -> (Option<Value>, Vec<Diagnostic>
         share: false,
         base_created: Vec::new(),
         defaults: None,
+        cells: RefCell::new(Vec::new()),
     };
     let root_cell = Rc::new(Cell {
         state: RefCell::new(State::Running),
         expr: Some(root),
         location: None,
     });
+    evaluator.cells.borrow_mut().push(root_cell.clone());
     let location = root_location(&root_cell);
     *root_cell.state.borrow_mut() = State::Pending(Box::new(Job::Expr {
         expr: root,
@@ -522,7 +525,7 @@ pub(crate) fn evaluate(ir: &Ir, root: ExprId) -> (Option<Value>, Vec<Diagnostic>
     });
     let span = ir.exprs[root].span;
     let value = evaluator.full_value(&root_cell, span, &mut Vec::new()).ok();
-    (value, evaluator.diagnostics)
+    (value, std::mem::take(&mut evaluator.diagnostics))
 }
 
 /// Which keys a context may have, compared with the base (`SPEC.md` 8.5).
@@ -771,6 +774,7 @@ pub(crate) fn evaluate_data(
         share: false,
         base_created: Vec::new(),
         defaults: input.defaults,
+        cells: RefCell::new(Vec::new()),
     };
     // Errors in the static structure of the chains are reported once.
     evaluator.check_chains(input);
@@ -1019,6 +1023,7 @@ pub(crate) fn explain(
         share: false,
         base_created: Vec::new(),
         defaults: input.defaults,
+        cells: RefCell::new(Vec::new()),
     };
     let id = evaluator.context_state(&context);
     Ok(requests
@@ -1313,6 +1318,21 @@ impl<'a> DataPlan<'a> {
 }
 
 impl Evaluator<'_> {
+    /// A pending cell, which the evaluator keeps (see `cells`).
+    fn cell(&self, job: Job, location: Option<Location>) -> Lazy {
+        let expr = match &job {
+            Job::Expr { expr, .. } => Some(*expr),
+            Job::Path { .. } => None,
+        };
+        let cell = Rc::new(Cell {
+            state: RefCell::new(State::Pending(Box::new(job))),
+            expr,
+            location,
+        });
+        self.cells.borrow_mut().push(cell.clone());
+        cell
+    }
+
     /// Reports the errors in the chains that do not depend on the context:
     /// two definitions under one condition in one layer, and patches from
     /// several documents of one layer (`SPEC.md` 7.2, 8.3).
@@ -1430,6 +1450,7 @@ impl Evaluator<'_> {
             expr: None,
             location: None,
         });
+        self.cells.borrow_mut().push(root_cell.clone());
         let root = root_location(&root_cell);
         // Root entries are in the root, so `&self` there is the root.
         let chain = Some(Rc::new(ChainLink {
@@ -1572,7 +1593,7 @@ impl Evaluator<'_> {
                     value: entry,
                     span: op.span,
                 });
-                let cell = Cell::new(
+                let cell = self.cell(
                     Job::Path {
                         base,
                         recipe,
@@ -1611,7 +1632,7 @@ impl Evaluator<'_> {
                         (Some((_, cell)), SetOp::Set) => Below::Value(cell.clone()),
                         _ => Below::Missing,
                     };
-                    let cell = Cell::new(
+                    let cell = self.cell(
                         Job::Expr {
                             expr: op.value.expect("a set has a value"),
                             env: Env {
@@ -1666,6 +1687,7 @@ impl Evaluator<'_> {
                 cell: cell.clone(),
                 next: vbinds,
             }));
+            self.cells.borrow_mut().push(cell.clone());
             cells.push((bind, cell));
         }
         for (bind, cell) in cells {
@@ -1923,7 +1945,7 @@ impl Evaluator<'_> {
     ) -> Lazy {
         match recipe {
             Recipe::Fixed => value.clone(),
-            Recipe::Entry(entry) => Cell::new(
+            Recipe::Entry(entry) => self.cell(
                 Job::Expr {
                     expr: entry.expr,
                     env: Env {
@@ -1940,7 +1962,7 @@ impl Evaluator<'_> {
             Recipe::Path(path) => {
                 let base =
                     self.instantiate(&path.base, &path.base_value, chain, here.clone(), context);
-                Cell::new(
+                self.cell(
                     Job::Path {
                         base,
                         recipe: path.clone(),
@@ -2041,7 +2063,7 @@ impl Evaluator<'_> {
                     outer_below: Below::Missing,
                     ..env.clone()
                 };
-                Cell::new(Job::Expr { expr: element, env }, here)
+                self.cell(Job::Expr { expr: element, env }, here)
             })
             .collect()
     }

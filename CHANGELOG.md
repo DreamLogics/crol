@@ -83,3 +83,5 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 - The parser reports tokens it skips while recovering, as in
   `<a * b>`; the formatter used to accept and garble them.
 - The formatter keeps the space in `1 .0`, which would become a float.
+- Evaluation no longer leaks memory through cells that hold each other:
+  a value bind that is never read, or a value that holds itself.
