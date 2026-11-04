@@ -32,12 +32,12 @@ web.tags: & + ["local"],
 The full design is in [`SPEC.md`](SPEC.md).
 
 > **Status:** early development. The format and the APIs will change before
-> 1.0. Milestones 1 to 7 are done: the parser and formatter, single
-> documents, layers and variants with `CrolComposer`, provenance, the
-> tree-sitter grammar and the Zed extension (syntax), and schemas with
-> `#[derive(crol::Schema)]`, `crol::check`, `&default` and project files.
-> Next is the language server. See the
-> [milestones](SPEC.md#143-milestones).
+> 1.0. Milestones 1 to 8 are done, and parts of 9 and 10: the parser and
+> formatter, single documents, layers and variants with `CrolComposer`,
+> provenance, the tree-sitter grammar, schemas with
+> `#[derive(crol::Schema)]`, `crol::check`, `&default` and project files,
+> and the language server with the Zed extension. See the
+> [milestones](SPEC.md#143-milestones) and the CHANGELOG.
 
 ## Crates
 
@@ -47,10 +47,10 @@ The full design is in [`SPEC.md`](SPEC.md).
 | [`crol-syntax`](crates/crol-syntax) | lexer, error-recovering parser, lossless syntax tree, typed AST, formatter | done |
 | [`crol-eval`](crates/crol-eval) | layers, chains, the evaluator, variants, fingerprints | done |
 | [`crol-derive`](crates/crol-derive) | `#[derive(Schema)]` and `#[derive(VariantName)]` | done |
-| [`crol-lsp`](crates/crol-lsp) | the language server, as a library | planned |
-| [`crol-cli`](crates/crol-cli) | the `crol` command-line tool | all but `lsp` |
+| [`crol-lsp`](crates/crol-lsp) | the language server, as a library | diagnostics, symbols, formatting, hover, completion, definition |
+| [`crol-cli`](crates/crol-cli) | the `crol` command-line tool | done |
 | [`tree-sitter-crol`](tree-sitter-crol) | the tree-sitter grammar and queries | done |
-| [`editors/zed`](editors/zed) | the Zed extension | syntax |
+| [`editors/zed`](editors/zed) | the Zed extension | syntax and language server |
 
 ## Development
 

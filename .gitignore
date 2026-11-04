@@ -19,3 +19,8 @@
 /tree-sitter-crol/*.dylib
 /tree-sitter-crol/*.wasm
 /tree-sitter-crol/node_modules
+
+# The Zed extension's build
+/editors/zed/target
+/editors/zed/Cargo.lock
+/editors/zed/extension.wasm

@@ -130,3 +130,16 @@ jobs:
           for query in highlights brackets indents outline textobjects; do
             diff -u "tree-sitter-crol/queries/$query.scm" "editors/zed/languages/crol/$query.scm"
           done
+
+  zed:
+    name: Zed extension
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: editors/zed
+      - run: cargo build --manifest-path editors/zed/Cargo.toml --target wasm32-wasip2

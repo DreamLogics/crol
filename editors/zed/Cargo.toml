@@ -1,0 +1,17 @@
+[package]
+name = "zed-crol"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "The Zed extension for CROL"
+
+# Not part of the crates' workspace: it builds to WebAssembly.
+[workspace]
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+zed_extension_api = "0.7.0"

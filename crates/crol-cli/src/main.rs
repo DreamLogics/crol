@@ -61,6 +61,8 @@ enum Command {
     Fmt(fmt::Args),
     /// Convert a RON value file to a CROL value document, on standard output.
     FromRon(from_ron::Args),
+    /// Run the language server on standard input and output.
+    Lsp,
 }
 
 fn main() -> ExitCode {
@@ -73,6 +75,13 @@ fn main() -> ExitCode {
         Command::Fingerprint(args) => fingerprint::run(&args, &mut reporter),
         Command::Fmt(args) => fmt::run(&args, &mut reporter),
         Command::FromRon(args) => from_ron::run(&args, &mut reporter),
+        Command::Lsp => match crol_lsp::serve_stdio() {
+            Ok(()) => true,
+            Err(error) => {
+                reporter.error(&format!("language server: {error}"));
+                false
+            }
+        },
     };
     if ok {
         ExitCode::SUCCESS
