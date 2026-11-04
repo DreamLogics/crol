@@ -903,7 +903,7 @@ impl SchemaDefaults {
 
 /// Whether a value is an `Option`'s `None`.
 fn is_none(value: &crate::Value) -> bool {
-    matches!(&value.kind, crate::ValueKind::UnitName(name) if name == "None")
+    matches!(&value.kind, crate::ValueKind::UnitName(name) if &**name == "None")
 }
 
 /// The named type a type expression stands for, through `Option`.
@@ -1028,7 +1028,7 @@ pub fn recorded_default<T: Serialize + ?Sized>(value: &T) -> FieldDefault {
 /// The default of an `Option` field without `#[serde(default)]`: `None`.
 pub fn none_value() -> FieldDefault {
     FieldDefault::Value(RawValue(crate::Value::new(
-        crate::ValueKind::UnitName("None".to_owned()),
+        crate::ValueKind::UnitName("None".into()),
         crate::Span::detached(),
     )))
 }

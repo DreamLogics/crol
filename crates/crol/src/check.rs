@@ -123,7 +123,7 @@ pub fn check_value(
 pub fn value_type(value: &Value, schema: &SchemaFile) -> Option<String> {
     let name = match &value.kind {
         ValueKind::Keyed(keyed) => keyed.name.as_deref(),
-        ValueKind::NamedTuple(name, _) | ValueKind::UnitName(name) => Some(name.as_str()),
+        ValueKind::NamedTuple(name, _) | ValueKind::UnitName(name) => Some(&**name),
         _ => None,
     }?;
     let mut found = schema.by_name(name).map(|(path, _)| path.to_owned());
@@ -267,8 +267,8 @@ impl Checker<'_> {
                 }
             }
             TypeExpr::Option(inner) => match &value.kind {
-                ValueKind::UnitName(n) if n == "None" => true,
-                ValueKind::NamedTuple(n, items) if n == "Some" && items.len() == 1 => {
+                ValueKind::UnitName(n) if &**n == "None" => true,
+                ValueKind::NamedTuple(n, items) if &**n == "Some" && items.len() == 1 => {
                     self.value(&items[0], inner, path, None);
                     true
                 }
@@ -353,8 +353,8 @@ impl Checker<'_> {
                     return self.expected(value, &format!("`{name} {{ ... }}`"), path);
                 };
                 if let Some(written) = &keyed.name
-                    && written != name
-                    && Some(written.as_str()) != variant
+                    && **written != **name
+                    && Some(&**written) != variant
                 {
                     return self.error(
                         value.span,
@@ -443,7 +443,9 @@ impl Checker<'_> {
                 }
             }
             TypeDef::Newtype { name, inner, .. } => match &value.kind {
-                ValueKind::NamedTuple(written, items) if written == name && items.len() == 1 => {
+                ValueKind::NamedTuple(written, items)
+                    if **written == **name && items.len() == 1 =>
+                {
                     self.value(&items[0], inner, path, None);
                 }
                 _ => self.value(value, inner, path, None),
@@ -451,7 +453,7 @@ impl Checker<'_> {
             TypeDef::Transparent { inner, .. } => self.value(value, inner, path, None),
             TypeDef::TupleStruct { name, fields, .. } => {
                 let items = match &value.kind {
-                    ValueKind::NamedTuple(written, items) if written == name => items,
+                    ValueKind::NamedTuple(written, items) if **written == **name => items,
                     ValueKind::Tuple(items) => items,
                     _ => return self.expected(value, &format!("`{name}(...)`"), path),
                 };
@@ -468,7 +470,7 @@ impl Checker<'_> {
             }
             TypeDef::UnitStruct { name, .. } => {
                 if !matches!(&value.kind, ValueKind::Unit)
-                    && !matches!(&value.kind, ValueKind::UnitName(n) if n == name)
+                    && !matches!(&value.kind, ValueKind::UnitName(n) if **n == **name)
                 {
                     self.expected(value, &format!("`{name}`"), path);
                 }
@@ -484,16 +486,16 @@ impl Checker<'_> {
                     // their shapes are not checked.
                     return;
                 }
-                let written = match &value.kind {
+                let written: &str = match &value.kind {
                     ValueKind::UnitName(v) | ValueKind::NamedTuple(v, _) => v,
                     ValueKind::Keyed(keyed) if keyed.name.is_some() => {
-                        keyed.name.as_ref().expect("checked to be there")
+                        keyed.name.as_deref().expect("checked to be there")
                     }
                     _ => return self.expected(value, &format!("a `{name}` variant"), path),
                 };
                 let Some((variant_name, variant)) = variants
                     .iter()
-                    .find(|(n, v)| *n == written || v.aliases.contains(written))
+                    .find(|(n, v)| *n == written || v.aliases.iter().any(|a| a == written))
                 else {
                     let names: Vec<&str> = variants.keys().map(String::as_str).collect();
                     return self.error(
@@ -570,7 +572,7 @@ impl Checker<'_> {
         }
         let target_name = match &target.kind {
             ValueKind::Keyed(keyed) => keyed.name.as_deref(),
-            ValueKind::NamedTuple(n, _) | ValueKind::UnitName(n) => Some(n.as_str()),
+            ValueKind::NamedTuple(n, _) | ValueKind::UnitName(n) => Some(&**n),
             _ => None,
         };
         let allowed: Vec<&str> = refers

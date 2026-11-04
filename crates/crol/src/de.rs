@@ -271,8 +271,8 @@ impl<'a> ValueDeserializer<'a> {
     /// The struct checks of `SPEC.md` 10.2.
     fn check_struct(&self, keyed: &Keyed, name: &str, fields: &[&str]) -> Result<(), Error> {
         if let Some(written) = &keyed.name
-            && written != name
-            && Some(written.as_str()) != self.variant
+            && &**written != name
+            && Some(&**written) != self.variant
         {
             return Err(self.error(format!("expected a `{name}`, found a `{written}`")));
         }
@@ -458,8 +458,8 @@ impl<'a> de::Deserializer<'a> for ValueDeserializer<'a> {
 
     fn deserialize_option<V: Visitor<'a>>(self, visitor: V) -> Result<V::Value, Error> {
         match &self.value.kind {
-            ValueKind::UnitName(name) if name == "None" => visitor.visit_none(),
-            ValueKind::NamedTuple(name, elements) if name == "Some" && elements.len() == 1 => {
+            ValueKind::UnitName(name) if &**name == "None" => visitor.visit_none(),
+            ValueKind::NamedTuple(name, elements) if &**name == "Some" && elements.len() == 1 => {
                 let inner = self.child(&elements[0], PathNode::Index(self.path.clone(), 0));
                 let inner = ValueDeserializer {
                     path: self.path.clone(),
@@ -495,7 +495,7 @@ impl<'a> de::Deserializer<'a> for ValueDeserializer<'a> {
     ) -> Result<V::Value, Error> {
         match &self.value.kind {
             ValueKind::Unit => {}
-            ValueKind::UnitName(written) if written == name => {}
+            ValueKind::UnitName(written) if &**written == name => {}
             _ => return Err(self.expected(&format!("`{name}`"))),
         }
         visitor.visit_unit().map_err(|e| self.attach(e))
@@ -527,7 +527,9 @@ impl<'a> de::Deserializer<'a> for ValueDeserializer<'a> {
                 .map_err(|e| self.attach(e));
         }
         match &self.value.kind {
-            ValueKind::NamedTuple(written, elements) if written == name && elements.len() == 1 => {
+            ValueKind::NamedTuple(written, elements)
+                if &**written == name && elements.len() == 1 =>
+            {
                 let inner = ValueDeserializer {
                     path: self.path.clone(),
                     ..self.child(&elements[0], PathNode::Root)
@@ -570,7 +572,7 @@ impl<'a> de::Deserializer<'a> for ValueDeserializer<'a> {
     ) -> Result<V::Value, Error> {
         match &self.value.kind {
             ValueKind::NamedTuple(written, elements)
-                if written == name && elements.len() == len =>
+                if &**written == name && elements.len() == len =>
             {
                 self.seq(elements, visitor)
             }
@@ -606,7 +608,7 @@ impl<'a> de::Deserializer<'a> for ValueDeserializer<'a> {
         visitor: V,
     ) -> Result<V::Value, Error> {
         let variant = match &self.value.kind {
-            ValueKind::UnitName(variant) | ValueKind::NamedTuple(variant, _) => variant.as_str(),
+            ValueKind::UnitName(variant) | ValueKind::NamedTuple(variant, _) => &**variant,
             ValueKind::Keyed(keyed) if keyed.name.is_some() => {
                 keyed.name.as_deref().unwrap_or_default()
             }

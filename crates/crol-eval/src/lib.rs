@@ -14,7 +14,7 @@
 //! let value = evaluation.value.unwrap();
 //! let ValueKind::Keyed(keyed) = &value.kind else { panic!() };
 //! let listen = &keyed.entries[&crol_eval::Key::Str("listen".into())];
-//! assert!(matches!(&listen.kind, ValueKind::String(s) if s == "0.0.0.0:8080"));
+//! assert!(matches!(&listen.kind, ValueKind::String(s) if &**s == "0.0.0.0:8080"));
 //! ```
 
 #![forbid(unsafe_code)]

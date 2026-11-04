@@ -88,7 +88,7 @@ fn at_path<'v>(value: &'v Value, path: &[&str]) -> Option<&'v Value> {
 
 fn unwrap_some(value: &Value) -> &Value {
     match &value.kind {
-        ValueKind::NamedTuple(name, items) if name == "Some" && items.len() == 1 => &items[0],
+        ValueKind::NamedTuple(name, items) if &**name == "Some" && items.len() == 1 => &items[0],
         _ => value,
     }
 }
@@ -229,7 +229,7 @@ impl<T: VariantName> Query<'_, T> {
     fn matches(&self, value: &Value) -> bool {
         let type_name = match &value.kind {
             ValueKind::Keyed(keyed) => keyed.name.as_deref(),
-            ValueKind::NamedTuple(name, _) | ValueKind::UnitName(name) => Some(name.as_str()),
+            ValueKind::NamedTuple(name, _) | ValueKind::UnitName(name) => Some(&**name),
             _ => None,
         };
         self.type_name

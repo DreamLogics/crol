@@ -57,7 +57,7 @@ fn strings(value: &Value) -> Vec<String> {
         ValueKind::List(items) => items
             .iter()
             .map(|item| match &item.kind {
-                ValueKind::String(s) => s.clone(),
+                ValueKind::String(s) => s.to_string(),
                 _ => panic!("expected a string"),
             })
             .collect(),
@@ -90,7 +90,7 @@ fn options(case: &Path) -> DataOptions {
             ("warn_cross_file_patches", ValueKind::Bool(b)) => options.warn_cross_file_patches = *b,
             ("max_contexts", ValueKind::Int(i)) => options.max_contexts = *i as usize,
             ("variant_keys", ValueKind::UnitName(rule)) => {
-                options.variant_keys = match rule.as_str() {
+                options.variant_keys = match &**rule {
                     "Any" => VariantKeys::Any,
                     "NoNewKeys" => VariantKeys::NoNewKeys,
                     "SameKeys" => VariantKeys::SameKeys,
@@ -100,10 +100,10 @@ fn options(case: &Path) -> DataOptions {
             ("variants", ValueKind::List(items)) => {
                 for item in items {
                     match &item.kind {
-                        ValueKind::NamedTuple(kind, args) if kind == "Grouped" => {
+                        ValueKind::NamedTuple(kind, args) if &**kind == "Grouped" => {
                             variants.add_grouped(strings(&args[0])).unwrap();
                         }
-                        ValueKind::NamedTuple(kind, args) if kind == "Discrete" => {
+                        ValueKind::NamedTuple(kind, args) if &**kind == "Discrete" => {
                             let ValueKind::String(name) = &args[0].kind else {
                                 panic!()
                             };

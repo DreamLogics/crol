@@ -157,7 +157,7 @@ impl Parser<'_> {
             }
             '{' => self.map(),
             '(' => self.parens(None),
-            '"' => Ok(value(ValueKind::String(self.string()?))),
+            '"' => Ok(value(ValueKind::String(self.string()?.into()))),
             '\'' => self.char(),
             'b' if is_raw_string(&self.rest()[1..]) || self.rest().starts_with("b\"") => {
                 self.bump();
@@ -172,7 +172,9 @@ impl Parser<'_> {
                     .collect();
                 Ok(value(ValueKind::List(bytes)))
             }
-            'r' if is_raw_string(self.rest()) => Ok(value(ValueKind::String(self.raw_string()?))),
+            'r' if is_raw_string(self.rest()) => {
+                Ok(value(ValueKind::String(self.raw_string()?.into())))
+            }
             c if c.is_ascii_digit() || matches!(c, '+' | '-' | '.') => self.number(),
             c if is_ident_start(c) => {
                 let start = self.pos;
@@ -193,7 +195,7 @@ impl Parser<'_> {
                 if self.peek() == Some('(') {
                     self.parens(Some(name))
                 } else {
-                    Ok(value(ValueKind::UnitName(name)))
+                    Ok(value(ValueKind::UnitName(name.into())))
                 }
             }
             c => self.fail(format!("unexpected `{c}`")),
@@ -239,9 +241,9 @@ impl Parser<'_> {
             self.skip_trivia()?;
             let key_pos = self.pos;
             let key = match self.value()?.kind {
-                ValueKind::String(s) => Key::Str(s.into()),
+                ValueKind::String(s) => Key::Str(s),
                 ValueKind::Int(i) => Key::Int(i),
-                ValueKind::UnitName(name) => Key::Str(name.into()),
+                ValueKind::UnitName(name) => Key::Str(name),
                 other => {
                     return Err((
                         key_pos,
@@ -285,7 +287,7 @@ impl Parser<'_> {
                 }
             }
             return Ok(value(ValueKind::Keyed(Box::new(Keyed {
-                name,
+                name: name.map(Into::into),
                 entries,
                 defaults: true,
                 defaulted: Default::default(),
@@ -293,7 +295,7 @@ impl Parser<'_> {
         }
         let elements = self.values(')')?;
         Ok(value(match name {
-            Some(name) => ValueKind::NamedTuple(name, elements),
+            Some(name) => ValueKind::NamedTuple(name.into(), elements),
             None if elements.is_empty() => ValueKind::Unit,
             None => ValueKind::Tuple(elements),
         }))

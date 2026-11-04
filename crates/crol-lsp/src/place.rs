@@ -94,8 +94,8 @@ impl<'a> Scope<'a> {
         };
         let value = features::value_in(self.evaluation, key, rest, &[])?;
         match value.kind {
-            ValueKind::Keyed(keyed) => keyed.name,
-            ValueKind::NamedTuple(name, _) | ValueKind::UnitName(name) => Some(name),
+            ValueKind::Keyed(keyed) => keyed.name.as_deref().map(str::to_owned),
+            ValueKind::NamedTuple(name, _) | ValueKind::UnitName(name) => Some(name.to_string()),
             _ => None,
         }
     }

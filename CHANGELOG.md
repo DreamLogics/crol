@@ -52,6 +52,9 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   contexts, and a context evaluated later no longer evaluates the base again.
 - **Breaking:** `Key::Str` holds an `Arc<str>` rather than a `String`, so that values
   with the same field share its name. Write `Key::Str("port".into())`.
+- **Breaking:** `ValueKind::String`, `Id`, `UnitName` and `NamedTuple`, and
+  `Keyed::name`, hold an `Arc<str>`, so that a value shares its text with what it was
+  evaluated from. Write `ValueKind::String("text".into())`.
 - **Breaking:** `ValueKind::Keyed` holds a `Box<Keyed>`, which makes every other value
   smaller.
 - **Breaking:** `~` merges deep: a block inside a patch merges with what the key

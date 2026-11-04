@@ -96,13 +96,15 @@ impl Filler<'_> {
                     && keyed
                         .name
                         .as_ref()
-                        .is_none_or(|w| w == name || Some(w.as_str()) == variant)
+                        .is_none_or(|w| **w == **name || Some(&**w) == variant)
                 {
                     self.fields(keyed, fields, default.as_ref(), *explicit_defaults, depth);
                 }
             }
             TypeDef::Newtype { name, inner, .. } => match &mut value.kind {
-                ValueKind::NamedTuple(written, items) if written == name && items.len() == 1 => {
+                ValueKind::NamedTuple(written, items)
+                    if **written == **name && items.len() == 1 =>
+                {
                     self.value(&mut items[0], inner, None, depth);
                 }
                 _ => self.value(value, inner, None, depth),
@@ -119,9 +121,9 @@ impl Filler<'_> {
             }
             TypeDef::Enum { repr, variants, .. } if *repr == Repr::External => {
                 let written = match &value.kind {
-                    ValueKind::NamedTuple(v, _) => v.clone(),
+                    ValueKind::NamedTuple(v, _) => v.to_string(),
                     ValueKind::Keyed(keyed) if keyed.name.is_some() => {
-                        keyed.name.clone().unwrap_or_default()
+                        keyed.name.as_deref().unwrap_or_default().to_owned()
                     }
                     _ => return,
                 };

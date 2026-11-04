@@ -149,7 +149,7 @@ impl<'c> ser::Serializer for ValueSerializer<'c> {
     }
 
     fn serialize_str(self, v: &str) -> Result<Value, Error> {
-        Ok(value(ValueKind::String(v.to_owned())))
+        Ok(value(ValueKind::String(v.into())))
     }
 
     fn serialize_bytes(self, v: &[u8]) -> Result<Value, Error> {
@@ -158,7 +158,7 @@ impl<'c> ser::Serializer for ValueSerializer<'c> {
     }
 
     fn serialize_none(self) -> Result<Value, Error> {
-        Ok(value(ValueKind::UnitName("None".to_owned())))
+        Ok(value(ValueKind::UnitName("None".into())))
     }
 
     fn serialize_some<T: Serialize + ?Sized>(self, v: &T) -> Result<Value, Error> {
@@ -167,7 +167,7 @@ impl<'c> ser::Serializer for ValueSerializer<'c> {
         if config.implicit_some {
             Ok(inner)
         } else {
-            Ok(value(ValueKind::NamedTuple("Some".to_owned(), vec![inner])))
+            Ok(value(ValueKind::NamedTuple("Some".into(), vec![inner])))
         }
     }
 
@@ -177,7 +177,7 @@ impl<'c> ser::Serializer for ValueSerializer<'c> {
 
     fn serialize_unit_struct(self, name: &'static str) -> Result<Value, Error> {
         if self.config.struct_names {
-            Ok(value(ValueKind::UnitName(name.to_owned())))
+            Ok(value(ValueKind::UnitName(name.into())))
         } else {
             Ok(value(ValueKind::Unit))
         }
@@ -189,7 +189,7 @@ impl<'c> ser::Serializer for ValueSerializer<'c> {
         _: u32,
         variant: &'static str,
     ) -> Result<Value, Error> {
-        Ok(value(ValueKind::UnitName(variant.to_owned())))
+        Ok(value(ValueKind::UnitName(variant.into())))
     }
 
     fn serialize_newtype_struct<T: Serialize + ?Sized>(
@@ -215,7 +215,7 @@ impl<'c> ser::Serializer for ValueSerializer<'c> {
             };
         }
         if config.struct_names {
-            Ok(value(ValueKind::NamedTuple(name.to_owned(), vec![inner])))
+            Ok(value(ValueKind::NamedTuple(name.into(), vec![inner])))
         } else {
             Ok(inner)
         }
@@ -229,10 +229,7 @@ impl<'c> ser::Serializer for ValueSerializer<'c> {
         v: &T,
     ) -> Result<Value, Error> {
         let inner = v.serialize(self)?;
-        Ok(value(ValueKind::NamedTuple(
-            variant.to_owned(),
-            vec![inner],
-        )))
+        Ok(value(ValueKind::NamedTuple(variant.into(), vec![inner])))
     }
 
     fn serialize_seq(self, len: Option<usize>) -> Result<SeqSerializer<'c>, Error> {
@@ -328,7 +325,7 @@ impl<'c> SeqSerializer<'c> {
             SeqKind::List => ValueKind::List(self.elements),
             SeqKind::Tuple if self.elements.is_empty() => ValueKind::Unit,
             SeqKind::Tuple => ValueKind::Tuple(self.elements),
-            SeqKind::Named(name) => ValueKind::NamedTuple(name.to_owned(), self.elements),
+            SeqKind::Named(name) => ValueKind::NamedTuple(name.into(), self.elements),
         })
     }
 }
@@ -415,7 +412,7 @@ impl<'c> MapSerializer<'c> {
 
     fn finish(self) -> Value {
         value(ValueKind::Keyed(Box::new(Keyed {
-            name: self.name,
+            name: self.name.map(Into::into),
             entries: self.entries,
             defaults: self.defaults,
             defaulted: Default::default(),

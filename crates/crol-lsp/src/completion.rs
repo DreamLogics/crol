@@ -336,8 +336,8 @@ fn documented(mut item: CompletionItem, doc: &str) -> CompletionItem {
 /// What a value is, in a word: its type name or kind.
 fn describe(value: &Value) -> Option<String> {
     match &value.kind {
-        ValueKind::Keyed(k) => k.name.clone(),
-        ValueKind::NamedTuple(n, _) | ValueKind::UnitName(n) => Some(n.clone()),
+        ValueKind::Keyed(k) => k.name.as_deref().map(str::to_owned),
+        ValueKind::NamedTuple(n, _) | ValueKind::UnitName(n) => Some(n.to_string()),
         _ => {
             let text = print::to_text(value);
             (text.len() <= 40).then_some(text)

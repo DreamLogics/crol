@@ -116,7 +116,7 @@ pub fn format_float(f: f64) -> String {
 #[derive(Debug, Clone, Default)]
 pub struct Keyed {
     /// The type name, `Service` in `Service { ... }`.
-    pub name: Option<String>,
+    pub name: Option<Arc<str>>,
     /// The entries, in insertion order.
     pub entries: IndexMap<Key, Value>,
     /// Set by `..`: fields the value does not hold take their defaults.
@@ -139,17 +139,17 @@ pub enum ValueKind {
     /// `'a'`
     Char(char),
     /// `"a"`
-    String(String),
+    String(Arc<str>),
     /// `@web`: a root key, as a value (`SPEC.md` 3.2).
-    Id(String),
+    Id(Arc<str>),
     /// `[a, b]`
     List(Vec<Value>),
     /// `(a, b)`, `(a,)`
     Tuple(Vec<Value>),
     /// `None`, `Red`: a unit variant or unit struct.
-    UnitName(String),
+    UnitName(Arc<str>),
     /// `Some(1)`, `Rgb(1, 2, 3)`
-    NamedTuple(String, Vec<Value>),
+    NamedTuple(Arc<str>, Vec<Value>),
     /// `{ ... }`, `Service { ... }`
     Keyed(Box<Keyed>),
 }

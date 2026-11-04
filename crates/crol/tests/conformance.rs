@@ -145,7 +145,7 @@ fn schema_of(case: &Path) -> Option<String> {
         .get(&crol_eval::Key::Str("schema".into()))?
         .kind
     {
-        crol_eval::ValueKind::String(name) => Some(name.clone()),
+        crol_eval::ValueKind::String(name) => Some(name.to_string()),
         _ => panic!("{}: `schema` is a string", case.display()),
     }
 }

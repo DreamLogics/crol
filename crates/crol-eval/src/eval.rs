@@ -671,14 +671,14 @@ fn shaped_from_value(value: &Value) -> Rc<Shaped> {
         ValueKind::Int(i) => Shape::Int(*i),
         ValueKind::Float(f) => Shape::Float(*f),
         ValueKind::Char(c) => Shape::Char(*c),
-        ValueKind::String(s) => Shape::Str(Arc::from(s.as_str())),
-        ValueKind::Id(s) => Shape::Id(Arc::from(s.as_str())),
-        ValueKind::UnitName(n) => Shape::UnitName(Arc::from(n.as_str())),
+        ValueKind::String(s) => Shape::Str(s.clone()),
+        ValueKind::Id(s) => Shape::Id(s.clone()),
+        ValueKind::UnitName(n) => Shape::UnitName(n.clone()),
         ValueKind::List(items) => Shape::List(cells(items)),
         ValueKind::Tuple(items) => Shape::Tuple(cells(items)),
-        ValueKind::NamedTuple(n, items) => Shape::Named(Arc::from(n.as_str()), cells(items)),
+        ValueKind::NamedTuple(n, items) => Shape::Named(n.clone(), cells(items)),
         ValueKind::Keyed(keyed) => Shape::Keyed(Box::new(KeyedShape {
-            name: keyed.name.as_deref().map(Arc::from),
+            name: keyed.name.clone(),
             slots: keyed
                 .entries
                 .iter()
@@ -1869,7 +1869,10 @@ impl Evaluator<'_> {
 
         // A key that cannot differ from the base shares the base's cell.
         let shared = (self.share && id > 0).then(|| {
-            (plan.varying(context), done_shape(&self.contexts[0].root_cell))
+            (
+                plan.varying(context),
+                done_shape(&self.contexts[0].root_cell),
+            )
         });
         let no_keys = KeyedShape::default();
         let mut slots = Vec::new();
@@ -3963,20 +3966,19 @@ impl Evaluator<'_> {
             Shape::Int(i) => ValueKind::Int(*i),
             Shape::Float(f) => ValueKind::Float(*f),
             Shape::Char(c) => ValueKind::Char(*c),
-            Shape::Str(s) => ValueKind::String(s.to_string()),
-            Shape::Id(s) => ValueKind::Id(s.to_string()),
-            Shape::UnitName(n) => ValueKind::UnitName(n.to_string()),
+            Shape::Str(s) => ValueKind::String(s.clone()),
+            Shape::Id(s) => ValueKind::Id(s.clone()),
+            Shape::UnitName(n) => ValueKind::UnitName(n.clone()),
             Shape::List(cells) => ValueKind::List(self.all_full_values(cells, span, visiting)?),
             Shape::Tuple(cells) => ValueKind::Tuple(self.all_full_values(cells, span, visiting)?),
-            Shape::Named(name, cells) => ValueKind::NamedTuple(
-                name.to_string(),
-                self.all_full_values(cells, span, visiting)?,
-            ),
+            Shape::Named(name, cells) => {
+                ValueKind::NamedTuple(name.clone(), self.all_full_values(cells, span, visiting)?)
+            }
             Shape::Keyed(keyed) => {
                 let cells: Vec<Lazy> = keyed.slots.values().map(|s| s.value.clone()).collect();
                 let values = self.all_full_values(&cells, span, visiting)?;
                 ValueKind::Keyed(Box::new(Keyed {
-                    name: keyed.name.as_ref().map(|n| n.to_string()),
+                    name: keyed.name.clone(),
                     entries: keyed.slots.keys().cloned().zip(values).collect(),
                     defaults: keyed.defaults,
                     defaulted: keyed.defaulted.clone(),

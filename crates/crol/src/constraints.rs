@@ -101,7 +101,7 @@ fn broken(
             };
             let type_name = match &target.kind {
                 ValueKind::Keyed(keyed) => keyed.name.as_deref(),
-                ValueKind::NamedTuple(n, _) | ValueKind::UnitName(n) => Some(n.as_str()),
+                ValueKind::NamedTuple(n, _) | ValueKind::UnitName(n) => Some(&**n),
                 _ => None,
             };
             (!type_name.is_some_and(|n| types.iter().any(|t| t == n)))
@@ -113,13 +113,13 @@ fn broken(
 /// `Some(x)`'s `x`, or the value itself.
 fn unwrap_some(value: &Value) -> &Value {
     match &value.kind {
-        ValueKind::NamedTuple(name, items) if name == "Some" && items.len() == 1 => &items[0],
+        ValueKind::NamedTuple(name, items) if &**name == "Some" && items.len() == 1 => &items[0],
         _ => value,
     }
 }
 
 fn is_none(value: &Value) -> bool {
-    matches!(&value.kind, ValueKind::UnitName(name) if name == "None")
+    matches!(&value.kind, ValueKind::UnitName(name) if &**name == "None")
 }
 
 /// Walks a value by its type, for what a schema's fields say.
@@ -168,7 +168,7 @@ impl Walker<'_> {
         };
         for key in keyed.entries.keys() {
             let kind = match key {
-                Key::Str(text) => ValueKind::String(text.to_string()),
+                Key::Str(text) => ValueKind::String(text.as_ref().into()),
                 Key::Int(i) => ValueKind::Int(*i),
             };
             self.apply(
@@ -620,7 +620,7 @@ impl SchemaDefaults {
                     if old != new {
                         return;
                     }
-                    match variants.get(&old).map(|v| &v.shape) {
+                    match variants.get(&*old).map(|v| &v.shape) {
                         Some(VariantShape::Struct(fields)) => {
                             self.sealed_fields(fields, before, after, path, found);
                         }
