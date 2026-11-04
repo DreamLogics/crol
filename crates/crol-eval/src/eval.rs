@@ -1069,13 +1069,7 @@ pub(crate) fn explain(
             span: op.span,
             layer: input.layer_names.get(op.layer).cloned().unwrap_or_default(),
             entry,
-            kind: if op.op.is_none() {
-                StepKind::Remove
-            } else if op.is_definition() {
-                StepKind::Definition
-            } else {
-                StepKind::Patch
-            },
+            kind: op.kind(),
             value: value.as_ref().and_then(|v| value_at_path(v, path)).cloned(),
         });
     }
