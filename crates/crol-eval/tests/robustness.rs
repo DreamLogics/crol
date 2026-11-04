@@ -299,6 +299,111 @@ fn random_layers_with_variants_round_trip_through_all_contexts() {
     );
 }
 
+impl Gen {
+    /// A value that reads other root keys, some of them only once it has been
+    /// spread elsewhere, which what a key reads does not show.
+    fn linked(&mut self, keys: usize) -> String {
+        let other = self.next() % keys as u64;
+        match self.next() % 8 {
+            0 => format!("&root.k{other}.a | 0"),
+            1 => format!("{{ ..(&root.k{other}.b | {{}}), a: 1 }}"),
+            2 => format!("{{ ..(&root.k{other} | {{}}), c: 2 }}"),
+            3 => "{ a: 1, b: { x: &parent.k1 | 3, y: &parent.a | 4 } }".to_owned(),
+            4 => format!("{{ a: {other}, b: {{ ..&t, y: &parent.a }} }}"),
+            5 => format!("{{ b: {{ x: &root.k{other}.b.x | 5 }} }}"),
+            6 => format!("& ~ {{ a: {other} }}"),
+            _ => format!("{other}"),
+        }
+    }
+
+    fn linked_document(&mut self) -> String {
+        let keys = 2 + self.next() as usize % 6;
+        let mut entries = vec!["t := { x: &parent.k0 | 6, z: 1 }".to_owned()];
+        for key in 0..keys {
+            entries.push(format!("k{key}: {}", self.linked(keys)));
+        }
+        entries.join(",\n")
+    }
+}
+
+/// What a data set evaluates to, as its base and its messages in order.
+fn evaluated(documents: &[&str]) -> (Option<crol_eval::Value>, Vec<String>) {
+    use crol_eval::{DataOptions, evaluate_data};
+
+    let mut sources = Sources::new();
+    let layers: Vec<Layer> = documents
+        .iter()
+        .enumerate()
+        .map(|(i, text)| {
+            let name = format!("{i}.crod");
+            Layer {
+                name: name.clone(),
+                documents: vec![(name.clone(), sources.add(name, *text))],
+            }
+        })
+        .collect();
+    let evaluation = evaluate_data(&sources, &layers, &DataOptions::default());
+    let messages = evaluation
+        .diagnostics
+        .iter()
+        .map(|d| format!("{:?} {}", d.span, d.message))
+        .collect();
+    (evaluation.value, messages)
+}
+
+/// Reading the whole root keeps every key's cells, as this key does without
+/// being evaluated.
+const KEEP_EVERY_KEY: &str = "zz: 1 | &root";
+
+/// The base without the key of [`KEEP_EVERY_KEY`].
+fn without_keeper(value: crol_eval::Value) -> crol_eval::Value {
+    let mut value = value;
+    if let crol_eval::ValueKind::Keyed(keyed) = &mut value.kind {
+        keyed
+            .entries
+            .shift_remove(&crol_eval::Key::Str("zz".into()));
+    }
+    value
+}
+
+#[test]
+fn a_freed_key_that_is_read_is_computed_again() {
+    // `b.x` is `&parent.y` in `a`, where it reads `a.y`; spread into `b`, it
+    // reads the root's `y`, which nothing shows to read.
+    let text = "y: { deep: 2 },\na: { inner: { x: &parent.y }, y: 1 },\nb: { ..&root.a.inner },";
+    let (value, messages) = evaluated(&[text]);
+    assert_eq!(messages, Vec::<String>::new());
+    let (kept, _) = evaluated(&[text, KEEP_EVERY_KEY]);
+    let (value, kept) = (value.unwrap(), without_keeper(kept.unwrap()));
+    assert!(value.identical(&kept), "{value:?}\n{kept:?}");
+}
+
+#[test]
+fn freeing_keys_changes_neither_values_nor_messages() {
+    let mut generator = Gen(0x0E71_C7ED);
+    let mut evaluated_well = 0;
+    for _ in 0..3_000 {
+        let text = generator.linked_document();
+        assert!(crol_syntax::parse(&text).errors().is_empty(), "{text}");
+        let (value, messages) = evaluated(&[&text]);
+        let (kept, kept_messages) = evaluated(&[&text, KEEP_EVERY_KEY]);
+        assert_eq!(messages, kept_messages, "{text}");
+        match (value, kept) {
+            (Some(value), Some(kept)) => {
+                let kept = without_keeper(kept);
+                assert!(value.identical(&kept), "{text}");
+                evaluated_well += 1;
+            }
+            (None, None) => {}
+            _ => panic!("only one of them evaluates:\n{text}"),
+        }
+    }
+    assert!(
+        evaluated_well > 300,
+        "only {evaluated_well} data sets evaluated without errors"
+    );
+}
+
 /// Inputs the fuzz targets (`fuzz/`) found problems with.
 #[test]
 fn fuzz_findings() {

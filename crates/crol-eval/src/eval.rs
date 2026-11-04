@@ -49,6 +49,9 @@ struct Cell {
     expr: Option<ExprId>,
     /// Where the value ends up, for "while evaluating ..." in diagnostics.
     location: Option<Location>,
+    /// The root key being evaluated when the cell was made (see
+    /// [`Evaluator::window`]).
+    born: u32,
 }
 
 enum State {
@@ -100,6 +103,9 @@ enum Job {
         context: usize,
         span: Span,
     },
+    /// A root key of the base: its chain is applied when it is read, so that
+    /// what it holds can be freed and made again (`Evaluator::full_base`).
+    Key(Arc<str>),
 }
 
 impl Cell {
@@ -108,6 +114,7 @@ impl Cell {
             state: RefCell::new(State::Done(Ok(shaped))),
             expr: None,
             location: None,
+            born: 0,
         })
     }
 }
@@ -504,6 +511,19 @@ pub(crate) struct Evaluator<'ir> {
     /// cell; `a: &self` holds itself), so their states are cleared when
     /// the evaluator is dropped.
     cells: RefCell<Vec<Lazy>>,
+    /// Whether the cells of a root key of the base are freed once its value
+    /// is computed.
+    evict: bool,
+    /// Which root key `Evaluator::full_base` is at, counting from 1; 0 outside
+    /// it. Cells made meanwhile are that key's, so they can be freed with it.
+    window: u32,
+    /// The cell of that root key.
+    window_cell: *const Cell,
+    /// Whether an older cell was computed meanwhile: what it holds outlives
+    /// the key, and may hold cells made meanwhile.
+    window_escaped: bool,
+    /// Whether a root key of the base was made again.
+    remade: bool,
 }
 
 impl Drop for Evaluator<'_> {
@@ -547,6 +567,8 @@ struct ContextState {
     /// Kept alive here; locations refer to it weakly.
     root_cell: Lazy,
     root: Location,
+    /// The chain of the root's entries.
+    chain: Chain,
     templates: VBinds,
 }
 
@@ -672,11 +694,17 @@ pub(crate) fn evaluate(ir: &Ir, root: ExprId) -> (Option<Value>, Vec<Diagnostic>
         init_defaults: false,
         merge_root: false,
         cells: RefCell::new(Vec::new()),
+        evict: false,
+        window: 0,
+        window_cell: std::ptr::null(),
+        window_escaped: false,
+        remade: false,
     };
     let root_cell = Rc::new(Cell {
         state: RefCell::new(State::Running),
         expr: Some(root),
         location: None,
+        born: 0,
     });
     evaluator.cells.borrow_mut().push(root_cell.clone());
     let location = root_location(&root_cell);
@@ -696,6 +724,7 @@ pub(crate) fn evaluate(ir: &Ir, root: ExprId) -> (Option<Value>, Vec<Diagnostic>
         context: Context::base(),
         root_cell: root_cell.clone(),
         root: location,
+        chain: None,
         templates: None,
     });
     let span = ir.exprs[root].span;
@@ -973,6 +1002,11 @@ pub(crate) fn evaluate_data(
         init_defaults: input.init_defaults,
         merge_root: input.merge_root,
         cells: RefCell::new(Vec::new()),
+        evict: false,
+        window: 0,
+        window_cell: std::ptr::null(),
+        window_escaped: false,
+        remade: false,
     };
     // Errors in the static structure of the chains are reported once.
     evaluator.check_chains(input);
@@ -992,21 +1026,24 @@ pub(crate) fn evaluate_data(
         }
     };
 
+    // What a context evaluates is not needed once it is done, unless a
+    // reference reads another context, which may be in a cell of the base.
+    let forget = input.known_base.is_none() && !plan.keys.values().any(|key| key.reads.switch);
+    // Nor is what a root key of the base holds, unless something reads it.
+    evaluator.evict = forget && !plan.keys.values().any(|key| key.reads.whole);
+
     // The base, in full, unless it is known: then what a context needs of it
     // is computed when it does (`SPEC.md` 8.1).
     let base_id = evaluator.context_state(&contexts[0]);
     let base_cell = evaluator.contexts[base_id].root_cell.clone();
     let base = match input.known_base {
         Some(known) => Some(std::borrow::Cow::Borrowed(known)),
-        None => evaluator
-            .full_value(&base_cell, Span::detached(), &mut Vec::new())
-            .ok()
-            .map(|mut base| {
-                // The root is written nowhere; what is wrong with it as a
-                // whole needs a place all the same.
-                base.span = input.root_span;
-                std::borrow::Cow::Owned(base)
-            }),
+        None => evaluator.full_base(&base_cell).ok().map(|mut base| {
+            // The root is written nowhere; what is wrong with it as a
+            // whole needs a place all the same.
+            base.span = input.root_span;
+            std::borrow::Cow::Owned(base)
+        }),
     };
     let base_failed = base.is_none() || !evaluator.diagnostics.is_empty();
     evaluator.share = !base_failed && !input.evaluate_every_key;
@@ -1016,13 +1053,11 @@ pub(crate) fn evaluate_data(
         Some(ValueKind::Keyed(keyed)) => keyed,
         _ => &empty_keyed,
     };
-    // What a context evaluates is not needed once it is done, unless a
-    // reference reads another context, which may be in a cell of the base.
-    let forget = input.known_base.is_none() && !plan.keys.values().any(|key| key.reads.switch);
 
     let mut per_context = Vec::with_capacity(contexts.len() - 1);
     for (index, context) in contexts.iter().enumerate().skip(1) {
         evaluator.steps = 0;
+        evaluator.remade = false;
         let cells_before = evaluator.cells.borrow().len();
         let contexts_before = evaluator.contexts.len();
         let id = evaluator.context_state(context);
@@ -1082,7 +1117,8 @@ pub(crate) fn evaluate_data(
         }
         ordered.extend(changes);
         record(&mut evaluator, index);
-        if forget {
+        // A root key of the base made again holds what the context made.
+        if forget && !evaluator.remade {
             evaluator.forget(cells_before, contexts_before);
         }
         if !failed {
@@ -1250,6 +1286,11 @@ pub(crate) fn explain(
         init_defaults: input.init_defaults,
         merge_root: input.merge_root,
         cells: RefCell::new(Vec::new()),
+        evict: false,
+        window: 0,
+        window_cell: std::ptr::null(),
+        window_escaped: false,
+        remade: false,
     };
     let id = evaluator.context_state(&context);
     Ok(requests
@@ -1590,12 +1631,13 @@ impl Evaluator<'_> {
     fn cell(&self, job: Job, location: Option<Location>) -> Lazy {
         let expr = match &job {
             Job::Expr { expr, .. } => Some(*expr),
-            Job::Path { .. } | Job::Merge { .. } => None,
+            Job::Path { .. } | Job::Merge { .. } | Job::Key(_) => None,
         };
         let cell = Rc::new(Cell {
             state: RefCell::new(State::Pending(Box::new(job))),
             expr,
             location,
+            born: self.window,
         });
         self.cells.borrow_mut().push(cell.clone());
         cell
@@ -1717,6 +1759,7 @@ impl Evaluator<'_> {
             state: RefCell::new(State::Running),
             expr: None,
             location: None,
+            born: 0,
         });
         self.cells.borrow_mut().push(root_cell.clone());
         let root = root_location(&root_cell);
@@ -1731,6 +1774,7 @@ impl Evaluator<'_> {
             context: context.clone(),
             root_cell: root_cell.clone(),
             root: root.clone(),
+            chain: chain.clone(),
             templates: None,
         });
         let plan = self.plan.expect("only data mode has more than one context");
@@ -1765,9 +1809,16 @@ impl Evaluator<'_> {
                 continue;
             }
             let order = plan.chain(key_plan, context);
-            if let Some((created, slot)) =
+            let cells_before = self.cells.borrow().len();
+            let diagnostics_before = self.diagnostics.len();
+            if let Some((created, mut slot)) =
                 self.apply_chain(key, &order, &chain, &root, &templates, id)
             {
+                // Without errors, the chain can be applied again when the
+                // key is read, and the cells made here are not needed.
+                if id == 0 && self.evict && self.diagnostics.len() == diagnostics_before {
+                    slot.value = self.key_cell(key, &slot.value, cells_before);
+                }
                 slots.push((created, Key::Str(key.to_string()), slot));
             } else if !order.is_empty() {
                 defaulted.insert(Key::Str(key.to_string()));
@@ -1792,6 +1843,107 @@ impl Evaluator<'_> {
             span: Span::detached(),
         })));
         id
+    }
+
+    /// A cell that applies the chain of a root key of the base when it is
+    /// read, in place of `cell`, the end of that chain, whose cells are those
+    /// since `cells_before`.
+    fn key_cell(&mut self, key: &Arc<str>, cell: &Lazy, cells_before: usize) -> Lazy {
+        let keyed = Rc::new(Cell {
+            state: RefCell::new(State::Pending(Box::new(Job::Key(key.clone())))),
+            expr: cell.expr,
+            location: cell.location.clone(),
+            born: 0,
+        });
+        let cells = self.cells.get_mut();
+        for cell in cells.drain(cells_before..) {
+            *cell.state.borrow_mut() = State::Running;
+        }
+        cells.push(keyed.clone());
+        keyed
+    }
+
+    /// Applies the chain of a root key of the base, and runs its last
+    /// operation here, as the job of the key's cell.
+    fn run_key(&mut self, key: &str) -> Eval<Rc<Shaped>> {
+        let plan = self.plan.expect("only data mode has root keys");
+        self.remade = true;
+        let base = &self.contexts[0];
+        let order = plan.chain(&plan.keys[key], &base.context);
+        let (root, chain, templates) = (
+            base.root.clone(),
+            base.chain.clone(),
+            base.templates.clone(),
+        );
+        let (_, slot) = self
+            .apply_chain(key, &order, &chain, &root, &templates, 0)
+            .expect("a key that exists had a chain without errors");
+        let state = std::mem::replace(&mut *slot.value.state.borrow_mut(), State::Running);
+        let State::Pending(job) = state else {
+            unreachable!("a chain ends in a new cell")
+        };
+        self.run(*job)
+    }
+
+    /// The base root in full. Keys are computed in order, and the cells of a
+    /// key that nothing reads are freed as soon as its value is computed, so
+    /// that the cells of every key are not alive at once. That is only a
+    /// matter of memory: a key read after all is computed again.
+    fn full_base(&mut self, root: &Lazy) -> Result<Value, Poisoned> {
+        if !self.evict {
+            return self.full_value(root, Span::detached(), &mut Vec::new());
+        }
+        let shaped = self.force(root, Span::detached()).map_err(|_| Poisoned)?;
+        let Shape::Keyed(keyed) = &shaped.shape else {
+            unreachable!("a data-mode root is keyed")
+        };
+        let dependents = &self.plan.expect("data mode").dependents;
+        let mut visiting = vec![(Rc::as_ptr(root), root.expr)];
+        let mut values = Vec::with_capacity(keyed.slots.len());
+        let mut failed = false;
+        for (key, slot) in &keyed.slots {
+            let cells_before = self.cells.borrow().len();
+            let diagnostics_before = self.diagnostics.len();
+            self.window += 1;
+            self.window_cell = Rc::as_ptr(&slot.value);
+            self.window_escaped = false;
+            match self.full_value(&slot.value, shaped.span, &mut visiting) {
+                Ok(value) => values.push(value),
+                Err(_) => failed = true,
+            }
+            let Key::Str(name) = key else {
+                unreachable!("root keys are strings")
+            };
+            if !self.window_escaped
+                && self.diagnostics.len() == diagnostics_before
+                && !dependents.contains_key(name.as_str())
+                && matches!(&*slot.value.state.borrow(), State::Done(_))
+            {
+                self.evict_key(name, &slot.value, cells_before);
+            }
+        }
+        self.window = 0;
+        self.window_cell = std::ptr::null();
+        if failed {
+            return Err(Poisoned);
+        }
+        let entries = keyed.slots.keys().cloned().zip(values).collect();
+        let keyed = Keyed {
+            name: None,
+            entries,
+            defaults: keyed.defaults,
+            defaulted: keyed.defaulted.clone(),
+        };
+        Ok(Value::new(ValueKind::Keyed(Box::new(keyed)), shaped.span))
+    }
+
+    /// Frees what a root key computed: its cell starts again, and the cells
+    /// since `cells_before` are its own.
+    fn evict_key(&mut self, key: &str, cell: &Lazy, cells_before: usize) {
+        *cell.state.borrow_mut() = State::Pending(Box::new(Job::Key(Arc::from(key))));
+        for cell in self.cells.get_mut().drain(cells_before..) {
+            *cell.state.borrow_mut() = State::Running;
+        }
     }
 
     /// The chain of blocks an operation is evaluated in: the root, and for an
@@ -1974,6 +2126,7 @@ impl Evaluator<'_> {
                 state: RefCell::new(State::Running),
                 expr: Some(ir.value_binds[bind].expr),
                 location: None,
+                born: self.window,
             });
             vbinds = Some(Rc::new(VBindLink {
                 id: bind,
@@ -2159,6 +2312,9 @@ impl Evaluator<'_> {
                 },
             }
         };
+        if cell.born != self.window && !std::ptr::eq(Rc::as_ptr(cell), self.window_cell) {
+            self.window_escaped = true;
+        }
         self.steps += 1;
         if self.steps == MAX_STEPS {
             let message = format!(
@@ -2218,6 +2374,7 @@ impl Evaluator<'_> {
     fn run(&mut self, job: Job) -> Eval<Rc<Shaped>> {
         match job {
             Job::Expr { expr, env } => self.eval(expr, &env),
+            Job::Key(key) => self.run_key(&key),
             Job::Path {
                 base,
                 recipe,
@@ -3138,7 +3295,7 @@ impl Evaluator<'_> {
             State::Done(Ok(shaped)) => Some(shaped.span),
             State::Pending(job) => match &**job {
                 Job::Expr { expr, .. } => Some(self.ir.exprs[*expr].span),
-                Job::Path { .. } => None,
+                Job::Path { .. } | Job::Key(_) => None,
                 Job::Merge { span, .. } => Some(*span),
             },
             _ => None,
