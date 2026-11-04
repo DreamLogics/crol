@@ -208,7 +208,7 @@ impl Writer<'_> {
             }
             ExprKind::Int(i) => {
                 self.out.push(2);
-                self.int(*i);
+                self.int(i.0);
             }
             ExprKind::Float(f) => {
                 self.out.push(3);
@@ -242,10 +242,10 @@ impl Writer<'_> {
                 self.out.push(10);
                 self.ids(items);
             }
-            ExprKind::Named(name, items) => {
+            ExprKind::Named(named) => {
                 self.out.push(11);
-                self.string(name);
-                self.ids(items);
+                self.string(&named.0);
+                self.ids(&named.1);
             }
             ExprKind::UnitName(name) => {
                 self.out.push(12);
@@ -641,14 +641,14 @@ impl Reader<'_> {
             1 => RefKind::SelfValue,
             2 => RefKind::Parent(self.id()?),
             3 => RefKind::Root,
-            4 => RefKind::Default(DefaultTarget {
+            4 => RefKind::Default(Box::new(DefaultTarget {
                 type_name: self.option(Self::string)?,
                 root_key: self.option(Self::string)?,
                 path: self.list(Self::string)?,
-            }),
+            })),
             5 => RefKind::Bind {
                 up: self.id()?,
-                target: self.selectors()?,
+                target: self.selectors()?.into(),
             },
             6 => RefKind::ValueBind(self.bind_id()?),
             _ => return Err(Corrupt),
@@ -659,7 +659,7 @@ impl Reader<'_> {
         let kind = match self.byte()? {
             0 => ExprKind::Unit,
             1 => ExprKind::Bool(self.flag()?),
-            2 => ExprKind::Int(self.int()?),
+            2 => ExprKind::Int(Wide(self.int()?)),
             3 => {
                 let raw: [u8; 8] = self.bytes(8)?.try_into().map_err(|_| Corrupt)?;
                 ExprKind::Float(f64::from_le_bytes(raw))
@@ -674,9 +674,9 @@ impl Reader<'_> {
             8 => ExprKind::Block(self.id()?.saturating_add(self.blocks)),
             9 => ExprKind::List(self.expr_ids()?),
             10 => ExprKind::Tuple(self.expr_ids()?),
-            11 => ExprKind::Named(self.string()?, self.expr_ids()?),
+            11 => ExprKind::Named(Box::new((self.string()?, self.expr_ids()?))),
             12 => ExprKind::UnitName(self.string()?),
-            13 => ExprKind::Path(self.expr_id()?, self.selectors()?),
+            13 => ExprKind::Path(self.expr_id()?, self.selectors()?.into()),
             14 => ExprKind::Neg(self.expr_id()?),
             15 => {
                 let op = match self.byte()? {
@@ -704,7 +704,7 @@ impl Reader<'_> {
                 if args.len() != kind.arity() {
                     return Err(Corrupt);
                 }
-                ExprKind::Macro(kind, args)
+                ExprKind::Macro(kind, args.into())
             }
             17 => ExprKind::Error,
             _ => return Err(Corrupt),
@@ -887,11 +887,18 @@ fn check(ir: &Ir, first_expr: usize, first_block: usize, first_bind: usize) -> R
                     return Err(Corrupt);
                 }
             }
-            ExprKind::List(items)
-            | ExprKind::Tuple(items)
-            | ExprKind::Named(_, items)
-            | ExprKind::Macro(_, items) => {
+            ExprKind::List(items) | ExprKind::Tuple(items) => {
                 for &item in items {
+                    holds(item)?;
+                }
+            }
+            ExprKind::Macro(_, items) => {
+                for &item in items {
+                    holds(item)?;
+                }
+            }
+            ExprKind::Named(named) => {
+                for &item in &named.1 {
                     holds(item)?;
                 }
             }

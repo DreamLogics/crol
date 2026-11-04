@@ -41,11 +41,21 @@ pub(crate) struct Expr {
     pub(crate) span: Span,
 }
 
+// Documents hold hundreds of thousands of these: what a rare kind of
+// expression needs goes behind a box.
+const _: () = assert!(size_of::<Expr>() <= 48);
+
+/// An `i128` aligned as a `u64`, which spares every expression the padding
+/// that a 16-byte alignment takes.
+#[derive(Debug, Clone, Copy)]
+#[repr(Rust, packed(8))]
+pub(crate) struct Wide(pub(crate) i128);
+
 #[derive(Debug)]
 pub(crate) enum ExprKind {
     Unit,
     Bool(bool),
-    Int(i128),
+    Int(Wide),
     Float(f64),
     Char(char),
     Str(Arc<str>),
@@ -54,12 +64,12 @@ pub(crate) enum ExprKind {
     Block(BlockId),
     List(Vec<ExprId>),
     Tuple(Vec<ExprId>),
-    Named(Arc<str>, Vec<ExprId>),
+    Named(Box<(Arc<str>, Vec<ExprId>)>),
     UnitName(Arc<str>),
-    Path(ExprId, Vec<Selector>),
+    Path(ExprId, Box<[Selector]>),
     Neg(ExprId),
     Binary(BinOp, ExprId, ExprId),
-    Macro(MacroKind, Vec<ExprId>),
+    Macro(MacroKind, Box<[ExprId]>),
     /// An expression that failed to lower; the error is already reported.
     Error,
 }
@@ -75,9 +85,9 @@ pub(crate) enum RefKind {
     /// `&root`
     Root,
     /// `&default`, with the target whose default it is.
-    Default(DefaultTarget),
+    Default(Box<DefaultTarget>),
     /// `&name` for an entry bind: the bound target, `up` blocks out.
-    Bind { up: usize, target: Vec<Selector> },
+    Bind { up: usize, target: Box<[Selector]> },
     /// `&name` for a value bind or template.
     ValueBind(BindId),
 }

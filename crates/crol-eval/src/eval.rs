@@ -913,11 +913,18 @@ fn collect_reads(
                 collect_reads(ir, ir.value_binds[bind].expr, depth + 1, templates, out);
             }
         }
-        ExprKind::List(items)
-        | ExprKind::Tuple(items)
-        | ExprKind::Named(_, items)
-        | ExprKind::Macro(_, items) => {
+        ExprKind::List(items) | ExprKind::Tuple(items) => {
             for &item in items {
+                collect_reads(ir, item, depth, templates, out);
+            }
+        }
+        ExprKind::Macro(_, items) => {
+            for &item in items {
+                collect_reads(ir, item, depth, templates, out);
+            }
+        }
+        ExprKind::Named(named) => {
+            for &item in &named.1 {
                 collect_reads(ir, item, depth, templates, out);
             }
         }
@@ -2498,7 +2505,7 @@ impl Evaluator<'_> {
         match &ir.exprs[expr].kind {
             ExprKind::Unit => Self::shaped(Shape::Unit, span),
             ExprKind::Bool(b) => Self::shaped(Shape::Bool(*b), span),
-            ExprKind::Int(i) => Self::shaped(Shape::Int(*i), span),
+            ExprKind::Int(i) => Self::shaped(Shape::Int(i.0), span),
             ExprKind::Float(f) => Self::shaped(Shape::Float(*f), span),
             ExprKind::Char(c) => Self::shaped(Shape::Char(*c), span),
             ExprKind::Str(s) => Self::shaped(Shape::Str(s.clone()), span),
@@ -2521,7 +2528,8 @@ impl Evaluator<'_> {
                 let cells = self.elements(elements, env, Some(None));
                 Self::shaped(Shape::Tuple(cells), span)
             }
-            ExprKind::Named(name, elements) => {
+            ExprKind::Named(named) => {
+                let (name, elements) = &**named;
                 let cells = self.elements(elements, env, Some(Some(name)));
                 Self::shaped(Shape::Named(name.clone(), cells), span)
             }

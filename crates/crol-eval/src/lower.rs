@@ -1252,7 +1252,8 @@ impl Lowerer {
                     .map_or_else(|| Arc::from(""), |n| self.resolve_type_name(n.text()));
                 let elements =
                     self.detached(|this| named.elements().map(|e| this.expr(&e)).collect());
-                self.ir.add_expr(ExprKind::Named(name, elements), span)
+                self.ir
+                    .add_expr(ExprKind::Named(Box::new((name, elements))), span)
             }
             ast::Expr::MacroCall(call) => self.macro_call(call, span),
             ast::Expr::UnitName(unit) => {
@@ -1288,7 +1289,9 @@ impl Lowerer {
                 };
                 let base = self.detached(|this| this.expr(&base));
                 match self.selectors(path.selectors(), usage, &mut Vec::new()) {
-                    Some(selectors) => self.ir.add_expr(ExprKind::Path(base, selectors), span),
+                    Some(selectors) => self
+                        .ir
+                        .add_expr(ExprKind::Path(base, selectors.into()), span),
                     None => self.ir.add_expr(ExprKind::Error, span),
                 }
             }
@@ -1389,7 +1392,7 @@ impl Lowerer {
         };
         let kind = match token.kind() {
             SyntaxKind::INT => match literal::int(token.text(), negative) {
-                Ok(value) => ExprKind::Int(value),
+                Ok(value) => ExprKind::Int(Wide(value)),
                 Err(message) => return self.error_expr(span, message),
             },
             SyntaxKind::FLOAT => match literal::float(token.text(), negative) {
@@ -1439,7 +1442,7 @@ impl Lowerer {
             );
             return self.ir.add_expr(ExprKind::Error, span);
         }
-        self.ir.add_expr(ExprKind::Macro(kind, args), span)
+        self.ir.add_expr(ExprKind::Macro(kind, args.into()), span)
     }
 
     fn reference(&mut self, reference: &ast::Reference, span: Span) -> ExprId {
@@ -1453,7 +1456,7 @@ impl Lowerer {
             ast::ReferenceKind::SelfValue => RefKind::SelfValue,
             ast::ReferenceKind::Parent(n) => RefKind::Parent(n),
             ast::ReferenceKind::Root => RefKind::Root,
-            ast::ReferenceKind::Default => RefKind::Default(self.default_target.clone()),
+            ast::ReferenceKind::Default => RefKind::Default(Box::new(self.default_target.clone())),
             ast::ReferenceKind::Bind(name) => {
                 let name = name.text();
                 let innermost = self.scopes.len();
@@ -1476,7 +1479,7 @@ impl Lowerer {
                                 depth,
                                 RefKind::Bind {
                                     up: innermost - 1 - depth,
-                                    target: path,
+                                    target: path.into(),
                                 },
                             ))
                         } else {
