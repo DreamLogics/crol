@@ -491,6 +491,7 @@ impl Server {
                             let snapshot = self.snapshot.as_ref()?;
                             features::definition(
                                 snapshot,
+                                &uri,
                                 &text,
                                 p.text_document_position_params.position,
                                 encoding,

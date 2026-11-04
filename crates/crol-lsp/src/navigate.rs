@@ -29,7 +29,7 @@ enum Declaration {
 
 /// The bind name at a token: its declaration (`port =`, `base :=`) or a
 /// use (`&port`).
-fn bind_name(token: &SyntaxToken) -> Option<SyntaxToken> {
+pub(crate) fn bind_name(token: &SyntaxToken) -> Option<SyntaxToken> {
     if token.kind() != SyntaxKind::IDENT {
         return None;
     }
@@ -81,6 +81,15 @@ fn declaration(token: &SyntaxToken) -> Declaration {
         }
     }
     Declaration::Template
+}
+
+/// Where the bind at a name token (a use or the declaration) is declared:
+/// the declared name in this document, or `None` for a template.
+pub(crate) fn local_declaration(token: &SyntaxToken) -> Option<SyntaxToken> {
+    match declaration(token) {
+        Declaration::Local { name, .. } => Some(name),
+        Declaration::Template => None,
+    }
 }
 
 /// The declaration and uses of the bind `name` under `node` that resolve
