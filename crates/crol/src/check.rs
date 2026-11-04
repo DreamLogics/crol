@@ -4,7 +4,7 @@
 use crol_eval::{Context, ContextData, Diagnostic, Key, Keyed, Span, Value, ValueKind, Variants};
 
 use crate::compose::{CrolData, VariantName};
-use crate::schema::{FieldDefault, Repr, SchemaFile, TypeDef, TypeExpr, VariantShape};
+use crate::schema::{Field, FieldDefault, Repr, SchemaFile, TypeDef, TypeExpr, VariantShape};
 
 /// Options of [`check`], as `CrolConfig` sets them for deserializing.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -367,13 +367,18 @@ impl Checker<'_> {
                         }
                     }
                 }
-                let present = |f: &str| {
-                    keyed.entries.contains_key(&Key::Str(f.to_owned()))
-                        || keyed.defaulted.contains(&Key::Str(f.to_owned()))
+                // A field is written when its name or an alias is.
+                let present = |f: &str, field: &Field| {
+                    std::iter::once(f)
+                        .chain(field.aliases.iter().map(String::as_str))
+                        .any(|n| {
+                            keyed.entries.contains_key(&Key::Str(n.to_owned()))
+                                || keyed.defaulted.contains(&Key::Str(n.to_owned()))
+                        })
                 };
                 let missing: Vec<&str> = fields
                     .iter()
-                    .filter(|(f, field)| !field.flatten && !present(f))
+                    .filter(|(f, field)| !field.flatten && !present(f, field))
                     .filter(|(_, field)| {
                         // With `..`, serde fills fields that have defaults.
                         !keyed.defaults || field.default == FieldDefault::Required

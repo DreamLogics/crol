@@ -79,6 +79,51 @@ fn aliases_are_recorded() {
     assert_eq!(fields["new"].aliases, ["old", "older"]);
 }
 
+#[derive(Debug, Deserialize, Schema)]
+pub struct Moved {
+    #[serde(alias = "host")]
+    pub address: String,
+    pub port: u16,
+}
+
+#[derive(Debug, Deserialize, Schema)]
+pub enum Moves {
+    Moved(Moved),
+}
+
+#[test]
+fn a_field_written_by_an_alias_is_complete() {
+    let compose = |text: &str, with_schema: bool| {
+        let mut composer = crol::CrolComposer::new()
+            .load_layer(crol::CrolLayer::from_sources("base", [("a.crol", text)]));
+        if with_schema {
+            composer = composer.schema(schema::build::<Moves>());
+        }
+        composer.compose_data().unwrap()
+    };
+    let text = "+a: Moved { host: \"h\", port: 1 },";
+    // With the schema, `host` writes `address`.
+    let data = compose(text, true);
+    let Moves::Moved(moved) = data.get::<Moves>("a").unwrap();
+    assert_eq!(moved.address, "h");
+    assert!(crol::check(&data, &schema::build::<Moves>(), None, &Default::default()).is_empty());
+    // Without it, the deserializer cannot tell `host` is `address`.
+    let error = compose(text, false).get::<Moves>("a").unwrap_err();
+    assert!(
+        error.message().contains("missing the field `address`"),
+        "{error}"
+    );
+    // A field written by no name is still missing.
+    let data = compose("+a: Moved { port: 1 },", true);
+    let error = data.get::<Moves>("a").unwrap_err();
+    assert!(
+        error.message().contains("missing the field `address`"),
+        "{error}"
+    );
+    let checked = crol::check(&data, &schema::build::<Moves>(), None, &Default::default());
+    assert_eq!(checked.len(), 1, "{checked:?}");
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, VariantName)]
 enum Env {
     Dev,

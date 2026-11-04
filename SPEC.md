@@ -1440,6 +1440,12 @@ For `deserialize_struct(name, fields, visitor)` the deserializer checks:
   `Option` fields, unless the value has the defaults flag or the field
   is in its defaulted fields (section 10.3). `CrolConfig::require_complete`
   turns this check off.
+- **Aliases.** A field written by one of its `#[serde(alias)]` names is
+  present. serde puts a field's aliases in `fields` without saying which
+  field they belong to, so the deserializer groups them from the schema
+  given to the composer (`CrolComposer::schema`, section 10.9). Without
+  a schema it cannot, and every name in `fields` counts as a field of
+  its own. `crol::check` and tools read the aliases from the schema.
 
 Only the final value is checked, so a patch block may leave out
 whatever it does not change.
@@ -2274,14 +2280,6 @@ only in major releases.
    would cover this without comparisons in the language, but
    `min(a, b)` already parses as a named tuple, so they need their own
    syntax.
-2. **Completeness and serde aliases.** serde gives the deserializer one
-   list of the names a struct accepts, aliases included, without saying
-   which names belong to one field. So the completeness rule (10.2) asks
-   for every alias of a field that is written by another name, unless the
-   block ends with `..`; `crol::check`, which reads the schema, does not.
-   Options: check completeness only with a schema, treat a struct whose
-   fields have aliases as allowing omissions, or forbid `alias` on types
-   loaded from CROL.
 
 ---
 
@@ -2326,6 +2324,9 @@ where it is not obvious.
 - Decided: variant parents, declared by the application only (8.1, 8.3).
   This lets one variant's patch extend another's for the same key;
   applying another *key's* patch stays out.
+- Decided: a field written by a serde alias is present for the
+  completeness rule; the deserializer learns aliases from the schema
+  (10.2).
 - Decided: no comparisons or conditionals, now or later; input
   validation belongs on the Rust side (wrapper types, derive
   attributes). `<v>` is final as the variant selector.

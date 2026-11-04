@@ -186,6 +186,7 @@ impl<T> CrolConfig<T> {
             implicit_some: self.implicit_some,
             allow_unknown_fields: self.allow_unknown_fields,
             require_complete: self.require_complete,
+            aliases: None,
         }
     }
 }
@@ -397,6 +398,8 @@ pub struct CrolComposer<T = String> {
     error: Option<Error>,
     /// The schema, for `&default`.
     schema: Option<crol_eval::Defaults>,
+    /// The schema's aliases, for completeness.
+    aliases: Option<std::sync::Arc<de::Aliases>>,
     /// The variants made active with `with_variant`.
     chosen: Vec<T>,
 }
@@ -424,6 +427,7 @@ impl<T: VariantName> CrolComposer<T> {
             error: None,
             chosen: Vec::new(),
             schema: None,
+            aliases: None,
         }
     }
 
@@ -446,8 +450,11 @@ impl<T: VariantName> CrolComposer<T> {
     }
 
     /// Gives the composer a schema, from which `&default` reads defaults
-    /// (`SPEC.md` 6.1.3): `.schema(crol::schema::build::<Definition>())`.
+    /// (`SPEC.md` 6.1.3) and the deserializer learns which names are
+    /// aliases of one field (10.2):
+    /// `.schema(crol::schema::build::<Definition>())`.
     pub fn schema(mut self, schema: crate::schema::SchemaFile) -> Self {
+        self.aliases = Some(std::sync::Arc::new(de::Aliases::from_schema(&schema)));
         self.schema = Some(crol_eval::Defaults(std::sync::Arc::new(
             crate::schema::SchemaDefaults(schema),
         )));
@@ -613,7 +620,10 @@ impl<T: VariantName> CrolComposer<T> {
             variants: evaluation.variants,
             composed,
             diagnostics: evaluation.diagnostics,
-            options: self.config.deserialize_options(),
+            options: de::Options {
+                aliases: self.aliases.clone(),
+                ..self.config.deserialize_options()
+            },
             names: std::marker::PhantomData,
         })
     }

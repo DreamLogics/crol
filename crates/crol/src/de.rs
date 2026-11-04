@@ -1,8 +1,10 @@
 //! The serde `Deserializer` over evaluated values (`SPEC.md` 10.1 to 10.6).
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use serde::de::{
     self, DeserializeSeed, EnumAccess, IntoDeserializer, MapAccess, SeqAccess, VariantAccess,
@@ -14,6 +16,7 @@ use crol_eval::{Key, Keyed, Sources, Value, ValueKind};
 use crate::error::Error;
 use crate::id::{ID_TOKEN, IdUse};
 use crate::raw::RAW_TOKEN;
+use crate::schema::{Field, SchemaFile, TypeDef, VariantShape};
 
 /// Options of the deserializer (`SPEC.md` 10.7's `CrolConfig` fields).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,6 +27,8 @@ pub(crate) struct Options {
     pub(crate) allow_unknown_fields: bool,
     /// Every field must be written unless the value has `..`.
     pub(crate) require_complete: bool,
+    /// Which names are one field's, from the schema, if there is one.
+    pub(crate) aliases: Option<Arc<Aliases>>,
 }
 
 impl Default for Options {
@@ -32,7 +37,57 @@ impl Default for Options {
             implicit_some: true,
             allow_unknown_fields: false,
             require_complete: true,
+            aliases: None,
         }
+    }
+}
+
+/// The names of each field of the structs and struct variants whose
+/// fields have serde aliases, by serde name: serde gives the deserializer
+/// every name a struct accepts, without saying which belong to one field
+/// (`SPEC.md` 10.2).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Aliases(HashMap<String, Vec<Vec<Vec<String>>>>);
+
+impl Aliases {
+    pub(crate) fn from_schema(schema: &SchemaFile) -> Self {
+        let mut aliases = Self::default();
+        let mut add = |name: &str, fields: &indexmap::IndexMap<String, Field>| {
+            if fields.values().all(|f| f.aliases.is_empty()) {
+                return;
+            }
+            let names = fields
+                .iter()
+                .map(|(n, f)| std::iter::once(n).chain(&f.aliases).cloned().collect())
+                .collect();
+            aliases.0.entry(name.to_owned()).or_default().push(names);
+        };
+        for def in schema.types.values() {
+            match def {
+                TypeDef::Struct { name, fields, .. } => add(name, fields),
+                TypeDef::Enum { variants, .. } => {
+                    for (name, variant) in variants {
+                        if let VariantShape::Struct(fields) = &variant.shape {
+                            add(name, fields);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        aliases
+    }
+
+    /// The names of each field of the struct `name` that accepts exactly
+    /// `accepted`, its own name first.
+    fn fields_of(&self, name: &str, accepted: &[&str]) -> Option<&[Vec<String>]> {
+        self.0.get(name)?.iter().map(Vec::as_slice).find(|fields| {
+            fields.iter().map(Vec::len).sum::<usize>() == accepted.len()
+                && fields
+                    .iter()
+                    .flatten()
+                    .all(|n| accepted.contains(&n.as_str()))
+        })
     }
 }
 
@@ -215,14 +270,20 @@ impl<'a> ValueDeserializer<'a> {
             }
         }
         if self.context.options.require_complete && !keyed.defaults {
-            let missing: Vec<&str> = fields
-                .iter()
-                .copied()
-                .filter(|f| {
-                    let key = Key::Str((*f).to_owned());
-                    !keyed.entries.contains_key(&key) && !keyed.defaulted.contains(&key)
-                })
-                .collect();
+            let present = |f: &str| {
+                let key = Key::Str(f.to_owned());
+                keyed.entries.contains_key(&key) || keyed.defaulted.contains(&key)
+            };
+            // A field is written when one of its names is.
+            let grouped = self.context.options.aliases.as_ref();
+            let missing: Vec<&str> = match grouped.and_then(|a| a.fields_of(name, fields)) {
+                Some(grouped) => grouped
+                    .iter()
+                    .filter(|names| !names.iter().any(|n| present(n)))
+                    .map(|names| names[0].as_str())
+                    .collect(),
+                None => fields.iter().copied().filter(|f| !present(f)).collect(),
+            };
             if !missing.is_empty() {
                 let s = if missing.len() == 1 { "" } else { "s" };
                 return Err(self.error(format!(

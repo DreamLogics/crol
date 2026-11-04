@@ -76,6 +76,8 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 - `crol` provides the schema of the project file (`Schema` for `Project`
   and the types in it), and the language server checks the project file
   against it.
+- A field written by a serde alias counts as present for completeness,
+  in `crol::check` and, given `CrolComposer::schema`, in the deserializer.
 
 ### Fixed
 
