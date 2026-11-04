@@ -1043,3 +1043,115 @@ fn layer_documents_that_name_another_schema_get_a_warning() {
     );
     client.stop();
 }
+
+#[test]
+fn documents_on_their_own_complete_from_their_schema() {
+    let dir = workspace(
+        "lsp-own-schema",
+        &[
+            (
+                "schema.crol",
+                r#"Schema {
+                    format: 1,
+                    root: "app::Config",
+                    types: {
+                        "app::Config": Struct {
+                            name: "Config",
+                            source: ("src/lib.rs", 1),
+                            fields: {
+                                listen: { ty: String, doc: "Where to listen.", .. },
+                                limits: { ty: Named("app::Limits"), .. },
+                            },
+                            ..
+                        },
+                        "app::Limits": Struct {
+                            name: "Limits",
+                            source: ("src/lib.rs", 5),
+                            fields: { cpu: { ty: F64, .. } },
+                            ..
+                        },
+                    },
+                }"#,
+            ),
+            ("config.crol", ""),
+            (
+                "project.crol",
+                r#"Project { layers: List([{ name: "base", dir: "base", .. }]), .. }"#,
+            ),
+            ("base/a.crol", "+a: 1,"),
+        ],
+    );
+    let mut client = Client::start(&dir);
+    let mut complete = |client: &mut Client, uri: &str, first: &str, text: &str| {
+        client.notify(
+            "textDocument/didOpen",
+            json!({ "textDocument": { "uri": uri, "languageId": "crol", "version": 1, "text": first } }),
+        );
+        client.diagnostics_for(uri, |d| d.is_empty());
+        client.notify(
+            "textDocument/didChange",
+            json!({
+                "textDocument": { "uri": uri, "version": 2 },
+                "contentChanges": [{ "text": text }],
+            }),
+        );
+        let line = text.lines().count() - 1;
+        let character = text.lines().last().unwrap().len();
+        let items = client.request(
+            "textDocument/completion",
+            json!({ "textDocument": { "uri": uri }, "position": { "line": line, "character": character } }),
+        );
+        items
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["label"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+
+    // The fields of the root type, and inside them.
+    let config = uri(&dir.join("config.crol"));
+    let start = "#![schema(schema)]\n\n{ listen: \"x\", limits: { cpu: 1.0 } }";
+    let labels = complete(&mut client, &config, start, "#![schema(schema)]\n\n{ lim");
+    assert_eq!(labels, ["listen", "limits"]);
+    let labels = complete(
+        &mut client,
+        &config,
+        start,
+        "#![schema(schema)]\n\n{ limits: { c",
+    );
+    assert_eq!(labels, ["cpu"]);
+    // Written as entries, without braces.
+    let entries = "#![schema(schema)]\n\nlisten: \"x\",\nlimits: { cpu: 1.0 },";
+    let labels = complete(
+        &mut client,
+        &config,
+        entries,
+        "#![schema(schema)]\n\nlisten: \"x\",\nl",
+    );
+    assert_eq!(labels, ["limits"]);
+    client.notify(
+        "textDocument/didChange",
+        json!({ "textDocument": { "uri": config, "version": 3 }, "contentChanges": [{ "text": entries }] }),
+    );
+    client.diagnostics_for(&config, |d| d.is_empty());
+    let hover = client.request(
+        "textDocument/hover",
+        json!({ "textDocument": { "uri": config }, "position": { "line": 2, "character": 2 } }),
+    );
+    let markdown = hover["contents"]["value"].as_str().unwrap_or_default();
+    assert!(markdown.contains("`String` — Where to listen."), "{hover}");
+
+    // The project file: the fields of `Project` crol provides.
+    let project = uri(&dir.join("project.crol"));
+    let text = r#"Project { layers: List([{ name: "base", dir: "base", .. }]), "#;
+    let labels = complete(
+        &mut client,
+        &project,
+        r#"Project { layers: List([{ name: "base", dir: "base", .. }]), .. }"#,
+        text,
+    );
+    assert!(labels.iter().any(|l| l == "schema"), "{labels:?}");
+    assert!(!labels.iter().any(|l| l == "layers"), "{labels:?}");
+    client.stop();
+}

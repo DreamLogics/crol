@@ -42,6 +42,9 @@ pub struct Snapshot {
     pub schema: Option<SchemaFile>,
     /// The type path of the project's root type, with the schema.
     pub root_type: Option<String>,
+    /// The schemas of documents evaluated on their own, with the type of
+    /// each one's value: the one it names, or the project file's.
+    own_schemas: HashMap<FileId, (SchemaFile, Option<String>)>,
     /// The path of each file, by its id.
     paths: Vec<PathBuf>,
     /// Files of read-only layers, which get no diagnostics.
@@ -54,7 +57,43 @@ pub struct Snapshot {
     pub(crate) remote: Vec<(String, PathBuf)>,
 }
 
+/// The schema a document is written against.
+pub(crate) struct DocumentSchema<'a> {
+    pub(crate) file: &'a SchemaFile,
+    /// The type path of the root type, if not the schema's.
+    pub(crate) root: Option<&'a str>,
+    /// Whether the document is a value of the root type (a document on its
+    /// own) rather than data whose root values are (`SPEC.md` 4.1).
+    pub(crate) value_mode: bool,
+}
+
+impl DocumentSchema<'_> {
+    pub(crate) fn root_type(&self) -> &str {
+        self.root.unwrap_or(&self.file.root)
+    }
+}
+
 impl Snapshot {
+    /// The schema of a file: its own, for a document on its own, else the
+    /// project's.
+    pub(crate) fn schema_for(&self, file: Option<FileId>) -> Option<DocumentSchema<'_>> {
+        if let Some((schema, root)) = file.and_then(|f| self.own_schemas.get(&f)) {
+            return Some(DocumentSchema {
+                file: schema,
+                root: root.as_deref(),
+                value_mode: true,
+            });
+        }
+        if file.is_some_and(|f| !self.in_layers(f)) {
+            return None;
+        }
+        Some(DocumentSchema {
+            file: self.schema.as_ref()?,
+            root: self.root_type.as_deref(),
+            value_mode: false,
+        })
+    }
+
     /// The file a path is, if it was read.
     pub fn file_of(&self, path: &Path) -> Option<FileId> {
         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
@@ -177,6 +216,7 @@ pub(crate) fn evaluate(
         extra: Vec::new(),
         schema: None,
         root_type: None,
+        own_schemas: HashMap::new(),
         paths: Vec::new(),
         read_only: HashSet::new(),
         problem: None,
@@ -261,6 +301,9 @@ pub(crate) fn evaluate(
                         root.as_deref(),
                         &CheckOptions::default(),
                     ));
+                    snapshot.own_schemas.insert(file, (schema, root));
+                } else {
+                    snapshot.own_schemas.insert(file, (schema, None));
                 }
             }
             Some(Err((range, message))) => {

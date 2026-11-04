@@ -92,6 +92,8 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   schema than the project's (or `--schema`), in `crol check` and the
   language server; `crol::schema::attribute_disagrees`.
 - Language server: go to definition on `&` goes to the value below.
+- Language server: completion and hover in documents on their own come
+  from the schema they name, and in the project file from crol's.
 
 ### Fixed
 

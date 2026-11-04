@@ -174,9 +174,16 @@ impl Completer<'_> {
 
     /// The innermost blocks around the cursor, innermost first.
     fn blocks(&self) -> Vec<ast::Block> {
-        let Some(token) = self.root.token_at_offset(self.offset).left_biased() else {
+        let Some(mut token) = self.root.token_at_offset(self.offset).left_biased() else {
             return Vec::new();
         };
+        // Trailing whitespace may belong to no block, as at the end of an
+        // unclosed one; the token before it does.
+        while token.kind().is_trivia()
+            && let Some(previous) = token.prev_token()
+        {
+            token = previous;
+        }
         token
             .parent_ancestors()
             .filter_map(ast::Block::cast)
@@ -297,7 +304,7 @@ impl Completer<'_> {
         };
         let refers = self.value_type().and_then(|ty| refers_of(&ty));
         let names: Option<Vec<&str>> = refers.map(|paths| {
-            let schema = self.snapshot.schema.as_ref();
+            let schema = self.snapshot.schema_for(self.file).map(|s| s.file);
             paths
                 .iter()
                 .filter_map(|p| schema.and_then(|s| s.get(p)).map(TypeDef::name))
@@ -314,13 +321,16 @@ impl Completer<'_> {
     fn value_type(&self) -> Option<TypeExpr> {
         let token = self.root.token_at_offset(self.offset).left_biased()?;
         let entry = token.parent_ancestors().find_map(ast::Entry::cast)?;
-        let (ty, _) = schema::entry_type(self.snapshot, &entry)?;
+        let (ty, _) = schema::entry_type(self.snapshot, self.file, &entry)?;
         Some(ty)
     }
 
     /// After `key:`: the values the field's type allows.
     fn values(&self) -> Vec<CompletionItem> {
-        let (Some(schema), Some(ty)) = (self.snapshot.schema.as_ref(), self.value_type()) else {
+        let (Some(schema), Some(ty)) = (
+            self.snapshot.schema_for(self.file).map(|s| s.file),
+            self.value_type(),
+        ) else {
             return Vec::new();
         };
         let mut items = Vec::new();
@@ -332,20 +342,35 @@ impl Completer<'_> {
     /// its doc. Accepting one writes the value it has now, if any, else a
     /// placeholder.
     fn fields(&self) -> Vec<CompletionItem> {
-        let Some(schema) = self.snapshot.schema.as_ref() else {
+        let Some(document_schema) = self.snapshot.schema_for(self.file) else {
             return Vec::new();
         };
-        let Some(block) = self.blocks().into_iter().next() else {
-            return Vec::new();
+        let schema = document_schema.file;
+        let block = self.blocks().into_iter().next();
+        let (ty, entries): (_, Vec<ast::AnyEntry>) = match &block {
+            Some(block) => (
+                schema::block_type(self.snapshot, self.file, block),
+                block.entries().collect(),
+            ),
+            // A document on its own written as entries, without braces:
+            // the fields of its root type.
+            None if document_schema.value_mode => {
+                let Some(document) = ast::Document::cast(self.root.clone()) else {
+                    return Vec::new();
+                };
+                (
+                    Some(TypeExpr::Named(document_schema.root_type().to_owned())),
+                    document.entries().collect(),
+                )
+            }
+            None => return Vec::new(),
         };
-        let Some((_, fields)) =
-            schema::block_type(self.snapshot, &block).and_then(|ty| schema::struct_of(schema, &ty))
-        else {
+        let Some((_, fields)) = ty.and_then(|ty| schema::struct_of(schema, &ty)) else {
             return Vec::new();
         };
         // The entry being typed is not written yet.
-        let written: Vec<String> = block
-            .entries()
+        let written: Vec<String> = entries
+            .into_iter()
             .filter(|e| !e.syntax().text_range().contains_inclusive(self.offset))
             .filter_map(|e| match e {
                 ast::AnyEntry::Entry(e) => e.target()?.key(),
@@ -354,7 +379,7 @@ impl Completer<'_> {
             })
             .filter_map(|k| features::key_text(&k))
             .collect();
-        let location = features::block_path(&block);
+        let location = block.as_ref().and_then(features::block_path);
         fields
             .iter()
             .filter(|(name, _)| !written.contains(name))

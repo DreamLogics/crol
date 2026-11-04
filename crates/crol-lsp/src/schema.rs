@@ -1,40 +1,77 @@
 //! What the schema says about a place in the data (`SPEC.md` 10.9, 12.5).
 
 use crol::schema::{Field, SchemaFile, TypeDef, TypeExpr, VariantShape};
-use crol_eval::{PathStep, ValueKind};
+use crol_eval::{FileId, PathStep, ValueKind};
 use crol_syntax::SyntaxKind;
 use crol_syntax::ast::{self, AstNode};
 use indexmap::IndexMap;
 
 use crate::features;
-use crate::workspace::Snapshot;
+use crate::workspace::{DocumentSchema, Snapshot};
 
 /// The type of a block: its type name's, else that of its place in the
 /// block or root entry around it, through struct fields, map values,
 /// elements, and the payloads of options, newtypes and transparent types.
-pub(crate) fn block_type(snapshot: &Snapshot, block: &ast::Block) -> Option<TypeExpr> {
-    let schema = snapshot.schema.as_ref()?;
-    block_type_in(schema, &|key| root_key_type(snapshot, key), block, 0)
+pub(crate) fn block_type(
+    snapshot: &Snapshot,
+    file: Option<FileId>,
+    block: &ast::Block,
+) -> Option<TypeExpr> {
+    let schema = snapshot.schema_for(file)?;
+    // The outer braces of a document on its own are its root type.
+    if schema.value_mode
+        && block.type_name().is_none()
+        && block
+            .syntax()
+            .parent()
+            .is_some_and(|p| p.kind() == SyntaxKind::DOCUMENT)
+    {
+        return Some(TypeExpr::Named(schema.root_type().to_owned()));
+    }
+    block_type_in(
+        schema.file,
+        &|key| root_key_type(snapshot, &schema, key),
+        block,
+        0,
+    )
 }
 
 /// The type of an entry's value, and the doc of what it sets: the
 /// field's, or the type's for a root entry.
-pub(crate) fn entry_type(snapshot: &Snapshot, entry: &ast::Entry) -> Option<(TypeExpr, String)> {
-    let schema = snapshot.schema.as_ref()?;
-    let (ty, doc) = entry_type_in(schema, &|key| root_key_type(snapshot, key), entry, 0)?;
+pub(crate) fn entry_type(
+    snapshot: &Snapshot,
+    file: Option<FileId>,
+    entry: &ast::Entry,
+) -> Option<(TypeExpr, String)> {
+    let schema = snapshot.schema_for(file)?;
+    let (ty, doc) = entry_type_in(
+        schema.file,
+        &|key| root_key_type(snapshot, &schema, key),
+        entry,
+        0,
+    )?;
     let doc = match doc {
         Some(doc) => doc,
-        None => named_def(schema, &ty).map_or(String::new(), |d| d.doc().to_owned()),
+        None => named_def(schema.file, &ty).map_or(String::new(), |d| d.doc().to_owned()),
     };
     Some((ty, doc))
 }
 
-/// The type of a root key's value: the root type, or, when that is an
-/// enum (`Definition`), the type the key's value names (`Service`).
-fn root_key_type(snapshot: &Snapshot, key: &str) -> Option<TypeExpr> {
-    let schema = snapshot.schema.as_ref()?;
-    let root = snapshot.root_type.as_deref().unwrap_or(&schema.root);
-    if let Some(TypeDef::Enum { .. }) = schema.get(root) {
+/// The type of a root key's value, and its doc as a field. In a document
+/// on its own, a root key is a field of the root type. In data, it is the
+/// root type, or, when that is an enum (`Definition`), the type the key's
+/// value names (`Service`).
+fn root_key_type(
+    snapshot: &Snapshot,
+    schema: &DocumentSchema<'_>,
+    key: &str,
+) -> Option<(TypeExpr, Option<String>)> {
+    let root = schema.root_type();
+    if schema.value_mode {
+        let root = TypeExpr::Named(root.to_owned());
+        return step(schema.file, &root, &PathStep::Field(key.to_owned()));
+    }
+    if let Some(TypeDef::Enum { .. }) = schema.file.get(root) {
         let evaluation = match (&snapshot.evaluation.value, &snapshot.last_good) {
             (None, Some(good)) => good,
             _ => &snapshot.evaluation,
@@ -44,15 +81,15 @@ fn root_key_type(snapshot: &Snapshot, key: &str) -> Option<TypeExpr> {
             ValueKind::NamedTuple(n, _) | ValueKind::UnitName(n) => Some(n),
             _ => None,
         });
-        if let Some(ty) = name.and_then(|n| named(schema, &n)) {
-            return Some(ty);
+        if let Some(ty) = name.and_then(|n| named(schema.file, &n)) {
+            return Some((ty, None));
         }
     }
-    Some(TypeExpr::Named(root.to_owned()))
+    Some((TypeExpr::Named(root.to_owned()), None))
 }
 
-/// The type of each root key's value.
-type RootTypes<'a> = &'a dyn Fn(&str) -> Option<TypeExpr>;
+/// The type of each root key's value, and its doc as a field.
+type RootTypes<'a> = &'a dyn Fn(&str) -> Option<(TypeExpr, Option<String>)>;
 
 fn block_type_in(
     schema: &SchemaFile,
@@ -101,7 +138,11 @@ fn entry_type_in(
             ty
         }
         // A root entry.
-        None => root(&features::key_text(&target.key()?)?)?,
+        None => {
+            let (ty, field_doc) = root(&features::key_text(&target.key()?)?)?;
+            doc = field_doc;
+            ty
+        }
     };
     for s in features::selector_steps(target.selectors()) {
         let (next, field_doc) = step(schema, &ty, &s)?;

@@ -456,10 +456,13 @@ pub(crate) fn hover(
             .find_map(ast::Target::cast)
             .and_then(|t| t.syntax().parent())
             .and_then(ast::Entry::cast)
-        && let Some((ty, doc)) = crate::schema::entry_type(snapshot, &entry)
-        && let Some(schema) = &snapshot.schema
+        && let Some((ty, doc)) = crate::schema::entry_type(snapshot, Some(file), &entry)
+        && let Some(schema) = snapshot.schema_for(Some(file))
     {
-        markdown.push_str(&format!("\n\n`{}`", crate::schema::rust_type(schema, &ty)));
+        markdown.push_str(&format!(
+            "\n\n`{}`",
+            crate::schema::rust_type(schema.file, &ty)
+        ));
         if !doc.is_empty() {
             markdown.push_str(&format!(" — {doc}"));
         }
