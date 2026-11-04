@@ -963,3 +963,52 @@ fn remote_schemas_are_fetched_without_blocking() {
     assert_eq!(diagnostics[0]["range"]["start"]["line"], 0);
     client.stop();
 }
+
+#[test]
+fn go_to_value_below() {
+    let dir = workspace(
+        "lsp-value-below",
+        &[
+            (
+                "project.crol",
+                r#"Project { layers: List([{ name: "base", dir: "base", .. }, { name: "local", dir: "local", .. }]), .. }"#,
+            ),
+            (
+                "base/a.crol",
+                "+web: { replicas: 2, limits: { cpu: 1 } },\nweb.limits: & ~ { memory: 2 },",
+            ),
+            (
+                "local/a.crol",
+                "web.replicas: & + 1,\nweb: & ~ { limits: { cpu: & * 2 } },",
+            ),
+        ],
+    );
+    let mut client = Client::start(&dir);
+    let local = uri(&dir.join("local/a.crol"));
+    let text = std::fs::read_to_string(dir.join("local/a.crol")).unwrap();
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": local, "languageId": "crol", "version": 1, "text": text } }),
+    );
+    client.diagnostics_for(&local, |d| d.is_empty());
+    let base = uri(&dir.join("base/a.crol"));
+    let mut definition = |line: u32, character: u32| {
+        let location = client.request(
+            "textDocument/definition",
+            json!({ "textDocument": { "uri": local }, "position": { "line": line, "character": character } }),
+        );
+        (location["uri"].clone(), location["range"]["start"].clone())
+    };
+    // `& + 1` adds to what `+web` defined.
+    assert_eq!(
+        definition(0, 14),
+        (json!(base), json!({ "line": 0, "character": 1 }))
+    );
+    // `&` in `cpu`: web.limits.cpu was last changed by `+web`, not by the
+    // patch that added `memory`.
+    assert_eq!(
+        definition(1, 26),
+        (json!(base), json!({ "line": 0, "character": 1 }))
+    );
+    client.stop();
+}
