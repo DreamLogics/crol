@@ -23,6 +23,7 @@ clap.workspace = true
 codespan-reporting.workspace = true
 crol.workspace = true
 crol-eval.workspace = true
+crol-lsp.workspace = true
 crol-syntax.workspace = true
 indexmap.workspace = true
 

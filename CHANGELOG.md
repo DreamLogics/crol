@@ -51,6 +51,13 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 - `crol::check`: schema checks of evaluated data without the Rust types,
   including ids.
 - `&default` (`SPEC.md` 6.1.3), with `CrolComposer::schema`.
+- The language server (`SPEC.md` 12.5): `crol lsp` and the `crol-lsp`
+  library, with diagnostics (syntax at once, evaluation after a pause in
+  typing), document symbols, formatting, hover with the value and its
+  history, completion of root keys, references and variants, and go to
+  definition.
+- The Zed extension starts the language server, from the settings, the
+  `PATH`, or a downloaded release.
 - The project file (`SPEC.md` 12.4); `crol` commands read their layers,
   variants, options and schema from it when given no layers, and take
   `--project` and `--schema`.
