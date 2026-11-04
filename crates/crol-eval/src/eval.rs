@@ -57,6 +57,8 @@ struct Cell {
 enum State {
     /// Boxed, so that computed cells, the most common, stay small.
     Pending(Box<Job>),
+    /// A literal, the most common pending cell, which needs no environment.
+    Literal(ExprId),
     Running,
     Done(Result<Rc<Shaped>, Poisoned>),
 }
@@ -106,6 +108,8 @@ enum Job {
     /// A root key of the base: its chain is applied when it is read, so that
     /// what it holds can be freed and made again (`Evaluator::full_base`).
     Key(Arc<str>),
+    /// A literal: see `State::Literal`.
+    Literal(ExprId),
 }
 
 impl Cell {
@@ -178,6 +182,8 @@ struct Slot {
 enum Recipe {
     /// An entry's expression.
     Entry(Rc<EntryRecipe>),
+    /// A literal, which reads nothing, so that it needs no more than that.
+    Literal(ExprId),
     /// A path entry applied to an earlier value.
     Path(Rc<PathRecipe>),
     /// A value that stays what it is wherever it is copied.
@@ -677,6 +683,21 @@ fn shaped_from_value(value: &Value) -> Rc<Shaped> {
         shape,
         span: value.span,
     })
+}
+
+/// The shape of a literal (`Evaluator::is_literal`).
+fn literal_shape(kind: &ExprKind) -> Shape {
+    match kind {
+        ExprKind::Unit => Shape::Unit,
+        ExprKind::Bool(b) => Shape::Bool(*b),
+        ExprKind::Int(i) => Shape::Int(i.0),
+        ExprKind::Float(f) => Shape::Float(*f),
+        ExprKind::Char(c) => Shape::Char(*c),
+        ExprKind::Str(s) => Shape::Str(s.clone()),
+        ExprKind::Id(s) => Shape::Id(s.clone()),
+        ExprKind::UnitName(n) => Shape::UnitName(n.clone()),
+        _ => unreachable!("only literals are given"),
+    }
 }
 
 /// Evaluates a lowered value-mode document.
@@ -1638,6 +1659,7 @@ impl Evaluator<'_> {
     fn cell(&self, job: Job, location: Option<Location>) -> Lazy {
         let expr = match &job {
             Job::Expr { expr, .. } => Some(*expr),
+            Job::Literal(expr) => Some(*expr),
             Job::Path { .. } | Job::Merge { .. } | Job::Key(_) => None,
         };
         let cell = Rc::new(Cell {
@@ -1648,6 +1670,32 @@ impl Evaluator<'_> {
         });
         self.cells.borrow_mut().push(cell.clone());
         cell
+    }
+
+    /// A cell of a literal. It holds nothing, so that the evaluator need not
+    /// keep it.
+    fn literal_cell(&self, expr: ExprId, location: Option<Location>) -> Lazy {
+        Rc::new(Cell {
+            state: RefCell::new(State::Literal(expr)),
+            expr: Some(expr),
+            location,
+            born: self.window,
+        })
+    }
+
+    /// Whether an expression is a literal.
+    fn is_literal(&self, expr: ExprId) -> bool {
+        matches!(
+            self.ir.exprs[expr].kind,
+            ExprKind::Unit
+                | ExprKind::Bool(_)
+                | ExprKind::Int(_)
+                | ExprKind::Float(_)
+                | ExprKind::Char(_)
+                | ExprKind::Str(_)
+                | ExprKind::Id(_)
+                | ExprKind::UnitName(_)
+        )
     }
 
     /// Reports the errors in the chains that do not depend on the context:
@@ -2313,15 +2361,23 @@ impl Evaluator<'_> {
                     drop(state);
                     return Err(self.cycle(cell, span));
                 }
-                State::Pending(_) => match std::mem::replace(&mut *state, State::Running) {
-                    State::Pending(job) => *job,
-                    _ => unreachable!(),
-                },
+                State::Literal(expr) => {
+                    let expr = *expr;
+                    *state = State::Running;
+                    Job::Literal(expr)
+                }
+                State::Pending(_) => {
+                    if cell.born != self.window && !std::ptr::eq(Rc::as_ptr(cell), self.window_cell)
+                    {
+                        self.window_escaped = true;
+                    }
+                    match std::mem::replace(&mut *state, State::Running) {
+                        State::Pending(job) => *job,
+                        _ => unreachable!(),
+                    }
+                }
             }
         };
-        if cell.born != self.window && !std::ptr::eq(Rc::as_ptr(cell), self.window_cell) {
-            self.window_escaped = true;
-        }
         self.steps += 1;
         if self.steps == MAX_STEPS {
             let message = format!(
@@ -2382,6 +2438,10 @@ impl Evaluator<'_> {
         match job {
             Job::Expr { expr, env } => self.eval(expr, &env),
             Job::Key(key) => self.run_key(&key),
+            Job::Literal(expr) => {
+                let Expr { kind, span } = &self.ir.exprs[expr];
+                Self::shaped(literal_shape(kind), *span)
+            }
             Job::Path {
                 base,
                 recipe,
@@ -2428,13 +2488,14 @@ impl Evaluator<'_> {
     fn instantiate(
         &self,
         recipe: &Recipe,
-        value: &Lazy,
+        value: Option<&Lazy>,
         chain: &Chain,
         here: Option<Location>,
         context: usize,
     ) -> Lazy {
         match recipe {
-            Recipe::Fixed => value.clone(),
+            Recipe::Fixed => value.expect("a fixed recipe has its value").clone(),
+            Recipe::Literal(expr) => self.literal_cell(*expr, here),
             Recipe::Entry(entry) => self.cell(
                 Job::Expr {
                     expr: entry.expr,
@@ -2456,14 +2517,14 @@ impl Evaluator<'_> {
                     Job::Merge {
                         left: self.instantiate(
                             &left.recipe,
-                            &left.value,
+                            Some(&left.value),
                             chain,
                             here.clone(),
                             context,
                         ),
                         right: self.instantiate(
                             &right.recipe,
-                            &right.value,
+                            Some(&right.value),
                             chain,
                             here.clone(),
                             context,
@@ -2477,8 +2538,13 @@ impl Evaluator<'_> {
                 )
             }
             Recipe::Path(path) => {
-                let base =
-                    self.instantiate(&path.base, &path.base_value, chain, here.clone(), context);
+                let base = self.instantiate(
+                    &path.base,
+                    Some(&path.base_value),
+                    chain,
+                    here.clone(),
+                    context,
+                );
                 self.cell(
                     Job::Path {
                         base,
@@ -2503,14 +2569,6 @@ impl Evaluator<'_> {
         let ir = self.ir;
         let span = ir.exprs[expr].span;
         match &ir.exprs[expr].kind {
-            ExprKind::Unit => Self::shaped(Shape::Unit, span),
-            ExprKind::Bool(b) => Self::shaped(Shape::Bool(*b), span),
-            ExprKind::Int(i) => Self::shaped(Shape::Int(i.0), span),
-            ExprKind::Float(f) => Self::shaped(Shape::Float(*f), span),
-            ExprKind::Char(c) => Self::shaped(Shape::Char(*c), span),
-            ExprKind::Str(s) => Self::shaped(Shape::Str(s.clone()), span),
-            ExprKind::Id(s) => Self::shaped(Shape::Id(s.clone()), span),
-            ExprKind::UnitName(n) => Self::shaped(Shape::UnitName(n.clone()), span),
             ExprKind::Ref(kind) => self.reference(kind, env, span),
             ExprKind::Block(block) => {
                 let start = if env.merge {
@@ -2572,6 +2630,7 @@ impl Evaluator<'_> {
                 self.macro_call(*kind, &values, span)
             }
             ExprKind::Error => Err(Fail::Poison),
+            literal => Self::shaped(literal_shape(literal), span),
         }
     }
 
@@ -2599,6 +2658,9 @@ impl Evaluator<'_> {
             .enumerate()
             .map(|(i, &element)| {
                 let here = child_location(&env.here, Step::Index(i));
+                if self.is_literal(element) {
+                    return self.literal_cell(element, here);
+                }
                 let below = match positional {
                     Some(name) => Below::Element(Rc::new(ElementBelow {
                         below: env.below.clone(),
@@ -3111,7 +3173,8 @@ impl Evaluator<'_> {
         for (key, slot) in &source.slots {
             let here = child_location(copy.location, Step::Key(key.clone()));
             let recipe = self.landed(key, slot, target.slots.get(key), copy);
-            let value = self.instantiate(&recipe, &slot.value, copy.chain, here, copy.context);
+            let value =
+                self.instantiate(&recipe, Some(&slot.value), copy.chain, here, copy.context);
             target.slots.insert(key.clone(), Slot { value, recipe });
             target.defaulted.remove(key);
         }
@@ -3135,6 +3198,7 @@ impl Evaluator<'_> {
             _ => recipe,
         };
         let Recipe::Entry(entry) = &slot.recipe else {
+            // `Recipe::Literal` too: whatever is below, it is the same.
             return merged(slot.recipe.clone());
         };
         if entry.replace {
@@ -3227,7 +3291,7 @@ impl Evaluator<'_> {
                 value,
                 span: entry.span,
             }));
-            let value = self.instantiate(&recipe, &slot.value, chain, here, context);
+            let value = self.instantiate(&recipe, Some(&slot.value), chain, here, context);
             keyed.slots.insert(key.clone(), Slot { value, recipe });
             return;
         }
@@ -3257,32 +3321,35 @@ impl Evaluator<'_> {
                         SetOp::Set => {}
                     }
                 }
-                let below = match &existing {
-                    Some(slot) => Below::Value(slot.value.clone()),
-                    None => self.defaulted(
-                        Below::Select(Rc::new(outer_below.clone()), key_selector(key, entry.span)),
-                        chain,
-                        &here,
-                    ),
-                };
-                let below = if op == SetOp::Set {
-                    below
-                } else {
-                    Below::Missing
-                };
                 let expr = entry.value.expect("a set entry has a value");
-                let recipe = Recipe::Entry(Rc::new(EntryRecipe {
-                    expr,
-                    below,
-                    merge: *merging && !entry.replace && self.is_block(expr),
-                    replace: entry.replace,
-                    vbinds: vbinds.clone(),
-                }));
-                let placeholder = Cell::done(Rc::new(Shaped {
-                    shape: Shape::Unit,
-                    span: entry.span,
-                }));
-                let value = self.instantiate(&recipe, &placeholder, chain, here, context);
+                let recipe = if self.is_literal(expr) && !entry.replace {
+                    Recipe::Literal(expr)
+                } else {
+                    let below = match &existing {
+                        Some(slot) => Below::Value(slot.value.clone()),
+                        None => self.defaulted(
+                            Below::Select(
+                                Rc::new(outer_below.clone()),
+                                key_selector(key, entry.span),
+                            ),
+                            chain,
+                            &here,
+                        ),
+                    };
+                    let below = if op == SetOp::Set {
+                        below
+                    } else {
+                        Below::Missing
+                    };
+                    Recipe::Entry(Rc::new(EntryRecipe {
+                        expr,
+                        below,
+                        merge: *merging && !entry.replace && self.is_block(expr),
+                        replace: entry.replace,
+                        vbinds: vbinds.clone(),
+                    }))
+                };
+                let value = self.instantiate(&recipe, None, chain, here, context);
                 keyed.slots.insert(key.clone(), Slot { value, recipe });
                 keyed.defaulted.remove(key);
             }
@@ -3301,8 +3368,9 @@ impl Evaluator<'_> {
     fn span_of(&self, cell: &Lazy) -> Option<Span> {
         match &*cell.state.borrow() {
             State::Done(Ok(shaped)) => Some(shaped.span),
+            State::Literal(expr) => Some(self.ir.exprs[*expr].span),
             State::Pending(job) => match &**job {
-                Job::Expr { expr, .. } => Some(self.ir.exprs[*expr].span),
+                Job::Expr { expr, .. } | Job::Literal(expr) => Some(self.ir.exprs[*expr].span),
                 Job::Path { .. } | Job::Key(_) => None,
                 Job::Merge { span, .. } => Some(*span),
             },
@@ -3382,9 +3450,8 @@ impl Evaluator<'_> {
         let new_value = |this: &Self| {
             recipe.value.as_ref().map(|entry| {
                 let recipe = Recipe::Entry(entry.clone());
-                let placeholder = Cell::done(value.clone());
                 (
-                    this.instantiate(&recipe, &placeholder, chain, here.clone(), context),
+                    this.instantiate(&recipe, None, chain, here.clone(), context),
                     recipe,
                 )
             })
