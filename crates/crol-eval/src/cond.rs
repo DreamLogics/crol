@@ -1,6 +1,6 @@
 //! Variant conditions (`SPEC.md` 8.2, 8.3).
 
-use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::source::Span;
 use crate::variants::{Context, VariantId, Variants};
@@ -8,7 +8,7 @@ use crate::variants::{Context, VariantId, Variants};
 /// A condition as written, with variant names.
 #[derive(Debug, Clone)]
 pub(crate) enum Cond {
-    Name(Rc<str>, Span),
+    Name(Arc<str>, Span),
     Not(Box<Cond>),
     And(Box<Cond>, Box<Cond>),
     Or(Box<Cond>, Box<Cond>),
@@ -26,7 +26,7 @@ impl Cond {
     }
 
     /// Every variant name in the condition, with its span.
-    pub(crate) fn names(&self, out: &mut Vec<(Rc<str>, Span)>) {
+    pub(crate) fn names(&self, out: &mut Vec<(Arc<str>, Span)>) {
         match self {
             Cond::Name(name, span) => out.push((name.clone(), *span)),
             Cond::Not(c) => c.names(out),

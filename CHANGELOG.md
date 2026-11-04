@@ -11,6 +11,10 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Added
 
+- `CrolData::evaluate`, which evaluates another context later without reading the
+  layers again, and `each_variant`, which evaluates the base and one context for
+  each variant instead of every combination (`SPEC.md` 8.1). `CrolData` is `Send`
+  and `Sync`.
 - `crol::DataWriter`, which writes data-mode documents: declarations, patches,
   diffs between two values and variant blocks (`SPEC.md` 10.8).
 - The macros `round!`, `floor!`, `ceil!` and `clamp!` (`SPEC.md` 6.7).

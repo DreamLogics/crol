@@ -354,6 +354,7 @@ that out when you do not set `variants`.
 | `file_loaders`            | the file system    | where [documents come from](recipes.md#loading-documents-from-somewhere-else) |
 | `load_extends`            | `false`            | follow [`#![extends(...)]`](layers.md#declaring-what-a-file-builds-on) |
 | `contexts`                | `None`: all        | the contexts `compose_data` evaluates                        |
+| `each_variant`            | `false`            | with no `contexts`, the base and [one context for each variant](variants.md#using-more-than-one-context) |
 | `max_contexts`            | `4096`             | the most contexts evaluated when `contexts` is `None`        |
 | `variant_keys`            | `Any`              | [keys per context](variants.md#keys-that-exist-only-in-some-contexts) |
 | `implicit_some`           | `true`             | accept `x` for an `Option`, as `Some(x)`                     |
@@ -416,6 +417,7 @@ The most useful methods:
 | `get_with_ids(key)`                | a root value and the ids in it                     |
 | `deserialize_root(context)`        | the whole root, deserialized                       |
 | `context(variants)`, `contexts()`  | one context, or every evaluated context            |
+| `evaluate(variants)`               | evaluates a context now, without reading the files |
 | `keys()`, `contains(id)`, `type_name(id)` | what is in the data                         |
 | `value(key, &context)`             | the raw evaluated `crol::Value`                    |
 | `warnings()`                       | warnings, which `compose` drops                    |

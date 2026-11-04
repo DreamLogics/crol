@@ -4,10 +4,11 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crol_eval::{
-    Context, ContextData, DataOptions, Diagnostic, ExplainStep, Key, Layer, Sources, Value,
-    ValueKind, VariantKeys, Variants, evaluate_data,
+    Compiled, Context, ContextData, DataOptions, Diagnostic, ExplainStep, Key, Layer, Sources,
+    Value, ValueKind, VariantKeys, Variants, compile, evaluate_compiled,
 };
 use crol_syntax::TextRange;
 use crol_syntax::ast::{self, AstNode};
@@ -150,6 +151,9 @@ pub struct CrolConfig<T = String> {
     /// The contexts `compose_data` evaluates, each by its chosen variants.
     /// Default: `None`, every valid context.
     pub contexts: Option<Vec<Vec<T>>>,
+    /// With no `contexts`, evaluate the base and one context for each variant
+    /// rather than every combination (`SPEC.md` 8.1).
+    pub each_variant: bool,
     /// The most contexts evaluated without `contexts`. Default: 4096.
     pub max_contexts: usize,
     /// Which keys a context may have, compared with the base (`SPEC.md`
@@ -182,6 +186,7 @@ impl<T> Default for CrolConfig<T> {
             file_loaders: FileLoaders::new(),
             load_extends: false,
             contexts: None,
+            each_variant: false,
             max_contexts: 4096,
             variant_keys: VariantKeys::Any,
             implicit_some: true,
@@ -771,10 +776,17 @@ impl<T: VariantName> CrolComposer<T> {
             .with_init_defaults(self.config.init_defaults)
             .with_variants(variants)
             .with_contexts(contexts)
+            .with_each_variant(self.config.each_variant)
             .with_max_contexts(self.config.max_contexts)
             .with_variant_keys(self.config.variant_keys)
             .with_defaults(self.schema.clone());
-        let evaluation = evaluate_data(&sources, &layers, &options);
+        let (compiled, mut diagnostics) = compile(&sources, &layers);
+        let Some(compiled) = compiled else {
+            return Err(Error::from_diagnostics(&sources, &diagnostics));
+        };
+        let mut evaluation = evaluate_compiled(&compiled, &options);
+        diagnostics.append(&mut evaluation.diagnostics);
+        evaluation.diagnostics = diagnostics;
         let Some(base) = evaluation.value.clone() else {
             return Err(Error::from_diagnostics(&sources, &evaluation.diagnostics));
         };
@@ -794,6 +806,7 @@ impl<T: VariantName> CrolComposer<T> {
         Ok(CrolData {
             sources,
             layers,
+            compiled: Arc::new(compiled),
             data_options: options,
             base,
             contexts: evaluation.contexts,
@@ -850,6 +863,8 @@ pub struct CrolData<T = String> {
     sources: Sources,
     /// The layers and options, for re-evaluating in `explain`.
     layers: Vec<Layer>,
+    /// For evaluating another context later.
+    compiled: Arc<Compiled>,
     data_options: DataOptions,
     base: Value,
     contexts: Vec<ContextData>,
@@ -926,16 +941,7 @@ impl<T: VariantName> CrolData<T> {
         &self,
         variants: impl IntoIterator<Item = V>,
     ) -> Result<CrolContext, Error> {
-        let mut ids = Vec::new();
-        for variant in variants {
-            let variant = variant.into();
-            ids.push(
-                self.variants
-                    .id(variant.name())
-                    .ok_or_else(|| Error::new(format!("`{}` is not a variant", variant.name())))?,
-            );
-        }
-        let context = self.variants.context(&ids).map_err(Error::new)?;
+        let context = self.context_of(variants)?;
         if !self.is_evaluated(&context) {
             return Err(Error::new(format!(
                 "the context {} was not evaluated",
@@ -952,6 +958,62 @@ impl<T: VariantName> CrolData<T> {
                 .iter()
                 .map(|data| CrolContext(data.context.clone())),
         )
+    }
+
+    /// Evaluates a context of these variants, if it is not yet, without
+    /// reading the layers again (`SPEC.md` 8.1). It then counts as evaluated
+    /// everywhere, in the fingerprint as well. Its errors are returned, and
+    /// the data stays as it was.
+    pub fn evaluate<V: Into<T>>(
+        &mut self,
+        variants: impl IntoIterator<Item = V>,
+    ) -> Result<CrolContext, Error> {
+        let context = self.context_of(variants)?;
+        if self.is_evaluated(&context) {
+            return Ok(CrolContext(context));
+        }
+        let names = self
+            .variants
+            .chosen_names(&context)
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let options = self
+            .data_options
+            .clone()
+            .with_contexts(Some(vec![names]))
+            .with_warn_cross_file_patches(false);
+        let evaluation = evaluate_compiled(&self.compiled, &options);
+        if evaluation.has_errors() {
+            return Err(Error::from_diagnostics(
+                &self.sources,
+                &evaluation.diagnostics,
+            ));
+        }
+        let evaluated = evaluation
+            .contexts
+            .into_iter()
+            .find(|data| data.context == context)
+            .ok_or_else(|| Error::new("this context was not evaluated"))?;
+        self.contexts.push(evaluated);
+        Ok(CrolContext(context))
+    }
+
+    /// The context of these variants, evaluated or not.
+    fn context_of<V: Into<T>>(
+        &self,
+        variants: impl IntoIterator<Item = V>,
+    ) -> Result<Context, Error> {
+        let mut ids = Vec::new();
+        for variant in variants {
+            let variant = variant.into();
+            ids.push(
+                self.variants
+                    .id(variant.name())
+                    .ok_or_else(|| Error::new(format!("`{}` is not a variant", variant.name())))?,
+            );
+        }
+        self.variants.context(&ids).map_err(Error::new)
     }
 
     /// The names of a context's chosen variants.

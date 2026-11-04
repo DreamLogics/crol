@@ -82,6 +82,9 @@ pub struct ProjectOptions {
     pub warn_cross_file_patches: bool,
     /// Let a path go through a field left out, from its default.
     pub init_defaults: bool,
+    /// Evaluate the base and one context for each variant, not every
+    /// combination.
+    pub each_variant: bool,
     /// How many contexts may be evaluated.
     pub max_contexts: usize,
     /// The contexts to evaluate; default: every one.
@@ -98,6 +101,7 @@ impl Default for ProjectOptions {
             require_complete: true,
             warn_cross_file_patches: true,
             init_defaults: false,
+            each_variant: false,
             max_contexts: 4096,
             contexts: None,
             variant_keys: "Any".to_owned(),
@@ -477,6 +481,14 @@ impl Schema for ProjectOptions {
                             TypeExpr::Bool,
                             "Let a path go through a field left out, from its default.",
                             recorded_default(&d.init_defaults),
+                        ),
+                    ),
+                    (
+                        "each_variant",
+                        field(
+                            TypeExpr::Bool,
+                            "Evaluate the base and one context for each variant, not every combination.",
+                            recorded_default(&d.each_variant),
                         ),
                     ),
                     (

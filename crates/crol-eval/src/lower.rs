@@ -3,7 +3,7 @@
 //! variant selectors.
 
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use crol_syntax::SyntaxKind;
 use crol_syntax::ast::{self, AstNode};
@@ -25,6 +25,7 @@ pub(crate) struct DataDocument<'a> {
 }
 
 /// Lowered data-mode documents: every root operation, and the templates.
+#[derive(Debug)]
 pub(crate) struct LoweredData {
     pub(crate) ir: Ir,
     pub(crate) ops: Vec<RootOp>,
@@ -111,7 +112,7 @@ pub(crate) fn lower_data(documents: &[DataDocument<'_>]) -> (LoweredData, Vec<Di
             }
             let id = lowerer.ir.value_binds.len();
             lowerer.ir.value_binds.push(ValueBind {
-                name: Rc::from(name.text()),
+                name: Arc::from(name.text()),
                 expr: usize::MAX,
             });
             scope.value_binds.insert(name.text().to_owned(), (id, span));
@@ -212,7 +213,7 @@ struct Lowerer {
 /// `~` there, or a field value nested in such a block (`SPEC.md` 6.1).
 #[derive(Debug, Clone)]
 struct FixedBlock {
-    key: Rc<str>,
+    key: Arc<str>,
     /// The block's path from the root key.
     path: Vec<Selector>,
     /// The paths of the blocks around it, innermost first.
@@ -255,7 +256,7 @@ fn set_op(op: ast::EntryOp) -> SetOp {
     }
 }
 
-fn field_names(path: &[Selector]) -> Vec<Rc<str>> {
+fn field_names(path: &[Selector]) -> Vec<Arc<str>> {
     path.iter()
         .filter_map(|s| match &s.kind {
             SelectorKind::Field(name) => Some(name.clone()),
@@ -266,7 +267,7 @@ fn field_names(path: &[Selector]) -> Vec<Rc<str>> {
 
 fn key_selector(key: &Key, span: Span) -> Selector {
     let kind = match key {
-        Key::Str(s) => SelectorKind::Field(Rc::from(s.as_str())),
+        Key::Str(s) => SelectorKind::Field(Arc::from(s.as_str())),
         Key::Int(i) => SelectorKind::Accessor(*i),
     };
     Selector { kind, span }
@@ -305,8 +306,8 @@ fn has_variant(target: ast::Target) -> bool {
 /// The changes a reference's variant selector makes to the context: names
 /// made active, and with `!` inactive. Lowering has checked that it uses
 /// only names, `!` and `&` (`SPEC.md` 8.4).
-fn context_changes(condition: &Cond) -> Vec<(Rc<str>, bool, Span)> {
-    fn walk(c: &Cond, active: bool, out: &mut Vec<(Rc<str>, bool, Span)>) {
+fn context_changes(condition: &Cond) -> Vec<(Arc<str>, bool, Span)> {
+    fn walk(c: &Cond, active: bool, out: &mut Vec<(Arc<str>, bool, Span)>) {
         match c {
             Cond::Name(name, span) => out.push((name.clone(), active, *span)),
             Cond::Not(inner) => walk(inner, !active, out),
@@ -485,8 +486,8 @@ impl Lowerer {
         let Some((key, path)) = self.target_with_conditions(&target, &mut lists) else {
             return;
         };
-        let key: Rc<str> = match key {
-            Key::Str(key) => Rc::from(key),
+        let key: Arc<str> = match key {
+            Key::Str(key) => Arc::from(key),
             Key::Int(i) => {
                 self.error(
                     span,
@@ -627,7 +628,7 @@ impl Lowerer {
         let saved_reach = std::mem::take(&mut self.reach);
         let mut entry_target = self.block_target.clone();
         if let Key::Str(key) = &key {
-            entry_target.path.push(Rc::from(key.as_str()));
+            entry_target.path.push(Arc::from(key.as_str()));
         }
         entry_target.path.extend(field_names(&path));
         let saved_target = std::mem::replace(&mut self.default_target, entry_target);
@@ -671,7 +672,7 @@ impl Lowerer {
         Some(match condition {
             ast::Condition::Name(name) => {
                 let token = name.name()?;
-                Cond::Name(Rc::from(token.text()), self.token_span(&token))
+                Cond::Name(Arc::from(token.text()), self.token_span(&token))
             }
             ast::Condition::Not(not) => Cond::Not(Box::new(self.condition(&not.operand()?)?)),
             ast::Condition::Paren(paren) => self.condition(&paren.inner()?)?,
@@ -716,15 +717,15 @@ impl Lowerer {
         self.ir.add_expr(ExprKind::Error, span)
     }
 
-    fn resolve_type_name(&self, name: &str) -> Rc<str> {
-        Rc::from(self.aliases.get(name).map_or(name, String::as_str))
+    fn resolve_type_name(&self, name: &str) -> Arc<str> {
+        Arc::from(self.aliases.get(name).map_or(name, String::as_str))
     }
 
     // ---- Attributes (`SPEC.md` 4.1) ----
 
     /// Checks the attributes and records `use` aliases. Returns the name a
     /// `type` attribute gives.
-    fn attributes(&mut self, document: &ast::Document) -> Option<(Rc<str>, Span)> {
+    fn attributes(&mut self, document: &ast::Document) -> Option<(Arc<str>, Span)> {
         let mut schema = None;
         let mut type_name = None;
         // Type name (alias or last segment) to the full path it stands for.
@@ -824,7 +825,7 @@ impl Lowerer {
 
     fn block(
         &mut self,
-        name: Option<Rc<str>>,
+        name: Option<Arc<str>>,
         entries: impl Iterator<Item = ast::AnyEntry>,
     ) -> BlockId {
         let fixed = self.fixed.take();
@@ -876,7 +877,7 @@ impl Lowerer {
                         if self.check_bind_name(name.text(), span, &scope) {
                             let bind_id = self.ir.value_binds.len();
                             self.ir.value_binds.push(ValueBind {
-                                name: Rc::from(name.text()),
+                                name: Arc::from(name.text()),
                                 expr: usize::MAX,
                             });
                             scope
@@ -944,7 +945,7 @@ impl Lowerer {
                     let target_span = self.span(target.syntax());
                     let mut entry_target = block_target.clone();
                     if let Key::Str(key) = &key {
-                        entry_target.path.push(Rc::from(key.as_str()));
+                        entry_target.path.push(Arc::from(key.as_str()));
                     }
                     entry_target.path.extend(field_names(&path));
                     self.default_target = entry_target;
@@ -1098,7 +1099,7 @@ impl Lowerer {
         for selector in selectors {
             let span = self.span(selector.syntax());
             let kind = match &selector {
-                ast::Selector::Field(field) => SelectorKind::Field(Rc::from(field.name()?.text())),
+                ast::Selector::Field(field) => SelectorKind::Field(Arc::from(field.name()?.text())),
                 ast::Selector::Index(index) => {
                     let token = index.index()?;
                     match token.text().parse() {
@@ -1110,7 +1111,7 @@ impl Lowerer {
                     }
                 }
                 ast::Selector::Accessor(accessor) => match self.accessor_key(accessor)? {
-                    Key::Str(s) => SelectorKind::Field(Rc::from(s)),
+                    Key::Str(s) => SelectorKind::Field(Arc::from(s)),
                     Key::Int(i) => SelectorKind::Accessor(i),
                 },
                 ast::Selector::Variant(variant) => match usage {
@@ -1169,7 +1170,7 @@ impl Lowerer {
                     SyntaxKind::IDENT => name.text().to_owned(),
                     _ => literal::string(name.text()),
                 };
-                self.ir.add_expr(ExprKind::Id(Rc::from(text)), span)
+                self.ir.add_expr(ExprKind::Id(Arc::from(text)), span)
             }
             ast::Expr::Reference(reference) => self.reference(reference, span),
             ast::Expr::Block(block) => {
@@ -1198,7 +1199,7 @@ impl Lowerer {
             ast::Expr::NamedTuple(named) => {
                 let name = named
                     .name()
-                    .map_or_else(|| Rc::from(""), |n| self.resolve_type_name(n.text()));
+                    .map_or_else(|| Arc::from(""), |n| self.resolve_type_name(n.text()));
                 let elements =
                     self.detached(|this| named.elements().map(|e| this.expr(&e)).collect());
                 self.ir.add_expr(ExprKind::Named(name, elements), span)
@@ -1207,7 +1208,7 @@ impl Lowerer {
             ast::Expr::UnitName(unit) => {
                 let name = unit
                     .name()
-                    .map_or_else(|| Rc::from(""), |n| self.resolve_type_name(n.text()));
+                    .map_or_else(|| Arc::from(""), |n| self.resolve_type_name(n.text()));
                 self.ir.add_expr(ExprKind::UnitName(name), span)
             }
             ast::Expr::Paren(paren) => match paren.inner() {
@@ -1346,7 +1347,7 @@ impl Lowerer {
                 Err(message) => return self.error_expr(span, message),
             },
             SyntaxKind::STRING | SyntaxKind::RAW_STRING => {
-                ExprKind::Str(Rc::from(literal::string(token.text())))
+                ExprKind::Str(Arc::from(literal::string(token.text())))
             }
             SyntaxKind::CHAR => ExprKind::Char(literal::char(token.text())),
             SyntaxKind::TRUE_KW => ExprKind::Bool(true),
@@ -1415,7 +1416,7 @@ impl Lowerer {
                         if let Some((target, key, _)) = scope.entry_binds.get(name) {
                             let mut path = vec![Selector {
                                 kind: match key {
-                                    Key::Str(s) => SelectorKind::Field(Rc::from(s.as_str())),
+                                    Key::Str(s) => SelectorKind::Field(Arc::from(s.as_str())),
                                     Key::Int(i) => SelectorKind::Accessor(*i),
                                 },
                                 span,

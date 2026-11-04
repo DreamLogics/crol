@@ -1,7 +1,7 @@
 //! The evaluator's representation of a document: expressions and blocks in
 //! arenas, with names resolved.
 
-use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::source::Span;
 use crate::value::Key;
@@ -37,14 +37,14 @@ pub(crate) enum ExprKind {
     Int(i128),
     Float(f64),
     Char(char),
-    Str(Rc<str>),
-    Id(Rc<str>),
+    Str(Arc<str>),
+    Id(Arc<str>),
     Ref(RefKind),
     Block(BlockId),
     List(Vec<ExprId>),
     Tuple(Vec<ExprId>),
-    Named(Rc<str>, Vec<ExprId>),
-    UnitName(Rc<str>),
+    Named(Arc<str>, Vec<ExprId>),
+    UnitName(Arc<str>),
     Path(ExprId, Vec<Selector>),
     Neg(ExprId),
     Binary(BinOp, ExprId, ExprId),
@@ -75,12 +75,12 @@ pub(crate) enum RefKind {
 /// nearest enclosing type name, or with no type name, from the root type.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct DefaultTarget {
-    pub(crate) type_name: Option<Rc<str>>,
+    pub(crate) type_name: Option<Arc<str>>,
     /// The root key of a data-mode document the path starts below, with no
     /// type name: a step of the path where the root type is the whole
     /// document (`SPEC.md` 4.1).
-    pub(crate) root_key: Option<Rc<str>>,
-    pub(crate) path: Vec<Rc<str>>,
+    pub(crate) root_key: Option<Arc<str>>,
+    pub(crate) path: Vec<Arc<str>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -158,19 +158,19 @@ pub(crate) struct Selector {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SelectorKind {
     /// `.name` or `["name"]`: a string key.
-    Field(Rc<str>),
+    Field(Arc<str>),
     /// `.0`: a tuple element.
     Element(usize),
     /// `[3]`, `[-3]`: an integer key, or on a list an index.
     Accessor(i128),
     /// `<a & !b>` in a reference: the context to read it in (`SPEC.md`
     /// 8.4), as variants made active or inactive.
-    Context(Vec<(Rc<str>, bool, Span)>),
+    Context(Vec<(Arc<str>, bool, Span)>),
 }
 
 #[derive(Debug)]
 pub(crate) struct Block {
-    pub(crate) name: Option<Rc<str>>,
+    pub(crate) name: Option<Arc<str>>,
     pub(crate) spreads: Vec<ExprId>,
     pub(crate) entries: Vec<Entry>,
     pub(crate) defaults: bool,
@@ -213,14 +213,14 @@ pub(crate) struct Entry {
 
 #[derive(Debug)]
 pub(crate) struct ValueBind {
-    pub(crate) name: Rc<str>,
+    pub(crate) name: Arc<str>,
     pub(crate) expr: ExprId,
 }
 
 /// An operation on a root key, from a data-mode document (`SPEC.md` 7.2).
 #[derive(Debug)]
 pub(crate) struct RootOp {
-    pub(crate) key: Rc<str>,
+    pub(crate) key: Arc<str>,
     /// `None` for a remove.
     pub(crate) op: Option<SetOp>,
     /// `^target: expr`: a set that never merges (`SPEC.md` 5.2).

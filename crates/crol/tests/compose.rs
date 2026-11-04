@@ -489,3 +489,110 @@ fn explain_lists_the_operations_behind_a_value() {
     assert_eq!(steps[0].kind, crol::StepKind::Definition);
     assert_eq!(steps[1].kind, crol::StepKind::Patch);
 }
+
+const CIVS_AND_RULES: &str = "
++unit: { hp: 10, speed: 1 }
+<empire> {
+    unit.hp: & + 5,
+}
+<rebel> {
+    unit.hp: & + 1,
+}
+<fast> {
+    unit.speed: & * 2,
+}
+<broken & rebel> {
+    unit.hp: & / 0,
+}
+";
+
+fn civs_and_rules(contexts: Option<Vec<Vec<String>>>, each_variant: bool) -> crol::CrolComposer {
+    let variants = crol::CrolVariants::new()
+        .add_grouped(["empire", "rebel"])
+        .add_discrete("fast")
+        .add_discrete("broken");
+    crol::CrolComposer::with_cfg(crol::CrolConfig {
+        variants,
+        contexts,
+        each_variant,
+        ..Default::default()
+    })
+    .load_layer(crol::CrolLayer::from_sources(
+        "base",
+        [("a.crod", CIVS_AND_RULES)],
+    ))
+}
+
+#[derive(Debug, PartialEq, serde_derive::Deserialize)]
+struct Stats {
+    hp: u32,
+    speed: u32,
+}
+
+#[test]
+fn a_context_can_be_evaluated_later() {
+    let mut data = civs_and_rules(Some(Vec::new()), false)
+        .compose_data()
+        .unwrap();
+    assert!(data.context(["empire", "fast"]).is_err());
+    let context = data.evaluate(["empire", "fast"]).unwrap();
+    assert_eq!(
+        data.get_in::<Stats>("unit", &context).unwrap(),
+        Stats { hp: 15, speed: 2 }
+    );
+    assert!(data.context(["empire", "fast"]).is_ok());
+}
+
+#[test]
+fn evaluating_a_context_again_changes_nothing() {
+    let mut data = civs_and_rules(Some(Vec::new()), false)
+        .compose_data()
+        .unwrap();
+    data.evaluate(["rebel"]).unwrap();
+    let fingerprint = data.fingerprint();
+    data.evaluate(["rebel"]).unwrap();
+    assert_eq!(data.fingerprint(), fingerprint);
+    assert_eq!(data.contexts().count(), 2);
+}
+
+#[test]
+fn a_context_evaluated_later_fingerprints_as_one_evaluated_at_once() {
+    let names = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let at_once = civs_and_rules(Some(vec![names(&["rebel"]), names(&["fast"])]), false)
+        .compose_data()
+        .unwrap();
+    let mut later = civs_and_rules(Some(Vec::new()), false)
+        .compose_data()
+        .unwrap();
+    later.evaluate(["fast"]).unwrap();
+    later.evaluate(["rebel"]).unwrap();
+    assert_eq!(at_once.fingerprint(), later.fingerprint());
+}
+
+#[test]
+fn an_error_in_a_context_evaluated_later_leaves_the_data_as_it_was() {
+    let mut data = civs_and_rules(Some(Vec::new()), false)
+        .compose_data()
+        .unwrap();
+    let error = data.evaluate(["rebel", "broken"]).unwrap_err();
+    assert!(error.to_string().contains("division by zero"), "{error}");
+    assert_eq!(data.contexts().count(), 1);
+}
+
+#[test]
+fn each_variant_evaluates_one_context_for_each() {
+    let data = civs_and_rules(None, true).compose_data().unwrap();
+    // The base, `empire`, `rebel`, `fast` and `broken`; the error needs two.
+    assert_eq!(data.contexts().count(), 5);
+}
+
+#[test]
+fn every_combination_is_the_default() {
+    assert!(civs_and_rules(None, false).compose_data().is_err());
+}
+
+#[test]
+fn data_can_move_between_threads() {
+    fn shared<T: Send + Sync>() {}
+    shared::<crol::CrolData>();
+}

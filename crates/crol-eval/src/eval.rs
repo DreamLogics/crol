@@ -13,6 +13,7 @@ use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::rc::{Rc, Weak};
+use std::sync::Arc;
 
 use indexmap::IndexMap;
 
@@ -123,12 +124,12 @@ enum Shape {
     Int(i128),
     Float(f64),
     Char(char),
-    Str(Rc<str>),
-    Id(Rc<str>),
+    Str(Arc<str>),
+    Id(Arc<str>),
     List(Vec<Lazy>),
     Tuple(Vec<Lazy>),
-    UnitName(Rc<str>),
-    Named(Rc<str>, Vec<Lazy>),
+    UnitName(Arc<str>),
+    Named(Arc<str>, Vec<Lazy>),
     Keyed(KeyedShape),
 }
 
@@ -153,7 +154,7 @@ impl Shape {
 
 #[derive(Clone, Default)]
 struct KeyedShape {
-    name: Option<Rc<str>>,
+    name: Option<Arc<str>>,
     slots: IndexMap<Key, Slot>,
     defaults: bool,
     defaulted: BTreeSet<Key>,
@@ -234,7 +235,7 @@ struct ChainLink {
     /// The block of a value bind: `&parent` cannot go above it.
     bind_root: bool,
     /// The block's type name, if it has one.
-    name: Option<Rc<str>>,
+    name: Option<Arc<str>>,
     next: Chain,
 }
 
@@ -291,7 +292,7 @@ struct Location {
     base: Weak<Cell>,
     anchor: Anchor,
     /// The bind's name, or empty for the root.
-    name: Rc<str>,
+    name: Arc<str>,
     /// The steps from the base, as a shared list from the last step back,
     /// so that a child location costs one allocation.
     path: Option<Rc<PathLink>>,
@@ -388,7 +389,7 @@ fn child_location(location: &Option<Location>, step: Step) -> Option<Location> {
 }
 
 /// Whether two type names allow a merge: they are equal, or one is absent.
-fn names_agree(a: &Option<Rc<str>>, b: &Option<Rc<str>>) -> bool {
+fn names_agree(a: &Option<Arc<str>>, b: &Option<Arc<str>>) -> bool {
     match (a, b) {
         (Some(a), Some(b)) => a == b,
         _ => true,
@@ -405,7 +406,7 @@ fn selector_field(selector: &Selector) -> Option<String> {
 
 fn key_selector(key: &Key, span: Span) -> Selector {
     let kind = match key {
-        Key::Str(s) => SelectorKind::Field(Rc::from(s.as_str())),
+        Key::Str(s) => SelectorKind::Field(Arc::from(s.as_str())),
         Key::Int(i) => SelectorKind::Accessor(*i),
     };
     Selector { kind, span }
@@ -541,7 +542,7 @@ fn root_location(cell: &Lazy) -> Location {
     Location {
         base: Rc::downgrade(cell),
         anchor: Anchor::Root,
-        name: Rc::from(""),
+        name: Arc::from(""),
         path: None,
     }
 }
@@ -582,14 +583,14 @@ fn shaped_from_value(value: &Value) -> Rc<Shaped> {
         ValueKind::Int(i) => Shape::Int(*i),
         ValueKind::Float(f) => Shape::Float(*f),
         ValueKind::Char(c) => Shape::Char(*c),
-        ValueKind::String(s) => Shape::Str(Rc::from(s.as_str())),
-        ValueKind::Id(s) => Shape::Id(Rc::from(s.as_str())),
-        ValueKind::UnitName(n) => Shape::UnitName(Rc::from(n.as_str())),
+        ValueKind::String(s) => Shape::Str(Arc::from(s.as_str())),
+        ValueKind::Id(s) => Shape::Id(Arc::from(s.as_str())),
+        ValueKind::UnitName(n) => Shape::UnitName(Arc::from(n.as_str())),
         ValueKind::List(items) => Shape::List(cells(items)),
         ValueKind::Tuple(items) => Shape::Tuple(cells(items)),
-        ValueKind::NamedTuple(n, items) => Shape::Named(Rc::from(n.as_str()), cells(items)),
+        ValueKind::NamedTuple(n, items) => Shape::Named(Arc::from(n.as_str()), cells(items)),
         ValueKind::Keyed(keyed) => Shape::Keyed(KeyedShape {
-            name: keyed.name.as_deref().map(Rc::from),
+            name: keyed.name.as_deref().map(Arc::from),
             slots: keyed
                 .entries
                 .iter()
@@ -683,6 +684,7 @@ pub(crate) struct DataInput<'a> {
     /// The contexts to evaluate, by chosen variant names; `None` for every
     /// valid context.
     pub(crate) contexts: Option<&'a [Vec<String>]>,
+    pub(crate) each_variant: bool,
     pub(crate) max_contexts: usize,
     pub(crate) variant_keys: VariantKeys,
     pub(crate) evaluate_every_key: bool,
@@ -759,9 +761,9 @@ pub(crate) struct DataPlan<'a> {
     conditions: Vec<Option<Resolved>>,
     /// The condition of each `..` at a root, resolved.
     root_defaults: Vec<Option<Resolved>>,
-    keys: IndexMap<Rc<str>, KeyPlan>,
+    keys: IndexMap<Arc<str>, KeyPlan>,
     /// For each root key, the keys whose value it reads late.
-    dependents: std::collections::HashMap<Rc<str>, Vec<Rc<str>>>,
+    dependents: std::collections::HashMap<Arc<str>, Vec<Arc<str>>>,
 }
 
 /// What a key's operations read, found from their expressions.
@@ -769,7 +771,7 @@ pub(crate) struct DataPlan<'a> {
 struct Reads {
     /// Root keys read through `&root.key`, or `&self` and the like at the
     /// top level.
-    keys: Vec<Rc<str>>,
+    keys: Vec<Arc<str>>,
     /// The whole root, or a root key that cannot be told statically.
     whole: bool,
     /// A reference into another context.
@@ -1331,8 +1333,8 @@ impl<'a> DataPlan<'a> {
                 }
             }
         }
-        let mut keys: IndexMap<Rc<str>, KeyPlan> = IndexMap::new();
-        let mut indices: IndexMap<Rc<str>, Vec<usize>> = IndexMap::new();
+        let mut keys: IndexMap<Arc<str>, KeyPlan> = IndexMap::new();
+        let mut indices: IndexMap<Arc<str>, Vec<usize>> = IndexMap::new();
         for (i, op) in input.ops.iter().enumerate() {
             indices.entry(op.key.clone()).or_default().push(i);
         }
@@ -1353,7 +1355,7 @@ impl<'a> DataPlan<'a> {
             templates: input.templates.iter().copied().collect(),
             ..TemplateReads::default()
         };
-        let mut dependents: std::collections::HashMap<Rc<str>, Vec<Rc<str>>> = Default::default();
+        let mut dependents: std::collections::HashMap<Arc<str>, Vec<Arc<str>>> = Default::default();
         for (key, list) in indices {
             let mut reads = Reads::default();
             for &i in &list {
@@ -1409,7 +1411,7 @@ impl<'a> DataPlan<'a> {
     /// The keys whose value can differ from the base in `context`: those
     /// with an operation whose condition holds there, and those that read
     /// them, directly or not. Every other key has its base value.
-    fn varying(&self, context: &Context) -> std::collections::HashSet<Rc<str>> {
+    fn varying(&self, context: &Context) -> std::collections::HashSet<Arc<str>> {
         let mut varying = std::collections::HashSet::new();
         let mut queue = Vec::new();
         for (key, plan) in &self.keys {
@@ -1456,6 +1458,14 @@ impl<'a> DataPlan<'a> {
                         );
                     }
                     let context = self.variants.context(&ids)?;
+                    if !contexts.contains(&context) {
+                        contexts.push(context);
+                    }
+                }
+            }
+            None if input.each_variant => {
+                for id in self.variants.ids() {
+                    let context = self.variants.context(&[id])?;
                     if !contexts.contains(&context) {
                         contexts.push(context);
                     }
@@ -2603,7 +2613,7 @@ impl Evaluator<'_> {
 
     /// The nearest type name at or around what is at `below`, with the
     /// fields from there to it.
-    fn type_path(&mut self, below: &Below, span: Span) -> Option<(Rc<str>, Vec<String>)> {
+    fn type_path(&mut self, below: &Below, span: Span) -> Option<(Arc<str>, Vec<String>)> {
         let value = match self.resolve_below(below, span) {
             Ok(cell) => self.force(&cell, span).ok(),
             Err(_) => None,
@@ -2627,7 +2637,11 @@ impl Evaluator<'_> {
 
     /// The path to `here` from the nearest block with a type name, or from
     /// the root type (`SPEC.md` 6.1.3).
-    fn chain_path(&self, chain: &Chain, here: &Location) -> Option<(Option<Rc<str>>, Vec<String>)> {
+    fn chain_path(
+        &self,
+        chain: &Chain,
+        here: &Location,
+    ) -> Option<(Option<Arc<str>>, Vec<String>)> {
         let fields = |steps: &[&Step]| -> Option<Vec<String>> {
             steps
                 .iter()

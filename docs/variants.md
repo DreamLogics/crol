@@ -361,6 +361,48 @@ variant on or off, so it multiplies. Past `CrolConfig::max_contexts` (4096 by
 default) you have to list the contexts you actually use in
 `CrolConfig::contexts`. Only evaluated contexts are checked.
 
+If your variants multiply, and you do not need every combination checked, set
+`CrolConfig::each_variant`, or `each_variant: true` in the project file's `options`.
+Then the base and one context for each variant are evaluated. A context you need
+later, such as the combination a player chose, is evaluated when you ask for it.
+This does not read the files again:
+
+```rust
+// src/main.rs
+use crol::{CrolComposer, CrolConfig, CrolLayer, CrolVariants};
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct Unit {
+    hp: u32,
+    speed: u32,
+}
+
+fn main() -> Result<(), crol::Error> {
+    let variants = CrolVariants::new()
+        .add_grouped(["empire", "rebel"])
+        .add_discrete("fast");
+    let text = "+unit: { hp: 10, speed: 1 }, unit<empire>.hp: 15, unit<fast>.speed: 2";
+    let mut data = CrolComposer::with_cfg(CrolConfig {
+        variants,
+        each_variant: true,
+        ..Default::default()
+    })
+    .load_layer(CrolLayer::from_sources("base", [("a.crod", text)]))
+    .compose_data()?;
+
+    let chosen = data.evaluate(["empire", "fast"])?;
+    let unit: Unit = data.get_in("unit", &chosen)?;
+    println!("{} hit points, speed {}", unit.hp, unit.speed);
+    Ok(())
+}
+```
+
+```console
+$ cargo run
+15 hit points, speed 2
+```
+
 To see everything at once, `crol eval --all-contexts` prints the base and then
 what differs in each other context.
 

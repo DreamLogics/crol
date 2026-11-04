@@ -1478,7 +1478,12 @@ set. `{prod_eu, cache}` is the context in which `prod_eu`, `prod` and
 group's choice (or none) times each `Discrete` on or off. That is 4 × 2 ×
 2 = 16 contexts in the first example. `CrolConfig::contexts` lists the contexts
 the application uses instead; it is required when the product exceeds
-`CrolConfig::max_contexts` (default 4096). Only evaluated contexts are
+`CrolConfig::max_contexts` (default 4096), unless `CrolConfig::each_variant`
+evaluates the base and one context for each variant instead of every
+combination, for variants that multiply. A context can also be evaluated
+later: `CrolData::evaluate(variants)` adds it to the data without reading
+the layers again, and it then counts like any other, in the fingerprint as
+well. Only evaluated contexts are
 checked and fingerprinted.
 
 ### 8.2 Conditions
@@ -2135,6 +2140,7 @@ are fetched to a cache and read from there.
 | `file_loaders: FileLoaders` | the file system below `root_path` | 10.7 |
 | `load_extends: bool` | `false` | 4.1 |
 | `contexts: Option<Vec<Vec<T>>>` | `None` (every valid context) | 8.1 |
+| `each_variant: bool` | `false` | 8.1 |
 | `max_contexts: usize` | `4096` | 8.1 |
 | `variant_keys: VariantKeys` | `Any` | 8.5 |
 | `implicit_some: bool` | `true` | 10.1 |

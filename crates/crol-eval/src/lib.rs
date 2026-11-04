@@ -85,6 +85,9 @@ pub struct DataOptions {
     /// The contexts to evaluate besides the base, each by its chosen
     /// variants; `None` for every valid context.
     pub contexts: Option<Vec<Vec<String>>>,
+    /// When `contexts` is `None`, evaluate the base and one context for each
+    /// variant, rather than every combination (`SPEC.md` 8.1).
+    pub each_variant: bool,
     /// The most contexts evaluated when `contexts` is `None`.
     pub max_contexts: usize,
     /// Which keys a context may have, compared with the base (`SPEC.md` 8.5).
@@ -119,6 +122,7 @@ impl Default for DataOptions {
             warn_cross_file_patches: true,
             variants: Variants::new(),
             contexts: None,
+            each_variant: false,
             max_contexts: 4096,
             variant_keys: VariantKeys::Any,
             evaluate_every_key: false,
@@ -129,6 +133,12 @@ impl Default for DataOptions {
 }
 
 impl DataOptions {
+    /// Sets [`DataOptions::each_variant`].
+    pub fn with_each_variant(mut self, each: bool) -> Self {
+        self.each_variant = each;
+        self
+    }
+
     /// Sets [`DataOptions::init_defaults`].
     pub fn with_init_defaults(mut self, init: bool) -> Self {
         self.init_defaults = init;
@@ -172,10 +182,34 @@ impl DataOptions {
     }
 }
 
+/// Layers read and lowered, ready to be evaluated in any context, without
+/// reading their text again. Share one between threads with an `Arc`.
+#[derive(Debug)]
+pub struct Compiled {
+    lowered: lower::LoweredData,
+    layer_names: Vec<String>,
+}
+
 /// Evaluates layers of data-mode documents (`SPEC.md` 7): later layers
 /// apply over earlier ones. The value is the root, a keyed value from root
 /// keys to their final values.
 pub fn evaluate_data(sources: &Sources, layers: &[Layer], options: &DataOptions) -> Evaluation {
+    let (compiled, mut diagnostics) = compile(sources, layers);
+    let Some(compiled) = compiled else {
+        return Evaluation {
+            diagnostics,
+            ..Evaluation::default()
+        };
+    };
+    let mut evaluation = evaluate_compiled(&compiled, options);
+    diagnostics.append(&mut evaluation.diagnostics);
+    evaluation.diagnostics = diagnostics;
+    evaluation
+}
+
+/// Reads and lowers layers of data-mode documents, with every diagnostic
+/// found; `None` if there are errors.
+pub fn compile(sources: &Sources, layers: &[Layer]) -> (Option<Compiled>, Vec<Diagnostic>) {
     let mut diagnostics = Vec::new();
     let mut parses = Vec::new();
     for (layer_index, layer) in layers.iter().enumerate() {
@@ -221,21 +255,33 @@ pub fn evaluate_data(sources: &Sources, layers: &[Layer], options: &DataOptions)
     let (lowered, mut errors) = lower::lower_data(&documents);
     diagnostics.append(&mut errors);
     if diagnostics.iter().any(Diagnostic::is_error) {
-        return Evaluation {
-            diagnostics,
-            ..Evaluation::default()
-        };
+        return (None, diagnostics);
     }
-    let layer_names: Vec<String> = layers.iter().map(|l| l.name.clone()).collect();
+    let layer_names = layers.iter().map(|l| l.name.clone()).collect();
+    (
+        Some(Compiled {
+            lowered,
+            layer_names,
+        }),
+        diagnostics,
+    )
+}
+
+/// Evaluates compiled layers. With [`DataOptions::contexts`], this is how
+/// a context is evaluated later, without reading the layers again.
+pub fn evaluate_compiled(compiled: &Compiled, options: &DataOptions) -> Evaluation {
+    let lowered = &compiled.lowered;
+    let mut diagnostics = Vec::new();
     let input = eval::DataInput {
         ops: &lowered.ops,
         templates: &lowered.templates,
         root_defaults: &lowered.root_defaults,
         root_span: lowered.root_span,
-        layer_names: &layer_names,
+        layer_names: &compiled.layer_names,
         warn_cross_file_patches: options.warn_cross_file_patches,
         variants: &options.variants,
         contexts: options.contexts.as_deref(),
+        each_variant: options.each_variant,
         max_contexts: options.max_contexts,
         variant_keys: options.variant_keys,
         evaluate_every_key: options.evaluate_every_key,
@@ -426,6 +472,7 @@ fn explain_paths(
         warn_cross_file_patches: false,
         variants: &evaluation.variants,
         contexts: options.contexts.as_deref(),
+        each_variant: options.each_variant,
         max_contexts: options.max_contexts,
         variant_keys: options.variant_keys,
         evaluate_every_key: false,
