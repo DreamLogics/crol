@@ -112,3 +112,16 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 - The formatter keeps the space in `1 .0`, which would become a float.
 - Evaluation no longer leaks memory through cells that hold each other:
   a value bind that is never read, or a value that holds itself.
+- Language server: completion finds the type at the cursor at any depth:
+  in list and tuple elements, `Some(...)` and other payloads, struct
+  variants, after a `.` in a target, and with unfinished lines at the
+  cursor or above it. Values are offered in lists and payloads too, and
+  variant blocks offer the fields set in the block around them.
+- Language server: hover, inlay hints, code actions and `&self` work
+  inside list elements, tuples and payloads; hover shows the type in
+  struct variants; integer map keys are found.
+- Language server: completion no longer ends the server after text
+  outside ASCII, and offers nothing in strings and comments.
+- Language server: completion items carry a `textEdit` for the word at the
+  cursor, keep an existing `:`, and are triggered where keys and values
+  start; a document just opened is evaluated at once.

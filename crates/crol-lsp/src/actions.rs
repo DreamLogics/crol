@@ -323,10 +323,7 @@ impl Document<'_> {
         &crol::schema::SchemaFile,
         &indexmap::IndexMap<String, crol::schema::Field>,
     )> {
-        let snapshot = self.snapshot?;
-        let schema = snapshot.schema_for(self.file)?.file;
-        let ty = schema::block_type(snapshot, self.file, block)?;
-        schema::struct_of(schema, &ty).map(|(_, fields)| (schema, fields))
+        schema::block_fields(self.snapshot?, self.file, block)
     }
 
     /// The value below the entry a block is the value of: the value at its

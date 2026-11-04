@@ -19,6 +19,7 @@ mod convert;
 mod features;
 mod hints;
 mod navigate;
+mod place;
 mod remote;
 mod schema;
 mod tokens;
@@ -205,7 +206,13 @@ impl Server {
                 .into(),
             ),
             completion_provider: Some(lsp_types::CompletionOptions {
-                trigger_characters: Some([".", "&", "<", "@"].map(str::to_owned).to_vec()),
+                // Where a key or value starts, not only where a path goes
+                // on: editors ask on these and on word characters only.
+                trigger_characters: Some(
+                    [".", "&", "<", "@", ":", " ", "{", "[", "(", ","]
+                        .map(str::to_owned)
+                        .to_vec(),
+                ),
                 ..Default::default()
             }),
             ..Default::default()
@@ -307,8 +314,17 @@ impl Server {
                     notification.params,
                 ) && let Some(path) = convert::uri_to_path(&params.text_document.uri)
                 {
-                    self.open.insert(path, params.text_document.text);
+                    self.open.insert(path.clone(), params.text_document.text);
                     self.edited(&params.text_document.uri);
+                    // Until it is evaluated once, nothing is known of a
+                    // document in no layer, not even its schema.
+                    if !self
+                        .snapshot
+                        .as_ref()
+                        .is_some_and(|s| s.file_of(&path).is_some())
+                    {
+                        self.evaluate();
+                    }
                 }
             }
             notification::DidChangeTextDocument::METHOD => {

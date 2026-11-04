@@ -3,15 +3,17 @@
 use crol::schema::{SchemaFile, TypeDef, TypeExpr, VariantShape};
 use crol_eval::{FileId, PathStep, Value, ValueKind, print};
 use crol_syntax::ast::{self, AstNode};
-use crol_syntax::{SyntaxKind, SyntaxNode, TextSize};
+use crol_syntax::{LineIndex, SyntaxKind, SyntaxNode, TextRange, TextSize};
 use lsp_types::{
-    CompletionItem, CompletionItemKind, Documentation, MarkupContent, MarkupKind, Position, Uri,
+    CompletionItem, CompletionItemKind, CompletionTextEdit, Documentation, MarkupContent,
+    MarkupKind, Position, TextEdit, Uri,
 };
 
 use crate::Settings;
 use crate::convert::{self, Encoding};
 use crate::features;
-use crate::schema;
+use crate::place::{self, Cursor, Place, Scope, Slot};
+use crate::schema::{self, Shape};
 use crate::workspace::Snapshot;
 
 struct Completer<'a> {
@@ -20,13 +22,68 @@ struct Completer<'a> {
     root: SyntaxNode,
     offset: TextSize,
     context: &'a [String],
+    /// Where the word at the cursor starts in the data.
+    cursor: Cursor<'a>,
+    /// Whether a `:` follows the word, so that a key needs no value.
+    before_colon: bool,
+}
+
+fn is_word(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
+}
+
+/// Whether an offset is inside a string or comment, where the characters
+/// that trigger completion mean nothing. A string or comment that is not
+/// closed goes on up to the end of the text.
+fn in_string_or_comment(text: &str, at: usize) -> bool {
+    let mut start = 0;
+    for token in crol_syntax::tokenize(text).0 {
+        let end = start + usize::from(token.len);
+        if start < at && at <= end {
+            let open = match token.kind {
+                SyntaxKind::LINE_COMMENT => true,
+                SyntaxKind::BLOCK_COMMENT => !text[start..end].ends_with("*/"),
+                SyntaxKind::STRING => !closed_string(&text[start..end]),
+                SyntaxKind::RAW_STRING => {
+                    let hashes = text[start + 1..end]
+                        .chars()
+                        .take_while(|c| *c == '#')
+                        .count();
+                    !text[start..end].ends_with(&format!("\"{}", "#".repeat(hashes)))
+                        || end - start < hashes * 2 + 3
+                }
+                _ => false,
+            };
+            let text_like = matches!(
+                token.kind,
+                SyntaxKind::STRING
+                    | SyntaxKind::RAW_STRING
+                    | SyntaxKind::CHAR
+                    | SyntaxKind::LINE_COMMENT
+                    | SyntaxKind::BLOCK_COMMENT
+            );
+            return text_like && (at < end || open);
+        }
+        start = end;
+    }
+    false
+}
+
+/// Whether a string token has its closing quote, which a `\` would escape.
+fn closed_string(token: &str) -> bool {
+    let Some(body) = token.strip_prefix('"').and_then(|t| t.strip_suffix('"')) else {
+        return false;
+    };
+    let backslashes = body.chars().rev().take_while(|c| *c == '\\').count();
+    backslashes % 2 == 0
 }
 
 /// What to offer at the cursor: after `&root.`, `&self.`, `&parent.` or a
 /// bind, the keys of the value there; after `&`, the names a reference can
 /// start with; after `@`, root keys; in `<...>`, variant names; in a block
-/// of a known type, its fields not written yet; after `key:`, the values
-/// its type allows.
+/// of a known type, its fields not written yet; after a `.` in a target,
+/// the fields there; where a value goes, the values its type allows. Each
+/// item replaces the word at the cursor. Nothing in strings and comments.
 pub(crate) fn complete(
     snapshot: &Snapshot,
     uri: &Uri,
@@ -37,18 +94,66 @@ pub(crate) fn complete(
 ) -> Vec<CompletionItem> {
     let offset = convert::offset(text, position, encoding);
     let at = usize::from(offset);
+    if in_string_or_comment(text, at) {
+        return Vec::new();
+    }
     let line_start = text[..at].rfind('\n').map_or(0, |i| i + 1);
     let before = &text[line_start..at];
     let partial_start = before
-        .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-        .map_or(0, |i| i + 1);
-    let lead = &before[..partial_start];
+        .char_indices()
+        .rfind(|(_, c)| !is_word(*c))
+        .map_or(0, |(i, c)| i + c.len_utf8());
+    let word_start = line_start + partial_start;
+    let word_end = text[at..]
+        .find(|c| !is_word(c))
+        .map_or(text.len(), |i| at + i);
+    let mut items = items_at(
+        snapshot,
+        uri,
+        text,
+        (offset, word_start, word_end),
+        settings,
+    );
+    let index = LineIndex::new(text);
+    let word = TextRange::new(
+        TextSize::try_from(word_start).unwrap_or_default(),
+        TextSize::try_from(word_end).unwrap_or_default(),
+    );
+    let range = convert::range(text, &index, word, encoding);
+    for item in &mut items {
+        let new_text = item.insert_text.clone().unwrap_or(item.label.clone());
+        item.text_edit = Some(CompletionTextEdit::Edit(TextEdit::new(range, new_text)));
+        item.filter_text = Some(item.label.clone());
+    }
+    items
+}
+
+fn items_at(
+    snapshot: &Snapshot,
+    uri: &Uri,
+    text: &str,
+    (offset, word_start, word_end): (TextSize, usize, usize),
+    settings: &Settings,
+) -> Vec<CompletionItem> {
+    let at = usize::from(offset);
+    let line_start = text[..at].rfind('\n').map_or(0, |i| i + 1);
+    let before = &text[line_start..at];
+    let lead = &text[line_start..word_start];
+    let file = convert::uri_to_path(uri).and_then(|p| snapshot.file_of(&p));
+    let scope = Scope::new(snapshot, file);
+    let after = text[word_end..].trim_start_matches([' ', '\t']);
     let completer = Completer {
         snapshot,
-        file: convert::uri_to_path(uri).and_then(|p| snapshot.file_of(&p)),
+        file,
         root: crol_syntax::parse(text).syntax(),
         offset,
         context: &settings.context,
+        cursor: place::locate(
+            &scope,
+            text,
+            TextSize::try_from(word_start).unwrap_or_default(),
+        ),
+        before_colon: after.starts_with(':') && !after.starts_with("::"),
     };
 
     if let Some((reference, segments)) = reference_prefix(lead) {
@@ -80,35 +185,53 @@ pub(crate) fn complete(
         items.push(item("!".to_owned(), CompletionItemKind::OPERATOR, None));
         return items;
     }
-    // Before the partial word, on this line or the ones before.
-    let previous = text[..line_start + partial_start].trim_end();
-    if previous.ends_with(':') && !previous.ends_with("::") {
-        return completer.values();
+    match completer.cursor.slot {
+        Slot::Key => completer.bracket_fields(),
+        Slot::Path => completer.path_fields(),
+        Slot::Value => completer.values(),
+        Slot::None => Vec::new(),
     }
-    // A line break separates entries too (`SPEC.md` 5.3), unless an operator
-    // before it needs what comes next.
-    let own_line = lead.trim().is_empty() && !previous.is_empty();
-    if previous.ends_with(['{', ',', '+', '?'])
-        || own_line && !previous.ends_with(['-', '*', '/', '%', '~', '|', '(', '[', '=', '.'])
-    {
-        return completer.fields();
-    }
-    Vec::new()
 }
 
 /// `&self.limits.` → (`&self.limits.`, [`self`, `limits`]): a reference
-/// path the lead ends in, with a `.` last.
+/// path the lead ends in, with a `.` last. An accessor is a segment of its
+/// own: `&root.a[0].` → [`root`, `a`, `[0]`].
 fn reference_prefix(lead: &str) -> Option<(&str, Vec<&str>)> {
     if !lead.ends_with('.') {
         return None;
     }
     let start = lead.rfind('&')?;
     let reference = &lead[start..];
-    let segments: Vec<&str> = reference[1..reference.len() - 1].split('.').collect();
-    segments
-        .iter()
-        .all(|s| crol_eval::is_identifier(s) || s.chars().all(|c| c.is_ascii_digit()))
-        .then_some((reference, segments))
+    let mut segments = Vec::new();
+    for part in reference[1..reference.len() - 1].split('.') {
+        let name_end = part.find('[').unwrap_or(part.len());
+        let (name, mut accessors) = part.split_at(name_end);
+        if !(crol_eval::is_identifier(name) || name.chars().all(|c| c.is_ascii_digit()))
+            || name.is_empty()
+        {
+            return None;
+        }
+        segments.push(name);
+        while !accessors.is_empty() {
+            let end = accessors.find(']')? + 1;
+            let accessor = &accessors[..end];
+            accessor_step(accessor)?;
+            segments.push(accessor);
+            accessors = &accessors[end..];
+        }
+    }
+    Some((reference, segments))
+}
+
+/// The step of `[0]` or `["key"]`.
+fn accessor_step(accessor: &str) -> Option<PathStep> {
+    let inner = accessor.strip_prefix('[')?.strip_suffix(']')?;
+    match inner.parse() {
+        Ok(index) => Some(PathStep::Accessor(index)),
+        Err(_) => inner
+            .starts_with('"')
+            .then(|| PathStep::Field(features::string_text(inner))),
+    }
 }
 
 fn item(label: String, kind: CompletionItemKind, detail: Option<String>) -> CompletionItem {
@@ -143,17 +266,8 @@ fn describe(value: &Value) -> Option<String> {
 }
 
 impl Completer<'_> {
-    /// The evaluation the document belongs to, else the project's; while
-    /// that has no value, the latest of the project's that had one.
     fn evaluation(&self) -> &crol_eval::Evaluation {
-        let evaluation = self
-            .file
-            .and_then(|f| self.snapshot.evaluation_of(f))
-            .unwrap_or(&self.snapshot.evaluation);
-        match (&evaluation.value, &self.snapshot.last_good) {
-            (None, Some(good)) if self.file.is_none_or(|f| self.snapshot.in_layers(f)) => good,
-            _ => evaluation,
-        }
+        features::evaluation_for(self.snapshot, self.file)
     }
 
     fn root_value(&self) -> Option<&Value> {
@@ -214,9 +328,10 @@ impl Completer<'_> {
         let steps = |names: &[&str]| -> Vec<PathStep> {
             names
                 .iter()
-                .map(|n| match n.parse::<usize>() {
-                    Ok(i) => PathStep::Element(i),
-                    Err(_) => PathStep::Field((*n).to_owned()),
+                .map(|n| match (accessor_step(n), n.parse::<usize>()) {
+                    (Some(step), _) => step,
+                    (None, Ok(i)) => PathStep::Element(i),
+                    (None, Err(_)) => PathStep::Field((*n).to_owned()),
                 })
                 .collect()
         };
@@ -231,17 +346,22 @@ impl Completer<'_> {
                 Some((key, path)) => self.value_at(key, &steps(path)),
             },
             "self" | "parent" => {
-                let blocks = self.blocks();
-                let block = if base == "self" {
-                    blocks.first()
-                } else {
-                    blocks.get(1)
-                };
-                block.and_then(|b| {
-                    let (key, mut path) = features::block_path(b)?;
-                    path.extend(steps(rest));
-                    self.value_at(&key, &path)
-                })
+                let blocks = self.cursor.blocks();
+                let block = blocks.get(usize::from(base == "parent"));
+                let mut path = block.and_then(|b| b.path.clone()).unwrap_or_default();
+                if block.is_none_or(|b| b.path.is_none()) {
+                    return Vec::new();
+                }
+                path.extend(steps(rest));
+                match path.split_first() {
+                    None => {
+                        return self
+                            .root_value()
+                            .map_or_else(Vec::new, |v| Self::keys_of(v, spread));
+                    }
+                    Some((PathStep::Field(key), path)) => self.value_at(key, path),
+                    Some(_) => None,
+                }
             }
             "default" => None,
             name => self.bind_location(name).and_then(|(key, mut path)| {
@@ -324,13 +444,13 @@ impl Completer<'_> {
 
     /// The type of the value being written at the cursor.
     fn value_type(&self) -> Option<TypeExpr> {
-        let token = self.root.token_at_offset(self.offset).left_biased()?;
-        let entry = token.parent_ancestors().find_map(ast::Entry::cast)?;
-        let (ty, _) = schema::entry_type(self.snapshot, self.file, &entry)?;
-        Some(ty)
+        match self.cursor.value()?.shape.as_ref()? {
+            Shape::Type(ty) => Some(ty.clone()),
+            _ => None,
+        }
     }
 
-    /// After `key:`: the values the field's type allows.
+    /// Where a value goes: the values the type there allows.
     fn values(&self) -> Vec<CompletionItem> {
         let (Some(schema), Some(ty)) = (
             self.snapshot.schema_for(self.file).map(|s| s.file),
@@ -343,74 +463,67 @@ impl Completer<'_> {
         items
     }
 
-    /// In a block of a known type: its fields not written yet, each with
-    /// its doc. Accepting one writes the value it has now, if any, else a
-    /// placeholder.
-    fn fields(&self) -> Vec<CompletionItem> {
-        let Some(document_schema) = self.snapshot.schema_for(self.file) else {
+    /// In a bracket of a known type: its fields not written yet.
+    fn bracket_fields(&self) -> Vec<CompletionItem> {
+        self.cursor
+            .bracket()
+            .map_or_else(Vec::new, |place| self.fields(place, &self.cursor.written))
+    }
+
+    /// After a `.` in a target: the fields there.
+    fn path_fields(&self) -> Vec<CompletionItem> {
+        self.cursor
+            .current()
+            .map_or_else(Vec::new, |place| self.fields(place, &[]))
+    }
+
+    /// The fields of a place, each with its doc. Accepting one writes the
+    /// value it has now, if any, else a placeholder; only its name when a
+    /// `:` is there already.
+    fn fields(&self, place: &Place<'_>, written: &[String]) -> Vec<CompletionItem> {
+        let (Some(schema), Some(shape)) = (
+            self.snapshot.schema_for(self.file).map(|s| s.file),
+            place.shape.clone(),
+        ) else {
             return Vec::new();
         };
-        let schema = document_schema.file;
-        let block = self.blocks().into_iter().next();
-        let (ty, entries): (_, Vec<ast::AnyEntry>) = match &block {
-            Some(block) => (
-                schema::block_type(self.snapshot, self.file, block),
-                block.entries().collect(),
-            ),
-            // A document on its own written as entries, without braces:
-            // the fields of its root type.
-            None if document_schema.value_mode => {
-                let Some(document) = ast::Document::cast(self.root.clone()) else {
-                    return Vec::new();
-                };
-                (
-                    Some(TypeExpr::Named(document_schema.root_type().to_owned())),
-                    document.entries().collect(),
-                )
-            }
-            None => return Vec::new(),
-        };
-        let Some((_, fields)) = ty.and_then(|ty| schema::struct_of(schema, &ty)) else {
-            return Vec::new();
-        };
-        // The entry being typed is not written yet.
-        let written: Vec<String> = entries
-            .into_iter()
-            .filter(|e| !e.syntax().text_range().contains_inclusive(self.offset))
-            .filter_map(|e| match e {
-                ast::AnyEntry::Entry(e) => e.target()?.key(),
-                ast::AnyEntry::Remove(e) => e.target()?.key(),
-                _ => None,
-            })
-            .filter_map(|k| features::key_text(&k))
-            .collect();
-        let location = block.as_ref().and_then(features::block_path);
-        fields
+        schema::fields_of(schema, &shape)
             .iter()
             .filter(|(name, _)| !written.contains(name))
             .map(|(name, field)| {
-                let current = location.as_ref().and_then(|(key, path)| {
-                    let mut path = path.clone();
-                    path.push(PathStep::Field(name.clone()));
-                    self.value_at(key, &path)
+                let current = place.path.as_ref().and_then(|path| {
+                    let (key, rest) = match path.split_first() {
+                        Some((PathStep::Field(key), rest)) => {
+                            let mut rest = rest.to_vec();
+                            rest.push(PathStep::Field((*name).clone()));
+                            (key.clone(), rest)
+                        }
+                        Some(_) => return None,
+                        None => ((*name).clone(), Vec::new()),
+                    };
+                    self.value_at(&key, &rest)
                 });
                 let value = current
                     .as_ref()
                     .map_or_else(|| schema::placeholder(schema, &field.ty), print::to_text);
                 let written_name = if crol_eval::is_identifier(name) {
-                    name.clone()
+                    (*name).clone()
                 } else {
                     crol_eval::quote(name)
                 };
                 let mut item = documented(
                     item(
-                        name.clone(),
+                        (*name).clone(),
                         CompletionItemKind::FIELD,
                         Some(schema::rust_type(schema, &field.ty)),
                     ),
                     &field.doc,
                 );
-                item.insert_text = Some(format!("{written_name}: {value}"));
+                item.insert_text = Some(if self.before_colon {
+                    written_name
+                } else {
+                    format!("{written_name}: {value}")
+                });
                 item
             })
             .collect()
@@ -546,6 +659,14 @@ mod tests {
             Some(("&self.limits.", vec!["self", "limits"]))
         );
         assert_eq!(reference_prefix("..&root."), Some(("&root.", vec!["root"])));
+        assert_eq!(
+            reference_prefix("&root.a[0].b[\"c\"]."),
+            Some((
+                "&root.a[0].b[\"c\"].",
+                vec!["root", "a", "[0]", "b", "[\"c\"]"]
+            ))
+        );
+        assert_eq!(reference_prefix("&root.a[x]."), None);
         assert_eq!(reference_prefix("x: &self"), None);
         assert_eq!(reference_prefix("x: & + 1."), None);
     }

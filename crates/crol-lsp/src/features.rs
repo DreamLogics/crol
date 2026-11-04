@@ -195,62 +195,108 @@ pub(crate) fn selector_steps(selectors: impl Iterator<Item = ast::Selector>) -> 
         .collect()
 }
 
+/// The text a key or string token stands for.
+pub(crate) fn string_text(text: &str) -> String {
+    match text.strip_prefix('r').unwrap_or(text).trim_matches('#') {
+        quoted if quoted.starts_with('"') => quoted.trim_matches('"').to_owned(),
+        _ => text.to_owned(),
+    }
+}
+
 pub(crate) fn key_text(key: &ast::Key) -> Option<String> {
-    let token = key.token()?;
-    Some(match token.kind() {
-        SyntaxKind::STRING | SyntaxKind::RAW_STRING => token
-            .text()
-            .trim_start_matches('r')
-            .trim_matches('#')
-            .trim_matches('"')
-            .to_owned(),
-        _ => token.text().to_owned(),
-    })
+    let token = key
+        .accessor()
+        .map_or_else(|| key.token(), |accessor| accessor.key())?;
+    Some(string_text(token.text()))
+}
+
+/// The steps of a target: its key and selectors. An integer key is a key
+/// of that integer, not of the text.
+fn target_steps(target: &ast::Target) -> Option<Vec<PathStep>> {
+    let key = target.key()?;
+    let mut steps = match key.accessor() {
+        Some(accessor) => selector_steps(std::iter::once(ast::Selector::Accessor(accessor))),
+        None => {
+            let token = key.token()?;
+            let integer = (token.kind() == SyntaxKind::INT)
+                .then(|| token.text().parse().ok())
+                .flatten();
+            vec![integer.map_or_else(
+                || PathStep::Field(string_text(token.text())),
+                PathStep::Accessor,
+            )]
+        }
+    };
+    steps.extend(selector_steps(target.selectors()));
+    Some(steps)
+}
+
+/// The path of the place `node` is at (`SPEC.md` 6.1): through the targets
+/// of the entries around it, list elements at `[i]`, and tuple and
+/// named-tuple elements at `.i`. None for what has no such place, as a
+/// value bind's expression, or a list that is an operand.
+fn place_path(node: &SyntaxNode) -> Option<Vec<PathStep>> {
+    let position = |parent: &SyntaxNode, node: &SyntaxNode| {
+        parent
+            .children()
+            .filter_map(ast::Expr::cast)
+            .position(|e| e.syntax() == node)
+    };
+    // Innermost first.
+    let mut parts: Vec<Vec<PathStep>> = Vec::new();
+    let mut node = node.clone();
+    while let Some(parent) = node.parent() {
+        match parent.kind() {
+            SyntaxKind::DOCUMENT => break,
+            SyntaxKind::BLOCK
+            | SyntaxKind::VARIANT_BLOCK
+            | SyntaxKind::BINARY_EXPR
+            | SyntaxKind::PAREN_EXPR
+            | SyntaxKind::NAMED_TUPLE
+            | SyntaxKind::SPREAD => {}
+            SyntaxKind::ENTRY => {
+                parts.push(target_steps(&ast::Entry::cast(parent.clone())?.target()?)?);
+            }
+            SyntaxKind::LIST_EXPR => {
+                let operand = parent
+                    .parent()
+                    .is_some_and(|p| p.kind() == SyntaxKind::BINARY_EXPR);
+                if operand {
+                    return None;
+                }
+                let index = position(&parent, &node)?;
+                parts.push(vec![PathStep::Accessor(index as i128)]);
+            }
+            SyntaxKind::ARG_LIST | SyntaxKind::TUPLE_EXPR => {
+                parts.push(vec![PathStep::Element(position(&parent, &node)?)]);
+            }
+            _ => return None,
+        }
+        node = parent;
+    }
+    Some(parts.into_iter().rev().flatten().collect())
+}
+
+/// A path from the root as a root key and the path in its value.
+fn from_root(mut path: Vec<PathStep>) -> Option<(String, Vec<PathStep>)> {
+    if path.is_empty() {
+        return None;
+    }
+    let key = match path.remove(0) {
+        PathStep::Field(key) => key,
+        PathStep::Accessor(key) => key.to_string(),
+        PathStep::Element(_) => return None,
+    };
+    Some((key, path))
 }
 
 /// The root key and path of the target at a token: `web.limits.cpu` for
 /// `cpu` in `+web: Service { limits: { cpu: 2.0 } }`.
 pub(crate) fn target_path(token: &SyntaxToken) -> Option<(String, Vec<PathStep>)> {
     let target = token.parent_ancestors().find_map(ast::Target::cast)?;
-    let mut segments: Vec<PathStep> = Vec::new();
-    let key = key_text(&target.key()?)?;
-    let mut path = vec![PathStep::Field(key)];
-    path.extend(selector_steps(target.selectors()));
-    let mut node = target.syntax().parent()?; // the entry
-    loop {
-        let parent = node.parent()?;
-        match parent.kind() {
-            SyntaxKind::DOCUMENT => break,
-            SyntaxKind::VARIANT_BLOCK => {
-                node = parent;
-                continue;
-            }
-            SyntaxKind::BLOCK => {
-                // A block that is the value of an entry, or the right side
-                // of `~` there.
-                let mut up = parent.parent()?;
-                while up.kind() == SyntaxKind::BINARY_EXPR || up.kind() == SyntaxKind::PAREN_EXPR {
-                    up = up.parent()?;
-                }
-                if up.kind() == SyntaxKind::DOCUMENT {
-                    break;
-                }
-                let entry = ast::Entry::cast(up.clone())?;
-                let outer = entry.target()?;
-                let mut outer_path = vec![PathStep::Field(key_text(&outer.key()?)?)];
-                outer_path.extend(selector_steps(outer.selectors()));
-                outer_path.append(&mut path);
-                path = outer_path;
-                node = up;
-            }
-            _ => return None,
-        }
-    }
-    segments.append(&mut path);
-    let PathStep::Field(key) = segments.remove(0) else {
-        return None;
-    };
-    Some((key, segments))
+    let mut path = place_path(&target.syntax().parent()?)?;
+    path.extend(target_steps(&target)?);
+    from_root(path)
 }
 
 /// The root key a token names: the key of a root entry's target, an id
@@ -288,10 +334,9 @@ pub(crate) fn root_key_at(token: &SyntaxToken) -> Option<String> {
     None
 }
 
-/// The root key and path of the entry a block is the value of.
+/// The root key and path of the place a block is at.
 pub(crate) fn block_path(block: &ast::Block) -> Option<(String, Vec<PathStep>)> {
-    let entry = block.syntax().ancestors().find_map(ast::Entry::cast)?;
-    target_path(&entry.target()?.key()?.token()?)
+    from_root(place_path(block.syntax())?)
 }
 
 /// The root key and path that `&self`, `&parent` or an entry bind at a
@@ -367,6 +412,21 @@ pub(crate) fn value_at(
     context: &[String],
 ) -> Option<Value> {
     value_in(snapshot.evaluation_of(file)?, key, path, context)
+}
+
+/// The evaluation a document belongs to, else the project's; while that
+/// has no value, the latest of the project's that had one.
+pub(crate) fn evaluation_for(
+    snapshot: &Snapshot,
+    file: Option<crol_eval::FileId>,
+) -> &crol_eval::Evaluation {
+    let evaluation = file
+        .and_then(|f| snapshot.evaluation_of(f))
+        .unwrap_or(&snapshot.evaluation);
+    match (&evaluation.value, &snapshot.last_good) {
+        (None, Some(good)) if file.is_none_or(|f| snapshot.in_layers(f)) => good,
+        _ => evaluation,
+    }
 }
 
 /// The value at `key` + `path` in an evaluation, in the context `context`.

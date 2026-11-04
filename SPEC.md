@@ -2137,13 +2137,25 @@ information.
 expression that computes something (`& * 4` shows `= 2048`), in the
 context chosen with the `context` setting.
 
-**Completion.**
+**Completion.** The type expected at the cursor is found from the
+root, one bracket at a time, at any depth: through struct fields, map
+values, list and tuple elements, `Some(...)` and other payloads, struct
+variants, `Type { ... }` values, dotted targets and variant blocks. An
+enum in a dotted target or an unnamed block is taken as the variant of
+the value there. This uses the tokens before the cursor, so an
+unfinished line, at the cursor or above it, changes nothing. Nothing is
+offered in strings and comments. Every item replaces the word at the
+cursor. `:`, space, `{`, `[`, `(` and `,` trigger completion, as do `.`,
+`&`, `<` and `@`.
 
-- Keys: in a block of a known type, the fields not written yet, each
-  with its doc; accepting one fills in the value below if there is one
+- Keys: in a block of a known type and after a `.` in a target, the
+  fields not written yet (in that block, not one around a variant
+  block), with those of flattened fields, each with its doc; accepting
+  one fills in the value below if there is one
   (typing `rep` in a patch of `web` gives `replicas: 2`), else a
-  placeholder of the right shape.
-- Values: enum variants and type names that fit the field's type;
+  placeholder of the right shape; only the name before an existing `:`.
+- Values: after `key:`, in a list and in a payload, enum variants and
+  type names that fit the type there;
   `true`/`false`; ids filtered by `#[crol(refers(...))]`; `None`/`Some`.
 - After `&root.`, `&self.`, `&parent.` and binds: the keys of the
   evaluated value at that path. After `&` (and `..&`): bind and

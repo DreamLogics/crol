@@ -1,39 +1,58 @@
 //! What the schema says about a place in the data (`SPEC.md` 10.9, 12.5).
 
 use crol::schema::{Field, SchemaFile, TypeDef, TypeExpr, VariantShape};
-use crol_eval::{FileId, PathStep, ValueKind};
-use crol_syntax::SyntaxKind;
+use crol_eval::{FileId, PathStep};
 use crol_syntax::ast::{self, AstNode};
+use crol_syntax::{SyntaxKind, SyntaxNode};
 use indexmap::IndexMap;
 
-use crate::features;
+use crate::place::{self, Scope};
 use crate::workspace::{DocumentSchema, Snapshot};
 
-/// The type of a block: its type name's, else that of its place in the
-/// block or root entry around it, through struct fields, map values,
-/// elements, and the payloads of options, newtypes and transparent types.
-pub(crate) fn block_type(
-    snapshot: &Snapshot,
+/// How deep to follow types into each other where a type may contain
+/// itself.
+const MAX_DEPTH: usize = 8;
+
+/// What a place holds, by the schema.
+#[derive(Clone)]
+pub(crate) enum Shape<'a> {
+    /// The root keys of data, each a value of the root type.
+    Keys,
+    /// A value of a type.
+    Type(TypeExpr),
+    /// The fields of a struct variant, which has no type of its own.
+    Fields(&'a IndexMap<String, Field>),
+}
+
+/// The root type of a document.
+pub(crate) fn root_expr(schema: &DocumentSchema<'_>) -> TypeExpr {
+    TypeExpr::Named(schema.root_type().to_owned())
+}
+
+fn document_text(node: &SyntaxNode) -> String {
+    node.ancestors()
+        .last()
+        .unwrap_or_else(|| node.clone())
+        .text()
+        .to_string()
+}
+
+/// The fields of a block, by the place it is at (`place`).
+pub(crate) fn block_fields<'a>(
+    snapshot: &'a Snapshot,
     file: Option<FileId>,
     block: &ast::Block,
-) -> Option<TypeExpr> {
-    let schema = snapshot.schema_for(file)?;
-    // The outer braces of a document on its own are its root type.
-    if schema.value_mode
-        && block.type_name().is_none()
-        && block
-            .syntax()
-            .parent()
-            .is_some_and(|p| p.kind() == SyntaxKind::DOCUMENT)
-    {
-        return Some(TypeExpr::Named(schema.root_type().to_owned()));
-    }
-    block_type_in(
-        schema.file,
-        &|key| root_key_type(snapshot, &schema, key),
-        block,
-        0,
-    )
+) -> Option<(&'a SchemaFile, &'a IndexMap<String, Field>)> {
+    let schema = snapshot.schema_for(file)?.file;
+    let brace = block
+        .syntax()
+        .children_with_tokens()
+        .find(|t| t.kind() == SyntaxKind::L_BRACE)?;
+    let text = document_text(block.syntax());
+    let scope = Scope::new(snapshot, file);
+    let cursor = place::locate(&scope, &text, brace.text_range().end());
+    let shape = cursor.bracket()?.shape.as_ref()?;
+    shape_struct(schema, shape).map(|fields| (schema, fields))
 }
 
 /// The type of an entry's value, and the doc of what it sets: the
@@ -44,105 +63,203 @@ pub(crate) fn entry_type(
     entry: &ast::Entry,
 ) -> Option<(TypeExpr, String)> {
     let schema = snapshot.schema_for(file)?;
-    let (ty, doc) = entry_type_in(
-        schema.file,
-        &|key| root_key_type(snapshot, &schema, key),
-        entry,
-        0,
-    )?;
-    let doc = match doc {
-        Some(doc) => doc,
-        None => named_def(schema.file, &ty).map_or(String::new(), |d| d.doc().to_owned()),
+    let end = entry.target()?.syntax().text_range().end();
+    let text = document_text(entry.syntax());
+    let scope = Scope::new(snapshot, file);
+    let cursor = place::locate(&scope, &text, end);
+    let place = cursor.current()?;
+    let Some(Shape::Type(ty)) = &place.shape else {
+        return None;
     };
-    Some((ty, doc))
+    let doc = match &place.doc {
+        Some(doc) => doc.clone(),
+        None => named_def(schema.file, ty).map_or(String::new(), |d| d.doc().to_owned()),
+    };
+    Some((ty.clone(), doc))
 }
 
-/// The type of a root key's value, and its doc as a field. In a document
-/// on its own, a root key is a field of the root type. In data, it is the
-/// root type, or, when that is an enum (`Definition`), the type the key's
-/// value names (`Service`).
-fn root_key_type(
-    snapshot: &Snapshot,
-    schema: &DocumentSchema<'_>,
-    key: &str,
-) -> Option<(TypeExpr, Option<String>)> {
-    let root = schema.root_type();
-    if schema.value_mode {
-        let root = TypeExpr::Named(root.to_owned());
-        return step(schema.file, &root, &PathStep::Field(key.to_owned()));
-    }
-    if let Some(TypeDef::Enum { .. }) = schema.file.get(root) {
-        let evaluation = match (&snapshot.evaluation.value, &snapshot.last_good) {
-            (None, Some(good)) => good,
-            _ => &snapshot.evaluation,
-        };
-        let name = features::value_in(evaluation, key, &[], &[]).and_then(|v| match v.kind {
-            ValueKind::Keyed(k) => k.name,
-            ValueKind::NamedTuple(n, _) | ValueKind::UnitName(n) => Some(n),
-            _ => None,
-        });
-        if let Some(ty) = name.and_then(|n| named(schema.file, &n)) {
-            return Some((ty, None));
+/// The place one step into a shape, and the doc of the field stepped into.
+pub(crate) fn step_shape<'a>(
+    schema: &'a SchemaFile,
+    shape: &Shape<'a>,
+    path_step: &PathStep,
+) -> Option<(Shape<'a>, Option<String>)> {
+    let (ty, doc) = match (shape, path_step) {
+        (Shape::Type(ty), _) => step(schema, ty, path_step, 0)?,
+        (Shape::Fields(fields), PathStep::Field(name)) => {
+            field_step(schema, fields, name, path_step, 0)?
         }
-    }
-    Some((TypeExpr::Named(root.to_owned()), None))
+        _ => return None,
+    };
+    Some((Shape::Type(ty), doc))
 }
 
-/// The type of each root key's value, and its doc as a field.
-type RootTypes<'a> = &'a dyn Fn(&str) -> Option<(TypeExpr, Option<String>)>;
-
-fn block_type_in(
-    schema: &SchemaFile,
-    root: RootTypes<'_>,
-    block: &ast::Block,
-    depth: usize,
-) -> Option<TypeExpr> {
-    if let Some(name) = block.type_name() {
-        return named(schema, name.text());
+/// What `Name { ... }` is at a place of the type `expected`: its variant
+/// or the type itself, else the type of that name anywhere.
+pub(crate) fn named_shape<'a>(
+    schema: &'a SchemaFile,
+    expected: Option<&Shape<'a>>,
+    name: &str,
+) -> Option<Shape<'a>> {
+    if let Some(Shape::Type(ty)) = expected
+        && let Some(shape) = named_in(schema, ty, name, 0)
+    {
+        return Some(shape);
     }
-    let entry = block.syntax().parent().and_then(ast::Entry::cast)?;
-    entry_type_in(schema, root, &entry, depth).map(|(ty, _)| ty)
+    self::named(schema, name).map(Shape::Type)
 }
 
-/// The type of an entry's value, and the doc of the last field its
-/// target goes through, if any.
-fn entry_type_in(
-    schema: &SchemaFile,
-    root: RootTypes<'_>,
-    entry: &ast::Entry,
+fn named_in<'a>(
+    schema: &'a SchemaFile,
+    ty: &TypeExpr,
+    name: &str,
     depth: usize,
-) -> Option<(TypeExpr, Option<String>)> {
-    if depth > crol_syntax::MAX_NESTING {
+) -> Option<Shape<'a>> {
+    if depth > MAX_DEPTH {
         return None;
     }
-    let target = entry.target()?;
-    // The block or document the entry is in, through variant blocks.
-    let mut container = entry.syntax().parent()?;
-    while container.kind() == SyntaxKind::VARIANT_BLOCK {
-        container = container.parent()?;
+    match ty {
+        TypeExpr::Option(inner) => named_in(schema, inner, name, depth + 1),
+        TypeExpr::Named(path) => match schema.get(path)? {
+            TypeDef::Enum { variants, .. } => match &variant(variants, name)?.shape {
+                VariantShape::Struct(fields) => Some(Shape::Fields(fields)),
+                VariantShape::Newtype(inner) => Some(Shape::Type(inner.clone())),
+                _ => None,
+            },
+            def if def.name() == name => Some(Shape::Type(ty.clone())),
+            TypeDef::Newtype { inner, .. } | TypeDef::Transparent { inner, .. } => {
+                named_in(schema, inner, name, depth + 1)
+            }
+            _ => None,
+        },
+        _ => None,
     }
-    let outer = ast::Block::cast(container.clone()).filter(|b| {
-        b.type_name().is_some()
-            || container
-                .parent()
-                .is_some_and(|p| p.kind() != SyntaxKind::DOCUMENT)
-    });
-    let key = features::key_text(&target.key()?)?;
-    let (mut ty, mut doc) = match outer {
-        // In a block: the key is one of its fields.
-        Some(outer) => {
-            let ty = block_type_in(schema, root, &outer, depth + 1)?;
-            step(schema, &ty, &PathStep::Field(key))?
-        }
-        // A root entry.
-        None => root(&key)?,
+}
+
+/// An enum's variant by its name or an alias.
+fn variant<'a>(
+    variants: &'a IndexMap<String, crol::schema::VariantDef>,
+    name: &str,
+) -> Option<&'a crol::schema::VariantDef> {
+    variants.get(name).or_else(|| {
+        variants
+            .values()
+            .find(|v| v.aliases.iter().any(|a| a == name))
+    })
+}
+
+/// The type of argument `index` of `Name(...)` at a place of the type
+/// `expected`, else of the type of that name anywhere.
+pub(crate) fn payload(
+    schema: &SchemaFile,
+    expected: Option<&Shape<'_>>,
+    name: &str,
+    index: usize,
+) -> Option<TypeExpr> {
+    if let Some(Shape::Type(ty)) = expected
+        && let Some(found) = payload_in(schema, ty, name, index, 0)
+    {
+        return Some(found);
+    }
+    payload_in(schema, &self::named(schema, name)?, name, index, 0)
+}
+
+fn payload_in(
+    schema: &SchemaFile,
+    ty: &TypeExpr,
+    name: &str,
+    index: usize,
+    depth: usize,
+) -> Option<TypeExpr> {
+    if depth > MAX_DEPTH {
+        return None;
+    }
+    match ty {
+        TypeExpr::Option(inner) if name == "Some" => (index == 0).then(|| (**inner).clone()),
+        TypeExpr::Option(inner) => payload_in(schema, inner, name, index, depth + 1),
+        TypeExpr::Named(path) => match schema.get(path)? {
+            TypeDef::Enum { variants, .. } => match &variant(variants, name)?.shape {
+                VariantShape::Newtype(inner) if index == 0 => Some(inner.clone()),
+                VariantShape::Tuple(items) => items.get(index).cloned(),
+                _ => None,
+            },
+            TypeDef::Newtype {
+                name: own, inner, ..
+            } if own == name => (index == 0).then(|| inner.clone()),
+            TypeDef::TupleStruct {
+                name: own, fields, ..
+            } if own == name => fields.get(index).cloned(),
+            TypeDef::Newtype { inner, .. } | TypeDef::Transparent { inner, .. } => {
+                payload_in(schema, inner, name, index, depth + 1)
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Whether a place holds an enum, which only its value can say the
+/// variant of.
+pub(crate) fn is_enum(schema: &SchemaFile, shape: &Shape<'_>) -> bool {
+    let Shape::Type(ty) = shape else {
+        return false;
     };
-    for s in features::selector_steps(target.selectors()) {
-        let (next, field_doc) = step(schema, &ty, &s)?;
-        ty = next;
-        doc = field_doc;
+    matches!(named_def(schema, ty), Some(TypeDef::Enum { .. }))
+}
+
+/// Whether a place holds a tuple, so that `(a, b)` is not parentheses.
+pub(crate) fn is_tuple(schema: &SchemaFile, shape: &Shape<'_>) -> bool {
+    let Shape::Type(ty) = shape else {
+        return false;
+    };
+    match ty {
+        TypeExpr::Tuple(_) => true,
+        TypeExpr::Option(inner) => is_tuple(schema, &Shape::Type((**inner).clone())),
+        _ => matches!(named_def(schema, ty), Some(TypeDef::TupleStruct { .. })),
     }
-    Some((ty, doc))
+}
+
+/// The fields of a struct or struct variant, as written in the schema.
+fn shape_struct<'a>(
+    schema: &'a SchemaFile,
+    shape: &Shape<'a>,
+) -> Option<&'a IndexMap<String, Field>> {
+    match shape {
+        Shape::Keys => None,
+        Shape::Type(ty) => struct_of(schema, ty).map(|(_, fields)| fields),
+        Shape::Fields(fields) => Some(fields),
+    }
+}
+
+/// The fields a block at a place can have, with those of flattened fields
+/// in place of them.
+pub(crate) fn fields_of<'a>(
+    schema: &'a SchemaFile,
+    shape: &Shape<'a>,
+) -> Vec<(&'a String, &'a Field)> {
+    let mut out = Vec::new();
+    if let Some(fields) = shape_struct(schema, shape) {
+        flatten_into(schema, fields, &mut out, 0);
+    }
+    out
+}
+
+fn flatten_into<'a>(
+    schema: &'a SchemaFile,
+    fields: &'a IndexMap<String, Field>,
+    out: &mut Vec<(&'a String, &'a Field)>,
+    depth: usize,
+) {
+    if depth > MAX_DEPTH {
+        return;
+    }
+    for (name, field) in fields {
+        if !field.flatten {
+            out.push((name, field));
+        } else if let Some((_, inner)) = struct_of(schema, &field.ty) {
+            flatten_into(schema, inner, out, depth + 1);
+        }
+    }
 }
 
 /// The definition of a named type, through options.
@@ -191,15 +308,38 @@ pub(crate) fn named(schema: &SchemaFile, name: &str) -> Option<TypeExpr> {
         .then(|| TypeExpr::Named(path.to_owned()))
 }
 
+/// A field of a struct by its name, in a flattened field if not its own.
+fn field_step(
+    schema: &SchemaFile,
+    fields: &IndexMap<String, Field>,
+    name: &str,
+    path_step: &PathStep,
+    depth: usize,
+) -> Option<(TypeExpr, Option<String>)> {
+    if let Some(found) = field(fields, name).filter(|f| !f.flatten) {
+        return Some((found.ty.clone(), Some(found.doc.clone())));
+    }
+    fields
+        .values()
+        .filter(|f| f.flatten)
+        .find_map(|f| step(schema, &f.ty, path_step, depth + 1))
+}
+
 /// The type one step further in, and the doc of the field stepped into.
-fn step(schema: &SchemaFile, ty: &TypeExpr, step: &PathStep) -> Option<(TypeExpr, Option<String>)> {
+fn step(
+    schema: &SchemaFile,
+    ty: &TypeExpr,
+    step: &PathStep,
+    depth: usize,
+) -> Option<(TypeExpr, Option<String>)> {
+    if depth > MAX_DEPTH {
+        return None;
+    }
     match (ty, step) {
-        (TypeExpr::Option(inner), _) => self::step(schema, inner, step),
+        (TypeExpr::Option(inner), _) => self::step(schema, inner, step, depth + 1),
         (TypeExpr::Named(path), _) => match schema.get(path)? {
             TypeDef::Struct { fields, .. } => match step {
-                PathStep::Field(name) => {
-                    field(fields, name).map(|f| (f.ty.clone(), Some(f.doc.clone())))
-                }
+                PathStep::Field(name) => field_step(schema, fields, name, step, depth),
                 _ => None,
             },
             TypeDef::TupleStruct { fields, .. } => match step {
@@ -207,7 +347,7 @@ fn step(schema: &SchemaFile, ty: &TypeExpr, step: &PathStep) -> Option<(TypeExpr
                 _ => None,
             },
             TypeDef::Newtype { inner, .. } | TypeDef::Transparent { inner, .. } => {
-                self::step(schema, inner, step)
+                self::step(schema, inner, step, depth + 1)
             }
             _ => None,
         },
