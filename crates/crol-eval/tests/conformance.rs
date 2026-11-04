@@ -8,7 +8,8 @@
 //! - `options.crol` (optional): options, as a value-mode document:
 //!   `variants: [Grouped(["dev", "prod"]), Discrete("cache")]`, `parents: {
 //!   prod_eu: "prod" }`, `contexts: [["prod", "cache"]]`, `variant_keys:
-//!   NoNewKeys`, `max_contexts: 16`, `warn_cross_file_patches: false`;
+//!   NoNewKeys`, `max_contexts: 16`, `warn_cross_file_patches: false`, and
+//!   `schema: "services"` for `crol`'s test of the schema checks;
 //! - `expected.crol`: the evaluated data as `crol eval --all-contexts`
 //!   prints it, if evaluation succeeds;
 //! - `expected.fingerprint`: the data's fingerprint in hex, so that CI
@@ -120,6 +121,8 @@ fn options(case: &Path) -> DataOptions {
                     parents.push((child.clone(), parent.clone()));
                 }
             }
+            // For `crol`'s conformance test.
+            ("schema", ValueKind::String(_)) => {}
             ("contexts", ValueKind::List(items)) => {
                 options.contexts = Some(items.iter().map(strings).collect());
             }

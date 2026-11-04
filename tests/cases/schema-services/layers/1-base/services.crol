@@ -1,0 +1,17 @@
+// Data that deserializes into the test types, and that the check accepts.
++web: Service {
+    replicas: 2,
+    image: "web:1.4",
+    limits: Limits { cpu: 1.0, memory_mb: 512 },
+    depends_on: [@db],
+    ..
+},
++db: Volume { size_gb: 10 },
++worker: Service {
+    replicas: 1,
+    image: "worker:2",
+    tags: ["batch"],
+    limits: None,
+    mode: Slow(3),
+    depends_on: [],
+},
