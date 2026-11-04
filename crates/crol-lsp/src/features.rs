@@ -294,6 +294,35 @@ pub(crate) fn block_path(block: &ast::Block) -> Option<(String, Vec<PathStep>)> 
     target_path(&entry.target()?.key()?.token()?)
 }
 
+/// The root key and path that `&self`, `&parent` or an entry bind at a
+/// token names, with the selectors after it: `&self.port` in
+/// `+web: { url: &self.port }` names `web.port`.
+fn relative_reference_path(token: &SyntaxToken) -> Option<(String, Vec<PathStep>)> {
+    let reference = token.parent_ancestors().find_map(|n| {
+        if let Some(path) = ast::PathExpr::cast(n.clone())
+            && let Some(ast::Expr::Reference(r)) = path.base()
+        {
+            return Some(r);
+        }
+        ast::Reference::cast(n)
+    })?;
+    let blocks = || reference.syntax().ancestors().filter_map(ast::Block::cast);
+    let (key, mut path) = match reference.kind() {
+        ast::ReferenceKind::SelfValue => block_path(&blocks().next()?)?,
+        ast::ReferenceKind::Parent(n) => block_path(&blocks().nth(n)?)?,
+        ast::ReferenceKind::Bind(name) => {
+            let declared = crate::navigate::local_declaration(&name)?;
+            let entry = declared.parent()?.parent().and_then(ast::Entry::cast)?;
+            target_path(&entry.target()?.key()?.token()?)?
+        }
+        _ => return None,
+    };
+    if let Some(expr) = reference.syntax().parent().and_then(ast::PathExpr::cast) {
+        path.extend(selector_steps(expr.selectors()));
+    }
+    Some((key, path))
+}
+
 /// The root key and path a reference names: `&root.db.host`.
 fn reference_path(token: &SyntaxToken) -> Option<(String, Vec<PathStep>)> {
     let path = token.parent_ancestors().find_map(ast::PathExpr::cast)?;
@@ -404,6 +433,8 @@ pub(crate) fn hover(
         (id, Vec::new(), false)
     } else if let Some((key, steps)) = reference_path(&token) {
         (key, steps, false)
+    } else if let Some((key, steps)) = relative_reference_path(&token) {
+        (key, steps, false)
     } else {
         let (key, steps) = target_path(&token)?;
         (key, steps, true)
@@ -485,11 +516,22 @@ fn file_name(path: &str) -> &str {
 /// defines the key; on a template: its definition.
 pub(crate) fn definition(
     snapshot: &Snapshot,
+    uri: &Uri,
     text: &str,
     position: Position,
     encoding: Encoding,
 ) -> Option<Location> {
     let (_, token) = token_at(text, position, encoding)?;
+    // A bind: its declaration in scope, or the template.
+    if let Some(name) = crate::navigate::bind_name(&token) {
+        return match crate::navigate::local_declaration(&name) {
+            Some(declared) => Some(Location::new(
+                uri.clone(),
+                convert::range(text, &LineIndex::new(text), declared.text_range(), encoding),
+            )),
+            None => template_definition(snapshot, name.text(), encoding),
+        };
+    }
     let key = if token
         .parent()
         .is_some_and(|p| p.kind() == SyntaxKind::ID_EXPR)
@@ -501,16 +543,6 @@ pub(crate) fn definition(
             .to_owned()
     } else if let Some((key, _)) = reference_path(&token) {
         key
-    } else if token
-        .parent()
-        .is_some_and(|p| p.kind() == SyntaxKind::REFERENCE)
-        && let Some(name) = token
-            .text()
-            .strip_prefix('&')
-            .filter(|n| crol_eval::is_identifier(n))
-    {
-        return template_definition(snapshot, name, encoding)
-            .or_else(|| bind_definition(snapshot, name, encoding));
     } else {
         target_path(&token)?.0
     };
@@ -545,28 +577,6 @@ fn template_definition(snapshot: &Snapshot, name: &str, encoding: Encoding) -> O
         for entry in parse.document().entries() {
             if let ast::AnyEntry::ValueBind(bind) = entry
                 && let Some(token) = bind.name()
-                && token.text() == name
-            {
-                return location(
-                    snapshot,
-                    crol_eval::Span::new(id, token.text_range()),
-                    encoding,
-                );
-            }
-        }
-    }
-    None
-}
-
-/// A bind or value bind inside a block, found by name anywhere.
-fn bind_definition(snapshot: &Snapshot, name: &str, encoding: Encoding) -> Option<Location> {
-    for (id, file) in snapshot.sources.files() {
-        let parse = crol_syntax::parse(file.text());
-        for node in parse.syntax().descendants() {
-            let token = ast::Bind::cast(node.clone())
-                .and_then(|b| b.name())
-                .or_else(|| ast::ValueBind::cast(node).and_then(|b| b.name()));
-            if let Some(token) = token
                 && token.text() == name
             {
                 return location(

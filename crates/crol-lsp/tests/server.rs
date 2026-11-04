@@ -334,6 +334,19 @@ fn references_rename_and_workspace_symbols() {
         [(base.clone(), at(1, 43)), (base.clone(), at(1, 59))]
     );
 
+    // On a bind's use: its declaration, and the value it names.
+    let location = client.request(
+        "textDocument/definition",
+        json!({ "textDocument": { "uri": base }, "position": { "line": 1, "character": 59 } }),
+    );
+    assert_eq!(start(&location), (base.clone(), at(1, 16)));
+    let hover = client.request(
+        "textDocument/hover",
+        json!({ "textDocument": { "uri": base }, "position": { "line": 1, "character": 59 } }),
+    );
+    let markdown = hover["contents"]["value"].as_str().unwrap();
+    assert!(markdown.starts_with("**web.port**: `8080`"), "{markdown}");
+
     // Renaming a template renames it in every file.
     let range = client.request(
         "textDocument/prepareRename",
