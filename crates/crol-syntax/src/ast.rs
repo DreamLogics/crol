@@ -334,9 +334,20 @@ impl Entry {
 
     /// The `+`, `?` or `^` token, if any.
     pub fn op_token(&self) -> Option<SyntaxToken> {
-        token(&self.0, PLUS)
-            .or_else(|| token(&self.0, QUESTION))
-            .or_else(|| token(&self.0, CARET))
+        let mut found: Option<SyntaxToken> = None;
+        for token in self
+            .0
+            .children_with_tokens()
+            .filter_map(|it| it.into_token())
+        {
+            let rank = |kind| [CARET, QUESTION, PLUS].iter().position(|k| *k == kind);
+            if let Some(new) = rank(token.kind())
+                && found.as_ref().is_none_or(|f| rank(f.kind()) < Some(new))
+            {
+                found = Some(token);
+            }
+        }
+        found
     }
 
     /// The target.
