@@ -50,6 +50,12 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   the error; a layer that cannot be loaded adds nothing, and has the error on the
   file to blame. Errors above what is missing are warnings that say why, and every
   problem is shown, not only the first (`SPEC.md` 12.5).
+- `Project.files` now does what it says: a `.crov` file that a glob matches is
+  checked as a value of that type against the project's schema, by `crol check`,
+  `crol eval`, `crol fingerprint` and the language server, with completion and
+  hover to match. Its globs are specified (`SPEC.md` 12.4), and one with a wrong
+  form is an error in the project file. A `.crov` file that names a schema or that
+  no glob matches is treated as before.
 - `&default` works in `crol` and in the language server, not only through
   `CrolComposer::schema`: they read defaults from the schema they check against
   (`SPEC.md` 6.1.3). `SchemaFile::defaults` gives them to a tool of your own.

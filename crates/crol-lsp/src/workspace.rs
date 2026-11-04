@@ -137,6 +137,9 @@ pub struct Snapshot {
     /// The schemas of documents evaluated on their own, with the type of
     /// each one's value: the one it names, or the project file's.
     own_schemas: HashMap<FileId, OwnSchema>,
+    /// The project, with its directory, for what its `files` say of a
+    /// document (`SPEC.md` 12.4).
+    project: Option<(Project, PathBuf)>,
     /// What each `.crod` document evaluated on its own was evaluated with.
     chains: HashMap<FileId, Chain>,
     /// The path of each file, by its id.
@@ -297,6 +300,40 @@ impl Snapshot {
                 error: load.error.map(|e| e.to_string()),
             })
             .collect()
+    }
+
+    /// What the project's `files` say of a value document: the project's
+    /// schema, with the type to check it as; nothing if no glob matches it
+    /// (`SPEC.md` 12.4).
+    #[allow(clippy::type_complexity)]
+    fn project_files(
+        &self,
+        path: &Path,
+        mode: Mode,
+    ) -> Option<(
+        Result<SchemaFile, (crol_syntax::TextRange, String)>,
+        Option<String>,
+    )> {
+        let (project, dir) = self.project.as_ref()?;
+        if mode != Mode::Value {
+            return None;
+        }
+        let type_name = project.file_type(dir, path)?;
+        let failed = |why: String| {
+            let message =
+                format!("project: `files` gives this document the type `{type_name}`, {why}");
+            Some((Err((Default::default(), message)), None))
+        };
+        let Some(schema) = &self.schema else {
+            return failed(match project.schema {
+                Some(_) => "and the project's schema did not load".to_owned(),
+                None => "and the project has no schema".to_owned(),
+            });
+        };
+        match schema.type_path(type_name) {
+            Some(root) => Some((Ok(schema.clone()), Some(root.to_owned()))),
+            None => failed("which the schema does not have".to_owned()),
+        }
     }
 
     /// The layers and options a data document was evaluated with: the
@@ -542,6 +579,7 @@ pub(crate) fn evaluate(
         schema: None,
         root_type: None,
         own_schemas: HashMap::new(),
+        project: None,
         chains: HashMap::new(),
         paths: Vec::new(),
         by_path: HashMap::new(),
@@ -691,17 +729,26 @@ pub(crate) fn evaluate(
                 }
             }
         }
+        // What the project's `files` give a value document that names no
+        // schema (`SPEC.md` 12.4).
+        let mut given_type = None;
         let schema = if is_project_file {
             Some(Ok(crol::schema::build::<Project>()))
         } else {
-            document_schema(text, path, root_dir, remote, &mut snapshot.remote).or_else(|| {
-                extended_schema(
-                    &mut snapshot,
-                    chain.as_deref().unwrap_or_default(),
-                    root_dir,
-                    remote,
-                )
-            })
+            document_schema(text, path, root_dir, remote, &mut snapshot.remote)
+                .or_else(|| {
+                    extended_schema(
+                        &mut snapshot,
+                        chain.as_deref().unwrap_or_default(),
+                        root_dir,
+                        remote,
+                    )
+                })
+                .or_else(|| {
+                    let (schema, root) = snapshot.project_files(path, mode)?;
+                    given_type = root;
+                    Some(schema)
+                })
         };
         let mut evaluation = match (&chain, mode) {
             (Some(layers), _) => {
@@ -737,7 +784,8 @@ pub(crate) fn evaluate(
         }
         match schema {
             Some(Ok(schema)) => {
-                let mut root = None;
+                let by_project = given_type.is_some();
+                let mut root = given_type;
                 if let Some(value) = &evaluation.value {
                     match mode {
                         Mode::Data => {
@@ -754,14 +802,19 @@ pub(crate) fn evaluate(
                             snapshot.extra.extend(found);
                         }
                         Mode::Value => {
-                            // A top-level type name chooses the type
-                            // (`SPEC.md` 4.1).
-                            root = crol::value_type(value, &schema);
+                            // A top-level type name chooses the type,
+                            // unless the project gives it one (`SPEC.md`
+                            // 4.1, 12.4), whose options then count.
+                            let plain = CheckOptions::default();
+                            let options = if by_project { &check } else { &plain };
+                            if !by_project {
+                                root = crol::value_type(value, &schema);
+                            }
                             snapshot.extra.extend(crol::check_value(
                                 value,
                                 &schema,
                                 root.as_deref(),
-                                &CheckOptions::default(),
+                                options,
                             ));
                         }
                     }
@@ -996,7 +1049,9 @@ fn load_project(
     check.implicit_some = project.options.implicit_some;
     check.allow_unknown_fields = project.options.allow_unknown_fields;
     check.require_complete = project.options.require_complete;
-    Ok((schema, project.root.clone(), check))
+    let root = project.root.clone();
+    snapshot.project = Some((project, dir));
+    Ok((schema, root, check))
 }
 
 #[cfg(test)]

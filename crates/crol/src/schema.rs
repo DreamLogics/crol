@@ -372,6 +372,16 @@ impl SchemaFile {
             .map(|(path, def)| (path.as_str(), def))
     }
 
+    /// The schema path a type name in a project file stands for: a schema
+    /// path, or a plain name that one type has (`SPEC.md` 12.4).
+    pub fn type_path<'a>(&'a self, name: &'a str) -> Option<&'a str> {
+        if self.get(name).is_some() {
+            return Some(name);
+        }
+        let mut found = self.by_name(name).map(|(path, _)| path);
+        found.next().filter(|_| found.next().is_none())
+    }
+
     /// Where `&default` finds its values in this schema (`SPEC.md` 6.1.3),
     /// for tools that evaluate with
     /// [`DataOptions::with_defaults`](crol_eval::DataOptions::with_defaults).

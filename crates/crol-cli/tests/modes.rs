@@ -448,3 +448,83 @@ const FILES_PROJECT: &str = r#"Project {
     ],
     ..
 }"#;
+
+#[test]
+fn files_give_value_documents_a_type() {
+    let dir = tree(
+        "files",
+        &[
+            ("project.crov", FILES_PROJECT),
+            ("schema.crov", DEFAULTS_SCHEMA),
+            ("data/a.crod", "+web: Service { .. }\n"),
+            ("config/good.crov", "{ port: 80, .. }\n"),
+            ("config/deep/er/bad.crov", "{ port: \"x\", .. }\n"),
+            ("config/special.crov", "{ port: 80, .. }\n"),
+            ("other/plain.crov", "{ port: \"not checked\" }\n"),
+            (
+                "other/own.crov",
+                "#![schema(::schema)]\n\nConfig { port: \"x\", .. }\n",
+            ),
+        ],
+    );
+    let output = crol(&dir, &["check", "config/good.crov"]);
+    assert!(output.status.success(), "{output:?}");
+    let output = crol(&dir, &["check", "config/deep/er/bad.crov"]);
+    assert!(!output.status.success(), "{output:?}");
+    assert!(stderr(&output).contains("found \"x\""), "{output:?}");
+
+    // The first glob that matches decides.
+    let output = crol(&dir, &["check", "config/special.crov"]);
+    assert!(!output.status.success(), "{output:?}");
+
+    // A file no glob matches is not checked, and one that names a schema
+    // goes by that.
+    assert!(crol(&dir, &["check", "other/plain.crov"]).status.success());
+    let output = crol(&dir, &["check", "other/own.crov"]);
+    assert!(stderr(&output).contains("found \"x\""), "{output:?}");
+
+    // `eval` fills in the defaults of the type, and `fingerprint` reads it.
+    let output = crol(&dir, &["eval", "config/good.crov"]);
+    assert!(stdout(&output).contains("host: \"h\""), "{output:?}");
+    let output = crol(&dir, &["fingerprint", "config/deep/er/bad.crov"]);
+    assert!(!output.status.success(), "{output:?}");
+
+    // From elsewhere, `--project` says which project it is.
+    let args = ["check", "deep/er/bad.crov", "--project", "../project.crov"];
+    assert!(!crol(&dir.join("config"), &args).status.success());
+}
+
+#[test]
+fn files_need_a_schema_and_a_type_it_has() {
+    let no_schema =
+        "Project { layers: List([]), files: [{ glob: \"*\", type: \"app::Config\" }], .. }";
+    let dir = tree(
+        "files-no-schema",
+        &[("project.crov", no_schema), ("a.crov", "{ port: 80 }\n")],
+    );
+    let output = crol(&dir, &["check", "a.crov"]);
+    assert!(!output.status.success(), "{output:?}");
+    assert!(stderr(&output).contains("no schema"), "{output:?}");
+
+    let unknown = "Project { layers: List([]), schema: Some(\"schema\"), files: [{ glob: \"*\", type: \"app::Nothing\" }], .. }";
+    let dir = tree(
+        "files-unknown-type",
+        &[
+            ("project.crov", unknown),
+            ("schema.crov", DEFAULTS_SCHEMA),
+            ("a.crov", "{ port: 80 }\n"),
+        ],
+    );
+    let output = crol(&dir, &["check", "a.crov"]);
+    assert!(!output.status.success(), "{output:?}");
+    assert!(stderr(&output).contains("app::Nothing"), "{output:?}");
+
+    let bad_glob = "Project { layers: List([]), files: [{ glob: \"a::**\", type: \"T\" }], .. }";
+    let dir = tree(
+        "files-bad-glob",
+        &[("project.crov", bad_glob), ("a.crov", "1\n")],
+    );
+    let output = crol(&dir, &["check", "a.crov"]);
+    assert!(!output.status.success(), "{output:?}");
+    assert!(stderr(&output).contains("a::**"), "{output:?}");
+}

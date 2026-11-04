@@ -2243,14 +2243,16 @@ the variants and options, from the project file.
 **Modes.** Commands choose the mode by the rules of section 4:
 
 - With one source that is a `.crov` file, `check`, `eval` and `fingerprint`
-  read it in value mode. It is checked against `--schema`, else its
-  `#![schema(...)]`, else, for a file called `project.crov` or given with
-  `--project`, the schema `crol` provides (section 12.4). `eval` prints the
+  read it in value mode. It is checked against `--schema`, else, for a
+  file called `project.crov` or given with `--project`, the schema `crol`
+  provides, else its `#![schema(...)]`, else the type the `files` of the
+  project found, or given with `--project`, give it (section 12.4). `eval` prints the
   value, with a key and path the value there; with a schema, defaults are
   written out as above. `fingerprint` is over the value (appendix B).
   `--context`, `--all-contexts` and the flags that declare variants are
-  errors, as a value document has no variants. `Project.files` is not
-  read; a project's own schema and root type are for its layers.
+  errors, as a value document has no variants. A project's schema and
+  root type are for its layers: a value document only gets them through
+  `Project.files`.
 - `explain` follows a value through layers, so a `.crov` file is an error
   that points to `crol eval`.
 - A `.crov` file among other sources, or written `name=source`, is a layer,
@@ -2371,9 +2373,7 @@ Project {
 - `dir` is a module path (section 4.2), written as a string; the root
   directory is the project file's. The language server resolves it through
   a file loader (section 10.7) that puts open buffers over the file
-  system. `glob` is a module path whose
-  segments may hold `*` (any part of one name) or be `**` (any number of
-  directories). `read_only` layers
+  system. `read_only` layers
   (generated data, vendored data) are loaded but get no diagnostics or
   code actions in the editor.
 - `layers` is either `List([...])` or `Command(["my-app", "list-layers"])`.
@@ -2392,10 +2392,42 @@ Project {
   the application's definition kinds (section 10.4). It defaults to the
   schema's root type. Type names in `root` and `files` are schema paths;
   a plain name is accepted when it is unambiguous.
-- `files` gives value-mode documents a type. A `.crov` file that matches
-  no glob is checked against its `#![schema(...)]` if it has one; otherwise
-  it gets syntax and evaluation checks only. A `.crod` file in no layer is
-  a layer of its own in the editor, with the same schema rule.
+- `files` gives value-mode documents a type: it is how a `.crov` file
+  outside the layers opts in to the project's schema. A document that
+  matches is checked as a value of that type, against `schema`, with the
+  project's `options`, in the language server, and in `crol check`, `crol
+  eval` and `crol fingerprint` given that one file. It is an error if the
+  project has no `schema`, or the schema has no such type.
+- Which schema a `.crov` file gets, first what applies: `--schema` (CLI);
+  for the project file, the one `crol` provides; its `#![schema(...)]`, by
+  that schema's rules, whatever the globs say (section 4.1); the first glob
+  in `files` that matches it; nothing, for syntax and evaluation checks
+  only, with no project schema or root type. A `.crod` file in no layer is
+  a layer of its own in the editor, with its own `#![schema(...)]` or else
+  that of what it extends, never `files`.
+
+**Globs.** A `glob` is written like a module path (section 4.2): segments
+separated by `::`, from the project file's directory, so a leading `::`
+changes nothing. It says which files match; it is not resolved, and
+nothing lists a directory for it, so the result depends on a file's path
+alone, never on what else exists.
+
+- The last segment is matched against the file's name without `.crov`.
+  Every other segment is matched against one directory, in order, except
+  `**`, which matches any number of directories, also none.
+- In a segment, `*` matches any part of one name, also none, and every
+  other character matches itself, by Unicode scalar value: `config::*`,
+  `config::app_*`, `config::**::*`. Case counts, on every platform.
+- A segment holds letters, digits, `_` and `*`. `**` is a whole segment
+  and not the last, `super` is not allowed, and no segment is empty. A glob
+  that breaks this is an error in the project file.
+- Only `.crov` files match, by the name of the file, canonical, below the
+  canonical project directory: one outside it never matches, also through
+  a symbolic link. No name in the path may be hidden (start with `.`). A name
+  that is no identifier does match: `config::*` matches `config/my-app.crov`,
+  which a module path could not name.
+- Entries are tried in the order written, and the first that matches
+  decides.
 
 ### 12.5 Language server
 

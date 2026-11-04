@@ -2642,6 +2642,64 @@ const DEFAULTS_SCHEMA: &str = r#"Schema {
     },
 }"#;
 
+#[test]
+fn files_give_value_documents_a_type() {
+    let project = r#"Project {
+        layers: List([{ name: "base", dir: "data", .. }]),
+        schema: Some("schema"),
+        files: [{ glob: "config::*", type: "app::Config" }],
+        ..
+    }"#;
+    let dir = workspace(
+        "lsp-files",
+        &[
+            ("project.crov", project),
+            ("schema.crov", DEFAULTS_SCHEMA),
+            ("data/a.crod", "+web: Service { .. }\n"),
+            ("config/app.crov", "{ port: 80 }\n"),
+            ("other/app.crov", "{ port: \"not checked\" }\n"),
+        ],
+    );
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "config/app.crov");
+    let items = buffer.complete(&mut client, "{ po| }\n");
+    assert!(labels(&items).contains(&"port"), "{items:?}");
+    buffer.change(&client, "{ port: \"x\" }\n");
+    let diagnostics = client.diagnostics_for(&buffer.uri, |d| !d.is_empty());
+    assert!(says(&diagnostics, "found \"x\""), "{diagnostics:?}");
+
+    // A document that matches no glob is not given the project's schema.
+    let other = uri(&dir.join("other/app.crov"));
+    open_text(&client, &other, "{ port: \"not checked\" }\n");
+    client.diagnostics_for(&other, |d| d.is_empty());
+    client.stop();
+}
+
+#[test]
+fn a_type_the_schema_does_not_have_is_reported() {
+    let project = r#"Project {
+        layers: List([{ name: "base", dir: "data", .. }]),
+        schema: Some("schema"),
+        files: [{ glob: "config::*", type: "app::Nothing" }],
+        ..
+    }"#;
+    let dir = workspace(
+        "lsp-files-unknown",
+        &[
+            ("project.crov", project),
+            ("schema.crov", DEFAULTS_SCHEMA),
+            ("data/a.crod", "+web: Service { .. }\n"),
+            ("config/app.crov", "{ port: 80 }\n"),
+        ],
+    );
+    let client = Client::start(&dir);
+    let file = uri(&dir.join("config/app.crov"));
+    open_text(&client, &file, "{ port: 80 }\n");
+    let diagnostics = client.diagnostics_for(&file, |d| !d.is_empty());
+    assert!(says(&diagnostics, "app::Nothing"), "{diagnostics:?}");
+    client.stop();
+}
+
 /// A project of three layers, the middle one's directory as given.
 fn three_layers(name: &str, middle: &[(&str, &str)], middle_dir: &str) -> PathBuf {
     let project = format!(

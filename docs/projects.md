@@ -118,9 +118,44 @@ it.
 `warn_cross_file_patches`, `max_contexts`, `contexts`, and `variant_keys`, which
 is written as a string here: `"NoNewKeys"`.
 
-A project file also has a `files` field, meant to give value-mode documents a
-type. It is accepted, but no tool reads it yet. Use
-[`#![schema(...)]`](schemas.md#the-schema-attribute) in those documents instead.
+### Value documents in a project
+
+A `.crov` file gets nothing from the project on its own: not the schema, and not
+the root type. `files` opts it in, by giving it a type:
+
+```rust
+Project {
+    layers: List([{ name: "base", dir: "data::base", .. }]),
+    schema: Some("crol::schema"),
+    files: [
+        { glob: "config::production", type: "app::ProductionConfig" },
+        { glob: "config::**::*", type: "app::Config" },
+    ],
+    ..
+}
+```
+
+`crol check config/web.crov` and your editor now check that file as an
+`app::Config`, against the project's schema and with its `options`, and the editor
+completes its fields. `crol eval` fills in its defaults. The project must have a
+`schema`, with that type in it. `type` is a schema path, or a plain name that one
+type has.
+
+A `glob` is written like a [module path](#module-paths), starting from the directory
+of the project file:
+
+| Glob              | Matches                                             |
+| ----------------- | --------------------------------------------------- |
+| `config::web`     | `config/web.crov`                                   |
+| `config::*`       | every `.crov` file directly in `config`             |
+| `config::web_*`   | those whose names start with `web_`                 |
+| `config::**::*`   | every `.crov` file in `config` or a directory below |
+
+The first entry that matches decides. Case counts, hidden files never match, and
+neither do files outside the project's directory. A file that matches no glob only
+gets syntax and evaluation checks. A file with its own
+[`#![schema(...)]`](schemas.md#the-schema-attribute) goes by that instead, whatever
+the globs say, and so does `--schema`.
 
 ### How it is found
 

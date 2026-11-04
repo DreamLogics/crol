@@ -101,7 +101,9 @@ $ crol eval settings.crov workers
 
 It is checked against `--schema`, else its own
 [`#![schema(...)]`](schemas.md#the-schema-attribute). `project.crov` gets the
-schema of project files, so `crol check project.crov` checks your project file.
+schema of project files, so `crol check project.crov` checks your project file. A
+file that the project's [`files`](projects.md#value-documents-in-a-project) match
+is checked as the type they give it.
 A value document has no variants, so `--context`, `--all-contexts` and the options
 that declare variants are errors.
 
