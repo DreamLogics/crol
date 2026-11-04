@@ -495,3 +495,126 @@ fn the_composer_stays_send_and_sync() {
     check::<CrolConfig>();
     check::<crol::ResolvedSource>();
 }
+
+/// What a buffer holds over the files, as an editor's unsaved text.
+struct Over {
+    path: PathBuf,
+    text: &'static str,
+}
+
+impl FileLoader for Over {
+    fn resolve(&self, _: &crol::ModulePath<'_>) -> Result<Option<SourceId>, crol::LoaderError> {
+        Ok(None)
+    }
+
+    fn load(&self, source: &SourceId) -> Result<Loaded, crol::LoaderError> {
+        if source.canonical_path() == Some(self.path.as_path()) {
+            return Ok(Loaded::Document(self.text.as_bytes().to_vec()));
+        }
+        FsLoader::new(".").load(source)
+    }
+}
+
+fn tolerant(root: &std::path::Path, reader: Option<Over>) -> CrolComposer {
+    let file_loaders = match reader {
+        Some(reader) => FileLoaders::new().with_file_reader(reader),
+        None => FileLoaders::new(),
+    };
+    CrolComposer::with_cfg(crol::CrolConfig::<String> {
+        load_extends: true,
+        root_path: root.to_path_buf(),
+        file_loaders,
+        ..Default::default()
+    })
+}
+
+#[test]
+fn a_file_reader_reads_every_file_however_it_is_reached() {
+    let dir = tree(
+        "file-reader",
+        &[
+            ("sub/top.crod", "#![extends(below)]\n\nport: & + 1\n"),
+            ("sub/below.crod", "+port: 1\n"),
+        ],
+    );
+    let path = dir.join("sub/below.crod").canonicalize().unwrap();
+    let reader = Over {
+        path,
+        text: "+port: 41\n",
+    };
+    let loaders = FileLoaders::new().with_file_reader(reader);
+    let top = dir.join("sub/top.crod");
+    let layer = loaders.resolve_path(&top, &dir).load("top").unwrap();
+    assert_eq!(layer.documents().count(), 1);
+    let data = CrolComposer::with_cfg(crol::CrolConfig::<String> {
+        load_extends: true,
+        root_path: dir.clone(),
+        file_loaders: loaders,
+        ..Default::default()
+    })
+    .load_layer(layer)
+    .compose_data()
+    .unwrap();
+    assert_eq!(data.get::<u16>("port").unwrap(), 42);
+}
+
+#[test]
+fn a_tolerant_load_goes_on_past_an_extends_that_fails() {
+    let dir = tree(
+        "tolerant",
+        &[
+            (
+                "top.crod",
+                "#![extends(below)]\n#![extends(nothing)]\n#![extends(ring)]\n\nport: 2\n",
+            ),
+            ("below.crod", "#![extends(lowest)]\n\nport: 1\n"),
+            ("lowest.crod", "+port: 0\n"),
+            ("ring.crod", "#![extends(top)]\n"),
+        ],
+    );
+    let mut composer = tolerant(&dir, None);
+    let layer = FileLoaders::new().resolve_path(&dir.join("top.crod"), &dir);
+    let loads = composer.load_layer_tolerant(layer.load("top").unwrap());
+
+    assert_eq!(loads.len(), 3);
+    assert_eq!(loads[0].path, "below");
+    assert_eq!(loads[0].layers, 0..2);
+    assert_eq!(loads[0].error, None);
+    let text = std::fs::read_to_string(dir.join("top.crod")).unwrap();
+    assert_eq!(&text[loads[1].range], "nothing");
+    assert!(
+        loads[1]
+            .error
+            .as_ref()
+            .unwrap()
+            .to_string()
+            .contains("nothing"),
+        "{loads:?}"
+    );
+    assert_eq!(loads[1].layers, 2..2);
+    assert!(
+        loads[2]
+            .error
+            .as_ref()
+            .unwrap()
+            .to_string()
+            .contains("cycle"),
+        "{loads:?}"
+    );
+
+    // What could be followed lies below the layer, and it evaluates.
+    let names: Vec<&str> = composer.layers().iter().map(|l| l.name()).collect();
+    assert_eq!(names, ["lowest", "below", "top"]);
+    let data = composer.compose_data().unwrap();
+    assert_eq!(data.get::<u16>("port").unwrap(), 2);
+}
+
+#[test]
+fn a_tolerant_load_follows_nothing_without_load_extends() {
+    let dir = tree("tolerant-off", &[("top.crod", "#![extends(nothing)]\n")]);
+    let layer = FileLoaders::new().resolve_path(&dir.join("top.crod"), &dir);
+    let mut composer = CrolComposer::new();
+    let loads = composer.load_layer_tolerant(layer.load("top").unwrap());
+    assert!(loads.is_empty());
+    assert_eq!(composer.layers().len(), 1);
+}

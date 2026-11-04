@@ -501,7 +501,10 @@ web.replicas: 4,
 - **Tools** always follow it: they evaluate the document on top of those
   layers, so the editor shows the values below, the merged results, and
   the templates and keys the document can use. Diagnostics in extended
-  documents are not reported, only in the document itself.
+  documents are not reported, only in the document itself: an `extends`
+  that cannot be followed (it names nothing, or forms a cycle) and the
+  first error in what an `extends` brought in are shown on its module
+  path. The other `extends` of the document are still followed.
 - **The loader** follows it only with `CrolConfig::load_extends`
   (section 10.7); by default it ignores it, and the application decides
   what is loaded and in which order. Either way `extends` only adds
@@ -1822,6 +1825,11 @@ tools:
   together. `load_layer(CrolLayer)` adds a layer built in code.
 - `with_file_loader(loader)` registers a file loader (below), and
   `without_file_system()` turns off the default one.
+- `load_layer_tolerant(layer)` is `load_layer` for tools, which show what
+  they can: an `extends` that fails stops nothing, the layer goes on top
+  of what the others loaded, and it returns what became of each
+  (`ExtendsLoad`: the document, the module path and its range, the layers
+  it added, and the error). It takes `&mut self`.
 - `with_variant(v)` makes `v` active in the context to compose (section
   8.1). It fails for an undeclared variant (when variants are declared), or a second choice in a group
   that is not an ancestor or descendant of the first. Without any, the
@@ -1885,6 +1893,13 @@ let config: Config = CrolComposer::new()
     .compose()?;
 ```
 
+- `FileLoaders::with_file_reader(loader)` keeps the file system's
+  resolution, and reads every file it reaches through `loader`'s `load`.
+  This is how the language server puts open buffers over the files.
+  `FileLoaders::resolve_path(path, root)` is a layer's document by file
+  system path, read the same way; like `&Path` given to `load`, it needs no
+  name a module path can write, and its relative paths start from its
+  directory.
 - `ModulePath` gives a loader `segments()`, the names from the root to what
   the path names, with `super` and the directory of the document it is
   written in already applied (section 4.2): `super::defaults` in
@@ -2393,8 +2408,11 @@ editor-neutral; section 12.7 is the Zed client.
 not (section 4). Without a project file, it serves each open document on
 its own: syntax, evaluation (a `.crov` file as a value-mode document, a
 `.crod` file as a layer on its own, on top of its
-`#![extends(...)]` layers), and checks against its
-`#![schema(...)]` if it has one. An open document with another extension
+`#![extends(...)]` layers, loaded by the composer as for `crol check`,
+with open buffers over the files), and checks against its
+`#![schema(...)]` if it has one, else the one the nearest extended
+document names. Hover, go to definition, completion and inlay hints see
+those layers. An open document with another extension
 is value mode, as a text with no layers, and a `.crol` file is not
 evaluated: its one diagnostic says to rename it. With a project file, an open
 document in none of its layers is served in the same way. At start it reads the
@@ -2406,7 +2424,16 @@ and the outline), and re-evaluates everything after a pause in typing
 (default 150 ms), cancelling an evaluation that a newer edit makes stale.
 Requests are answered from the latest finished evaluation, so the
 editor never waits for one. Changes to files on disk, the project file
-and the schema file are watched.
+and the schema file are watched: a client that can register watchers is
+asked for every `.crod`, `.crov` and `.crol` file in the workspace, and any
+change, also to an open buffer, evaluates everything again, so a document
+follows what it extends. Files outside the workspace are read again at
+each evaluation.
+
+A layer of a project may `extends` too, as in `crol check`. What that
+brings in that is no layer of the project goes below the layer, gets no
+diagnostics of its own unless it is open, and has a warning on the
+`extends` (section 4.1).
 
 **Diagnostics.** Everything `crol check` reports, on the spot: syntax,
 reading and evaluation errors, schema errors on final values (unknown

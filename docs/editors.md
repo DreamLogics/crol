@@ -48,9 +48,14 @@ their own, and checked against their `#![schema(...)]` if they have one. The
 [extension](modes.md) gives the mode: a `.crov` file is a value document, and a
 `.crod` file is data, as a layer of its own, with its variants and patches.
 
-A `.crod` file alone only knows itself, so a patch to a key from another file has
-nothing below it. The server does not follow `#![extends(...)]` yet, so list your
-layers in `project.crov` to see how they work together.
+A `.crod` file is evaluated on top of what its `#![extends(...)]` names, as with
+`crol check`, and open files among those count even when they are not saved. Hover,
+go to definition and completion see the extended keys, and changing an extended
+file evaluates the document again. Errors in an extended file are not shown as if
+they were yours: the first one, an `extends` that names nothing and a cycle appear
+on the `extends` itself. A `.crod` file with no `extends` only knows itself, so a
+patch to a key from another file has nothing below it. Name what it builds on, or
+list your layers in `project.crov`.
 
 A wrong file in a layer, such as a `.crov` file, is reported on that file. The
 server shows a `.crol` file only an error that says to rename it.

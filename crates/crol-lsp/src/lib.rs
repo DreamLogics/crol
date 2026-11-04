@@ -6,8 +6,9 @@
 //! the others.
 //!
 //! The server evaluates the project (`SPEC.md` 12.4) found from the
-//! workspace folder, or each open document on its own. Open buffers replace
-//! their files, saved or not. After an edit it parses the file again at
+//! workspace folder, or each open document on its own, on top of what it
+//! extends. Open buffers replace their files, saved or not. After an edit it
+//! parses the file again at
 //! once, for syntax errors, and evaluates everything after a pause in
 //! typing; requests are answered from the latest evaluation.
 
@@ -165,6 +166,13 @@ impl Server {
             .and_then(|w| w.inlay_hint.as_ref())
             .and_then(|h| h.refresh_support)
             .unwrap_or(false);
+        let watch_files = params
+            .capabilities
+            .workspace
+            .as_ref()
+            .and_then(|w| w.did_change_watched_files.as_ref())
+            .and_then(|w| w.dynamic_registration)
+            .unwrap_or(false);
         let mut settings = Settings::default();
         if let Some(options) = &params.initialization_options {
             settings.update(options);
@@ -238,8 +246,36 @@ impl Server {
             requests_sent: 0,
             fetcher: remote::Fetcher::new(),
         };
+        if watch_files {
+            server.watch_files();
+        }
         server.evaluate();
         Ok(server)
+    }
+
+    /// Asks the client to report changes to files on disk (`SPEC.md` 12.5):
+    /// a file that is not open may be a layer, or extended.
+    fn watch_files(&mut self) {
+        let watchers = ["crod", "crov", "crol"]
+            .map(|extension| lsp_types::FileSystemWatcher {
+                glob_pattern: lsp_types::GlobPattern::String(format!("**/*.{extension}")),
+                kind: None,
+            })
+            .to_vec();
+        let options = lsp_types::DidChangeWatchedFilesRegistrationOptions { watchers };
+        let params = lsp_types::RegistrationParams {
+            registrations: vec![lsp_types::Registration {
+                id: "crol-files".to_owned(),
+                method: notification::DidChangeWatchedFiles::METHOD.to_owned(),
+                register_options: serde_json::to_value(options).ok(),
+            }],
+        };
+        self.requests_sent += 1;
+        self.send(Message::Request(lsp_server::Request::new(
+            RequestId::from(format!("crol-{}", self.requests_sent)),
+            request::RegisterCapability::METHOD.to_owned(),
+            params,
+        )));
     }
 
     /// Adds the application's own checks (`SPEC.md` 12.5).
@@ -317,12 +353,12 @@ impl Server {
                     self.open.insert(path.clone(), params.text_document.text);
                     self.edited(&params.text_document.uri);
                     // Until it is evaluated once, nothing is known of a
-                    // document in no layer, not even its schema.
-                    if !self
-                        .snapshot
-                        .as_ref()
-                        .is_some_and(|s| s.file_of(&path).is_some())
-                    {
+                    // document in no layer, not even its schema. One read
+                    // only for what extends it was not evaluated either.
+                    if !self.snapshot.as_ref().is_some_and(|s| {
+                        s.file_of(&path)
+                            .is_some_and(|f| s.evaluation_of(f).is_some())
+                    }) {
                         self.evaluate();
                     }
                 }

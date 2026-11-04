@@ -448,5 +448,3 @@ const FILES_PROJECT: &str = r#"Project {
     ],
     ..
 }"#;
-
-

@@ -334,6 +334,8 @@ fn read_directory(
 pub struct FileLoaders {
     registered: Vec<Arc<dyn FileLoader>>,
     file_system: bool,
+    /// What reads files in place of an [`FsLoader`], if anything does.
+    file_reader: Option<Arc<dyn FileLoader>>,
     /// The project file, which a layer's directory may hold.
     project_file: Option<SourceId>,
 }
@@ -349,6 +351,7 @@ impl fmt::Debug for FileLoaders {
         f.debug_struct("FileLoaders")
             .field("registered", &self.registered.len())
             .field("file_system", &self.file_system)
+            .field("file_reader", &self.file_reader.is_some())
             .field("project_file", &self.project_file)
             .finish()
     }
@@ -358,6 +361,10 @@ impl PartialEq for FileLoaders {
     fn eq(&self, other: &Self) -> bool {
         self.file_system == other.file_system
             && self.project_file == other.project_file
+            && match (&self.file_reader, &other.file_reader) {
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                (a, b) => a.is_none() && b.is_none(),
+            }
             && self.registered.len() == other.registered.len()
             && self
                 .registered
@@ -393,6 +400,7 @@ impl FileLoaders {
         Self {
             registered: Vec::new(),
             file_system: true,
+            file_reader: None,
             project_file: None,
         }
     }
@@ -410,6 +418,16 @@ impl FileLoaders {
     /// trusted with the application's files.
     pub fn without_file_system(mut self) -> Self {
         self.file_system = false;
+        self
+    }
+
+    /// Reads the files of the file system through `reader`: paths still
+    /// resolve on the file system, and `reader`'s
+    /// [`load`](FileLoader::load) says what each source holds, however it
+    /// was reached, also from a document loaded by a file system path. For
+    /// what puts something over the files, as an editor's unsaved buffers.
+    pub fn with_file_reader(mut self, reader: impl FileLoader + 'static) -> Self {
+        self.file_reader = Some(Arc::new(reader));
         self
     }
 
@@ -442,6 +460,33 @@ impl FileLoaders {
     /// as a schema or project file (`SPEC.md` 4.2).
     pub fn resolve_value(&self, module_path: &str, root: &Path) -> Result<ResolvedSource, Error> {
         self.resolve_from(module_path, root, Origin::CODE, Mode::Value)
+    }
+
+    /// The layer document at a file system path, which need not be below
+    /// `root`, or have a name a module path can write. Like
+    /// [`CrolLayer::from_path`], with the file read as
+    /// [`with_file_reader`](Self::with_file_reader) says: its relative
+    /// module paths start from its directory.
+    pub fn resolve_path(&self, path: &Path, root: &Path) -> ResolvedSource {
+        ResolvedSource {
+            loader: self.file_system_loader(root),
+            id: SourceId::from_path(path),
+            file_name: path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            target: None,
+            mode: Mode::Data,
+            project_file: self.project_file.clone(),
+        }
+    }
+
+    /// What reads the file system below `root`.
+    fn file_system_loader(&self, root: &Path) -> Arc<dyn FileLoader> {
+        match &self.file_reader {
+            Some(reader) => Arc::clone(reader),
+            None => Arc::new(FsLoader::new(root)),
+        }
     }
 
     /// Resolves a module path written at `origin`, to a document of `mode`.
@@ -511,7 +556,7 @@ impl FileLoaders {
             }
         }?;
         Ok(ResolvedSource {
-            loader: Arc::new(FsLoader::new(root)),
+            loader: self.file_system_loader(root),
             id: SourceId::from_path(path),
             file_name,
             target,

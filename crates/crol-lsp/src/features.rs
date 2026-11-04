@@ -527,12 +527,12 @@ pub(crate) fn hover(
             markdown.push_str(&format!(" — {doc}"));
         }
     }
-    if is_target && snapshot.in_layers(file) {
+    if is_target && let Some((layers, options)) = snapshot.chain_of(file) {
         let path_text = described.clone();
         if let Ok(history) = crol_eval::explain(
             &snapshot.sources,
-            &snapshot.layers,
-            &snapshot.options,
+            layers,
+            options,
             &path_text,
             &settings.context,
         ) && !history.is_empty()
@@ -613,10 +613,14 @@ pub(crate) fn definition(
         target_path(&token)?.0
     };
     // The first definition of the key, in the base chain.
+    let file = convert::uri_to_path(uri).and_then(|path| snapshot.file_of(&path));
+    let (layers, options) = file
+        .and_then(|file| snapshot.chain_of(file))
+        .unwrap_or((&snapshot.layers, &snapshot.options));
     let steps = crol_eval::explain(
         &snapshot.sources,
-        &snapshot.layers,
-        &snapshot.options,
+        layers,
+        options,
         &Key::Str(key).to_string(),
         &[],
     )
@@ -648,10 +652,11 @@ fn value_below(
     if let Some(selected) = reference.syntax().parent().and_then(ast::PathExpr::cast) {
         path.extend(selector_steps(selected.selectors()));
     }
+    let (layers, options) = snapshot.chain_of(file)?;
     let steps = crol_eval::explain(
         &snapshot.sources,
-        &snapshot.layers,
-        &snapshot.options,
+        layers,
+        options,
         &describe_path(&key, &path),
         &[],
     )

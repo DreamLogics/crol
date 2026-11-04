@@ -2,12 +2,14 @@
 
 use std::borrow::Cow;
 use std::collections::HashSet;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use crol_eval::{
     Context, ContextData, DataOptions, Diagnostic, ExplainStep, Key, Layer, Sources, Value,
     ValueKind, VariantKeys, Variants, evaluate_data,
 };
+use crol_syntax::TextRange;
 use crol_syntax::ast::{self, AstNode};
 use serde::Deserialize;
 
@@ -373,6 +375,25 @@ impl CrolLayer {
     }
 }
 
+/// What became of one `#![extends(...)]`, from
+/// [`CrolComposer::load_layer_tolerant`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtendsLoad {
+    /// The document that has the attribute, by its name for messages, as
+    /// [`CrolLayer::documents`] gives it.
+    pub document: String,
+    /// The module path as written.
+    pub path: String,
+    /// Where the module path is written in the document.
+    pub range: TextRange,
+    /// The layers it added, as indices into
+    /// [`layers`](CrolComposer::layers), lowest first. Empty when it names
+    /// what is already loaded, and for those it could not load.
+    pub layers: Range<usize>,
+    /// Why it, or an `extends` further down, could not be followed.
+    pub error: Option<Error>,
+}
+
 /// Where a layer comes from: a module path (`&str`, `String`) or a file
 /// system path (`&Path`, `PathBuf`).
 pub trait LayerSource {
@@ -519,6 +540,58 @@ impl<T: VariantName> CrolComposer<T> {
             self.error.get_or_insert(error);
         }
         self
+    }
+
+    /// Adds a layer as [`load_layer`](Self::load_layer) does, going on past
+    /// an `extends` that fails, for tools that show what they can: the
+    /// layer goes in on top of what the other `extends` loaded, and the
+    /// result says what became of each. `load_layer` keeps the first error
+    /// for `compose`, and this one reports none there.
+    pub fn load_layer_tolerant(&mut self, layer: CrolLayer) -> Vec<ExtendsLoad> {
+        let mut loads = Vec::new();
+        if self.config.load_extends {
+            let mut documents: Vec<&Document> = layer.documents.iter().collect();
+            documents.sort_by(|a, b| a.relative.cmp(&b.relative));
+            for document in documents {
+                for (path, range) in extends_attributes(&document.text) {
+                    let start = self.layers.len();
+                    // The document with this `extends` alone, so that `add`
+                    // follows it as it follows any other, and its failure
+                    // leaves the rest.
+                    let alone = CrolLayer {
+                        name: layer.name.clone(),
+                        documents: vec![Document {
+                            text: format!("#![extends({path})]\n"),
+                            ..document.clone()
+                        }],
+                    };
+                    let error = self.add(alone, &mut Vec::new()).err();
+                    if error.is_none() {
+                        self.layers.pop();
+                    }
+                    if let Some(source) = &document.source {
+                        self.loaded.remove(source);
+                    }
+                    let end = if error.is_none() {
+                        self.layers.len()
+                    } else {
+                        start
+                    };
+                    loads.push(ExtendsLoad {
+                        document: document.display.clone(),
+                        path,
+                        range,
+                        layers: start..end,
+                        error,
+                    });
+                }
+            }
+        }
+        let load_extends = std::mem::replace(&mut self.config.load_extends, false);
+        let added = self.add(layer, &mut Vec::new());
+        self.config.load_extends = load_extends;
+        debug_assert!(added.is_ok(), "only `extends` can fail");
+        loads
     }
 
     /// Gives the composer a schema, from which `&default` reads defaults
@@ -708,6 +781,15 @@ impl<T: VariantName> CrolComposer<T> {
 
 /// The module paths a document's `#![extends(...)]` attributes name.
 fn extends_of(text: &str) -> Vec<String> {
+    extends_attributes(text)
+        .into_iter()
+        .map(|(path, _)| path)
+        .collect()
+}
+
+/// The module paths a document's `#![extends(...)]` attributes name, each
+/// with where it is written.
+fn extends_attributes(text: &str) -> Vec<(String, TextRange)> {
     let parse = crol_syntax::parse(text);
     parse
         .document()
@@ -717,11 +799,11 @@ fn extends_of(text: &str) -> Vec<String> {
             _ => None,
         })
         .map(|path: ast::ModulePath| {
-            path.syntax()
-                .text()
-                .to_string()
-                .split_whitespace()
-                .collect()
+            let written = path.syntax().text().to_string();
+            (
+                written.split_whitespace().collect(),
+                path.syntax().text_range(),
+            )
         })
         .collect()
 }

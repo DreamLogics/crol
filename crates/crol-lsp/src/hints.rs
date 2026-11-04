@@ -52,13 +52,13 @@ pub(crate) fn inlay_hints(
         return Vec::new();
     }
 
-    // In a layer, the value after the operation the entry is part of; in
-    // a document on its own, the final value.
-    let operations = if snapshot.in_layers(file) {
+    // In data, the value after the operation the entry is part of; in a
+    // value document, the final value.
+    let operations = if let Some((layers, options)) = snapshot.chain_of(file) {
         match crol_eval::operation_values(
             &snapshot.sources,
-            &snapshot.layers,
-            &snapshot.options,
+            layers,
+            options,
             file,
             &settings.context,
         ) {

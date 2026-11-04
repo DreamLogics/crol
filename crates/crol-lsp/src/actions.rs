@@ -332,14 +332,12 @@ impl Document<'_> {
     fn value_below(&self, block: &ast::Block) -> Option<Value> {
         let snapshot = self.snapshot?;
         let file = self.file?;
-        if !snapshot.in_layers(file) {
-            return None;
-        }
+        let (layers, options) = snapshot.chain_of(file)?;
         let (key, path) = features::block_path(block)?;
         let steps = crol_eval::explain(
             &snapshot.sources,
-            &snapshot.layers,
-            &snapshot.options,
+            layers,
+            options,
             &features::describe_path(&key, &path),
             self.context,
         )

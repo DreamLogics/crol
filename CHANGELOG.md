@@ -38,6 +38,13 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   patches, and its own variants are completed. A problem with the project is now
   shown on the file to blame.
 - `crol --init` writes `project.crov` and `data/base/main.crod`.
+- The language server follows `#![extends(...)]`, in a layer and in a document on
+  its own, through the composer `crol check` uses, with open buffers over the
+  files. Hover, go to definition, completion and inlay hints see what is extended,
+  a document follows changes to it, and an `extends` that fails is shown on the
+  attribute. It asks the client to watch the workspace's CROL files.
+  `CrolComposer::load_layer_tolerant`, `FileLoaders::with_file_reader` and
+  `FileLoaders::resolve_path` are what it uses.
 - `&default` works in `crol` and in the language server, not only through
   `CrolComposer::schema`: they read defaults from the schema they check against
   (`SPEC.md` 6.1.3). `SchemaFile::defaults` gives them to a tool of your own.

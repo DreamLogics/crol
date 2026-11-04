@@ -246,9 +246,13 @@ found your project. It looks in your workspace folder and above, so open the
 project's folder, not a directory next to it, or set `project`.
 
 **Errors about keys that exist in another file.** A `.crod` file that is not in
-any layer is evaluated alone, and the server does not follow `#![extends(...)]`
-yet, so what it builds on is missing. Add the file's directory to the `layers` in
-`project.crov`.
+any layer only knows itself and what its `#![extends(...)]` names. Add an `extends`,
+or add the file's directory to the `layers` in `project.crov`.
+
+**An error on `#![extends(...)]`.** It names nothing, forms a cycle, or what it
+names has errors of its own, of which the message shows the first. Other errors in
+the document are then warnings when the `extends` cannot be followed at all, since
+what is missing may be why.
 
 **A `.crov` file or a `project.crol` has one error, and the rest shows nothing.**
 A problem with the project stops the server from loading its layers, and is shown
