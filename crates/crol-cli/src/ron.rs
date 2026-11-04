@@ -259,10 +259,10 @@ impl Parser<'_> {
                 break;
             }
         }
-        Ok(value(ValueKind::Keyed(Keyed {
+        Ok(value(ValueKind::Keyed(Box::new(Keyed {
             entries,
             ..Keyed::default()
-        })))
+        }))))
     }
 
     /// `(...)` after a name or on its own: a struct with named fields, a
@@ -284,12 +284,12 @@ impl Parser<'_> {
                     break;
                 }
             }
-            return Ok(value(ValueKind::Keyed(Keyed {
+            return Ok(value(ValueKind::Keyed(Box::new(Keyed {
                 name,
                 entries,
                 defaults: true,
                 defaulted: Default::default(),
-            })));
+            }))));
         }
         let elements = self.values(')')?;
         Ok(value(match name {

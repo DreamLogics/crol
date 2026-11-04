@@ -1495,8 +1495,8 @@ the application uses instead; it is required when the product exceeds
 evaluates the base and one context for each variant instead of every
 combination, for variants that multiply. A context can also be evaluated
 later: `CrolData::evaluate(variants)` adds it to the data without reading
-the layers again, and it then counts like any other, in the fingerprint as
-well. Only evaluated contexts are
+the layers or evaluating the base again, only what the context needs of it,
+and it then counts like any other, in the fingerprint as well. Only evaluated contexts are
 checked and fingerprinted.
 
 ### 8.2 Conditions

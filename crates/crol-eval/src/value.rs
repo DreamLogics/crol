@@ -149,7 +149,7 @@ pub enum ValueKind {
     /// `Some(1)`, `Rgb(1, 2, 3)`
     NamedTuple(String, Vec<Value>),
     /// `{ ... }`, `Service { ... }`
-    Keyed(Keyed),
+    Keyed(Box<Keyed>),
 }
 
 /// An evaluated value, with the span of the expression that produced it.

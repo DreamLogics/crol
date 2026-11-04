@@ -269,23 +269,23 @@ mod tests {
 
     #[test]
     fn the_same_values_give_the_same_fingerprint() {
-        let a = v(ValueKind::Keyed(crate::value::Keyed {
+        let a = v(ValueKind::Keyed(Box::new(crate::value::Keyed {
             entries: [(Key::Str("x".into()), v(ValueKind::Int(1)))]
                 .into_iter()
                 .collect(),
             ..Default::default()
-        }));
+        })));
         let variants = Variants::new();
         assert_eq!(
             fingerprint(&a, &[], &variants),
             fingerprint(&a.clone(), &[], &variants)
         );
-        let b = v(ValueKind::Keyed(crate::value::Keyed {
+        let b = v(ValueKind::Keyed(Box::new(crate::value::Keyed {
             entries: [(Key::Str("x".into()), v(ValueKind::Int(2)))]
                 .into_iter()
                 .collect(),
             ..Default::default()
-        }));
+        })));
         assert_ne!(
             fingerprint(&a, &[], &variants),
             fingerprint(&b, &[], &variants)

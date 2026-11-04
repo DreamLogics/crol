@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crol_eval::{
     Compiled, Context, ContextData, DataOptions, Diagnostic, ExplainStep, Key, Layer, Sources,
-    Value, ValueKind, VariantKeys, Variants, compile, evaluate_compiled,
+    Value, ValueKind, VariantKeys, Variants, compile, evaluate_compiled, evaluate_contexts,
 };
 use crol_syntax::TextRange;
 use crol_syntax::ast::{self, AstNode};
@@ -810,7 +810,7 @@ impl<T: VariantName> CrolComposer<T> {
         let mut evaluation = evaluate_compiled(&compiled, &options);
         diagnostics.append(&mut evaluation.diagnostics);
         evaluation.diagnostics = diagnostics;
-        let Some(base) = evaluation.value.clone() else {
+        let Some(base) = evaluation.value.take() else {
             return Err(Error::from_diagnostics(&sources, &evaluation.diagnostics));
         };
         let chosen: Vec<_> = self
@@ -1083,7 +1083,7 @@ impl<T: VariantName> CrolData<T> {
             .clone()
             .with_contexts(Some(vec![names]))
             .with_warn_cross_file_patches(false);
-        let evaluation = evaluate_compiled(&self.compiled, &options);
+        let evaluation = evaluate_contexts(&self.compiled, &options, &self.base);
         if evaluation.has_errors() {
             return Err(Error::from_diagnostics(
                 &self.sources,

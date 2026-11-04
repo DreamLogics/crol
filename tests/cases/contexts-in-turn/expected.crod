@@ -1,0 +1,31 @@
+base_only: { hp: 7 }
+unit: { hp: 1, bonus: { amount: 2 }, total: 3 }
+reads: { hp: 1, total: 3 }
+other: { hp: 1, bonus: { amount: 2 } }
+
+<!empire & !rebel & fast> {
+    other: { hp: 1, bonus: { amount: 5 } },
+}
+
+<empire & !rebel & !fast> {
+    unit: { hp: 10, bonus: { amount: 2 }, total: 12 },
+    reads: { hp: 10, total: 12 },
+}
+
+<empire & !rebel & fast> {
+    unit: { hp: 10, bonus: { amount: 2 }, total: 12 },
+    reads: { hp: 10, total: 12 },
+    other: { hp: 1, bonus: { amount: 5 } },
+}
+
+<!empire & rebel & !fast> {
+    unit: { hp: 1, bonus: { amount: 20 }, total: 21 },
+    reads: { hp: 1, total: 21 },
+    other: { hp: 3, bonus: { amount: 2 } },
+}
+
+<!empire & rebel & fast> {
+    unit: { hp: 1, bonus: { amount: 20 }, total: 21 },
+    reads: { hp: 1, total: 21 },
+    other: { hp: 3, bonus: { amount: 5 } },
+}

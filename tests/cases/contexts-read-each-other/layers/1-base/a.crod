@@ -1,0 +1,5 @@
+// A reference to another context keeps every context's cells.
+shared := { hp: 1 }
++unit: { ..&shared }
+unit<empire>.hp: 10
++compare: { own: &root.unit.hp, empire: &root.unit<empire>.hp, rebel: &root.unit<rebel>.hp }

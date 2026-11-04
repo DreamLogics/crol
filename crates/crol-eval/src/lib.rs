@@ -313,6 +313,21 @@ fn compile_documents(
 /// Evaluates compiled layers. With [`DataOptions::contexts`], this is how
 /// a context is evaluated later, without reading the layers again.
 pub fn evaluate_compiled(compiled: &Compiled, options: &DataOptions) -> Evaluation {
+    evaluate_lowered(compiled, options, None)
+}
+
+/// Evaluates [`DataOptions::contexts`] given the base root as it was evaluated
+/// before, which is not evaluated again: only what the contexts need of it
+/// is. The evaluation's `value` is `None`, and its `contexts` are as usual.
+pub fn evaluate_contexts(compiled: &Compiled, options: &DataOptions, base: &Value) -> Evaluation {
+    evaluate_lowered(compiled, options, Some(base))
+}
+
+fn evaluate_lowered(
+    compiled: &Compiled,
+    options: &DataOptions,
+    known_base: Option<&Value>,
+) -> Evaluation {
     let lowered = &compiled.lowered;
     let mut diagnostics = Vec::new();
     let input = eval::DataInput {
@@ -331,6 +346,7 @@ pub fn evaluate_compiled(compiled: &Compiled, options: &DataOptions) -> Evaluati
         defaults: options.defaults.as_ref().map(|d| &*d.0),
         init_defaults: options.init_defaults,
         merge_root: options.merge_root,
+        known_base,
     };
     let (result, mut errors) = eval::evaluate_data(&lowered.ir, &input);
     diagnostics.append(&mut errors);
@@ -341,7 +357,8 @@ pub fn evaluate_compiled(compiled: &Compiled, options: &DataOptions) -> Evaluati
         };
     };
     let evaluated = !diagnostics.iter().any(Diagnostic::is_error);
-    if let (Some(defaults), Some(base)) = (&options.defaults, &result.base)
+    let base = result.base.as_ref().or(known_base);
+    if let (Some(defaults), Some(base)) = (&options.defaults, base)
         && defaults.0.has_constraints()
     {
         check_constraints(
@@ -353,7 +370,7 @@ pub fn evaluate_compiled(compiled: &Compiled, options: &DataOptions) -> Evaluati
         );
     }
     if evaluated
-        && let (Some(defaults), Some(base)) = (input.defaults, &result.base)
+        && let (Some(defaults), Some(base)) = (input.defaults, base)
         && defaults.has_sealed()
     {
         check_sealed(lowered, &input, defaults, base, &result, &mut diagnostics);
@@ -540,6 +557,7 @@ fn explain_paths(
         defaults: options.defaults.as_ref().map(|d| &*d.0),
         init_defaults: options.init_defaults,
         merge_root: options.merge_root,
+        known_base: None,
     };
     eval::explain(&lowered.ir, &input, requests, context)
 }
@@ -593,6 +611,7 @@ fn check_sealed(
             variants: &result.variants,
             contexts: Some(&contexts),
             warn_cross_file_patches: false,
+            known_base: None,
             ..*input
         };
         let (below, _) = eval::evaluate_data(&lowered.ir, &below);

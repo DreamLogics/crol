@@ -130,7 +130,7 @@ enum Shape {
     Tuple(Vec<Lazy>),
     UnitName(Arc<str>),
     Named(Arc<str>, Vec<Lazy>),
-    Keyed(KeyedShape),
+    Keyed(Box<KeyedShape>),
 }
 
 impl Shape {
@@ -631,7 +631,7 @@ fn shaped_from_value(value: &Value) -> Rc<Shaped> {
         ValueKind::List(items) => Shape::List(cells(items)),
         ValueKind::Tuple(items) => Shape::Tuple(cells(items)),
         ValueKind::NamedTuple(n, items) => Shape::Named(Arc::from(n.as_str()), cells(items)),
-        ValueKind::Keyed(keyed) => Shape::Keyed(KeyedShape {
+        ValueKind::Keyed(keyed) => Shape::Keyed(Box::new(KeyedShape {
             name: keyed.name.as_deref().map(Arc::from),
             slots: keyed
                 .entries
@@ -649,7 +649,7 @@ fn shaped_from_value(value: &Value) -> Rc<Shaped> {
                 .collect(),
             defaults: keyed.defaults,
             defaulted: keyed.defaulted.clone(),
-        }),
+        })),
     };
     Rc::new(Shaped {
         shape,
@@ -735,6 +735,8 @@ pub(crate) struct DataInput<'a> {
     pub(crate) defaults: Option<&'a dyn DefaultsProvider>,
     pub(crate) init_defaults: bool,
     pub(crate) merge_root: bool,
+    /// The base root, if it was evaluated before.
+    pub(crate) known_base: Option<&'a Value>,
 }
 
 /// The evaluated data: the variants (declared, or found in the data), the
@@ -990,29 +992,39 @@ pub(crate) fn evaluate_data(
         }
     };
 
-    // The base, in full.
+    // The base, in full, unless it is known: then what a context needs of it
+    // is computed when it does (`SPEC.md` 8.1).
     let base_id = evaluator.context_state(&contexts[0]);
     let base_cell = evaluator.contexts[base_id].root_cell.clone();
-    let base = evaluator
-        .full_value(&base_cell, Span::detached(), &mut Vec::new())
-        .ok()
-        .map(|mut base| {
-            // The root is written nowhere; what is wrong with it as a whole
-            // needs a place all the same.
-            base.span = input.root_span;
-            base
-        });
+    let base = match input.known_base {
+        Some(known) => Some(std::borrow::Cow::Borrowed(known)),
+        None => evaluator
+            .full_value(&base_cell, Span::detached(), &mut Vec::new())
+            .ok()
+            .map(|mut base| {
+                // The root is written nowhere; what is wrong with it as a
+                // whole needs a place all the same.
+                base.span = input.root_span;
+                std::borrow::Cow::Owned(base)
+            }),
+    };
     let base_failed = base.is_none() || !evaluator.diagnostics.is_empty();
     evaluator.share = !base_failed && !input.evaluate_every_key;
     record(&mut evaluator, 0);
+    let empty_keyed = Keyed::default();
     let base_keyed = match base.as_ref().map(|v| &v.kind) {
-        Some(ValueKind::Keyed(keyed)) => keyed.clone(),
-        _ => Keyed::default(),
+        Some(ValueKind::Keyed(keyed)) => keyed,
+        _ => &empty_keyed,
     };
+    // What a context evaluates is not needed once it is done, unless a
+    // reference reads another context, which may be in a cell of the base.
+    let forget = input.known_base.is_none() && !plan.keys.values().any(|key| key.reads.switch);
 
     let mut per_context = Vec::with_capacity(contexts.len() - 1);
     for (index, context) in contexts.iter().enumerate().skip(1) {
         evaluator.steps = 0;
+        let cells_before = evaluator.cells.borrow().len();
+        let contexts_before = evaluator.contexts.len();
         let id = evaluator.context_state(context);
         let root_cell = evaluator.contexts[id].root_cell.clone();
         // Only keys that can differ are evaluated again, unless the base
@@ -1070,6 +1082,9 @@ pub(crate) fn evaluate_data(
         }
         ordered.extend(changes);
         record(&mut evaluator, index);
+        if forget {
+            evaluator.forget(cells_before, contexts_before);
+        }
         if !failed {
             per_context.push(ContextData {
                 context: context.clone(),
@@ -1080,7 +1095,7 @@ pub(crate) fn evaluate_data(
         }
     }
     evaluator.check_variant_keys(
-        &base_keyed,
+        base_keyed,
         &per_context,
         input.variant_keys,
         &mut diagnostics,
@@ -1105,7 +1120,10 @@ pub(crate) fn evaluate_data(
     (
         Some(DataResult {
             variants,
-            base,
+            base: base.and_then(|base| match base {
+                std::borrow::Cow::Owned(base) => Some(base),
+                std::borrow::Cow::Borrowed(_) => None,
+            }),
             contexts: per_context,
         }),
         diagnostics,
@@ -1559,6 +1577,15 @@ impl<'a> DataPlan<'a> {
 }
 
 impl Evaluator<'_> {
+    /// Drops the cells and contexts made since these counts, breaking what
+    /// cycles they hold, as dropping the evaluator does.
+    fn forget(&mut self, cells: usize, contexts: usize) {
+        for cell in self.cells.get_mut().drain(cells..) {
+            *cell.state.borrow_mut() = State::Running;
+        }
+        self.contexts.truncate(contexts);
+    }
+
     /// A pending cell, which the evaluator keeps (see `cells`).
     fn cell(&self, job: Job, location: Option<Location>) -> Lazy {
         let expr = match &job {
@@ -1761,7 +1788,7 @@ impl Evaluator<'_> {
             ..KeyedShape::default()
         };
         *root_cell.state.borrow_mut() = State::Done(Ok(Rc::new(Shaped {
-            shape: Shape::Keyed(keyed),
+            shape: Shape::Keyed(Box::new(keyed)),
             span: Span::detached(),
         })));
         id
@@ -2824,7 +2851,7 @@ impl Evaluator<'_> {
         let mut keyed = match &start {
             None => KeyedShape::default(),
             Some(start) => match &start.shape {
-                Shape::Keyed(keyed) => keyed.clone(),
+                Shape::Keyed(keyed) => (**keyed).clone(),
                 other => {
                     let kind = other.kind_name();
                     return Err(self.fail(span, format!("~: cannot patch {kind} with a block")));
@@ -2910,7 +2937,7 @@ impl Evaluator<'_> {
         if block.defaults {
             keyed.defaults = true;
         }
-        Self::shaped(Shape::Keyed(keyed), span)
+        Self::shaped(Shape::Keyed(Box::new(keyed)), span)
     }
 
     /// Sets each of `source`'s entries in `target`, evaluated again at the
@@ -3396,7 +3423,7 @@ impl Evaluator<'_> {
             ..*copy
         };
         self.copy_entries(b, &mut keyed, &inner);
-        Self::shaped(Shape::Keyed(keyed), copy.span)
+        Self::shaped(Shape::Keyed(Box::new(keyed)), copy.span)
     }
 
     fn merge(
@@ -3688,12 +3715,12 @@ impl Evaluator<'_> {
             Shape::Keyed(keyed) => {
                 let cells: Vec<Lazy> = keyed.slots.values().map(|s| s.value.clone()).collect();
                 let values = self.all_full_values(&cells, span, visiting)?;
-                ValueKind::Keyed(Keyed {
+                ValueKind::Keyed(Box::new(Keyed {
                     name: keyed.name.as_ref().map(|n| n.to_string()),
                     entries: keyed.slots.keys().cloned().zip(values).collect(),
                     defaults: keyed.defaults,
                     defaulted: keyed.defaulted.clone(),
-                })
+                }))
             }
         };
         Ok(Value::new(kind, span))

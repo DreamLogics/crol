@@ -414,12 +414,12 @@ impl<'c> MapSerializer<'c> {
     }
 
     fn finish(self) -> Value {
-        value(ValueKind::Keyed(Keyed {
+        value(ValueKind::Keyed(Box::new(Keyed {
             name: self.name,
             entries: self.entries,
             defaults: self.defaults,
             defaulted: Default::default(),
-        }))
+        })))
     }
 }
 

@@ -1,0 +1,7 @@
+unit: { hp: 1 }
+compare: { own: 1, empire: 10, rebel: 1 }
+
+<empire & !rebel> {
+    unit: { hp: 10 },
+    compare: { own: 10, empire: 10, rebel: 1 },
+}

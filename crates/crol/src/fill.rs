@@ -120,7 +120,9 @@ impl Filler<'_> {
             TypeDef::Enum { repr, variants, .. } if *repr == Repr::External => {
                 let written = match &value.kind {
                     ValueKind::NamedTuple(v, _) => v.clone(),
-                    ValueKind::Keyed(Keyed { name: Some(v), .. }) => v.clone(),
+                    ValueKind::Keyed(keyed) if keyed.name.is_some() => {
+                        keyed.name.clone().unwrap_or_default()
+                    }
                     _ => return,
                 };
                 let Some((variant_name, variant)) = variants

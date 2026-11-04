@@ -1,7 +1,7 @@
 //! `crol::check`: the deserializer's rules applied to evaluated data with
 //! only a schema, and id checks (`SPEC.md` 10.9).
 
-use crol_eval::{Context, ContextData, Diagnostic, Key, Keyed, Span, Value, ValueKind, Variants};
+use crol_eval::{Context, ContextData, Diagnostic, Key, Span, Value, ValueKind, Variants};
 
 use crate::compose::{CrolData, VariantName};
 use crate::schema::{
@@ -209,7 +209,9 @@ fn found(value: &Value) -> String {
         ValueKind::Char(c) => crol_eval::quote_char(*c),
         ValueKind::UnitName(n) => format!("`{n}`"),
         ValueKind::NamedTuple(n, _) => format!("`{n}(...)`"),
-        ValueKind::Keyed(Keyed { name: Some(n), .. }) => format!("`{n} {{ ... }}`"),
+        ValueKind::Keyed(keyed) if keyed.name.is_some() => {
+            format!("`{} {{ ... }}`", keyed.name.as_deref().unwrap_or_default())
+        }
         kind => kind.kind_name().to_owned(),
     }
 }
@@ -482,7 +484,9 @@ impl Checker<'_> {
                 }
                 let written = match &value.kind {
                     ValueKind::UnitName(v) | ValueKind::NamedTuple(v, _) => v,
-                    ValueKind::Keyed(Keyed { name: Some(v), .. }) => v,
+                    ValueKind::Keyed(keyed) if keyed.name.is_some() => {
+                        keyed.name.as_ref().expect("checked to be there")
+                    }
                     _ => return self.expected(value, &format!("a `{name}` variant"), path),
                 };
                 let Some((variant_name, variant)) = variants

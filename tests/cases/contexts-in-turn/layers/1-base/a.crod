@@ -1,0 +1,20 @@
+// Each context is evaluated in turn and then forgotten; what they share with
+// the base, and with each other, stays right.
+shared := { hp: 1, bonus: { amount: 2 } }
+unused := { hp: &root.base_only.hp + 1 }
+
++base_only: { hp: 7 }
++unit: { ..&shared, total: &self.hp + &self.bonus.amount }
++reads: { hp: &root.unit.hp, total: &root.unit.total }
++other: { ..&shared }
+
+<empire> {
+    unit.hp: 10,
+}
+<rebel> {
+    unit.bonus.amount: 20,
+    other.hp: 3,
+}
+<fast> {
+    other.bonus: { amount: 5 },
+}

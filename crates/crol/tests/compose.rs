@@ -592,6 +592,28 @@ fn every_combination_is_the_default() {
 }
 
 #[test]
+fn a_context_evaluated_later_reports_its_constraints_and_reads_lazily() {
+    // Only what the context needs of the base is evaluated again.
+    let text = "+a: { hp: 1 }\n+b: { hp: &root.a.hp + 1 }\n+c: { hp: 3 }\nb<rebel>.hp: & * 10";
+    let variants = crol::CrolVariants::new().add_grouped(["rebel", "empire"]);
+    let mut data = crol::CrolComposer::with_cfg(crol::CrolConfig {
+        variants,
+        contexts: Some(Vec::new()),
+        ..Default::default()
+    })
+    .load_layer(crol::CrolLayer::from_sources("base", [("a.crod", text)]))
+    .compose_data()
+    .unwrap();
+    let rebel = data.evaluate(["rebel"]).unwrap();
+    let hp = |data: &crol::CrolData, key: &str, context| {
+        data.get_in::<std::collections::BTreeMap<String, u32>>(key, context)
+            .unwrap()["hp"]
+    };
+    assert_eq!(hp(&data, "b", &rebel), 20);
+    assert_eq!(hp(&data, "c", &rebel), 3);
+}
+
+#[test]
 fn data_can_move_between_threads() {
     fn shared<T: Send + Sync>() {}
     shared::<crol::CrolData>();

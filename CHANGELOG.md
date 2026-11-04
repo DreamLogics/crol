@@ -44,6 +44,10 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Changed
 
+- Evaluation takes about 45% less memory at its peak on large data with many
+  contexts, and a context evaluated later no longer evaluates the base again.
+- **Breaking:** `ValueKind::Keyed` holds a `Box<Keyed>`, which makes every other value
+  smaller.
 - **Breaking:** `~` merges deep: a block inside a patch merges with what the key
   holds, at any depth, where it used to replace it. So do a path that ends in a
   block, a spread, and a block after a spread. A block of another type replaces,

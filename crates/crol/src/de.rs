@@ -220,7 +220,9 @@ impl<'a> ValueDeserializer<'a> {
             ValueKind::Char(c) => crol_eval::quote_char(*c),
             ValueKind::UnitName(n) => format!("`{n}`"),
             ValueKind::NamedTuple(n, _) => format!("`{n}(...)`"),
-            ValueKind::Keyed(Keyed { name: Some(n), .. }) => format!("`{n} {{ ... }}`"),
+            ValueKind::Keyed(keyed) if keyed.name.is_some() => {
+                format!("`{} {{ ... }}`", keyed.name.as_deref().unwrap_or_default())
+            }
             kind => kind.kind_name().to_owned(),
         }
     }
@@ -608,10 +610,9 @@ impl<'a> de::Deserializer<'a> for ValueDeserializer<'a> {
     ) -> Result<V::Value, Error> {
         let variant = match &self.value.kind {
             ValueKind::UnitName(variant) | ValueKind::NamedTuple(variant, _) => variant.as_str(),
-            ValueKind::Keyed(Keyed {
-                name: Some(variant),
-                ..
-            }) => variant.as_str(),
+            ValueKind::Keyed(keyed) if keyed.name.is_some() => {
+                keyed.name.as_deref().unwrap_or_default()
+            }
             _ => return Err(self.expected(&format!("a `{name}` variant"))),
         };
         if !variants.contains(&variant) {
