@@ -29,6 +29,10 @@ fn uri(path: &Path) -> String {
 
 impl Client {
     fn start(root: &Path) -> Client {
+        Client::start_with(root, json!({ "debounce_ms": 10 }))
+    }
+
+    fn start_with(root: &Path, options: Value) -> Client {
         let (server_side, client_side) = Connection::memory();
         let server = thread::spawn(move || {
             let server = crol_lsp::Server::start(server_side, None).unwrap();
@@ -44,7 +48,7 @@ impl Client {
             json!({
                 "capabilities": { "general": { "positionEncodings": ["utf-16"] } },
                 "workspaceFolders": [{ "uri": uri(root), "name": "test" }],
-                "initializationOptions": { "debounce_ms": 10 },
+                "initializationOptions": options,
             }),
         );
         client.notify("initialized", json!({}));
@@ -413,5 +417,60 @@ fn references_rename_and_workspace_symbols() {
     ));
     assert_eq!(tokens[0], (0, 0, 3, 0, 4)); // `web.port`, a patch
     assert!(tokens.contains(&(3, 3, 1, 4, 16)), "{tokens:?}"); // `&` of `&root`
+    client.stop();
+}
+
+#[test]
+fn inlay_hints_show_what_entries_compute() {
+    let dir = workspace(
+        "lsp-hints",
+        &[
+            (
+                "project.crol",
+                r#"Project { layers: List([{ name: "base", dir: "base", .. }, { name: "local", dir: "local", .. }]), .. }"#,
+            ),
+            (
+                "base/a.crol",
+                "+web: { replicas: 2, port: 8000 + 80, max: &self.replicas * 4, name: \"web\" },",
+            ),
+            ("local/a.crol", "web.replicas: & * 3,"),
+        ],
+    );
+    let hints_in = |client: &mut Client, uri: &str| {
+        let hints = client.request(
+            "textDocument/inlayHint",
+            json!({
+                "textDocument": { "uri": uri },
+                "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 9, "character": 0 } },
+            }),
+        );
+        hints
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| {
+                (
+                    h["position"]["character"].as_u64().unwrap(),
+                    h["label"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let base = uri(&dir.join("base/a.crol"));
+    let local = uri(&dir.join("local/a.crol"));
+
+    // Off by default.
+    let mut client = Client::start(&dir);
+    assert_eq!(hints_in(&mut client, &base), []);
+    client.stop();
+
+    let mut client = Client::start_with(&dir, json!({ "debounce_ms": 10, "inlay_hints": true }));
+    // The value after each operation; late references read the final
+    // value, so `max` sees the patched `replicas`.
+    assert_eq!(
+        hints_in(&mut client, &base),
+        [(36, "= 8080".to_owned()), (61, "= 24".to_owned())]
+    );
+    assert_eq!(hints_in(&mut client, &local), [(19, "= 6".to_owned())]);
     client.stop();
 }

@@ -15,6 +15,7 @@
 
 mod convert;
 mod features;
+mod hints;
 mod navigate;
 mod tokens;
 mod workspace;
@@ -38,8 +39,11 @@ use convert::Encoding;
 /// (`SPEC.md` 12.5).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
-    /// The context for hovers, by its variants; default: the base.
+    /// The context for inlay hints and the first context shown on hover,
+    /// by its variants; default: the base.
     pub context: Vec<String>,
+    /// Whether to show inlay hints; default: off.
+    pub inlay_hints: bool,
     /// The pause in typing before evaluating, in milliseconds.
     pub debounce_ms: u64,
     /// How many contexts a hover lists values for.
@@ -52,6 +56,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             context: Vec::new(),
+            inlay_hints: false,
             debounce_ms: 150,
             max_contexts_in_hover: 8,
             project: None,
@@ -67,6 +72,9 @@ impl Settings {
                 .iter()
                 .filter_map(|v| v.as_str().map(str::to_owned))
                 .collect();
+        }
+        if let Some(on) = json.get("inlay_hints").and_then(Json::as_bool) {
+            self.inlay_hints = on;
         }
         if let Some(ms) = json.get("debounce_ms").and_then(Json::as_u64) {
             self.debounce_ms = ms;
@@ -95,6 +103,10 @@ pub struct Server {
     /// caches internally, so it is not a hash key.)
     published: HashSet<String>,
     checks: Option<Checks>,
+    /// Whether the client can be asked to request inlay hints again.
+    refresh_hints: bool,
+    /// How many requests the server has sent the client, for their ids.
+    requests_sent: u64,
 }
 
 /// Runs `crol lsp`: the server on standard input and output.
@@ -133,6 +145,13 @@ impl Server {
             .map(|f| &f.uri)
             .or(params.root_uri.as_ref())
             .and_then(convert::uri_to_path);
+        let refresh_hints = params
+            .capabilities
+            .workspace
+            .as_ref()
+            .and_then(|w| w.inlay_hint.as_ref())
+            .and_then(|h| h.refresh_support)
+            .unwrap_or(false);
         let mut settings = Settings::default();
         if let Some(options) = &params.initialization_options {
             settings.update(options);
@@ -155,6 +174,7 @@ impl Server {
                 work_done_progress_options: Default::default(),
             })),
             workspace_symbol_provider: Some(lsp_types::OneOf::Left(true)),
+            inlay_hint_provider: Some(lsp_types::OneOf::Left(true)),
             semantic_tokens_provider: Some(
                 lsp_types::SemanticTokensOptions {
                     legend: tokens::legend(),
@@ -186,6 +206,8 @@ impl Server {
             dirty_since: None,
             published: HashSet::new(),
             checks,
+            refresh_hints,
+            requests_sent: 0,
         };
         server.evaluate();
         Ok(server)
@@ -361,6 +383,15 @@ impl Server {
         }
         self.published = published;
         self.snapshot = Some(snapshot);
+        // Hints are left out while a document has edits not evaluated yet.
+        if self.settings.inlay_hints && self.refresh_hints {
+            self.requests_sent += 1;
+            self.send(Message::Request(lsp_server::Request::new(
+                RequestId::from(format!("crol-{}", self.requests_sent)),
+                request::InlayHintRefreshRequest::METHOD.to_owned(),
+                Json::Null,
+            )));
+        }
     }
 
     // ---- Requests ----
@@ -525,6 +556,24 @@ impl Server {
                                 encoding,
                             )))
                         });
+                self.respond(id, result);
+            }
+            request::InlayHintRequest::METHOD => {
+                let result = serde_json::from_value::<lsp_types::InlayHintParams>(request.params)
+                    .ok()
+                    .and_then(|p| {
+                        let uri = p.text_document.uri;
+                        let text = self.text(&uri)?;
+                        let path = convert::uri_to_path(&uri)?;
+                        Some(hints::inlay_hints(
+                            self.snapshot.as_ref()?,
+                            &path,
+                            &text,
+                            p.range,
+                            &self.settings,
+                            encoding,
+                        ))
+                    });
                 self.respond(id, result);
             }
             request::WorkspaceSymbolRequest::METHOD => {

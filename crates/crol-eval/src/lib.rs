@@ -328,6 +328,49 @@ pub fn explain(
 ) -> Result<Vec<ExplainStep>, Vec<Diagnostic>> {
     let (key, steps) =
         parse_path(path).map_err(|message| vec![Diagnostic::error(Span::detached(), message)])?;
+    let mut found = explain_paths(sources, layers, options, &[(&key, &steps)], context)?;
+    Ok(found.pop().unwrap_or_default())
+}
+
+/// The value of the root key after each root operation in `file`, in the
+/// context of the `context` variants, as [`explain`] gives it: for editors,
+/// which show what an entry computes. Operations whose chain fails have no
+/// value. Fails with the diagnostics if the data has errors.
+pub fn operation_values(
+    sources: &Sources,
+    layers: &[Layer],
+    options: &DataOptions,
+    file: FileId,
+    context: &[String],
+) -> Result<Vec<(Span, Option<Value>)>, Vec<Diagnostic>> {
+    let parse = crol_syntax::parse(sources.file(file).text());
+    let document = parse.document();
+    let (lowered, _) = lower::lower_data(&[lower::DataDocument {
+        file,
+        document: &document,
+        layer: 0,
+        index: 0,
+    }]);
+    let mut keys: Vec<&str> = lowered.ops.iter().map(|op| &*op.key).collect();
+    keys.sort_unstable();
+    keys.dedup();
+    let requests: Vec<(&str, &[PathStep])> = keys.iter().map(|k| (*k, &[][..])).collect();
+    let found = explain_paths(sources, layers, options, &requests, context)?;
+    Ok(found
+        .into_iter()
+        .flatten()
+        .filter(|step| step.span.file == file)
+        .map(|step| (step.span, step.value))
+        .collect())
+}
+
+fn explain_paths(
+    sources: &Sources,
+    layers: &[Layer],
+    options: &DataOptions,
+    requests: &[(&str, &[PathStep])],
+    context: &[String],
+) -> Result<Vec<Vec<ExplainStep>>, Vec<Diagnostic>> {
     let evaluation = evaluate_data(sources, layers, options);
     if evaluation.has_errors() {
         return Err(evaluation.diagnostics);
@@ -368,7 +411,7 @@ pub fn explain(
         evaluate_every_key: false,
         defaults: options.defaults.as_ref().map(|d| &*d.0),
     };
-    eval::explain(&lowered.ir, &input, &key, &steps, context)
+    eval::explain(&lowered.ir, &input, requests, context)
 }
 
 /// Evaluates a file as a value-mode document (`SPEC.md` 4): one value, with

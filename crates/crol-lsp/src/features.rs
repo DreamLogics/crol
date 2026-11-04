@@ -210,7 +210,7 @@ pub(crate) fn key_text(key: &ast::Key) -> Option<String> {
 
 /// The root key and path of the target at a token: `web.limits.cpu` for
 /// `cpu` in `+web: Service { limits: { cpu: 2.0 } }`.
-fn target_path(token: &SyntaxToken) -> Option<(String, Vec<PathStep>)> {
+pub(crate) fn target_path(token: &SyntaxToken) -> Option<(String, Vec<PathStep>)> {
     let target = token.parent_ancestors().find_map(ast::Target::cast)?;
     let mut segments: Vec<PathStep> = Vec::new();
     let key = key_text(&target.key()?)?;
@@ -324,7 +324,7 @@ fn describe_path(key: &str, path: &[PathStep]) -> String {
 
 /// The value at `key` + `path` in the evaluation `file` belongs to, in the
 /// context `context`.
-fn value_at(
+pub(crate) fn value_at(
     snapshot: &Snapshot,
     file: crol_eval::FileId,
     key: &str,
