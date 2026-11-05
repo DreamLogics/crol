@@ -888,3 +888,32 @@ fn a_compiled_layer_reloads_without_what_it_lowered_to() {
     assert_eq!(data.reload(&[change]).unwrap().changed.len(), 1);
     assert_eq!(data.get::<i32>("a").unwrap(), 3);
 }
+
+#[test]
+fn a_compiled_layer_says_whether_it_matches_its_text() {
+    let layer = |text: &'static str| {
+        CrolLayer::from_sources("base", [("a.crod", text), ("b.crod", "+b: 2")])
+    };
+    let bytes = layer("+a: 1").to_binary().unwrap();
+    assert!(layer("+a: 1").compiled_in(&bytes));
+    assert!(
+        CrolLayer::from_binary("base", &bytes)
+            .unwrap()
+            .compiled_in(&bytes)
+    );
+    assert!(!layer("+a: 2").compiled_in(&bytes));
+    let renamed = CrolLayer::from_sources("base", [("c.crod", "+a: 1"), ("b.crod", "+b: 2")]);
+    assert!(!renamed.compiled_in(&bytes));
+    let fewer = CrolLayer::from_sources("base", [("a.crod", "+a: 1")]);
+    assert!(!fewer.compiled_in(&bytes));
+    // Not a file of this format, or none at all.
+    assert!(!layer("+a: 1").compiled_in(b""));
+    assert!(!layer("+a: 1").compiled_in(b"CROB and then some more bytes"));
+    let mut other_format = bytes.clone();
+    other_format[4] = other_format[4].wrapping_add(1);
+    assert!(!layer("+a: 1").compiled_in(&other_format));
+    // A hash in the header that was damaged is caught on reading.
+    let mut damaged = bytes;
+    damaged[50] ^= 1;
+    assert!(CrolLayer::from_binary("base", &damaged).is_err());
+}

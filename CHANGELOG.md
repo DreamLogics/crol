@@ -19,7 +19,8 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 - Compiled layers (`SPEC.md` 7.8): `crol compile` and `CrolLayer::to_binary` write a
   `.crob` file, a layer lowered ahead of time and compressed, that loads without
   parsing, about five times faster on large data. It evaluates exactly as its
-  documents do.
+  documents do, and `CrolLayer::compiled_in` says whether a file still matches its
+  sources.
 - `CrolData::reload`, which applies changes to documents and evaluates again, says
   which root keys changed, and leaves the data as it was if the result does not load
   (`SPEC.md` 10.8).

@@ -1449,6 +1449,10 @@ is an error, like a `.crol` file there (section 4).
   it uses no template of another layer. Layers above it see its templates, as
   they would in text, and one defined twice is an error.
 - **`#![extends(...)]` is followed from the text**, as ever.
+- **It says what it was made from.** Its header holds a hash of the layer's
+  documents, by path and text. `CrolLayer::compiled_in(bytes)` says whether a
+  file was made from just the documents of a layer read as text, by a version that
+  reads it, so that a loader can tell a stale file without compiling.
 - **A file is not trusted.** A hash catches damage, and a file of another format
   version is refused. What a file says it unpacks to is limited by its own
   size. Reading checks that every id is in range, that an

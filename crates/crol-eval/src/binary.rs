@@ -25,10 +25,11 @@ use crate::value::Key;
 const MAGIC: &[u8; 4] = b"CROB";
 
 /// The version of the format: files of another are refused, and made again.
-pub const FORMAT: u32 = 1;
+pub const FORMAT: u32 = 2;
 
-/// The magic, the format, the hash and the size of what is compressed.
-const HEADER: usize = 4 + 4 + 32 + 8;
+/// The magic, the format, the hash of the rest of the file, the hash of the
+/// documents and the size of what is compressed.
+const HEADER: usize = 4 + 4 + 32 + 32 + 8;
 
 /// The most LZ4 can expand, a little over the true 255.
 const MAX_EXPANSION: usize = 256;
@@ -397,10 +398,41 @@ pub(crate) fn write_file(documents: &[BinaryDocument], lowered: &[u8]) -> Vec<u8
     let mut out = Vec::with_capacity(packed.len() + HEADER);
     out.extend_from_slice(MAGIC);
     out.extend_from_slice(&FORMAT.to_le_bytes());
-    out.extend_from_slice(blake3::hash(&packed).as_bytes());
+    out.extend_from_slice(&[0; 32]);
+    let documents = documents
+        .iter()
+        .map(|d| (d.relative.as_str(), d.text.as_str()));
+    out.extend_from_slice(&hash_documents(documents));
     out.extend_from_slice(&(body.len() as u64).to_le_bytes());
     out.extend_from_slice(&packed);
+    let hash = blake3::hash(&out[40..]);
+    out[8..40].copy_from_slice(hash.as_bytes());
     out
+}
+
+/// A hash of a layer's documents, by path and text, in any order: what a
+/// `.crob` file says it was made from.
+pub fn hash_documents<'a>(documents: impl Iterator<Item = (&'a str, &'a str)>) -> [u8; 32] {
+    let mut documents: Vec<(&str, &str)> = documents.collect();
+    documents.sort_unstable();
+    let mut hasher = blake3::Hasher::new();
+    for (path, text) in documents {
+        hasher.update(&(path.len() as u64).to_le_bytes());
+        hasher.update(path.as_bytes());
+        hasher.update(&(text.len() as u64).to_le_bytes());
+        hasher.update(text.as_bytes());
+    }
+    *hasher.finalize().as_bytes()
+}
+
+/// What [`hash_documents`] gave for the documents a `.crob` file was made
+/// from, without reading the rest; `None` for bytes that are no file of this
+/// format.
+pub fn source_hash(bytes: &[u8]) -> Option<[u8; 32]> {
+    if bytes.len() < HEADER || &bytes[..4] != MAGIC || bytes[4..8] != FORMAT.to_le_bytes() {
+        return None;
+    }
+    bytes[40..72].try_into().ok()
 }
 
 // ---- Reading ----
@@ -419,10 +451,10 @@ pub fn read_layer(bytes: &[u8]) -> Result<BinaryLayer, String> {
     }
     let damaged = || "this `.crob` file is damaged".to_owned();
     let packed = &bytes[HEADER..];
-    if blake3::hash(packed).as_bytes() != &bytes[8..40] {
+    if blake3::hash(&bytes[40..]).as_bytes() != &bytes[8..40] {
         return Err(damaged());
     }
-    let size: [u8; 8] = bytes[40..HEADER].try_into().map_err(|_| damaged())?;
+    let size: [u8; 8] = bytes[72..HEADER].try_into().map_err(|_| damaged())?;
     let size = usize::try_from(u64::from_le_bytes(size)).map_err(|_| damaged())?;
     // LZ4 cannot expand by more than this, so a size that says otherwise
     // does not get to ask for the memory.

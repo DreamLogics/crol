@@ -305,6 +305,20 @@ let data: Data = CrolComposer::new()
     .compose()?;
 ```
 
+For a layer whose text may change, `layer.compiled_in(&bytes)` says whether the file
+was made from just that text. Read the text, and compile again if it says no:
+
+```rust
+let text = CrolLayer::from_path("base", Path::new("data/base"))?;
+let bytes = std::fs::read("data/base.crob").unwrap_or_default();
+let layer = if text.compiled_in(&bytes) {
+    CrolLayer::from_binary("base", &bytes)?
+} else {
+    std::fs::write("data/base.crob", text.to_binary()?)?;
+    text
+};
+```
+
 It evaluates exactly as its documents do, with the same fingerprint, and it keeps
 their text, so errors and `crol explain` still show where a value was written. Layers
 above it can be plain text, and use its templates.

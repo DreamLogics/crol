@@ -638,9 +638,11 @@ fn a_compiled_file_cannot_ask_for_more_than_it_can_hold() {
     let header = |size: u64, packed: &[u8]| {
         let mut file = b"CROB".to_vec();
         file.extend_from_slice(&crol_eval::binary::FORMAT.to_le_bytes());
-        file.extend_from_slice(blake3::hash(packed).as_bytes());
-        file.extend_from_slice(&size.to_le_bytes());
-        file.extend_from_slice(packed);
+        let mut rest = vec![0; 32];
+        rest.extend_from_slice(&size.to_le_bytes());
+        rest.extend_from_slice(packed);
+        file.extend_from_slice(blake3::hash(&rest).as_bytes());
+        file.extend_from_slice(&rest);
         file
     };
     for size in [u64::MAX, 1 << 40, 100_000] {

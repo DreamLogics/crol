@@ -422,6 +422,18 @@ impl CrolLayer {
         })
     }
 
+    /// Whether `bytes` are a `.crob` file made from just these documents, by
+    /// a version of CROL that reads it (`SPEC.md` 7.8). So a program can read
+    /// a layer's text and use the file only while that holds, without
+    /// compiling. Bytes that are no such file are not an error.
+    pub fn compiled_in(&self, bytes: &[u8]) -> bool {
+        let documents = self
+            .documents
+            .iter()
+            .map(|d| (d.relative.as_str(), d.text.as_str()));
+        crol_eval::binary::source_hash(bytes) == Some(crol_eval::binary::hash_documents(documents))
+    }
+
     /// The bytes of the layer's `.crob` file (`SPEC.md` 7.8): for a layer
     /// that does not change, such as generated data, to load without
     /// parsing. It may not use a template of another layer.
