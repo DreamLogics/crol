@@ -50,6 +50,9 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 - `f32`s are written as the shortest text that reads back the same: `0.1`, not
   `0.10000000149011612`.
+- The warning about patches from several documents only comes where their order
+  really depends on file names: not for patches under conditions that never hold
+  together in the evaluated contexts, or that specificity puts in order.
 - Evaluation takes about 45% less memory at its peak on large data with many
   contexts, and a context evaluated later no longer evaluates the base again.
 - Evaluation takes about 45% less memory at its peak on large data and 60% less time,

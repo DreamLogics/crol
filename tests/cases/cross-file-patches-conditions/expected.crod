@@ -1,0 +1,29 @@
+apart: 1
+ranked: 2
+together: 1
+
+<!empire & !rebel & hard> {
+    ranked: 4,
+    together: 2,
+}
+
+<empire & !rebel & !hard> {
+    apart: 2,
+    together: 2,
+}
+
+<empire & !rebel & hard> {
+    apart: 2,
+    ranked: 4,
+    together: 4,
+}
+
+<!empire & rebel & !hard> {
+    apart: 2,
+}
+
+<!empire & rebel & hard> {
+    apart: 2,
+    ranked: 4,
+    together: 2,
+}

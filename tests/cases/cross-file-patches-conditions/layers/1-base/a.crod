@@ -1,0 +1,9 @@
+// Never together: one group.
++apart: 1,
+apart<empire>: & + 1,
+// A base patch, and a condition that comes after it wherever it holds.
++ranked: 1,
+ranked: & + 1,
+// Of one specificity, and able to hold together: this one warns.
++together: 1,
+together<empire>: & + 1,

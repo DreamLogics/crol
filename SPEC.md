@@ -1255,9 +1255,12 @@ Within one layer, a chain's operations are ordered:
 Layers then follow each other in load order. A layer may hold at most
 one definition per chain: two, in one file or in two, are an error
 naming both. The loader warns (a *warning*, not an error) when patches
-to one root key come from more than one document of one layer, since
-their order then depends on file names; `CrolConfig::warn_cross_file_patches`
-turns this off.
+to one root key from more than one document of one layer meet in a context
+that is evaluated, as base operations or with conditions of one specificity
+(section 8.3), since their order then depends on file names. Patches under
+conditions that never hold together in those contexts, or that specificity
+puts in order, do not warn. `CrolConfig::warn_cross_file_patches` turns this
+off.
 
 These rules order the base operations, and the conditional operations
 within one specificity (section 8.3). For definitions, conditional

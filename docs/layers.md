@@ -187,6 +187,9 @@ error: `web` is defined twice in the layer `twice`; a layer may define a key onc
 but their order depends on file names, and renaming a file would change the
 result. Move them into one file, or into separate layers. If you know what you
 are doing, turn the warning off with `CrolConfig::warn_cross_file_patches`.
+Patches that are never in doubt do not warn: `<rebel>` in one file and `<empire>`
+in another, when those variants are in one group, or a base patch in one file and
+a conditional one in another, which always comes after it.
 
 ## Early and late references
 

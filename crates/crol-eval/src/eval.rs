@@ -1326,7 +1326,7 @@ fn evaluate_raw(
         window_escaped: false,
     };
     // Errors in the static structure of the chains are reported once.
-    evaluator.check_chains(input);
+    evaluator.check_chains(input, &planned);
     diagnostics.append(&mut evaluator.diagnostics);
     if diagnostics.iter().any(Diagnostic::is_error) {
         diagnostics.sort_by_key(|d| (d.span.file, d.span.range.start()));
@@ -1919,6 +1919,43 @@ impl<'a> DataPlan<'a> {
         Ok(contexts)
     }
 
+    /// The first of a layer's `patches` to one key, in a context of
+    /// `contexts`, that only the names of their documents put in order, with
+    /// how many documents they come from (`SPEC.md` 7.2): those that hold
+    /// together and are of one rank, as base operations or by specificity.
+    fn unordered(&self, patches: &[usize], contexts: &[Context]) -> Option<(Vec<usize>, usize)> {
+        let document_count = |patches: &[usize]| {
+            let mut documents: Vec<usize> = patches.iter().map(|&i| self.ops[i].document).collect();
+            documents.sort_unstable();
+            documents.dedup();
+            documents.len()
+        };
+        if document_count(patches) < 2 {
+            return None;
+        }
+        for context in contexts {
+            let mut ranks: Vec<(Option<usize>, Vec<usize>)> = Vec::new();
+            for &i in patches {
+                let rank = match &self.conditions[i] {
+                    None => None,
+                    Some(c) if c.holds(context) => Some(c.specificity(&self.variants)),
+                    Some(_) => continue,
+                };
+                match ranks.iter_mut().find(|(r, _)| *r == rank) {
+                    Some((_, same)) => same.push(i),
+                    None => ranks.push((rank, vec![i])),
+                }
+            }
+            for (_, same) in ranks {
+                let documents = document_count(&same);
+                if documents > 1 {
+                    return Some((same, documents));
+                }
+            }
+        }
+        None
+    }
+
     /// A key's operations in a context: the base ones, then those whose
     /// condition holds, by specificity (`SPEC.md` 8.3).
     fn chain(&self, key: &KeyPlan, context: &Context) -> Vec<usize> {
@@ -2014,7 +2051,7 @@ impl Evaluator<'_> {
     /// Reports the errors in the chains that do not depend on the context:
     /// two definitions under one condition in one layer, and patches from
     /// several documents of one layer (`SPEC.md` 7.2, 8.3).
-    fn check_chains(&mut self, input: &DataInput<'_>) {
+    fn check_chains(&mut self, input: &DataInput<'_>, contexts: &[Context]) {
         let plan = self.plan.expect("data mode");
         let ops = plan.ops;
         for (key, key_plan) in &plan.keys {
@@ -2058,16 +2095,11 @@ impl Evaluator<'_> {
                         .copied()
                         .filter(|&i| !ops[i].is_definition())
                         .collect();
-                    let mut documents: Vec<usize> =
-                        patches.iter().map(|&i| ops[i].document).collect();
-                    documents.sort_unstable();
-                    documents.dedup();
-                    if documents.len() > 1 {
+                    if let Some((patches, documents)) = plan.unordered(&patches, contexts) {
                         let mut diagnostic = Diagnostic::warning(
                             ops[patches[0]].span,
                             format!(
-                                "`{key}` is patched from {} documents of the layer `{layer_name}`, so the order of the patches depends on the file names",
-                                documents.len()
+                                "`{key}` is patched from {documents} documents of the layer `{layer_name}`, so the order of the patches depends on the file names",
                             ),
                         );
                         for &i in &patches[1..] {
