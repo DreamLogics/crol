@@ -148,12 +148,12 @@ CROL is built to load a whole game's data at every start. On the data of a real-
 strategy game, with about 14,000 definitions, 8 MB of text in 3,200 files, a mod layer
 over them, and 9 variants, so 10 contexts:
 
-| Load and evaluate everything | Time | Peak memory |
-| --- | --- | --- |
-| From text | 528 ms | 367 MB |
-| From text, on one core | 752 ms | 256 MB |
-| Base layer from a [`.crob` file](docs/layers.md#compiled-layers) | 280 ms | 322 MB |
-| Base layer from a `.crob` file, on one core | 406 ms | 264 MB |
+| Load and evaluate everything                                     | Time   | Peak memory |
+| ---------------------------------------------------------------- | ------ | ----------- |
+| From text                                                        | 528 ms | 367 MB      |
+| From text, on one core                                           | 752 ms | 256 MB      |
+| Base layer from a [`.crob` file](docs/layers.md#compiled-layers) | 280 ms | 322 MB      |
+| Base layer from a `.crob` file, on one core                      | 406 ms | 264 MB      |
 
 That is `compose_data` on an Intel Core i7-13700K, the median of 5 runs with the files in
 the page cache, stopping at evaluated values, before any deserializing. Evaluating one
@@ -177,16 +177,16 @@ publishing the Zed extension. See the [changelog](CHANGELOG.md), and
 
 ## Crates
 
-| Crate                                  | Contents                                                                                    | Status                                                                                                                                |
-| -------------------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| [`crol`](crates/crol)                  | the library: `CrolComposer`, serde `Deserializer` and `Serializer`, `from_str`, `to_string` | done                                                                                                                                  |
-| [`crol-syntax`](crates/crol-syntax)    | lexer, error-recovering parser, lossless syntax tree, typed AST, formatter                  | done                                                                                                                                  |
-| [`crol-eval`](crates/crol-eval)        | layers, chains, the evaluator, variants, fingerprints                                       | done                                                                                                                                  |
-| [`crol-derive`](crates/crol-derive)    | `#[derive(Schema)]` and `#[derive(VariantName)]`                                            | done                                                                                                                                  |
+| Crate                                  | Contents                                                                                    | Status                                                                                                                                   |
+| -------------------------------------- | ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| [`crol`](crates/crol)                  | the library: `CrolComposer`, serde `Deserializer` and `Serializer`, `from_str`, `to_string` | done                                                                                                                                     |
+| [`crol-syntax`](crates/crol-syntax)    | lexer, error-recovering parser, lossless syntax tree, typed AST, formatter                  | done                                                                                                                                     |
+| [`crol-eval`](crates/crol-eval)        | layers, chains, the evaluator, variants, fingerprints                                       | done                                                                                                                                     |
+| [`crol-derive`](crates/crol-derive)    | `#[derive(Schema)]` and `#[derive(VariantName)]`                                            | done                                                                                                                                     |
 | [`crol-lsp`](crates/crol-lsp)          | the language server, as a library                                                           | diagnostics, symbols, formatting, hover, completion, definition, references, rename of binds, semantic tokens, inlay hints, code actions |
-| [`crol-cli`](crates/crol-cli)          | the `crol` command-line tool                                                                | done                                                                                                                                  |
-| [`tree-sitter-crol`](tree-sitter-crol) | the tree-sitter grammar and queries                                                         | done                                                                                                                                  |
-| [`editors/zed`](editors/zed)           | the Zed extension                                                                           | syntax and language server; not in the registry yet                                                                                   |
+| [`crol-cli`](crates/crol-cli)          | the `crol` command-line tool                                                                | done                                                                                                                                     |
+| [`tree-sitter-crol`](tree-sitter-crol) | the tree-sitter grammar and queries                                                         | done                                                                                                                                     |
+| [`editors/zed`](editors/zed)           | the Zed extension                                                                           | syntax and language server; not in the registry yet                                                                                      |
 
 ## Development
 
