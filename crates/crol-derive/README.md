@@ -6,7 +6,7 @@ than depending on this crate:
 
 ```toml
 [dependencies]
-crol = { git = "https://github.com/DreamLogics/crol", features = ["derive"] }
+crol = { version = "0.1", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 ```
 

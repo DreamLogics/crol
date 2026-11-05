@@ -1,9 +1,11 @@
 # Command-line reference
 
-`crol` checks, evaluates, formats and explains CROL data. Install it with:
+`crol` checks, evaluates, formats and explains CROL data. Take a binary for your
+platform from the [latest release](https://github.com/DreamLogics/crol/releases/latest),
+or install it with:
 
 ```console
-$ cargo install --git https://github.com/DreamLogics/crol crol-cli
+$ cargo install crol-cli
 ```
 
 | Command                             | Does                                                 |
@@ -44,7 +46,7 @@ Created /path/to/project/project.crol
 Created /path/to/project/data/base/main.crod
 
 Next:
-  - add `crol = { git = "https://github.com/DreamLogics/crol" }` to [dependencies] in Cargo.toml, if it is not there yet
+  - add `crol = "0.1"` to [dependencies] in Cargo.toml, if it is not there yet
   - write your data in data/base/main.crod
   - run `crol check`
 ```

@@ -11,6 +11,8 @@ authors.workspace = true
 keywords = ["crol", "parser", "syntax", "configuration"]
 categories = ["parser-implementations", "config"]
 readme = "README.md"
+# These need `tests/syntax` and `SPEC.md`, which are outside the package.
+exclude = ["tests/spec_examples.rs", "tests/syntax_corpus.rs"]
 
 [dependencies]
 rowan.workspace = true

@@ -7,11 +7,12 @@ server.
 
 ## Install
 
-CROL is not on crates.io yet, so install it from the repository:
-
 ```sh
-cargo install --git https://github.com/DreamLogics/crol crol-cli
+cargo install crol-cli
 ```
+
+Or take a binary for your platform from the
+[latest release](https://github.com/DreamLogics/crol/releases/latest).
 
 ## Commands
 

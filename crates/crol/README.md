@@ -6,11 +6,9 @@ load into your types through [serde](https://serde.rs).
 
 ## Usage
 
-CROL is not on crates.io yet, so add it from the repository:
-
 ```toml
 [dependencies]
-crol = { git = "https://github.com/DreamLogics/crol" }
+crol = "0.1"
 serde = { version = "1", features = ["derive"] }
 ```
 

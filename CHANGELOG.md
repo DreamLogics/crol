@@ -9,6 +9,22 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-05
+
+The first release, with the format as `SPEC.md` describes it:
+
+- `crol`, the library: layers with `CrolComposer`, and serde `Deserializer` and
+  `Serializer` implementations, with `#[derive(crol::Schema)]` behind the `derive`
+  feature and schemas by URL or crate behind the `remote-schemas` features.
+- `crol-syntax` and `crol-eval`, the parser, formatter and evaluator on their own.
+- `crol-cli`, the `crol` tool, also as binaries for x86-64 and AArch64 Linux, macOS
+  and Windows, and `crol-lsp`, the language server.
+- The tree-sitter grammar and the Zed extension, from the repository.
+
+## Before 0.1.0
+
+What changed during development, before anything was published.
+
 ### Added
 
 - Doc comments in data (`SPEC.md` 2.2): `///` above an entry and `//!` at the top of
@@ -405,3 +421,6 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 - Language server: completion items carry a `textEdit` for the word at the
   cursor, keep an existing `:`, and are triggered where keys and values
   start; a document just opened is evaluated at once.
+
+[Unreleased]: https://github.com/DreamLogics/crol/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/DreamLogics/crol/releases/tag/v0.1.0

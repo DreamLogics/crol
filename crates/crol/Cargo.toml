@@ -11,6 +11,12 @@ authors.workspace = true
 keywords = ["crol", "configuration", "config", "serde", "ron"]
 categories = ["config", "encoding", "parser-implementations"]
 readme = "README.md"
+# These need `tests/cases`, which is outside the package.
+exclude = ["tests/conformance.rs"]
+
+# No feature is on by default, and the API docs should show them all.
+[package.metadata.docs.rs]
+all-features = true
 
 [features]
 # `#[derive(Schema)]` and `#[derive(VariantName)]`.

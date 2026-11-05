@@ -48,8 +48,7 @@ New here? Start with [getting started](getting-started.md).
 
 ## Other documentation
 
-- The API docs describe the library. The crate is not on crates.io yet, so run
-  `cargo doc -p crol --open` in the repository to read them.
+- The [API docs](https://docs.rs/crol) describe the library.
 - [`SPEC.md`](../SPEC.md) is the complete, precise definition of the format, for
   people who implement it or need to settle an argument. You do not need it to
   use CROL.

@@ -24,12 +24,11 @@
 //! # A tour of CROL
 //!
 //! This section is a brief tour of the crate's main APIs and when to use them.
-//! CROL is not on crates.io yet, so add it from the repository, along with
-//! serde:
+//! Add it to your `Cargo.toml`, along with serde:
 //!
 //! ```toml
 //! [dependencies]
-//! crol = { git = "https://github.com/DreamLogics/crol" }
+//! crol = "0.1"
 //! serde = { version = "1", features = ["derive"] }
 //! ```
 //!

@@ -14,6 +14,8 @@ with fixed rules, and load into your Rust types through
   learn.
 
 [![Build Status][actions-badge]][actions-url]
+[![Crates.io][crates-badge]][crates-url]
+[![Documentation][docs-badge]][docs-url]
 
 [Guide](docs/README.md) |
 [Getting started](docs/getting-started.md) |
@@ -23,6 +25,10 @@ with fixed rules, and load into your Rust types through
 
 [actions-badge]: https://github.com/DreamLogics/crol/actions/workflows/ci.yml/badge.svg
 [actions-url]: https://github.com/DreamLogics/crol/actions/workflows/ci.yml
+[crates-badge]: https://img.shields.io/crates/v/crol.svg
+[crates-url]: https://crates.io/crates/crol
+[docs-badge]: https://docs.rs/crol/badge.svg
+[docs-url]: https://docs.rs/crol
 
 ## Overview
 
@@ -78,12 +84,11 @@ web.port: 9090
 web.replicas: & + 1
 ```
 
-Make sure you add `crol` and `serde` to your `Cargo.toml`. CROL is not on
-crates.io yet:
+Make sure you add `crol` and `serde` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-crol = { git = "https://github.com/DreamLogics/crol" }
+crol = "0.1"
 serde = { version = "1", features = ["derive"] }
 ```
 
@@ -167,9 +172,10 @@ evaluate contexts.
 ## Status
 
 CROL is in early development: the format and the APIs will change before 1.0.
-Nothing is published yet, so there is no crate on crates.io, no binary release
-and no entry in Zed's extension registry. Install from this repository, as the
-[guide](docs/getting-started.md#install-the-tools) describes.
+The crates are on [crates.io](https://crates.io/crates/crol), and each
+[release](https://github.com/DreamLogics/crol/releases) has `crol` binaries for
+Linux, macOS and Windows. The Zed extension is not in Zed's extension registry yet,
+so [install it from this repository](docs/editors.md#zed).
 
 Of the [milestones](SPEC.md#143-milestones), everything is in place except
 publishing the Zed extension. See the [changelog](CHANGELOG.md), and

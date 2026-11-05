@@ -24,7 +24,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-crol = { git = "https://github.com/DreamLogics/crol", features = ["derive"] }
+crol = { version = "0.1", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 ```
 

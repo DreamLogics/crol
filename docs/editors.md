@@ -101,8 +101,7 @@ The extension uses the first of these it finds:
 
 1. `binary.path` from your settings;
 2. `crol` on the `PATH`;
-3. the binary from the latest GitHub release, which it downloads. There are no
-   releases yet, so for now one of the first two is required.
+3. the binary from the latest GitHub release, which it downloads.
 
 Settings go in Zed's `settings.json`, under `lsp.crol`. With `binary.path` set,
 Zed starts that binary with the `arguments` beside it and none of the extension's,
