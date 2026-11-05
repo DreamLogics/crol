@@ -67,7 +67,7 @@ Parsing on several threads (`parse_all`) is why the process peak is so far above
 heap's. With glibc's allocator, about 50 MB that parse trees took on other threads is
 not reused by the main thread, whatever the number of threads, and the peak varies from
 run to run. On one thread, the peak is 244 MB, compile 662 ms and evaluate 550 ms. It
-was kept for the 190 ms it saves in all at every game start. Another allocator may not
+was kept for the 180 ms it saves in all at every game start. Another allocator may not
 have this cost: measure before relying on that. `big` has too little text to use threads.
 
 Already done, so do not look there first: cells of a finished context are freed
