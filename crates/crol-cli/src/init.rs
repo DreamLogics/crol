@@ -118,10 +118,11 @@ fn init(reporter: &mut Reporter) -> Result<(), String> {
     // The application's manifest and code are the user's to change.
     reporter.note(&format!(
         "\nNext:\n  \
-         - add `crol = {{ git = \"{}\" }}` to [dependencies] in Cargo.toml, if it is not there yet\n  \
+         - add `crol = \"{}.{}\"` to [dependencies] in Cargo.toml, if it is not there yet\n  \
          - write your data in {LAYER_DIR}/{DOCUMENT_NAME}\n  \
          - run `crol check`",
-        env!("CARGO_PKG_REPOSITORY"),
+        env!("CARGO_PKG_VERSION_MAJOR"),
+        env!("CARGO_PKG_VERSION_MINOR"),
     ));
     Ok(())
 }

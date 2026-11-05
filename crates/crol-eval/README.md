@@ -4,7 +4,7 @@ The evaluator of [CROL](https://github.com/DreamLogics/crol), the Composable Rus
 Object Language: layers, chains of operations, variants, fingerprints and
 provenance.
 
-Most users want the [`crol`](../crol) crate, which adds file loading and serde on
+Most users want the [`crol`](https://crates.io/crates/crol) crate, which adds file loading and serde on
 top of this one. Use `crol-eval` directly for tools that work on evaluated values
 without Rust types:
 

@@ -9,27 +9,27 @@ Two commands solve most mysteries:
 
 ## Writing entries
 
-**`` `web` does not exist, so it cannot be patched ``**
+**`` `web` is not set, so it cannot be patched ``**
 
-A path like `web.port: 80` changes a value that must already exist. Either `web`
+A path like `web.port: 80` changes a value that must already be set. Either `web`
 is not defined anywhere, or the layer that defines it is not loaded, or it is
 loaded later than this one. Check the order of your layers: lowest first. To
 create the key, write `+web: { port: 80 }`.
 
 The same goes for every step of a longer path: `web.limits.cpu: 2` with no `limits`
-gives ``web.limits.cpu: `web.limits` does not exist, so it cannot be patched``.
+gives ``web.limits.cpu: `web.limits` is not set, so it cannot be patched``.
 If `limits` is a field with a default, [`init_defaults`](schemas.md#paths-through-fields-left-out)
 lets the path start from it.
 
-**`` +: `web` already exists ``**
+**`` +: `web` is already set ``**
 
-`+` means "this is new", and something below already wrote it. To change the
+`+` gives a key its first value, and something below already set it. To change the
 value, use `web: ...` or `web.port: ...`. To set it only if it is missing, use
 `?web: ...`.
 
-**`` -: `web` does not exist ``**
+**`` -: `web` is not set ``**
 
-`-` removes a key, and the key is not there. Check the spelling and the order of
+`-` removes a key, and the key is not set. Check the spelling and the order of
 your layers.
 
 **`` `web` is defined twice in the layer `base`; a layer may define a key once ``**

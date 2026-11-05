@@ -17,11 +17,11 @@ second file that changes a value without touching the first.
 
 ## Install the tools
 
-CROL is not on crates.io yet, so both the command-line tool and the library
-come from the Git repository. Install the `crol` tool first:
+Install the `crol` tool first, or take a binary for your platform from the
+[latest release](https://github.com/DreamLogics/crol/releases/latest):
 
 ```console
-$ cargo install --git https://github.com/DreamLogics/crol crol-cli
+$ cargo install crol-cli
 ```
 
 Then create a project:
@@ -41,7 +41,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-crol = { git = "https://github.com/DreamLogics/crol" }
+crol = "0.1"
 serde = { version = "1", features = ["derive"] }
 ```
 
@@ -227,7 +227,7 @@ worker.count: 1
 
 ```console
 $ crol check config.crod local.crod
-error: worker.count: `worker` does not exist, so it cannot be patched
+error: worker.count: `worker` is not set, so it cannot be patched
   ┌─ local.crod:3:1
   │
 3 │ worker.count: 1
@@ -262,12 +262,12 @@ Created /path/to/project/project.crol
 Created /path/to/project/data/base/main.crod
 
 Next:
-  - add `crol = { git = "https://github.com/DreamLogics/crol" }` to [dependencies] in Cargo.toml, if it is not there yet
+  - add `crol = "0.1"` to [dependencies] in Cargo.toml, if it is not there yet
   - write your data in data/base/main.crod
   - run `crol check`
 ```
 
-You already have the dependency, from the repository, so skip the first step.
+You already have the dependency, so skip the first step.
 `crol init` changes neither your manifest nor your code. It wrote a commented
 `project.crol` with one layer, `base`, in the directory `data/base`, and a
 `main.crod` there that holds only comments.

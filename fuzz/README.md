@@ -8,6 +8,7 @@ Fuzz targets for CROL (`SPEC.md` 14.2), run with
 | `parse` | The parser never panics and gives its input back byte for byte; the formatter is idempotent on what it accepts. |
 | `evaluate_value` | Evaluating a value-mode document never panics or loops. |
 | `evaluate_data` | Evaluating layers never panics or loops. The input is split at `\0` into documents, one layer each. |
+| `compiled_layer` | Compiling and evaluating what a `.crob` file holds never panics or loops, whatever it holds. |
 
 ```sh
 cargo install cargo-fuzz

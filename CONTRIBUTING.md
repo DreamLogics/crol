@@ -41,11 +41,30 @@ All crates share one version number (`SPEC.md` 14.4).
 
 1. Update `version` in the root `Cargo.toml` and the `crol-*` entries in
    `[workspace.dependencies]`, and move the `Unreleased` section of
-   `CHANGELOG.md` under the new version.
-2. Commit, then tag `vX.Y.Z` and push the tag. The release workflow publishes
-   the crates to crates.io and makes a GitHub release with the `crol` binaries.
+   `CHANGELOG.md` under the new version, with the date. The workflow refuses a
+   tag without that section, and uses it as the release notes.
+2. Update the version in `crol = "0.1"` in the guide and the READMEs if the
+   minor version changed.
+3. Commit, wait for CI to pass on `main`, then tag `vX.Y.Z` and push the tag. The
+   release workflow builds the binaries, publishes to crates.io whatever is not
+   there yet, and then makes the GitHub release. It is safe to run again if it
+   stops part of the way.
 
-The workflow publishes with crates.io trusted publishing. A crate's first
-version must be published by hand (`cargo publish -p <crate>`), after which
-trusted publishing is configured for `DreamLogics/crol` and the `release.yml`
-workflow in the crate's settings on crates.io.
+A pull request that changes `release.yml` runs the same builds and publishes
+nothing, so a change to the workflow is tried before a tag depends on it.
+
+### The first release
+
+The workflow publishes with crates.io trusted publishing, which a crate needs to
+exist for, so the first version of each crate goes up by hand, from a clean
+checkout of the commit to tag:
+
+1. `cargo login`, with a token that may publish new crates.
+2. `cargo publish --workspace --locked`. crates.io limits how many new crates an
+   account makes at once. If it answers 429 for the last crates, wait for the time
+   it gives and run `cargo publish --locked -p <crate>` for each, in the order
+   `crol-syntax`, `crol-derive`, `crol-eval`, `crol`, `crol-lsp`, `crol-cli`.
+3. Tag and push as above. The workflow finds the crates there, and goes on to the
+   GitHub release.
+4. In each crate's settings on crates.io, add a trusted publisher: the repository
+   `DreamLogics/crol`, the workflow `release.yml` and the environment `crates-io`.

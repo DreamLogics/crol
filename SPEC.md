@@ -614,16 +614,22 @@ optional path into its value.
 
 | Entry | Name | Meaning | Error when |
 |---|---|---|---|
-| `+target: expr` | declare | create the target | it exists |
+| `+target: expr` | declare | give the target its first value | it is set |
 | `target: expr` | set | replace the target, or create it | |
-| `?target: expr` | ensure | create the target if missing; otherwise nothing | |
+| `?target: expr` | ensure | set the target if it is not set; otherwise nothing | |
 | `^target: expr` | replace | as set, but the value never merges with what is there (section 5.2) | |
-| `-target` | remove | remove the target | it does not exist |
+| `-target` | remove | remove the target | it is not set |
 | `<c> { entries }` | variant block | the entries apply under condition `c` (section 8.2) | |
 | `..operand` | spread | copy the keyed value's entries in | it is not a keyed value |
 | `..` | defaults | fields left out take their defaults (section 10.3) | |
 | `name = entry` | bind | names the entry's target (section 6.1.1) | |
 | `name := expr` | value bind | names a value; at the top level, a template (section 6.1.2) | defined twice |
+
+A target is **set** when the data holds a value for it, even `None`.
+This is about the data alone: a field of a struct is not set until an
+entry sets it, though its type always has it. So these entries mean the
+same for the keys of a map and the fields of a struct, with or without
+a schema.
 
 ### 5.1 Targets and paths
 
@@ -1401,7 +1407,7 @@ independent error once. Each diagnostic has:
 - a primary span (file, line, column, layer), or none for a diagnostic
   about no place in a file, which is shown without one (in JSON, its
   `file`, `line` and `column` are `null`);
-- secondary spans (the entry that created a key that a `+` collides
+- secondary spans (the entry that set a key that a `+` collides
   with, every reference in a cycle, both definitions in a layer);
 - the evaluation context: `while evaluating web<prod>.limits.memory_mb`.
 
@@ -3087,7 +3093,7 @@ trigger completion, as do `.`, `&`, `<` and `@`.
   with placeholders; or add `..`. For a root struct, at the end of the
   document the diagnostic is on.
 - Quick fixes from diagnostics: a misspelt field or id (by edit
-  distance), `+x` on an existing key to a patch, `&name` without a bind
+  distance), `+x` on a key that is set to a patch, `&name` without a bind
   to `&self.name`.
 
 Nothing is written to a file unless the user accepts an action.
@@ -3189,8 +3195,8 @@ document; a bind on a remove, variant block,
 spread, `..`, variant entry or inside a variant block; a variant
 selector on `&` or `&default`.
 
-**Evaluation**: `+` on something that exists; `-` or a path on something
-that does not; declare or ensure on a list index or tuple element, set
+**Evaluation**: `+` on something that is set; `-` or a path on something
+that is not; declare or ensure on a list index or tuple element, set
 on a missing index, removing a tuple element; a missing value referenced
 outside `|`, or spread; `&default` without a schema; operators on the wrong kinds; integer overflow;
 division by zero; a non-finite float; `~` on lists, scalars, different

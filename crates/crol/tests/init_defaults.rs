@@ -63,7 +63,7 @@ fn a_path_is_an_error_without_the_option() {
         "+x: Unit { hp: 1, .. }\nx.behaviour.traits.stealth: true",
     )
     .unwrap_err();
-    assert!(error.to_string().contains("does not exist"), "{error}");
+    assert!(error.to_string().contains("is not set"), "{error}");
 }
 
 #[test]
@@ -143,5 +143,5 @@ fn a_field_with_no_default_stays_an_error() {
         "+x: Unit { hp: 1, .. }\nx.behaviour.nothing.at_all: 1",
     )
     .unwrap_err();
-    assert!(error.to_string().contains("does not exist"), "{error}");
+    assert!(error.to_string().contains("is not set"), "{error}");
 }
