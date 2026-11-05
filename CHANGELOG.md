@@ -304,6 +304,9 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 - A key with an operation whose condition holds in the base but not in a context, such
   as `x<!b>`, kept its base value in that context, or stayed where the context should
   remove it. It now has the value of its chain there (`SPEC.md` 8.3).
+- A key that copied a reference to a block around it, as `tank: { ..&root.unit.stats }`
+  does with `stats: { defense: &parent.armor }`, kept its base value in a context where
+  what the reference reads where it landed differs (`SPEC.md` 6.1).
 - `crate:crol` no longer stays on what an earlier build of the same version left
   in the cache.
 - A cycle between root keys (`+a: &root.b`, `+b: &root.a`) and a root key that

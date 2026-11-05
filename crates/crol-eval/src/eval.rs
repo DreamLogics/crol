@@ -908,6 +908,12 @@ struct Reads {
     whole: bool,
     /// A reference into another context.
     switch: bool,
+    /// A reference to a block around the one it is in, short of the root.
+    /// Copied elsewhere, it reads something else (`SPEC.md` 6.1), which can
+    /// be any root key.
+    climbs: bool,
+    /// A spread or a merge, which copies entries.
+    copies: bool,
 }
 
 /// Collects what an expression reads (`depth`: the number of blocks around
@@ -931,6 +937,7 @@ fn collect_reads(
                 _ => out.whole = true,
             },
             RefKind::ValueBind(id) => templates.add(ir, *id, out),
+            RefKind::Parent(up) | RefKind::Bind { up, .. } if *up > 0 => out.climbs = true,
             _ => {}
         },
         ExprKind::Path(base, selectors) => {
@@ -957,6 +964,7 @@ fn collect_reads(
         }
         ExprKind::Block(block) => {
             let block = &ir.blocks[*block];
+            out.copies |= !block.spreads.is_empty();
             for &spread in &block.spreads {
                 collect_reads(ir, spread, depth + 1, templates, out);
             }
@@ -985,7 +993,8 @@ fn collect_reads(
             }
         }
         ExprKind::Neg(operand) => collect_reads(ir, *operand, depth, templates, out),
-        ExprKind::Binary(_, lhs, rhs) => {
+        ExprKind::Binary(op, lhs, rhs) => {
+            out.copies |= matches!(op, BinOp::Merge | BinOp::MergeShallow);
             collect_reads(ir, *lhs, depth, templates, out);
             collect_reads(ir, *rhs, depth, templates, out);
         }
@@ -1019,6 +1028,8 @@ impl TemplateReads {
         out.keys.extend(reads.keys.iter().cloned());
         out.whole |= reads.whole;
         out.switch |= reads.switch;
+        out.climbs |= reads.climbs;
+        out.copies |= reads.copies;
     }
 }
 
@@ -1027,6 +1038,9 @@ struct KeyPlan {
     all: Vec<usize>,
     /// What the key's operations read late.
     reads: Reads,
+    /// Whether the key copies entries that may read what `reads` does not
+    /// show: where they land decides, so that it can read any root key.
+    moves_references: bool,
     /// The base operations, in order (`SPEC.md` 7.2).
     base: Vec<usize>,
     /// The conditional operations, in the order of `SPEC.md` 7.2: layer by
@@ -1782,10 +1796,24 @@ impl<'a> DataPlan<'a> {
                 KeyPlan {
                     all: list,
                     reads,
+                    moves_references: false,
                     base: ordered(base),
                     conditional: ordered(conditional),
                 },
             );
+        }
+        // What a key copies is in itself or in what it reads. Where it went
+        // through another key first, that key is here, and this one reads it.
+        let moving: Vec<bool> = keys
+            .values()
+            .map(|plan| {
+                let reads = &plan.reads;
+                let climbing = |key: &Arc<str>| keys.get(key).is_some_and(|k| k.reads.climbs);
+                reads.copies && (reads.climbs || reads.keys.iter().any(climbing))
+            })
+            .collect();
+        for (plan, moving) in keys.values_mut().zip(moving) {
+            plan.moves_references = moving;
         }
         Some(Self {
             ops: input.ops,
@@ -1808,8 +1836,9 @@ impl<'a> DataPlan<'a> {
 
     /// The keys whose value can differ from the base in `context`: those
     /// with an operation whose condition holds there or in the base, as
-    /// `x<!b>` does, and those that read them, directly or not. Every other
-    /// key has its base value.
+    /// `x<!b>` does, and those that read them, directly or not. If any key
+    /// can differ, so can those that read the whole root, and those that
+    /// copy references, which may read it. Every other key has its base value.
     fn varying(&self, context: &Context) -> std::collections::HashSet<Arc<str>> {
         let mut varying = std::collections::HashSet::new();
         let mut queue = Vec::new();
@@ -1827,7 +1856,7 @@ impl<'a> DataPlan<'a> {
         }
         if !varying.is_empty() {
             for (key, plan) in &self.keys {
-                if plan.reads.whole && varying.insert(key.clone()) {
+                if (plan.reads.whole || plan.moves_references) && varying.insert(key.clone()) {
                     queue.push(key.clone());
                 }
             }

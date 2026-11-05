@@ -1,0 +1,18 @@
+armor: 10
+base_unit: { armor: 5, stats: { defense: 10 } }
+tank: { defense: 20 }
+scout: { defense: 30 }
+walker: { defense: 40 }
+merged: { a: 1, defense: 20 }
+holder: { armor: 1, deep: { defense: 2 } }
+second: { defense: 20 }
+army: { armor: 3, tank: { defense: 6 } }
+
+<hard> {
+    armor: 20,
+    tank: { defense: 40 },
+    scout: { defense: 60 },
+    walker: { defense: 80 },
+    merged: { a: 1, defense: 40 },
+    second: { defense: 40 },
+}

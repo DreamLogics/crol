@@ -184,18 +184,22 @@ its own errors. So is one context on its own.
 - A plan for each thread: with 8 threads, evaluate took 448 ms, against 388 ms with one
   plan for all of them.
 
-### A bug found on the way, not fixed
+### What decides which keys a context evaluates
 
-It gives wrong data silently. `evaluate_every_key` gives the right answer, so it is in
-deciding what can differ, and `leaving_out_keys_that_cannot_differ_changes_nothing`
-compares the two, on data without such spreads. `game` does not have it: no spread moves
-a reference. **Fixing it changes results, so that is not an optimisation: it needs its
-own commit and a test.**
+`DataPlan::varying` leaves out keys that cannot differ from the base, and that is the
+only thing here that can make data wrong rather than slow. Two bugs were found in it
+and fixed: it missed operations that hold in the base and not in a context (`x<!b>`),
+and references that a spread moves (`tank: { ..&root.unit.stats }`, with
+`stats: { defense: &parent.armor }`). Copied entries are evaluated where they land, so
+what `collect_reads` sees where they are written is not what they read.
 
-- **A reference that a spread moves.** With
-  `y: 1, y<v>: 2, a: { inner: { x: &parent.y }, y: 5 }, b: { ..&root.a.inner }`, `b.x` is
-  `1` in `{v}`, and should be `2`. `collect_reads` sees `&parent.y` where it is written, in
-  `a`, not at `b`, where it ends up reading the root. This one may need a `SPEC.md` decision.
+It must only err on the wide side. `leaving_out_keys_that_cannot_differ_changes_nothing`
+compares it with `evaluate_every_key` on random data; change it with that test passing.
+A key that copies a climbing reference varies whenever anything does, which is wider
+than it must be. Recording what each key reads while the base is evaluated would be
+exact, as a key can only differ if a read returns something else, and the first such
+read also happens in the base; but it must count missing keys, treat templates as
+keys, and be kept for `evaluate_contexts`.
 
 ## Goals, in order
 
@@ -228,8 +232,7 @@ Ideas, roughly by what they may give:
   this needs two passes.
 - `plan.varying` decides what a context re-evaluates. A key with an operation that holds
   in the base varies in every context, which is wider than it must be for `x<!b>` in a
-  context without `b`. `reads.whole` makes only the key that reads the whole root vary,
-  which may be too narrow: see the bug above before relying on it for anything new.
+  context without `b`.
 
 ## Rules
 

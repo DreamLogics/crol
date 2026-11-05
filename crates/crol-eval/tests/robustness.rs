@@ -492,8 +492,14 @@ fn leaving_out_keys_that_cannot_differ_changes_nothing() {
 
     let mut generator = Gen(0xD1FF_E2E7);
     let mut compared = 0;
-    for _ in 0..3_000 {
-        let base = generator.data_document();
+    for round in 0..3_000 {
+        // Half have spreads that move references, with root keys that
+        // differ for those references to find.
+        let base = if round % 2 == 0 {
+            generator.data_document()
+        } else {
+            generator.linked_document() + ",\nk1<a>: 9,\nk0<!b>: { a: 8 },\nk2<b>: 7"
+        };
         let local = generator.data_document().replace("t :=", "u :=");
         if [&base, &local]
             .iter()

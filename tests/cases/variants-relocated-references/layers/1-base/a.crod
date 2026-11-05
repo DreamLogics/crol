@@ -1,0 +1,34 @@
+// An entry that a spread copies is evaluated where it lands (`SPEC.md` 6.1),
+// so `&parent` there can read a root key that nothing written says it reads.
+armor: 10,
+armor<hard>: 20,
+
+// From a sub-block of a key.
+base_unit: {
+    armor: 5,
+    stats: { defense: &parent.armor * 2 },
+},
+tank: { ..&root.base_unit.stats },
+
+// From a sub-block of a template.
+t := { inner: { defense: &parent.armor * 3 } },
+scout: { ..&t.inner },
+
+// From a value bind in the block itself.
+walker: {
+    v := { inner: { defense: &parent.armor * 4 } },
+    ..&v.inner,
+},
+
+// By a merge rather than a spread.
+merged: { a: 1 } ~ &root.base_unit.stats,
+
+// Through a key that copied it.
+holder: { armor: 1, deep: { ..&root.base_unit.stats } },
+second: { ..&root.holder.deep },
+
+// What it lands in decides, so that this reads `army.armor`, in every context.
+army: {
+    armor: 3,
+    tank: { ..&root.base_unit.stats },
+},
