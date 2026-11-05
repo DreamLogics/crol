@@ -865,3 +865,26 @@ fn a_compiled_file_is_read_as_a_layer_and_not_in_a_directory() {
     assert!(error.to_string().contains("a layer of its own"), "{error}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn a_compiled_layer_reloads_without_what_it_lowered_to() {
+    let bytes = CrolLayer::from_sources("base", [("a.crod", "+a: 1")])
+        .to_binary()
+        .unwrap();
+    let config = CrolConfig::<String> {
+        keep_lowered: false,
+        ..CrolConfig::default()
+    };
+    let mut data = CrolComposer::with_cfg(config)
+        .load_layer(CrolLayer::from_binary("base", &bytes).unwrap())
+        .load_layer(CrolLayer::from_sources("mod", [("a.crod", "a: & + 1")]))
+        .compose_data()
+        .unwrap();
+    let change = crol::DocumentChange {
+        layer: "mod",
+        path: "a.crod",
+        text: Some("a: & + 2"),
+    };
+    assert_eq!(data.reload(&[change]).unwrap().changed.len(), 1);
+    assert_eq!(data.get::<i32>("a").unwrap(), 3);
+}

@@ -180,6 +180,10 @@ pub struct CrolConfig<T = String> {
     /// Let a path go through a field left out, from its default. Needs a
     /// [schema](CrolComposer::schema) (`SPEC.md` 5.1).
     pub init_defaults: bool,
+    /// Keep what `.crob` layers hold beyond their text, so that
+    /// [`CrolData::reload`] need not parse them (`SPEC.md` 7.8). Without it,
+    /// loading takes less memory. Default: `true`.
+    pub keep_lowered: bool,
 }
 
 impl<T> Default for CrolConfig<T> {
@@ -199,6 +203,7 @@ impl<T> Default for CrolConfig<T> {
             require_complete: true,
             warn_cross_file_patches: true,
             init_defaults: false,
+            keep_lowered: true,
         }
     }
 }
@@ -824,28 +829,26 @@ impl<T: VariantName> CrolComposer<T> {
         self.evaluate(contexts)
     }
 
-    fn evaluate(self, contexts: Option<Vec<Vec<String>>>) -> Result<CrolData<T>, Error> {
+    fn evaluate(mut self, contexts: Option<Vec<Vec<String>>>) -> Result<CrolData<T>, Error> {
         if let Some(error) = self.error {
             return Err(error);
         }
         let variants = self.config.variants.build()?;
         let mut sources = Sources::new();
         let mut layers = Vec::with_capacity(self.layers.len());
-        for layer in &self.layers {
+        let mut lowered: Vec<Option<Arc<[u8]>>> = Vec::with_capacity(self.layers.len());
+        // The texts move to `sources`, so that evaluation holds them once.
+        for layer in std::mem::take(&mut self.layers) {
             let documents = layer
                 .documents
-                .iter()
-                .map(|d| {
-                    (
-                        d.relative.clone(),
-                        sources.add(d.display.clone(), d.text.as_str()),
-                    )
-                })
+                .into_iter()
+                .map(|d| (d.relative, sources.add(d.display, d.text)))
                 .collect();
             layers.push(Layer {
-                name: layer.name.clone(),
+                name: layer.name,
                 documents,
             });
+            lowered.push(layer.lowered);
         }
         // A layer's `schema.crod` changes the schema (`SPEC.md` 10.12).
         let schema = match &self.schema {
@@ -880,12 +883,13 @@ impl<T: VariantName> CrolComposer<T> {
             .with_threads(self.config.threads)
             .with_variant_keys(self.config.variant_keys)
             .with_defaults(schema);
-        let lowered: Vec<Option<Arc<[u8]>>> =
-            self.layers.iter().map(|l| l.lowered.clone()).collect();
         let (compiled, mut diagnostics) = compile_lowered(&sources, &layers, &lowered);
         let Some(compiled) = compiled else {
             return Err(Error::from_diagnostics(&sources, &diagnostics));
         };
+        if !self.config.keep_lowered {
+            lowered.fill(None);
+        }
         let mut evaluation = evaluate_compiled(&compiled, &options);
         diagnostics.append(&mut evaluation.diagnostics);
         evaluation.diagnostics = diagnostics;

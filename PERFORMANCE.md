@@ -165,11 +165,12 @@ more, on the real data, the same way:
 
 | | Text, one core | Text | `.crob` base, one core | `.crob` base |
 | --- | --- | --- | --- | --- |
-| `compose_data` | 758 ms | 522 ms | 406 ms | 280 ms |
-| Peak of the process | 265 MB | 373 MB | 272 MB | 330 MB |
+| `compose_data` | 752 ms | 528 ms | 406 ms | 280 ms |
+| Peak of the process | 256 MB | 367 MB | 264 MB | 322 MB |
 
-With a `.crob` base that is 23 MB more. `CrolData` keeps the lowered bytes for `reload`,
-which is the likely cause, though it was not isolated; see point 1 below. `reload` of one
+The 14 MB more with a `.crob` base is the lowered bytes that `CrolData` keeps for `reload`.
+With `CrolConfig::keep_lowered: false` the peak is 250 MB on one core and 308 MB with
+threads, as with `crol_eval`, and `reload` parses the layer instead. `reload` of one
 new document, over a `.crob` base, took 451 ms and raised the peak to 514 MB, as the old
 data stays in place until the new data has loaded.
 

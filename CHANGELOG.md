@@ -53,6 +53,8 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Changed
 
+- Loading holds each document's text once, and `CrolConfig::keep_lowered: false` leaves
+  out what only `reload` needs of a `.crob` layer: 8 and 14 MB less on large data.
 - `~` and merging blocks merge named tuples of one name element by element, so
   `& ~ Active({ range: 5 })` changes `range` and keeps the rest, where it used to
   replace the whole payload without a word (`SPEC.md` 5.2, 6.4). Write `^key` to replace.

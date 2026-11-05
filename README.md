@@ -150,10 +150,10 @@ over them, and 9 variants, so 10 contexts:
 
 | Load and evaluate everything | Time | Peak memory |
 | --- | --- | --- |
-| From text | 522 ms | 373 MB |
-| From text, on one core | 758 ms | 265 MB |
-| Base layer from a [`.crob` file](docs/layers.md#compiled-layers) | 280 ms | 330 MB |
-| Base layer from a `.crob` file, on one core | 406 ms | 272 MB |
+| From text | 528 ms | 367 MB |
+| From text, on one core | 752 ms | 256 MB |
+| Base layer from a [`.crob` file](docs/layers.md#compiled-layers) | 280 ms | 322 MB |
+| Base layer from a `.crob` file, on one core | 406 ms | 264 MB |
 
 That is `compose_data` on an Intel Core i7-13700K, the median of 5 runs with the files in
 the page cache, stopping at evaluated values, before any deserializing. Evaluating one

@@ -1442,7 +1442,8 @@ is an error, like a `.crol` file there (section 4).
   with LZ4, which costs milliseconds to read and makes the file a quarter of
   the size: errors and
   `crol explain` point into it, `CrolData::reload` of a document in the layer
-  falls back to the text for that layer, and tools that want a syntax tree parse
+  falls back to the text for that layer, as it does for every layer without
+  `CrolConfig::keep_lowered`, which saves memory, and tools that want a syntax tree parse
   it. A layer's `schema.crod` is kept and read as ever.
 - **It stands alone as far as templates go.** A layer can be compiled only if
   it uses no template of another layer. Layers above it see its templates, as
@@ -2211,6 +2212,7 @@ are fetched to a cache and read from there.
 | `allow_unknown_fields: bool` | `false` | 10.2 |
 | `require_complete: bool` | `true` | 10.2 |
 | `warn_cross_file_patches: bool` | `true` | 7.2 |
+| `keep_lowered: bool` | `true` | 7.8 |
 | `init_defaults: bool` | `false` | 5.1 |
 
 ### 10.8 Serializer
