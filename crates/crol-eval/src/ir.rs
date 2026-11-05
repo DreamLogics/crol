@@ -167,6 +167,42 @@ impl MacroKind {
             _ => 1,
         }
     }
+
+    /// How a call is written, with its parameters.
+    pub(crate) fn signature(self) -> &'static str {
+        match self {
+            MacroKind::Round => "round!(x)",
+            MacroKind::Floor => "floor!(x)",
+            MacroKind::Ceil => "ceil!(x)",
+            MacroKind::Clamp => "clamp!(x, min, max)",
+        }
+    }
+
+    /// What the macro does, in Markdown.
+    pub(crate) fn doc(self) -> &'static str {
+        match self {
+            MacroKind::Round => {
+                "`x` to the nearest integer, ties away from zero. An integer \
+                 is returned as it is, and a result that does not fit an \
+                 integer is an error."
+            }
+            MacroKind::Floor => {
+                "The largest integer not above `x`. An integer is returned \
+                 as it is, and a result that does not fit an integer is an \
+                 error."
+            }
+            MacroKind::Ceil => {
+                "The smallest integer not below `x`. An integer is returned \
+                 as it is, and a result that does not fit an integer is an \
+                 error."
+            }
+            MacroKind::Clamp => {
+                "`x`, kept between `min` and `max`. The result is an integer \
+                 if all three are, and a float otherwise. `min` above `max` \
+                 is an error."
+            }
+        }
+    }
 }
 
 /// A selector in a path (`SPEC.md` 5.1).

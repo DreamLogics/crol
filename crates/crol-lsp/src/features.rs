@@ -555,9 +555,12 @@ pub(crate) fn hover(
     encoding: Encoding,
     settings: &Settings,
 ) -> Option<Hover> {
+    let (_, token) = token_at(text, position, encoding)?;
+    if let Some(hover) = macro_hover(&token, text, encoding) {
+        return Some(hover);
+    }
     let path = convert::uri_to_path(uri)?;
     let file = snapshot.file_of(&path)?;
-    let (_, token) = token_at(text, position, encoding)?;
     let scope = Scope::new(snapshot, Some(file));
     let schema = snapshot.schema_for(Some(file));
     let target = token.parent_ancestors().find_map(ast::Target::cast);
@@ -621,6 +624,26 @@ pub(crate) fn hover(
             value: markdown,
         }),
         range: Some(convert::range(text, &index, token.text_range(), encoding)),
+    })
+}
+
+/// On the name of a built-in macro or its `!`: how a call is written, and
+/// what it does. The arguments are hovered as any value is.
+fn macro_hover(token: &SyntaxToken, text: &str, encoding: Encoding) -> Option<Hover> {
+    if !matches!(token.kind(), SyntaxKind::IDENT | SyntaxKind::BANG) {
+        return None;
+    }
+    let call = token.parent().and_then(ast::MacroCall::cast)?;
+    let name = call.name()?;
+    let help = crol_eval::macro_help(name.text())?;
+    let index = LineIndex::new(text);
+    let range = name.text_range().cover(token.text_range());
+    Some(Hover {
+        contents: HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: format!("```crol\n{}\n```\n\n{}", help.signature, help.doc),
+        }),
+        range: Some(convert::range(text, &index, range, encoding)),
     })
 }
 

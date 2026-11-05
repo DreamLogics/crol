@@ -17,7 +17,8 @@ finds your [project file](projects.md#how-it-is-found) by itself.
   type. A reference shows the comments of what it names. A value inside a list or `Some(...)` has the field's doc too, and an enum
   variant has its own. A key that several operations touched lists them, with
   their layers, below that, and a reference adds what it refers to. Without a
-  schema, there is mostly nothing to say, and no hover.
+  schema, there is mostly nothing to say, and no hover. On a built-in macro, how a
+  call is written and what it does.
 - **Completion**: field names, enum variants, type names, ids, variants, and
   keys after `&root.`, `&self.` and the like. It knows the type at the cursor at
   any depth: through nested blocks, lists, `Some(...)`, dotted keys and variant

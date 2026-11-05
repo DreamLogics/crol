@@ -45,6 +45,24 @@ pub use eval::{
     ContextData, DefaultsProvider, ExplainStep, PathStep, StepKind, VariantKeys, value_at_path,
 };
 
+/// What a built-in macro's reader needs to know (`SPEC.md` 6.7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MacroHelp {
+    /// How a call is written, with its parameters: `clamp!(x, min, max)`.
+    pub signature: &'static str,
+    /// What the macro does, in Markdown.
+    pub doc: &'static str,
+}
+
+/// The help of the built-in macro called `name`, without its `!`.
+pub fn macro_help(name: &str) -> Option<MacroHelp> {
+    let kind = ir::MacroKind::from_name(name)?;
+    Some(MacroHelp {
+        signature: kind.signature(),
+        doc: kind.doc(),
+    })
+}
+
 /// The result of evaluating: the value, unless an error made that
 /// impossible, and every diagnostic.
 #[derive(Debug, Clone, Default)]

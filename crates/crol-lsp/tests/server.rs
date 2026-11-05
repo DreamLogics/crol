@@ -2873,6 +2873,46 @@ fn a_value_document_keeps_its_last_good_evaluation() {
 }
 
 #[test]
+fn hover_on_a_macro_shows_its_signature_and_what_it_does() {
+    let dir = workspace("lsp-macro-hover", &[("a.crol", "{ a: 1 }\n")]);
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "a.crol");
+
+    for (marked, signature, doc) in [
+        ("{ a: rou|nd!(1.5) }\n", "round!(x)", "nearest integer"),
+        ("{ a: floor|!(1.5) }\n", "floor!(x)", "largest integer"),
+        ("{ a: |ceil!(1.5) }\n", "ceil!(x)", "smallest integer"),
+        (
+            "{ a: cl|amp!(5, 0, 3) }\n",
+            "clamp!(x, min, max)",
+            "kept between `min` and `max`",
+        ),
+        // In a nested call, the macro under the cursor.
+        (
+            "{ a: clamp!(rou|nd!(1.5), 0, 3) }\n",
+            "round!(x)",
+            "nearest integer",
+        ),
+        // While the file does not evaluate.
+        ("{ a: rou|nd!(\"x\") }\n", "round!(x)", "nearest integer"),
+    ] {
+        let hover = buffer.hover(&mut client, marked);
+        assert!(
+            hover.starts_with(&format!("```crol\n{signature}\n```\n\n")),
+            "{marked}: {hover}"
+        );
+        assert!(hover.contains(doc), "{marked}: {hover}");
+    }
+
+    // Neither an argument nor a name that is no macro.
+    for marked in ["{ a: round!(1|.5) }\n", "{ a: rou|nt!(1.5) }\n"] {
+        let hover = buffer.hover(&mut client, marked);
+        assert!(!hover.contains("```crol"), "{marked}: {hover}");
+    }
+    client.stop();
+}
+
+#[test]
 fn a_stray_file_in_an_extended_directory_is_reported_on_it() {
     let dir = workspace(
         "lsp-extends-stray",

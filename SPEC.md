@@ -3002,6 +3002,9 @@ definition's, and a reference shows the docs of what it names.
   before it, and everything it holds that is in no field of its own: the
   elements of a list or tuple, the values of a map, and what `Some(...)` and
   other payloads hold, at any depth. The type is that of the value there.
+- On the name of a built-in macro or its `!` (section 6.7): how a call is
+  written, with its parameters, and what it does, and nothing of the field
+  around it. A name that is no macro is a value like any other.
 - On an enum variant's name, as a value or the name of a block or payload: the
   variant's doc, else the field's, and the type as `Enum::Variant`. On a type
   name: the field's doc, else the type's. The document as a whole is in no

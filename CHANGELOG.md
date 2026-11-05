@@ -11,6 +11,8 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Added
 
+- Hover on a built-in macro shows how a call is written and what it does.
+  `crol_eval::macro_help` gives the same.
 - Doc comments in data (`SPEC.md` 2.2): `///` above an entry and `//!` at the top of
   a file. Hover shows those of every layer, lowest first, and completion after `@`
   those of root keys. `DataWriter::doc` writes one. Evaluation does not see them.
