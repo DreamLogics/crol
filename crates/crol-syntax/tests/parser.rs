@@ -911,3 +911,36 @@ fn attribute_errors() {
     "##]],
     );
 }
+
+#[test]
+fn doc_comments_belong_to_the_entry_below_them() {
+    use crol_syntax::ast::{self, AstNode, doc_comment};
+    let text = "//! The file.\n//! Second.\n\n// plain\n\n\
+                /// Rocket.\n///\n/// Second.\n+rocket: 1,\n\
+                a: 1, /// not of `b`\nb: 2,\n\
+                /// Apart.\n\nc: 3,\n\
+                /// Interrupted.\n// plain\nd: 4,\n\
+                //// Rule.\ne: 5,\n\
+                f: {\n    /// Inner.\n    g: 6,\n}\n";
+    let parse = crol_syntax::parse(text);
+    assert!(parse.errors().is_empty());
+    let document = ast::Document::cast(parse.syntax()).unwrap();
+    assert_eq!(document.docs().as_deref(), Some("The file.\nSecond."));
+    let docs: Vec<(String, Option<String>)> = parse
+        .syntax()
+        .descendants()
+        .filter_map(ast::Entry::cast)
+        .map(|e| {
+            let target = e.target().unwrap().syntax().text().to_string();
+            (target, doc_comment(e.syntax()))
+        })
+        .collect();
+    let doc = |key: &str| docs.iter().find(|(k, _)| k == key).unwrap().1.as_deref();
+    assert_eq!(doc("rocket"), Some("Rocket.\n\nSecond."));
+    assert_eq!(doc("a"), None);
+    assert_eq!(doc("b"), None);
+    assert_eq!(doc("c"), None);
+    assert_eq!(doc("d"), None);
+    assert_eq!(doc("e"), None);
+    assert_eq!(doc("g"), Some("Inner."));
+}

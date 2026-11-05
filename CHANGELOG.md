@@ -11,6 +11,9 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Added
 
+- Doc comments in data (`SPEC.md` 2.2): `///` above an entry and `//!` at the top of
+  a file. Hover shows those of every layer, lowest first, and completion after `@`
+  those of root keys. `DataWriter::doc` writes one. Evaluation does not see them.
 - `crol::Expression`, the text of one expression, which the serializer and
   `DataWriter` write as it is where a value goes, for references (`SPEC.md` 10.8).
 - Compiled layers (`SPEC.md` 7.8): `crol compile` and `CrolLayer::to_binary` write a

@@ -12,8 +12,9 @@ finds your [project file](projects.md#how-it-is-found) by itself.
 
 - **Diagnostics**: everything `crol check` reports, as you type. Errors that
   occur only in some contexts say which ones.
-- **Hover**: on a key or on a value, the doc comment of the field, then its
-  type. A value inside a list or `Some(...)` has the field's doc too, and an enum
+- **Hover**: on a key or on a value, the `///` comments written on it in data, from
+  every layer, lowest first, then the doc comment of the field, then its
+  type. A reference shows the comments of what it names. A value inside a list or `Some(...)` has the field's doc too, and an enum
   variant has its own. A key that several operations touched lists them, with
   their layers, below that, and a reference adds what it refers to. Without a
   schema, there is mostly nothing to say, and no hover.

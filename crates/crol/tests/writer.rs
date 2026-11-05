@@ -321,3 +321,14 @@ fn a_diff_replaces_a_named_tuple_rather_than_merging_it() {
         read(vec![("base", &expected.finish().unwrap())])
     );
 }
+
+#[test]
+fn a_doc_comment_is_written_above_the_next_entry() {
+    let mut writer = DataWriter::new();
+    writer.doc("The port.\nOf the web server.");
+    writer.declare("port", &80).unwrap();
+    assert_eq!(
+        writer.finish().unwrap(),
+        "/// The port.\n/// Of the web server.\n+port: 80\n"
+    );
+}

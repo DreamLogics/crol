@@ -121,6 +121,64 @@ impl Document {
     pub fn expr(&self) -> Option<Expr> {
         child(&self.0)
     }
+
+    /// The document's doc comment: its `//!` lines before anything but
+    /// comments (`SPEC.md` 2.2).
+    pub fn docs(&self) -> Option<String> {
+        let mut lines = Vec::new();
+        for element in self.0.children_with_tokens() {
+            let Some(token) = element.as_token() else {
+                break;
+            };
+            if !token.kind().is_trivia() {
+                break;
+            }
+            if token.kind() == LINE_COMMENT
+                && let Some(line) = token.text().strip_prefix("//!")
+            {
+                lines.push(doc_line(line).to_owned());
+            }
+        }
+        (!lines.is_empty()).then(|| lines.join("\n"))
+    }
+}
+
+/// A doc comment's line, after its `///` or `//!`.
+fn doc_line(line: &str) -> &str {
+    line.strip_prefix(' ').unwrap_or(line).trim_end()
+}
+
+/// The doc comment of an entry: the `///` lines directly above it, each on a
+/// line of its own (`SPEC.md` 2.2). A blank line or any other comment ends it.
+pub fn doc_comment(entry: &SyntaxNode) -> Option<String> {
+    let starts_line = |element: Option<crate::SyntaxElement>| {
+        element.is_none_or(|e| {
+            e.as_token()
+                .is_some_and(|t| t.kind() == WHITESPACE && t.text().contains('\n'))
+        })
+    };
+    let mut lines = Vec::new();
+    let mut at = entry.prev_sibling_or_token();
+    while let Some(element) = at {
+        let token = element.as_token()?.clone();
+        match token.kind() {
+            WHITESPACE if token.text().matches('\n').count() == 1 => {}
+            LINE_COMMENT => {
+                let doc = token.text().strip_prefix("///");
+                let Some(line) = doc.filter(|line| !line.starts_with('/')) else {
+                    break;
+                };
+                if !starts_line(token.prev_sibling_or_token()) {
+                    break;
+                }
+                lines.push(doc_line(line).to_owned());
+            }
+            _ => break,
+        }
+        at = token.prev_sibling_or_token();
+    }
+    lines.reverse();
+    (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
 ast_node!(

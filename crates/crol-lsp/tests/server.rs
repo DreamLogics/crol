@@ -3986,3 +3986,61 @@ fn an_enum_root_stays_the_type_of_each_root_value() {
     assert_eq!(hover, "The options.\n\n`Options`");
     client.stop();
 }
+
+#[test]
+fn doc_comments_in_data_show_in_hover_and_completion() {
+    let dir = workspace(
+        "lsp-docs",
+        &[
+            (
+                "project.crol",
+                r#"Project { layers: List([{ name: "base", dir: "base", .. }, { name: "local", dir: "local", .. }]), .. }"#,
+            ),
+            (
+                "base/a.crod",
+                "/// A rocket.\n+rocket: {\n    /// How far it flies.\n    range: 5,\n},\n+plain: 1,\n",
+            ),
+            (
+                "local/a.crod",
+                "/// Longer, for balance.\nrocket.range: 7,\nuse: @rocket,\nother: &root.rocket.range,\n",
+            ),
+        ],
+    );
+    let mut client = Client::start(&dir);
+    let local = uri(&dir.join("local/a.crod"));
+    let text = std::fs::read_to_string(dir.join("local/a.crod")).unwrap();
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": local, "languageId": "crol", "version": 1, "text": text } }),
+    );
+    let hover = |client: &mut Client, line: u32, character: u32| {
+        let hover = client.request(
+            "textDocument/hover",
+            json!({ "textDocument": { "uri": local }, "position": { "line": line, "character": character } }),
+        );
+        hover["contents"]["value"].as_str().unwrap_or("").to_owned()
+    };
+
+    // On a target: its layers' docs, lowest first.
+    let markdown = hover(&mut client, 1, 9);
+    assert!(
+        markdown.starts_with("How far it flies.\n\nLonger, for balance."),
+        "{markdown}"
+    );
+    // On an id and a reference: the docs of what it names.
+    let markdown = hover(&mut client, 2, 7);
+    assert!(markdown.starts_with("A rocket."), "{markdown}");
+    let markdown = hover(&mut client, 3, 22);
+    assert!(markdown.starts_with("How far it flies."), "{markdown}");
+
+    let completion = client.request(
+        "textDocument/completion",
+        json!({ "textDocument": { "uri": local }, "position": { "line": 2, "character": 6 } }),
+    );
+    let items = completion
+        .as_array()
+        .or(completion["items"].as_array())
+        .unwrap();
+    let rocket = items.iter().find(|i| i["label"] == "rocket").unwrap();
+    assert_eq!(rocket["documentation"]["value"], "A rocket.");
+}

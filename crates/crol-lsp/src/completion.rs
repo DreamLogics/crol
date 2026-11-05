@@ -519,7 +519,14 @@ impl Completer<'_> {
         if let Some(names) = names.filter(|n| !n.is_empty()) {
             items.retain(|i| i.detail.as_deref().is_some_and(|d| names.contains(&d)));
         }
+        let docs = crate::docs::of_root_keys(self.snapshot, self.file);
         items
+            .into_iter()
+            .map(|item| match docs.get(&item.label) {
+                Some(doc) => documented(item, doc),
+                None => item,
+            })
+            .collect()
     }
 
     /// The type of the value being written at the cursor.

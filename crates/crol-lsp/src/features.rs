@@ -591,6 +591,10 @@ pub(crate) fn hover(
         }
     }
     let mut parts = Vec::new();
+    let documented = named_path(&token)
+        .or_else(|| entry_path.clone())
+        .map(|(key, steps)| describe_path(&key, &steps));
+    parts.extend(documented.and_then(|path| crate::docs::of_path(snapshot, file, &path, settings)));
     if let Some(about) = about {
         if !about.doc.trim().is_empty() {
             parts.push(about.doc.trim().to_owned());
@@ -631,15 +635,9 @@ fn is_reference(token: &SyntaxToken) -> bool {
     })
 }
 
-/// On a reference or an id, what it names: its path and value on one line,
-/// which is not to be read off the document as a written value is.
-fn named_value(
-    snapshot: &Snapshot,
-    file: crol_eval::FileId,
-    token: &SyntaxToken,
-    settings: &Settings,
-) -> Option<String> {
-    let (key, steps) = if token
+/// On a reference or an id: the root key and path it names.
+fn named_path(token: &SyntaxToken) -> Option<(String, Vec<PathStep>)> {
+    if token
         .parent()
         .is_some_and(|p| p.kind() == SyntaxKind::ID_EXPR)
     {
@@ -648,10 +646,20 @@ fn named_value(
             .trim_start_matches('@')
             .trim_matches('"')
             .to_owned();
-        (id, Vec::new())
-    } else {
-        reference_path(token).or_else(|| relative_reference_path(token))?
-    };
+        return Some((id, Vec::new()));
+    }
+    reference_path(token).or_else(|| relative_reference_path(token))
+}
+
+/// On a reference or an id, what it names: its path and value on one line,
+/// which is not to be read off the document as a written value is.
+fn named_value(
+    snapshot: &Snapshot,
+    file: crol_eval::FileId,
+    token: &SyntaxToken,
+    settings: &Settings,
+) -> Option<String> {
+    let (key, steps) = named_path(token)?;
     let evaluation = evaluation_for(snapshot, Some(file));
     let stale = snapshot
         .last_good_of(Some(file))

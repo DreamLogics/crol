@@ -139,6 +139,14 @@ impl DataWriter {
         }
     }
 
+    /// `/// text`, the doc comment of the entry written next, a line of it
+    /// for each line of `text` (`SPEC.md` 2.2).
+    pub fn doc(&mut self, text: &str) {
+        for line in text.lines() {
+            let _ = writeln!(self.text, "/// {line}");
+        }
+    }
+
     /// Whether nothing is written yet.
     pub fn is_empty(&self) -> bool {
         self.text.is_empty()

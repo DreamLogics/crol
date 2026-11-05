@@ -156,8 +156,13 @@ runs after the base chain is complete.
 ### 2.2 Comments
 
 `// ...` to the end of the line, and `/* ... */`, which nest, as in Rust.
-Doc comments (`///`, `//!`) are ordinary comments. Comments are kept in
-the syntax tree (section 12.1).
+Comments are kept in the syntax tree (section 12.1), and evaluation does not see
+them: they are in no value or fingerprint.
+
+A **doc comment** is one or more `///` lines directly above an entry, each on a line
+of its own: a blank line or another comment ends it. It documents that entry, for
+tools (section 12.5). `//!` lines before anything but comments document the file.
+`////` is an ordinary comment.
 
 ### 2.3 Identifiers and keywords
 
@@ -2234,6 +2239,7 @@ error is returned and the data stays as it was.
 generates a layer, with values serialized the same way. `declare`, `set`,
 `ensure`, `remove`, `template` and `comment` write what they say, and
 `variant(condition, |writer| ...)` a variant block, left out if it is empty.
+`doc` writes a doc comment (section 2.2) for the next entry.
 `patch(key, value)` writes `key: & ~ value`, without any `..` in it,
 since a field left out of a patch is not changed. `diff(key, from, to)` writes the
 smallest entry that makes `from` into `to`: nothing if they are equal,
@@ -2962,6 +2968,11 @@ in a layer above one that has the value's key.
 **Hover.** Hover says what a place is for: the doc comment first, then the
 type on a line of its own, in Markdown, with nothing to scroll past. Evaluated
 values are for inlay hints, `crol eval` and `crol explain`.
+
+On a key, a value, a reference or an id, the doc comments written in data (section
+2.2) come before the field's: those of every operation on that path in the
+chain of the context in use, lowest layer first. A patch's note adds to the
+definition's, and a reference shows the docs of what it names.
 
 - On a target or key, for the segment under the cursor (`limits` in
   `web.limits.cpu: 2` is `web.limits`): the field's doc comment and type.

@@ -17,6 +17,7 @@
 mod actions;
 mod completion;
 mod convert;
+mod docs;
 mod features;
 mod hints;
 mod navigate;

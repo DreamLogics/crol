@@ -7,7 +7,9 @@ Every example here runs: save it to a file and try `crol eval` on it.
 ## Entries
 
 A file is a list of _entries_, usually one per line. Comments are written as in
-Rust: `// to the end of the line`, or `/* like this */`, which can nest.
+Rust: `// to the end of the line`, or `/* like this */`, which can nest. `///` lines
+directly above an entry are its doc comment, and `//!` lines at the top of a file the
+file's. Editors show them; they do not change the data.
 
 An entry is an operation on a key. There are four, and the prefix says which
 one you mean:
