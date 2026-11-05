@@ -50,6 +50,9 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Changed
 
+- `~` and merging blocks merge named tuples of one name element by element, so
+  `& ~ Active({ range: 5 })` changes `range` and keeps the rest, where it used to
+  replace the whole payload without a word (`SPEC.md` 5.2, 6.4). Write `^key` to replace.
 - `f32`s are written as the shortest text that reads back the same: `0.1`, not
   `0.10000000149011612`.
 - The warning about patches from several documents only comes where their order

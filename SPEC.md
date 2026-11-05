@@ -710,7 +710,11 @@ as a block merges with what `key` holds: the nested block is a patch
 block with that as its start value, and so on at any depth. So in a
 patch, `limits: { cpu: 2.0 }` changes `cpu` and leaves the rest of
 `limits`. The same goes for a path entry whose value is a block
-(`web.limits: { cpu: 2.0 }`).
+(`web.limits: { cpu: 2.0 }`). A named tuple with a block among its elements
+counts as written as a block: over a named tuple of the same name, each such
+block is a patch of the element at its position, so `weapon: Active({ range: 5 })`
+changes `range` and leaves the rest. Other elements replace theirs, and over
+anything else the named tuple replaces.
 
 It merges only when what the key holds is a keyed value and the type
 names agree (equal, or one absent). Otherwise the block replaces it, so
@@ -1122,7 +1126,7 @@ Postfix selectors apply to any expression: `(&root.a ~ { b: 1 }).b`,
 |---|---|---|
 | keyed value | block | the block applied with `a` as its start value |
 | keyed value | other keyed value (e.g. `& ~ &root.x`) | each of `b`'s entries applied over `a`, below, plus its defaults flag and defaulted fields |
-| named tuple `N(...)` | named tuple `N(...)` | `b` |
+| named tuple `N(...)` | named tuple `N(...)` | `b`, each element merged with `a`'s at its position, as an entry with a key `a` holds |
 | unit name `N` | unit name `N` | `N` |
 | anything else | | error; use `:`, `+`, `-` or a path |
 
@@ -1136,8 +1140,12 @@ Postfix selectors apply to any expression: `(&root.a ~ { b: 1 }).b`,
 With `~`, an entry of `b` over a key that `a` holds merges: where both
 values are keyed and their type names agree, the same way, at any depth,
 and otherwise `b`'s value replaces. An entry written `^key` in `b`
-replaces. With `~^`, every entry of `b` replaces. A spread is the
-same as `~` (section 5.2).
+replaces. With `~^`, every entry of `b` replaces, and a named tuple is `b`.
+A spread is the same as `~` (section 5.2).
+
+So `Some({ x: 1, y: 2 }) ~ Some({ x: 5 })` is `Some({ x: 5, y: 2 })`, and
+`Rgb(1, 2, 3) ~ Rgb(4, 5)` is `Rgb(4, 5)`: the elements of `b` decide how many
+there are, and values that are not keyed replace.
 
 ### 6.5 Fallback `a | b`
 

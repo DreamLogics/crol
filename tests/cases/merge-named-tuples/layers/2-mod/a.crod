@@ -1,0 +1,13 @@
+template: & ~ DamageTemplate({ heat: 60 }),
+optional: & ~ Some({ deep: { q: 5 } }),
+nested: & ~ { weapon: Active({ range: 5 }) },
+path.weapon: Active({ range: 5 }),
+replaced: & ~ { ^weapon: Active({ range: 5 }) },
+// Another variant replaces.
+other: & ~ { weapon: Passive({ range: 5 }) },
+removed: & ~ Active({ -damage }),
+shallow: & ~^ Active({ range: 5 }),
+colour: & ~ Rgb(4, 5, 6),
+shorter: & ~ Rgb(4, 5),
+mixed: & ~ Pair({ b: 7 }, 8),
+value: & ~ &root.donor,

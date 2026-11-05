@@ -241,7 +241,8 @@ Merging is deep: a block inside the patch merges with what is there, at any
 depth. So `limits: { cpu: 2.0 }` in the patch means the same as `limits.cpu: 2.0`
 above, and `memory_mb` stays. The same goes for a path that ends in a block,
 `web.limits: { cpu: 2.0 }`. Lists are replaced, and so is any value that is not
-written as a block.
+written as a block. A block inside a named tuple counts too: over a value of the same
+name, `weapon: Active({ range: 5 })` changes `range` and keeps the rest of the payload.
 
 Two things replace instead. `^` in front of a key replaces that one value, and
 `~^` is a _shallow_ merge, where no block inside merges:

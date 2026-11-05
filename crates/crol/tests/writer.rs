@@ -274,3 +274,50 @@ fn only_one_expression_is_an_expression() {
         assert!(crol::Expression::new(text).is_ok(), "{text}");
     }
 }
+
+#[test]
+fn a_diff_replaces_a_named_tuple_rather_than_merging_it() {
+    #[derive(Clone, serde::Serialize)]
+    enum Slot {
+        Active(BTreeMap<String, u32>),
+    }
+    #[derive(Clone, serde::Serialize)]
+    struct Unit {
+        slot: Slot,
+        hit_points: u32,
+    }
+    let map = |pairs: &[(&str, u32)]| {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), *v))
+            .collect::<BTreeMap<_, _>>()
+    };
+    let from = Unit {
+        slot: Slot::Active(map(&[("damage", 2), ("range", 1)])),
+        hit_points: 1,
+    };
+    let to = Unit {
+        slot: Slot::Active(map(&[("range", 5)])),
+        ..from.clone()
+    };
+    let mut base = DataWriter::new();
+    base.declare("unit", &from).unwrap();
+    let mut patch = DataWriter::new();
+    patch.diff("unit", &from, &to).unwrap();
+    let patch = patch.finish().unwrap();
+    assert!(patch.contains("^slot"), "{patch}");
+    let base = base.finish().unwrap();
+    let read = |layers: Vec<(&str, &str)>| {
+        let mut composer = CrolComposer::new();
+        for (name, text) in layers {
+            composer = composer.load_layer(CrolLayer::from_sources(name, [("a.crod", text)]));
+        }
+        composer.compose_data().unwrap().fingerprint()
+    };
+    let mut expected = DataWriter::new();
+    expected.declare("unit", &to).unwrap();
+    assert_eq!(
+        read(vec![("base", &base), ("patch", &patch)]),
+        read(vec![("base", &expected.finish().unwrap())])
+    );
+}

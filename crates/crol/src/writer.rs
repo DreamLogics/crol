@@ -199,6 +199,10 @@ fn diff_entries(from: &Keyed, to: &Keyed) -> String {
                 let name = b.name.as_ref().map_or(String::new(), |n| format!("{n} "));
                 entries.push(format!("{key}: {name}{{ {} }}", diff_entries(a, b)));
             }
+            // Written plainly, a block in it would merge with what is there.
+            (ValueKind::NamedTuple(a, _), ValueKind::NamedTuple(b, _)) if a == b => {
+                entries.push(format!("^{key}: {}", print::to_text(new)));
+            }
             _ => entries.push(format!("{key}: {}", print::to_text(new))),
         }
     }

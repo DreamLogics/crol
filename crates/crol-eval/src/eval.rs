@@ -2422,7 +2422,7 @@ impl Evaluator<'_> {
                     Rc::new(EntryRecipe {
                         expr,
                         below,
-                        merge: !op.replace && self.is_block(expr),
+                        merge: !op.replace && self.merges_below(expr),
                         replace: op.replace,
                         vbinds: vbinds.clone(),
                     })
@@ -2487,7 +2487,7 @@ impl Evaluator<'_> {
                                 outer_below: below,
                                 merge: self.merge_root
                                     && !op.replace
-                                    && self.is_block(op.value.expect("a set has a value")),
+                                    && self.merges_below(op.value.expect("a set has a value")),
                                 vbinds: vbinds.clone(),
                                 context,
                             },
@@ -2828,6 +2828,17 @@ impl Evaluator<'_> {
                         };
                         self.merge_keyed(a, b, &copy)
                     }
+                    (Shape::Named(x, a), Shape::Named(y, b)) if x == y => {
+                        let copy = CopyTo {
+                            chain: &chain,
+                            location: &here,
+                            context,
+                            deep: true,
+                            outer_below: &Below::Missing,
+                            span,
+                        };
+                        Ok(self.merge_named(x, a, b, new.span, &copy))
+                    }
                     _ => Ok(new),
                 }
             }
@@ -3002,6 +3013,7 @@ impl Evaluator<'_> {
         positional: Option<Option<&Arc<str>>>,
     ) -> Vec<Lazy> {
         let positional = positional.filter(|_| !env.below.is_nothing());
+        let named = matches!(positional, Some(Some(_)));
         elements
             .iter()
             .enumerate()
@@ -3022,6 +3034,7 @@ impl Evaluator<'_> {
                     here: here.clone(),
                     below,
                     outer_below: Below::Missing,
+                    merge: env.merge && named && self.merges_below(element),
                     ..env.clone()
                 };
                 self.cell(Job::Expr { expr: element, env }, here)
@@ -3573,7 +3586,7 @@ impl Evaluator<'_> {
                 )
             }
         };
-        let block = self.is_block(entry.expr);
+        let block = self.merges_below(entry.expr);
         let recipe = Recipe::Entry(Rc::new(EntryRecipe {
             expr: entry.expr,
             below,
@@ -3584,9 +3597,14 @@ impl Evaluator<'_> {
         if block { recipe } else { merged(recipe) }
     }
 
-    /// Whether an expression is written as a block.
-    fn is_block(&self, expr: ExprId) -> bool {
-        matches!(self.ir.exprs[expr].kind, ExprKind::Block(_))
+    /// Whether an expression is written as a block, or a named tuple with
+    /// one among its elements (`SPEC.md` 5.2).
+    fn merges_below(&self, expr: ExprId) -> bool {
+        match &self.ir.exprs[expr].kind {
+            ExprKind::Block(_) => true,
+            ExprKind::Named(named) => named.1.iter().any(|&e| self.merges_below(e)),
+            _ => false,
+        }
     }
 
     fn entry(&mut self, entry: &Entry, keyed: &mut KeyedShape, scope: &BlockScope) {
@@ -3627,7 +3645,7 @@ impl Evaluator<'_> {
                 Rc::new(EntryRecipe {
                     expr,
                     below,
-                    merge: *deep && !entry.replace && self.is_block(expr),
+                    merge: *deep && !entry.replace && self.merges_below(expr),
                     replace: entry.replace,
                     vbinds: vbinds.clone(),
                 })
@@ -3693,7 +3711,7 @@ impl Evaluator<'_> {
                     Recipe::Entry(Rc::new(EntryRecipe {
                         expr,
                         below,
-                        merge: *merging && !entry.replace && self.is_block(expr),
+                        merge: *merging && !entry.replace && self.merges_below(expr),
                         replace: entry.replace,
                         vbinds: vbinds.clone(),
                     }))
@@ -3970,6 +3988,19 @@ impl Evaluator<'_> {
                     let rhs_span = ir.exprs[rhs].span;
                     return self.block(block, Some(left), deep, env, rhs_span);
                 }
+                // Blocks in a named tuple of the same name are patches too.
+                if let (true, Shape::Named(x, _), ExprKind::Named(named)) =
+                    (deep, &left.shape, &ir.exprs[rhs].kind)
+                    && *x == named.0
+                    && self.merges_below(rhs)
+                {
+                    let patch = Env {
+                        below: Below::Value(Cell::done(left)),
+                        merge: true,
+                        ..env.clone()
+                    };
+                    return self.eval(rhs, &patch);
+                }
                 let right = self.eval(rhs, env)?;
                 self.merge(&left, &right, deep, env, span)
             }
@@ -4007,6 +4038,43 @@ impl Evaluator<'_> {
         Self::shaped(Shape::Keyed(Box::new(keyed)), copy.span)
     }
 
+    /// `b` over `a`, two named tuples of one name: an element merges with the
+    /// one at its position, as an entry over a key does (`SPEC.md` 6.4).
+    fn merge_named(
+        &mut self,
+        name: &Arc<str>,
+        a: &[Lazy],
+        b: &[Lazy],
+        span: Span,
+        copy: &CopyTo<'_>,
+    ) -> Rc<Shaped> {
+        let elements = b
+            .iter()
+            .enumerate()
+            .map(|(i, right)| {
+                let Some(left) = a.get(i) else {
+                    return right.clone();
+                };
+                let here = child_location(copy.location, Step::Index(i));
+                self.cell(
+                    Job::Merge {
+                        left: left.clone(),
+                        right: right.clone(),
+                        chain: copy.chain.clone(),
+                        here: here.clone(),
+                        context: copy.context,
+                        span: copy.span,
+                    },
+                    here,
+                )
+            })
+            .collect();
+        Rc::new(Shaped {
+            shape: Shape::Named(name.clone(), elements),
+            span,
+        })
+    }
+
     fn merge(
         &mut self,
         left: &Shaped,
@@ -4031,6 +4099,17 @@ impl Evaluator<'_> {
                     span,
                 };
                 self.merge_keyed(a, b, &copy)
+            }
+            (Shape::Named(x, a), Shape::Named(y, b)) if deep && x == y => {
+                let copy = CopyTo {
+                    chain: &env.chain,
+                    location: &env.here,
+                    context: env.context,
+                    deep,
+                    outer_below: &Below::Missing,
+                    span,
+                };
+                Ok(self.merge_named(x, a, b, right.span, &copy))
             }
             (Shape::Named(x, _), Shape::Named(y, _)) | (Shape::UnitName(x), Shape::UnitName(y)) => {
                 if x == y {
