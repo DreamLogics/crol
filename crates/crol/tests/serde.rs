@@ -346,3 +346,19 @@ mod round_trip {
         }
     }
 }
+
+#[test]
+fn an_f32_is_written_short_and_reads_back_the_same() {
+    assert_eq!(crol::to_string(&0.1f32).unwrap(), "0.1");
+    assert_eq!(crol::to_string(&1.5f32).unwrap(), "1.5");
+    assert_eq!(crol::to_string(&16_777_216.0f32).unwrap(), "16777216.0");
+    // Across the exponents, with bit patterns that step through the mantissas.
+    let mut bits = 1u32;
+    while bits < 0x7f80_0000 {
+        let value = f32::from_bits(bits);
+        let text = crol::to_string(&value).unwrap();
+        let back: f32 = crol::from_str(&text).unwrap();
+        assert_eq!(back.to_bits(), bits, "{value} as {text}");
+        bits += 0x0000_1fff;
+    }
+}

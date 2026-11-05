@@ -131,7 +131,10 @@ impl<'c> ser::Serializer for ValueSerializer<'c> {
     }
 
     fn serialize_f32(self, v: f32) -> Result<Value, Error> {
-        self.serialize_f64(v.into())
+        // The shortest text that reads back as this `f32`, not its exact
+        // value as an `f64`: `0.1` rather than `0.10000000149011612`.
+        let wide = v.to_string().parse().unwrap_or(f64::from(v));
+        self.serialize_f64(if wide as f32 == v { wide } else { v.into() })
     }
 
     fn serialize_f64(self, v: f64) -> Result<Value, Error> {
