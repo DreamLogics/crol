@@ -16,16 +16,20 @@ one you mean:
 
 ```crol
 // example.crod
-+name: "web" // declare: create `name`; an error if it already exists
++name: "web" // declare: give `name` its first value; an error if it is already set
 port: 8080 // set: create `port`, or replace it
-?replicas: 2 // ensure: create `replicas` unless it already exists
+?replicas: 2 // ensure: set `replicas` unless it is already set
 ```
 
-The fourth removes a key, and is an error if the key does not exist:
+The fourth removes a key, and is an error if the key is not set:
 
 ```crol
 -replicas
 ```
+
+A key is _set_ when the data holds a value for it. That goes for the keys of a
+map and the fields of a struct alike: a struct's type always has its fields, but
+each one is unset until an entry sets it, and `-` unsets it again.
 
 Why have several ways of writing a key? Because your intent is checked. In a
 project with many files, `+web` says "I am introducing `web`", and you get an

@@ -207,10 +207,10 @@ fn entry_errors() {
     check(
         r#"a: { x: 1, +x: 2 }, b: { -y }, c: { y.z: 1 }, d: { t: (1, 2), -t.0 }, e: { l: [1], +l[0]: 2 }, f: &"#,
         expect![[r#"
-            1:13: +: `x` already exists (while evaluating a)
+            1:13: +: `x` is already set (while evaluating a)
               1:9: its value
-            1:27: -: `y` does not exist (while evaluating b)
-            1:37: y.z: `y` does not exist, so it cannot be patched (while evaluating c)
+            1:27: -: `y` is not set (while evaluating b)
+            1:37: y.z: `y` is not set, so it cannot be patched (while evaluating c)
             1:65: -: tuple elements cannot be removed (while evaluating d.t)
             1:86: +: a list element can only be set, with `:` (while evaluating e.l)
             1:99: &: there is no value below here (while evaluating f)
