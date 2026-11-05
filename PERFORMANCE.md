@@ -29,10 +29,27 @@ and on a quiet machine: differences of 5% between runs are normal.
 Compare against a build of the commit you started from, on your machine, in the same
 sitting. Absolute numbers from elsewhere do not transfer.
 
+Tools that worked:
+
+- **Exact heap.** A counting `#[global_allocator]`. `forbid(unsafe_code)` applies to the
+  whole workspace, so put it in a small crate outside it, with a path dependency on
+  `crol-eval` and `debug = 1`. Copy the data generator out of `benches/game.rs`.
+- **Profiles.** `samply record --save-only --unstable-presymbolicate -r 3000 -o out.json.gz
+  -- <binary>`. The bench binaries have no symbols, so profile that outside crate too.
+  In glibc, `malloc` and `free` show up as unnamed `fun_` symbols.
+- **No threads, without changing code.** `taskset -c 0 <binary>` makes
+  `available_parallelism` return 1.
+- **Page faults and system time.** `minflt`, `utime` and `stime` from `/proc/self/stat`,
+  read before and after a phase.
+- **Whether an arena is the cause.** `GLIBC_TUNABLES=glibc.malloc.arena_max=1`.
+- **Worktrees.** Under `.claude/worktrees/`, set `CARGO_WORKSPACE_DIR` to the worktree when
+  running tests, or `expect-test` reads and writes the main checkout's snapshots.
+
 ## Where it stands
 
-These are the numbers from before the work below, on the development machine, for
-both the real data and `game`:
+### Before this work, on the development machine
+
+For both the real data and `game`, at `c6d8861`:
 
 | Phase | Real data | `game` |
 | --- | --- | --- |
@@ -42,51 +59,146 @@ both the real data and `game`:
 | Parse alone | 160 ms, 110 MB | |
 | Compile with the base layer from `.crob` | | 92 ms |
 
-After evaluation, 248 MB stays live on the real data: 124 MB of `Compiled` (the IR and
-the texts) and the values. `big` is at about 245 ms, over its 200 ms target.
+After evaluation, 248 MB stayed live on the real data: 124 MB of `Compiled` (the IR and
+the texts) and the values. `big` was at about 245 ms.
 
-Since then, on a machine about 1.75 times slower, so compare the columns and not with
-the table above, three runs each:
+### Now, on a slower machine
 
-| `game` and `big` | Before | After |
+| | |
+| --- | --- |
+| CPU | AMD Ryzen 9 3900X, 12 cores, 24 threads, 64 MiB L3 |
+| Memory | 62 GB |
+| System | Arch Linux, kernel 7.2.11, glibc 2.44, `schedutil` governor |
+| Compiler | rustc 1.99.0, `cargo bench` profile (release, thin LTO) |
+| Allocator | glibc's |
+| Load | not idle: a load average of about 2.5 from other work |
+
+`big` took 1.8 times as long here as on the development machine at the same commit, so
+compare within these tables, and not with the one above. Everything below is from one
+sitting, three runs of each, on `game` unless it says `big`. The real data has not been
+measured since `c6d8861`.
+
+| | `c6d8861` | Text, no threads | Text, threads (default) | `.crob` base, 3 threads |
+| --- | --- | --- | --- | --- |
+| Compile or load | 765 ms | 650 ms | 438 ms | 102 ms |
+| Evaluate, 10 contexts | 1.09 s | 559 ms | 419 ms | 360 ms |
+| **Together** | **1.86 s** | **1.21 s** | **857 ms** | **462 ms** |
+| **Peak of the process** | **594 MB** | **244 MB** | **335 MB** (331 to 341) | **320 MB** |
+| Peak after compile or load | 246 MB | 220 MB | 220 MB | 164 MB |
+| One context later | 149 ms | | 90 ms | |
+| `big`, 16 contexts | 445 ms | 248 ms | 192 ms | |
+
+The last column is a fresh process that reads the file, compiles the mod layer over it,
+drops what it read, and evaluates. `game` itself does not time this path.
+
+By a counting allocator, 199 MB stays live after evaluation: 17 MB of sources, 80 MB of
+`Compiled`, and 102 MB of values. With the default threads the heap peaks at 278 MB, so
+about 55 MB of the process's peak is what the allocator holds on to.
+
+Against the goals: 1 is met, unless freeing cells is off (below); 2 is met, even on this
+machine. The RON loader's 1.2 s is beaten. Its 205 MB is not: 244 MB is the lowest peak
+so far, and that is without threads.
+
+### Threads
+
+Two kinds, with different costs. Parsing takes up to 8 threads, one for each MB of text
+in a layer (`parse_all`). Contexts take up to 3, from at least 20 000 expressions
+(`DataOptions::threads`, `CrolConfig::threads`; `Some(1)` uses none).
+
+| Threads for contexts | Evaluate, from text | Peak, from text | Load and evaluate, `.crob` | Peak, `.crob` |
+| --- | --- | --- | --- | --- |
+| 1 | 622 ms | 324 MB | 641 ms | 270 MB |
+| 2 | 506 ms | 329 MB | 537 ms | 293 MB |
+| **3** | **425 ms** | **350 MB** | **462 ms** | **320 MB** |
+| 4 | 422 ms | 374 MB | 459 ms | 348 MB |
+| 6 | 387 ms | 413 MB | | |
+| 8 | 388 ms | 450 MB | | |
+
+This table has its own sitting and program, so its peaks run a little above the table
+before. 3 is where the time stops paying for the memory, partly because 9 contexts divide
+evenly over 3 threads: 4 threads take as many rounds. Data with another number of
+contexts may want another number. Beyond 6 there is nothing to gain.
+
+| Threads for parsing | Compile | Peak of `evaluate`, no context threads |
 | --- | --- | --- |
-| Peak of `evaluate` | 594 MB | about 295 MB (281 to 320) |
-| Peak of `compile` | 246 MB | 220 MB |
-| Compile | 746 ms | 437 ms |
-| Evaluate, 10 contexts | 1.08 s | 592 ms |
-| One context later | 150 ms | 99 ms |
-| Compile with the base layer from `.crob` | 139 ms | 97 ms |
-| `big` | 443 ms | 255 ms |
+| 1 | 663 ms | 244 MB |
+| 2 | 529 ms | 293 MB |
+| 3 | 485 ms | 308 MB |
+| 4 | 467 ms | 295 to 319 MB |
+| 6 | 444 ms | 310 MB |
+| 8 | 435 ms | 281 to 320 MB, usually 295 |
 
-`big` at 255 ms here is about 145 ms on the development machine, by that ratio, though
-it has not been measured there. Measured with a counting allocator, 199 MB stays live
-after evaluation: 17 MB of sources, 80 MB of `Compiled`, and 102 MB of values. The heap
-peaks 36 MB above that.
+Memory that parse trees took on another thread stays in that thread's glibc arena, and
+the main thread cannot reuse it. That costs about 50 MB however many threads there are,
+so fewer threads save nothing, and the peak varies from run to run. It also costs
+evaluation about 45 ms: 22 000 more page faults and 40 ms more system time, as the main
+thread gets about 88 MB of new pages rather than reusing what was freed.
+`arena_max=1` gives the memory back, but compile takes 1.24 s, on the lock, and evaluate
+stays about 35 ms slower, for reasons not measured. Another allocator may not have this
+cost; none has been tried.
 
-Parsing on several threads (`parse_all`) is why the process peak is so far above the
-heap's. With glibc's allocator, about 50 MB that parse trees took on other threads is
-not reused by the main thread, whatever the number of threads, and the peak varies from
-run to run. On one thread, the peak is 244 MB, compile 662 ms and evaluate 550 ms. It
-was kept for the 180 ms it saves in all at every game start. Another allocator may not
-have this cost: measure before relying on that. `big` has too little text to use threads.
+### What to do next
 
-Already done, so do not look there first: cells of a finished context are freed
-(`Evaluator::forget`), the base is not cloned, `Shape::Keyed` and `ValueKind::Keyed` are
-boxed, and a context evaluated later does not evaluate the base. The cells of a root
-key that nothing reads are freed once its value is computed (`Evaluator::full_base`),
-field names and strings are shared, literals have a cell of their own, and a context
-only looks at the keys that can differ.
+1. **Load the base layer from `.crob`, in the game's loader.** It is the largest gain
+   left: 857 ms to 462 ms, and a lower peak. It needs a loader that writes the file when
+   the sources change. Drop the file's bytes and `read_layer`'s result after
+   `compile_binary`: holding them through evaluation costs 36 MB.
+2. **The base is now the critical path**, 245 ms of the 360 ms, on one thread, as the
+   evaluator's `Rc`s tie it to one. The ideas below are for that.
+3. **A context from a known base has a fixed cost.** Of 107 ms for one context, about a
+   third is evaluating it. `DataPlan::new` was 22%, and is now made once for all threads
+   but still once for each `evaluate_contexts`. `context_state` is about 13%, applying
+   every key's chain in the base. Much of the rest, by the profile, is allocating and
+   freeing.
+4. **The `.crob` link step**, about 78 ms, has not been profiled.
+
+### Already done
+
+So do not look there first:
+
+- Cells of a finished context are freed (`Evaluator::forget`), the base is not cloned,
+  `Shape::Keyed` and `ValueKind::Keyed` are boxed, and a context evaluated later does not
+  evaluate the base.
+- The cells of a root key that nothing reads are freed once its value is computed
+  (`Evaluator::full_base`). A read that the static analysis misses computes the key again
+  (`Job::Key`), so that this only ever costs time.
+- Field names and strings are shared (`Arc<str>`), interned by the lowerer.
+- Literals have a cell and recipe of their own, without an environment.
+- A context only looks at the keys that can differ.
+- `Expr` is 48 bytes, which a `const` assertion keeps, and the IR's spare capacity is
+  given back.
 
 Freeing a root key's cells is off when any key reads the whole root or another context
-(`evict` in `evaluate_data`), so data that does keeps the old peak. Check that first if
-the peak of the real data is far from that of `game`.
+(`evict` in `evaluate_raw`), so data that does keeps a far higher peak. Check that first
+if the peak of the real data is far from that of `game`.
 
-Tried and dropped:
+Contexts are evaluated in order, without threads, if any key reads another context, as
+contexts then depend on each other, or if the base failed, as each context then reports
+its own errors. So is one context on its own.
+
+### Tried and dropped
 
 - A faster hasher for `KeyedShape::slots`: no difference in `game`, and `big` was
-  slightly slower.
-- Fewer threads for parsing: the cost in memory is the same with 2 threads as with 8,
-  and compile is slower (528 ms with 2, 465 ms with 4, 437 ms with 8).
+  slightly slower. Hashing looked like 8% of evaluation in the profile, and was not.
+- `arena_max=1` to keep parsing's memory: see above.
+- A plan for each thread: with 8 threads, evaluate took 448 ms, against 388 ms with one
+  plan for all of them.
+
+### Bugs found on the way, not fixed
+
+Both are in `main` as well, and both give wrong data silently. `evaluate_every_key` gives
+the right answer in each, so they are in deciding what can differ. `game` has neither:
+its conditions are never negated, and no spread moves a reference. **Fixing them changes
+results, so that is not an optimisation: it needs its own commit and a test.**
+
+- **A condition that holds in the base but not in a context.** With
+  `x: 1, x<!b>: 2, y<b>: 3`, `x` is `2` in `{b}`, and should be `1`. `plan.varying` only
+  asks which conditions hold in the context. It should also take a key whose conditions
+  hold in the base and not in the context; that fix is not written or tested.
+- **A reference that a spread moves.** With
+  `y: 1, y<v>: 2, a: { inner: { x: &parent.y }, y: 5 }, b: { ..&root.a.inner }`, `b.x` is
+  `1` in `{v}`, and should be `2`. `collect_reads` sees `&parent.y` where it is written, in
+  `a`, not at `b`, where it ends up reading the root. This one may need a `SPEC.md` decision.
 
 ## Goals, in order
 
@@ -98,14 +210,13 @@ Tried and dropped:
 ## Where the memory is
 
 The cells of one root key at a time now, so what they cost matters much less than it
-did, unless freeing them is off (see above). What stays is the live memory, measured
-with a counting `#[global_allocator]` in a throwaway program outside the workspace, as
-`forbid(unsafe_code)` applies to everything in it:
+did, unless freeing them is off (see above). What stays:
 
 - The values, 102 MB. `Keyed` has a fixed cost for each block, and a map entry takes
   96 bytes, as `Key` and `Value` are 16-aligned by their `i128`.
 - `Compiled`, 80 MB: expressions are 48 bytes each, `Entry` is 96, and the text of each
   string literal.
+- What the allocator holds, about 55 MB with the default threads.
 - `Cell` holds `location: Option<Location>` for messages, one `Rc<PathLink>` each.
   That no longer matters for memory, but it is the largest allocation left for a literal.
 
@@ -118,8 +229,9 @@ Ideas, roughly by what they may give:
 - Lower each document as it is parsed, which would take the peak of `compile` well
   below that of `evaluate`. Templates are collected from every document first, so
   this needs two passes.
-- `plan.varying` decides what a context re-evaluates. See if it is wider than it must
-  be: `reads.whole` makes every key vary.
+- `plan.varying` decides what a context re-evaluates. `reads.whole` makes only the key
+  that reads the whole root vary, which is too narrow rather than too wide: see the bugs
+  above before relying on it for anything new.
 
 ## Rules
 
@@ -129,7 +241,9 @@ Ideas, roughly by what they may give:
 - Behaviour changes need `SPEC.md` first. Pure optimisations do not change it.
 - `#![forbid(unsafe_code)]` stays. New dependencies need a reason (`SPEC.md` 14.1).
 - The parser and evaluator never panic or loop, on any input. Run the fuzz targets in
-  [`fuzz/`](fuzz/README.md) after changing `eval.rs`; they have not been run lately.
+  [`fuzz/`](fuzz/README.md) after changing `eval.rs`. Their inputs are too small to use
+  threads, so what guards those are `threads_change_neither_values_nor_messages` and the
+  conformance test, which evaluates every case on threads as well.
 - `CrolData` stays `Send + Sync`: a test checks that.
 - `cargo fmt --all`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`
   and the tests must pass. Note them with the results.
