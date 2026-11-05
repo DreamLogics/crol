@@ -54,6 +54,11 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Changed
 
+- The formatter's default line width, and `PrettyConfig`'s, is 80 instead of 100,
+  and more long lines break (`SPEC.md` 12.2). A binary expression breaks after an
+  operator, with what follows indented one more level, and a `#![use(...)]` goes one
+  path per line. Run `crol fmt` on your files, or pass `--max-width 100` to keep the
+  old width.
 - Loading holds each document's text once, and `CrolConfig::keep_lowered: false` leaves
   out what only `reload` needs of a `.crob` layer: 8 and 14 MB less on large data.
 - `~` and merging blocks merge named tuples of one name element by element, so

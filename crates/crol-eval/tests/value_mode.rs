@@ -132,7 +132,11 @@ fn binds_follow_spreads() {
 },
 web: Service { ..&service_defaults, port: 8080, .. },"#,
         expect![[r#"
-            web: Service { port: 8080, health: { probe: { url: "http://localhost:8080" } }, .. }
+            web: Service {
+                port: 8080,
+                health: { probe: { url: "http://localhost:8080" } },
+                ..,
+            }
         "#]],
     );
 }

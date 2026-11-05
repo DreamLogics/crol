@@ -304,7 +304,10 @@ port: 9000
 // project.crol
 Project {
     layers: List(
-        [{ name: "base", dir: "data::base", .. }, { name: "local", dir: "data::local", .. }],
+        [
+            { name: "base", dir: "data::base", .. },
+            { name: "local", dir: "data::local", .. },
+        ],
     ),
     ..,
 }

@@ -159,7 +159,7 @@ $ crol eval data/base data/local web.port
 | `--context a,b`     | evaluate in the context with these variants; default: the base         |
 | `--all-contexts`    | print the base, then what differs in every other context               |
 | `--no-defaults`     | with a schema, do not write out [default values](schemas.md#checking-data-against-it) |
-| `--max-width <n>`   | the maximum line width, by default 100                                 |
+| `--max-width <n>`   | the maximum line width, by default 80                                  |
 
 ```console
 $ crol eval --context prod data/base data/local
@@ -256,7 +256,10 @@ $ crol fmt --check data/base/services.crod
 ```
 
 With `--check`, it changes nothing and exits with status 1 if a file is not
-formatted. `--max-width <n>` sets the maximum line width, by default 100.
+formatted. `--max-width <n>` sets the maximum line width, by default 80.
+
+A line that is too long breaks inside its blocks, lists and tuples, or after a binary
+operator. A long string or reference stays whole, so such a line can stay too long.
 
 The formatter keeps your comments, and at most one blank line between entries. A
 block that fits stays on one line, unless you put a line break right after its

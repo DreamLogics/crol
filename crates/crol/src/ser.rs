@@ -28,7 +28,7 @@ pub struct PrettyConfig {
 impl Default for PrettyConfig {
     fn default() -> Self {
         Self {
-            max_width: 100,
+            max_width: 80,
             struct_names: true,
             implicit_some: false,
         }

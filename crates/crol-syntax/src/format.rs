@@ -2,10 +2,14 @@
 //!
 //! The style:
 //!
-//! - 4-space indentation and a maximum line width (100 by default);
+//! - 4-space indentation and a maximum line width (80 by default);
 //! - a block, list or tuple goes on one line if it fits and has no comments,
 //!   else one entry per line with a trailing comma; a block written with a
 //!   line break after its `{` stays broken;
+//! - so does the list of a `#![use(...)]`;
+//! - a binary expression that does not fit breaks after an operator, and what
+//!   follows is indented one more level, unless it is a container, which
+//!   stays and breaks inside;
 //! - top-level entries are separated by line breaks alone, with a comma only
 //!   where the line break would not separate them (`SPEC.md` 5.3);
 //! - spaces around binary operators and after `:` and `,`, none inside
@@ -35,7 +39,7 @@ pub struct FormatConfig {
 
 impl Default for FormatConfig {
     fn default() -> Self {
-        Self { max_width: 100 }
+        Self { max_width: 80 }
     }
 }
 
@@ -210,6 +214,14 @@ fn string_as_identifier(token: &SyntaxToken) -> Option<&str> {
         && !matches!(inner, "_" | "true" | "false")
         && !inner.contains('\\');
     is_identifier.then_some(inner)
+}
+
+/// Whether `node` holds a container. After a binary operator it stays on the
+/// line and can break inside. This must not depend on how the source breaks
+/// its blocks, or formatting would not be idempotent.
+fn holds_container(node: &SyntaxNode) -> bool {
+    node.descendants()
+        .any(|n| container_open(n.kind()).is_some())
 }
 
 /// Whether `node` is a block or variant block written with a line break
@@ -503,11 +515,42 @@ impl Formatter {
                 let (Some(lhs), Some(rhs)) = (operands.next(), operands.next()) else {
                     return node.text().to_string();
                 };
-                let op = format!(" {} ", self.binary_op(node));
-                let rhs_width = self.flat(&rhs).map_or(1, |s| first_line_width(&s));
-                let lhs = self.render(&lhs, indent, col, width(&op) + rhs_width);
-                let rhs_col = col_after(col, &lhs) + width(&op);
-                lhs + &op + &self.render(&rhs, indent, rhs_col, trailing)
+                let op = self.binary_op(node);
+                if holds_container(&rhs) {
+                    let op = format!(" {op} ");
+                    let opening = self.opening_width(&rhs);
+                    let lhs = self.render(&lhs, indent, col, width(&op) + opening);
+                    let rhs_col = col_after(col, &lhs) + width(&op);
+                    return lhs + &op + &self.render(&rhs, indent, rhs_col, trailing);
+                }
+                let Some(flat_rhs) = self.flat(&rhs) else {
+                    return node.text().to_string();
+                };
+                let lhs = self.render(&lhs, indent, col, width(&op) + 1);
+                let rhs_col = col_after(col, &lhs) + width(&op) + 2;
+                let next_line_col = (indent + 1) * INDENT.len();
+                // A line break helps only if it moves the operand to the left.
+                // A multi-line string would gain nothing.
+                if rhs_col <= next_line_col
+                    || flat_rhs.contains('\n')
+                    || self.fits(rhs_col, &flat_rhs, trailing)
+                {
+                    return format!("{lhs} {op} ") + &self.render(&rhs, indent, rhs_col, trailing);
+                }
+                let rhs = self.render(&rhs, indent + 1, next_line_col, trailing);
+                format!("{lhs} {op}\n{}{rhs}", INDENT.repeat(indent + 1))
+            }
+            ATTRIBUTE => {
+                let flat = self.attribute(node);
+                match self.use_paths(node) {
+                    Some(paths) if !self.fits(col, &flat, trailing) => {
+                        let pad = INDENT.repeat(indent + 1);
+                        let paths: String =
+                            paths.iter().map(|path| format!("{pad}{path},\n")).collect();
+                        format!("#![use(\n{paths}{})]", INDENT.repeat(indent))
+                    }
+                    _ => flat,
+                }
             }
             PREFIX_EXPR => {
                 let operand = node.children().next();
@@ -532,6 +575,21 @@ impl Formatter {
                 rendered + separator(base.as_ref(), &selectors) + &selectors
             }
             _ => self.flat(node).unwrap_or_else(|| node.text().to_string()),
+        }
+    }
+
+    /// The width of `node` up to the first place it can break.
+    fn opening_width(&self, node: &SyntaxNode) -> usize {
+        let first = node.children().next();
+        let first = |this: &Self| first.as_ref().map_or(0, |n| this.opening_width(n));
+        match node.kind() {
+            BLOCK | LIST_EXPR | TUPLE_EXPR | NAMED_TUPLE | MACRO_CALL => {
+                let (prefix, open, _) = self.container_parts(node);
+                width(&prefix) + width(open)
+            }
+            PREFIX_EXPR | PAREN_EXPR => 1 + first(self),
+            PATH_EXPR | BINARY_EXPR => first(self),
+            _ => self.flat(node).map_or(1, |s| first_line_width(&s)),
         }
     }
 
@@ -695,6 +753,23 @@ impl Formatter {
 
     /// `#![use(a::B, c::D as E)]`
     fn attribute(&self, node: &SyntaxNode) -> String {
+        match self.use_paths(node) {
+            Some(paths) => format!("#![use({})]", paths.join(", ")),
+            None => self.spaced_tokens(node),
+        }
+    }
+
+    /// The paths of a `#![use(...)]` attribute, if `node` is one.
+    fn use_paths(&self, node: &SyntaxNode) -> Option<Vec<String>> {
+        let paths = child_node(node, |k| k == USE_ATTR)?
+            .children()
+            .filter(|path| path.kind() == USE_PATH)
+            .map(|path| self.spaced_tokens(&path))
+            .collect();
+        Some(paths)
+    }
+
+    fn spaced_tokens(&self, node: &SyntaxNode) -> String {
         significant_tokens(node)
             .map(|t| match t.kind() {
                 COMMA => ", ".to_owned(),

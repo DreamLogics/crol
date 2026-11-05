@@ -26,7 +26,13 @@ fn spacing() {
     check(
         "+web:Service{replicas:&+1*2,url:\"x\"+&self.port,ids:[@a,@\"b c\"],t:(1,),u:()}",
         expect![[r#"
-            +web: Service { replicas: & + 1 * 2, url: "x" + &self.port, ids: [@a, @"b c"], t: (1,), u: () }
+            +web: Service {
+                replicas: & + 1 * 2,
+                url: "x" + &self.port,
+                ids: [@a, @"b c"],
+                t: (1,),
+                u: (),
+            }
         "#]],
     );
 }
@@ -450,6 +456,132 @@ fn wrapping_never_starts_a_line_with_an_operator() {
             }
             g: 1
         "#]],
+    );
+}
+
+#[test]
+fn long_lines_break_at_80_by_default() {
+    assert_eq!(FormatConfig::default().max_width, 80);
+    // 80 characters.
+    let fits = format!("a: [\"{}\", 1]", "x".repeat(70));
+    check(
+        &fits,
+        expect![[r#"
+        a: ["xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", 1]
+    "#]],
+    );
+    let over = format!("a: [\"{}\", 1]", "x".repeat(71));
+    check(
+        &over,
+        expect![[r#"
+        a: [
+            "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            1,
+        ]
+    "#]],
+    );
+}
+
+#[test]
+fn binary_expressions_fill_lines_up_to_an_operator() {
+    check_with(
+        &FormatConfig::default().with_max_width(30),
+        "url: \"https://\" + &self.host + \":\" + &self.port + \"/index.html\"\nb: [&first_name + &second_name + &third_name]",
+        expect![[r#"
+            url: "https://" + &self.host +
+                ":" + &self.port +
+                "/index.html"
+            b: [
+                &first_name +
+                    &second_name +
+                    &third_name,
+            ]
+        "#]],
+    );
+}
+
+#[test]
+fn a_scalar_after_an_operator_moves_before_a_list_breaks() {
+    check_with(
+        &FormatConfig::default().with_max_width(24),
+        "a: [1, 2, 3] + \"a long string\"",
+        expect![[r#"
+            a: [1, 2, 3] +
+                "a long string"
+        "#]],
+    );
+}
+
+#[test]
+fn a_container_after_an_operator_stays_and_breaks_inside() {
+    check_with(
+        &FormatConfig::default().with_max_width(24),
+        "a: &some_base ~ { b: 1, c: 2, d: 3 }\ne: [1, 2] ~ Foo { b: 1, c: 2, d: 3 }",
+        expect![[r#"
+            a: &some_base ~ {
+                b: 1,
+                c: 2,
+                d: 3,
+            }
+            e: [1, 2] ~ Foo {
+                b: 1,
+                c: 2,
+                d: 3,
+            }
+        "#]],
+    );
+}
+
+#[test]
+fn an_operand_stays_when_a_line_break_gains_nothing() {
+    check_with(
+        &FormatConfig::default().with_max_width(10),
+        "a: [1 + \"a long string\"]\nb: 1 + \"multi\nline\"",
+        expect![[r#"
+            a: [
+                1 + "a long string",
+            ]
+            b: 1 + "multi
+            line"
+        "#]],
+    );
+}
+
+#[test]
+fn a_block_that_broke_does_not_change_the_layout_around_it() {
+    // Once broken, the block has a line break after its `{`, and no flat form.
+    check_with(
+        &FormatConfig::default().with_max_width(8),
+        "n := 2 * 2 | 5 ~ { o: 1 }\nm: aaaaaaa + b * { c: 1 }",
+        expect![[r#"
+            n := 2 *
+                2 | 5 ~ {
+                o: 1,
+            }
+            m: aaaaaaa + b * {
+                c: 1,
+            }
+        "#]],
+    );
+}
+
+#[test]
+fn long_use_attributes_break_one_path_per_line() {
+    check_with(
+        &FormatConfig::default().with_max_width(30),
+        "#![use(a::B, c::D<u32, List(String)> as E, f::G)]\n#![use(a::B,)]\n#![use(\n a::B,\n c::D,\n)]\n#![schema(\"crate:some_long_name_here@0.1\")]\n\nx: 1",
+        expect![[r##"
+            #![use(
+                a::B,
+                c::D<u32, List(String)> as E,
+                f::G,
+            )]
+            #![use(a::B)]
+            #![use(a::B, c::D)]
+            #![schema("crate:some_long_name_here@0.1")]
+
+            x: 1
+        "##]],
     );
 }
 

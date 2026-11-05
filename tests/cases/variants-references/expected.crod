@@ -3,5 +3,10 @@ mirror: { dev_host: "db.dev", base_host: "db", uncached: "db", here: "db" }
 
 <!dev & prod & cache> {
     db: { host: "db.cached" },
-    mirror: { dev_host: "db.cached", base_host: "db.cached", uncached: "db", here: "db.cached" },
+    mirror: {
+        dev_host: "db.cached",
+        base_host: "db.cached",
+        uncached: "db",
+        here: "db.cached",
+    },
 }

@@ -2409,9 +2409,16 @@ Schema {
             source: ("src/model.rs", 15),
             fields: {
                 replicas: { ty: U32, doc: "Number of copies to run.", .. },
-                depends_on: { ty: List(Id(["app::Service", "app::Volume"])), .. },
+                depends_on: {
+                    ty: List(Id(["app::Service", "app::Volume"])),
+                    ..,
+                },
                 tags: { ty: List(String), default: Value([]), .. },
-                limits: { ty: Named("app::Limits"), default: Value(Limits { cpu: 1.0, memory_mb: 512 }), .. },
+                limits: {
+                    ty: Named("app::Limits"),
+                    default: Value(Limits { cpu: 1.0, memory_mb: 512 }),
+                    ..,
+                },
             },
             ..
         },
@@ -2751,7 +2758,7 @@ tree.
 
 `crol fmt` is idempotent and keeps comments. Style:
 
-- 4-space indentation; a maximum line width of 100 (configurable);
+- 4-space indentation; a maximum line width of 80 (configurable);
 - a block, list or tuple goes on one line if it fits and has no
   comments, else one entry per line with a trailing comma. A block
   written with a line break directly after its `{` stays broken, so
@@ -2766,7 +2773,12 @@ tree.
   before an entry that starts with `+`, `-`, `<` or `[` and is kept as
   written because of a comment inside it;
 - a binary operator stays at the end of the line it follows, and never
-  starts one, so wrapping cannot split an entry in two;
+  starts one, so wrapping cannot split an entry in two. A binary expression
+  that does not fit fills each line up to an operator, and goes on one level
+  further in; a block, list or tuple after an operator stays there and
+  breaks inside instead;
+- a `#![use(...)]` goes on one line if it fits, else one path per line with
+  a trailing comma;
 - spaces around binary operators and after `:` and `,`; none inside
   `&name`, `@id`, selectors or `..&x`; binds have a space before and
   after `=` and `:=`;

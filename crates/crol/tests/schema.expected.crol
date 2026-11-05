@@ -31,7 +31,10 @@ Schema {
             source: ("crates/crol/tests/schema.rs", 27),
             fields: {
                 replicas: { ty: U32, doc: "Number of copies to run.", .. },
-                depends_on: { ty: List(Id(["schema::Service", "schema::Volume"])), .. },
+                depends_on: {
+                    ty: List(Id(["schema::Service", "schema::Volume"])),
+                    ..,
+                },
                 tags: { ty: List(String), default: Value([]), .. },
                 limits: {
                     ty: Named("schema::Limits"),

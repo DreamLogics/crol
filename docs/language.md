@@ -316,7 +316,11 @@ References read other values. They all start with `&`:
 
 ```console
 $ crol eval example.crod
-web: { port: 8080, url: "http://web:8080", health: { probe: "http://localhost:8080" } }
+web: {
+    port: 8080,
+    url: "http://web:8080",
+    health: { probe: "http://localhost:8080" },
+}
 proxy: { upstream: "http://web:8080" }
 ```
 

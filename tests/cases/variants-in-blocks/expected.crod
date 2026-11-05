@@ -1,5 +1,17 @@
-web: Service { replicas: 1, port: 80, url: "http://web:80", limits: { cpu: 1.0 }, .. }
+web: Service {
+    replicas: 1,
+    port: 80,
+    url: "http://web:80",
+    limits: { cpu: 1.0 },
+    ..,
+}
 
 <!dev & prod> {
-    web: Service { replicas: 4, port: 80, url: "https://web:80", limits: { cpu: 2.0 }, .. },
+    web: Service {
+        replicas: 4,
+        port: 80,
+        url: "https://web:80",
+        limits: { cpu: 2.0 },
+        ..,
+    },
 }
