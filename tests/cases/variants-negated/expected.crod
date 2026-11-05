@@ -1,0 +1,27 @@
+x: 2
+only_without_b: 1
+reads_x: 12
+z: 2
+w: { deep: 1 }
+
+<!a & b> {
+    x: 1,
+    -only_without_b,
+    reads_x: 11,
+    z: 1,
+    y: 3,
+}
+
+<a & !b> {
+    z: 1,
+    w: { deep: 2 },
+}
+
+<a & b> {
+    x: 1,
+    -only_without_b,
+    reads_x: 11,
+    z: 1,
+    w: { deep: 2 },
+    y: 3,
+}

@@ -1807,16 +1807,18 @@ impl<'a> DataPlan<'a> {
     }
 
     /// The keys whose value can differ from the base in `context`: those
-    /// with an operation whose condition holds there, and those that read
-    /// them, directly or not. Every other key has its base value.
+    /// with an operation whose condition holds there or in the base, as
+    /// `x<!b>` does, and those that read them, directly or not. Every other
+    /// key has its base value.
     fn varying(&self, context: &Context) -> std::collections::HashSet<Arc<str>> {
         let mut varying = std::collections::HashSet::new();
         let mut queue = Vec::new();
+        let base = Context::base();
         for (key, plan) in &self.keys {
             let conditional = plan.conditional.iter().any(|&i| {
                 self.conditions[i]
                     .as_ref()
-                    .is_some_and(|c| c.holds(context))
+                    .is_some_and(|c| c.holds(context) || c.holds(&base))
             });
             if conditional || plan.reads.switch {
                 varying.insert(key.clone());

@@ -184,17 +184,14 @@ its own errors. So is one context on its own.
 - A plan for each thread: with 8 threads, evaluate took 448 ms, against 388 ms with one
   plan for all of them.
 
-### Bugs found on the way, not fixed
+### A bug found on the way, not fixed
 
-Both are in `main` as well, and both give wrong data silently. `evaluate_every_key` gives
-the right answer in each, so they are in deciding what can differ. `game` has neither:
-its conditions are never negated, and no spread moves a reference. **Fixing them changes
-results, so that is not an optimisation: it needs its own commit and a test.**
+It gives wrong data silently. `evaluate_every_key` gives the right answer, so it is in
+deciding what can differ, and `leaving_out_keys_that_cannot_differ_changes_nothing`
+compares the two, on data without such spreads. `game` does not have it: no spread moves
+a reference. **Fixing it changes results, so that is not an optimisation: it needs its
+own commit and a test.**
 
-- **A condition that holds in the base but not in a context.** With
-  `x: 1, x<!b>: 2, y<b>: 3`, `x` is `2` in `{b}`, and should be `1`. `plan.varying` only
-  asks which conditions hold in the context. It should also take a key whose conditions
-  hold in the base and not in the context; that fix is not written or tested.
 - **A reference that a spread moves.** With
   `y: 1, y<v>: 2, a: { inner: { x: &parent.y }, y: 5 }, b: { ..&root.a.inner }`, `b.x` is
   `1` in `{v}`, and should be `2`. `collect_reads` sees `&parent.y` where it is written, in
@@ -229,9 +226,10 @@ Ideas, roughly by what they may give:
 - Lower each document as it is parsed, which would take the peak of `compile` well
   below that of `evaluate`. Templates are collected from every document first, so
   this needs two passes.
-- `plan.varying` decides what a context re-evaluates. `reads.whole` makes only the key
-  that reads the whole root vary, which is too narrow rather than too wide: see the bugs
-  above before relying on it for anything new.
+- `plan.varying` decides what a context re-evaluates. A key with an operation that holds
+  in the base varies in every context, which is wider than it must be for `x<!b>` in a
+  context without `b`. `reads.whole` makes only the key that reads the whole root vary,
+  which may be too narrow: see the bug above before relying on it for anything new.
 
 ## Rules
 

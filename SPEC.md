@@ -1595,8 +1595,10 @@ replaces the base value with every base change in it; and more specific
 operations win over less specific ones, wherever they are written.
 
 A key with no operations whose condition holds in `C` is `x`'s base
-chain evaluated in `C`. That differs from the base value only if `x`
-references something that does have such operations.
+chain evaluated in `C`. That differs from the base value if `x` references
+something that does have such operations, or if `x` has an operation whose
+condition holds in the base and not in `C`: `x<!b>` holds in the base, where
+no variant is active, and not where `b` is.
 
 **Specificity** of a condition, like CSS selectors:
 

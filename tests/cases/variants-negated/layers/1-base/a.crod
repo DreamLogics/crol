@@ -1,0 +1,13 @@
+// A condition with `!` holds in the base, so that a key can have a value in
+// the base that it does not have in a context (`SPEC.md` 8.3).
+x: 1,
+x<!b>: 2,
+y<b>: 3,
+<!b> { only_without_b: 1 },
+// A key that reads one of those differs too.
+reads_x: &root.x + 10,
+// Neither of these differs where both conditions agree.
+z: 1,
+z<!a & !b>: 2,
+w<!a>: { deep: 1 },
+w<a>: { deep: 2 },

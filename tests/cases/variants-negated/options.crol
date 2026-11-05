@@ -1,0 +1,1 @@
+variants: [Discrete("a"), Discrete("b")],

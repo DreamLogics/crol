@@ -486,6 +486,52 @@ fn threads_change_neither_values_nor_messages() {
     );
 }
 
+#[test]
+fn leaving_out_keys_that_cannot_differ_changes_nothing() {
+    use crol_eval::{DataOptions, evaluate_data};
+
+    let mut generator = Gen(0xD1FF_E2E7);
+    let mut compared = 0;
+    for _ in 0..3_000 {
+        let base = generator.data_document();
+        let local = generator.data_document().replace("t :=", "u :=");
+        if [&base, &local]
+            .iter()
+            .any(|t| !crol_syntax::parse(t).errors().is_empty())
+        {
+            continue;
+        }
+        let mut sources = Sources::new();
+        let layers = vec![
+            Layer {
+                name: "base".into(),
+                documents: vec![("a.crod".into(), sources.add("base.crod", base.as_str()))],
+            },
+            Layer {
+                name: "local".into(),
+                documents: vec![("a.crod".into(), sources.add("local.crod", local.as_str()))],
+            },
+        ];
+        let options = DataOptions::default();
+        let mut every = DataOptions::default();
+        every.evaluate_every_key = true;
+        let shared = evaluate_data(&sources, &layers, &options);
+        let all = evaluate_data(&sources, &layers, &every);
+        let (Some(value), Some(all_value)) = (&shared.value, &all.value) else {
+            continue;
+        };
+        let text = || format!("{base}\n--\n{local}");
+        assert_eq!(shared.contexts.len(), all.contexts.len(), "{}", text());
+        for (a, b) in shared.contexts.iter().zip(&all.contexts) {
+            assert_eq!(a.context, b.context);
+            let (a, b) = (a.root(value), b.root(all_value));
+            assert!(same_keys(&a, &b), "{}", text());
+        }
+        compared += 1;
+    }
+    assert!(compared > 500, "only {compared} data sets evaluated");
+}
+
 /// Inputs the fuzz targets (`fuzz/`) found problems with.
 #[test]
 fn fuzz_findings() {
