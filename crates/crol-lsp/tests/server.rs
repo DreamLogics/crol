@@ -653,7 +653,7 @@ fn code_actions_fix_what_the_diagnostics_say() {
     let text = "+web: Service { replicas: 3, .. },";
     let diagnostics = open(&mut client, text, true);
     assert_eq!(
-        actions(&mut client, text, &message(&diagnostics, "already exists")),
+        actions(&mut client, text, &message(&diagnostics, "is already set")),
         [(
             "Patch `web` instead of declaring it".to_owned(),
             "web: Service { replicas: 3, .. },".to_owned()

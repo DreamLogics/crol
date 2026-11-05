@@ -123,8 +123,8 @@ impl Document<'_> {
             return;
         };
         let quick_fix = CodeActionKind::QUICKFIX;
-        if message.contains("` already exists") {
-            // `+x` on a key that exists: make it a patch.
+        if message.contains("` is already set") {
+            // `+x` on a key that is set: make it a patch.
             if let Some(entry) = node
                 .ancestors()
                 .filter_map(ast::Entry::cast)

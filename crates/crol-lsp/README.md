@@ -2,7 +2,7 @@
 
 The language server of [CROL](https://github.com/DreamLogics/crol), the Composable
 Rust Object Language, as a library. To use the server, you do not need this crate:
-run `crol lsp`, from [`crol-cli`](../crol-cli), and see
+run `crol lsp`, from [`crol-cli`](https://crates.io/crates/crol-cli), and see
 [editor setup](https://github.com/DreamLogics/crol/blob/main/docs/editors.md).
 
 Use the library to build a server of your own, with checks that only your

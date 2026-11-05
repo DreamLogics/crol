@@ -1,346 +1,277 @@
-# Optimising evaluation: a brief
+# Performance
 
-This is a brief for an agent working on the evaluator's speed and memory. Read
-[`CONTRIBUTING.md`](CONTRIBUTING.md) first, and the parts of
-[`SPEC.md`](SPEC.md) you touch: 7.5 (laziness), 7.6 (determinism), 8.1 and 8.3
-(contexts).
+This report describes how fast CROL loads and evaluates data, and how much memory it
+uses in doing so. It covers large data sets, of thousands of definitions over thousands
+of files. Below the thresholds in [Threads](#threads), CROL uses no threads at all.
 
-## Why
+## Machines
 
-CROL is about to load the data of a real-time strategy game, swgb-rs: about 14,000
-definitions, 17 MB of text, 3,200 files, and 9 civilisations as a variant group, so
-10 contexts. It runs at every game start, and on every save in the game's test mode.
-The RON loader it replaces peaks at 205 MB and takes about 1.2 s, including that
-game's own checks. CROL should not be worse than that on either.
+All figures come from two machines, named here after their CPUs: the **i7-13700K** and the
+**Ryzen 3900X**.
 
-## How to measure
+|           | i7-13700K                                                                          | Ryzen 3900X                                             |
+| --------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| CPU       | Intel Core i7-13700K, 16 cores (8 performance, 8 efficient), 24 threads, 30 MiB L3 | AMD Ryzen 9 3900X, 12 cores, 24 threads, 64 MiB L3      |
+| Memory    | 62 GiB                                                                             | 62 GB                                                   |
+| System    | Arch Linux, kernel 7.2.11, glibc 2.44                                              | Arch Linux, kernel 7.2.11, glibc 2.44                   |
+| Governor  | `powersave` (`intel_pstate`)                                                       | `schedutil`                                             |
+| Compiler  | rustc 1.99.1, release profile (thin LTO)                                           | rustc 1.99.0, `cargo bench` profile (release, thin LTO) |
+| Allocator | glibc's                                                                            | glibc's                                                 |
+| Load      | idle: a load average under 1                                                       | not idle: a load average of about 2.5                   |
 
-```sh
-cargo bench -p crol-eval --bench game   # phases and peak memory, game-shaped data
-cargo bench -p crol-eval --bench big    # the spec's target: under 200 ms (SPEC.md 12.3)
-```
+## Summary
 
-`game` writes its own data, so it needs no game files, and it was tuned to behave
-like the real data. Use it, not your intuition: an earlier guess here that parsing
-dominated was wrong, and only measuring each phase showed it. Peak memory comes from
-`/proc/self/status`, so measure on Linux. Run each benchmark at least three times,
-and on a quiet machine: differences of 5% between runs are normal.
+On a real data set of about 14,000 definitions, 8 MB of text in 3,187 documents and 10
+contexts, on the i7-13700K:
 
-Compare against a build of the commit you started from, on your machine, in the same
-sitting. Absolute numbers from elsewhere do not transfer.
+| Load and evaluate everything                | Time   | Peak memory |
+| ------------------------------------------- | ------ | ----------- |
+| From text                                   | 502 ms | 364 MB      |
+| From text, on one core                      | 736 ms | 253 MB      |
+| Base layer from a `.crob` file              | 275 ms | 307 MB      |
+| Base layer from a `.crob` file, on one core | 398 ms | 248 MB      |
 
-Tools that worked:
+- Evaluating one more context afterwards takes about 50 ms.
+- The target of `SPEC.md`, 10,000 root keys and 16 contexts in under 200 ms, is met at
+  111 ms on the i7-13700K and 192 ms on the Ryzen 3900X.
+- Compiled `.crob` layers roughly halve the total time, as they remove almost all of the
+  cost of parsing and lowering.
+- Threads save about a third of the time, and cost 60 to 110 MB of peak memory.
+- These figures stop at evaluated values. Deserializing into an application's own types
+  comes on top.
 
-- **Exact heap.** A counting `#[global_allocator]`. `forbid(unsafe_code)` applies to the
-  whole workspace, so put it in a small crate outside it, with a path dependency on
-  `crol-eval` and `debug = 1`. Copy the data generator out of `benches/game.rs`.
-- **Profiles.** `samply record --save-only --unstable-presymbolicate -r 3000 -o out.json.gz
-  -- <binary>`. The bench binaries have no symbols, so profile that outside crate too.
-  In glibc, `malloc` and `free` show up as unnamed `fun_` symbols.
-- **No threads, without changing code.** `taskset -c 0 <binary>` makes
-  `available_parallelism` return 1.
-- **Page faults and system time.** `minflt`, `utime` and `stime` from `/proc/self/stat`,
-  read before and after a phase.
-- **Whether an arena is the cause.** `GLIBC_TUNABLES=glibc.malloc.arena_max=1`.
-- **Worktrees.** Under `.claude/worktrees/`, set `CARGO_WORKSPACE_DIR` to the worktree when
-  running tests, or `expect-test` reads and writes the main checkout's snapshots.
+## Method
 
-## Where it stands
+### Workloads
 
-### Before this work, on the development machine
+|             | Real data set                  | Synthetic data set             |
+| ----------- | ------------------------------ | ------------------------------ |
+| Definitions | about 14,000                   | 14,000                         |
+| Text        | 8 MB                           | 15 MB                          |
+| Documents   | 3,187                          | 3,431                          |
+| Layers      | a base, and a layer of patches | a base, and a layer of patches |
+| Contexts    | 10 (9 variants in a group)     | 10 (9 variants in a group)     |
 
-For both the real data and `game`, at `c6d8861`:
+The real data set was converted from 17 MB of RON, with each definition on a line and
+comments dropped. The synthetic data set is generated by the benchmark
+`crates/crol-eval/benches/game.rs`, and was tuned to behave like the real one: deep
+blocks, long strings, definitions that spread others, and a layer of patches.
 
-| Phase | Real data | `game` |
-| --- | --- | --- |
-| Compile (parse and lower) | 0.5 s, 234 MB | 0.45 s, 246 MB |
-| Evaluate, 10 contexts | 0.7 s, peak 592 MB | 0.61 s, peak 593 MB |
-| One context later (`evaluate_contexts`) | 96 ms | 91 ms |
-| Parse alone | 160 ms, 110 MB | |
-| Compile with the base layer from `.crob` | | 92 ms |
+A third workload, `crates/crol-eval/benches/big.rs`, is the target of `SPEC.md`: 10,000
+root keys that spread a template and refer to one another, with 16 contexts.
 
-After evaluation, 248 MB stayed live on the real data: 124 MB of `Compiled` (the IR and
-the texts) and the values. `big` was at about 245 ms.
+### Measurements
 
-### Now, on a slower machine
+The figures are from commit `a339fd5`, and those of `CrolComposer` from `5a1c109`. A rerun
+of the synthetic benchmark at `6930089` on the Ryzen 3900X gave the same fingerprint, and
+medians within 6% of the Ryzen 3900X table.
 
-| | |
-| --- | --- |
-| CPU | AMD Ryzen 9 3900X, 12 cores, 24 threads, 64 MiB L3 |
-| Memory | 62 GB |
-| System | Arch Linux, kernel 7.2.11, glibc 2.44, `schedutil` governor |
-| Compiler | rustc 1.99.0, `cargo bench` profile (release, thin LTO) |
-| Allocator | glibc's |
-| Load | not idle: a load average of about 2.5 from other work |
+- On the i7-13700K, each figure is the median of 5 runs, each in a fresh process. `big` is
+  15 measurements.
+- On the Ryzen 3900X, each figure is from 3 runs in one sitting.
+- Files were in the page cache, and "Load" includes reading them. Cold reads from disk
+  were not measured.
+- Peak memory is the peak of the whole process, from `/proc/self/status`. Heap figures are
+  from a counting allocator.
+- "One core" is `taskset -c 0`, which also makes CROL use no threads.
+- "`.crob` base" means the base layer comes from a file written beforehand, and the layer
+  of patches from text. The file's bytes are dropped before evaluation. The benchmark does
+  not time this path, so these columns come from a separate program.
+- Differences of 5% between runs are normal.
 
-`big` took 1.8 times as long here as on the development machine at the same commit, so
-compare within these tables, and not with the one above. Everything below is from one
-sitting, three runs of each, on `game` unless it says `big`. For the real data, see
-[the next section](#now-on-the-development-machine).
+## Results
 
-| | `c6d8861` | Text, no threads | Text, threads (default) | `.crob` base, 3 threads |
-| --- | --- | --- | --- | --- |
-| Compile or load | 765 ms | 650 ms | 438 ms | 102 ms |
-| Evaluate, 10 contexts | 1.09 s | 559 ms | 419 ms | 360 ms |
-| **Together** | **1.86 s** | **1.21 s** | **857 ms** | **462 ms** |
-| **Peak of the process** | **594 MB** | **244 MB** | **335 MB** (331 to 341) | **320 MB** |
-| Peak after compile or load | 246 MB | 220 MB | 220 MB | 164 MB |
-| One context later | 149 ms | | 90 ms | |
-| `big`, 16 contexts | 445 ms | 248 ms | 192 ms | |
+### Load and evaluate
 
-The last column is a fresh process that reads the file, compiles the mod layer over it,
-drops what it read, and evaluates. `game` itself does not time this path.
+On the i7-13700K, calling `crol_eval` directly, with the real data set and 10 contexts:
 
-By a counting allocator, 199 MB stays live after evaluation: 17 MB of sources, 80 MB of
-`Compiled`, and 102 MB of values. With the default threads the heap peaks at 278 MB, so
-about 55 MB of the process's peak is what the allocator holds on to.
+|                         | Text, one core | Text (default)          | `.crob` base, one core | `.crob` base |
+| ----------------------- | -------------- | ----------------------- | ---------------------- | ------------ |
+| Load                    | 372 ms         | 264 ms                  | 62 ms                  | 68 ms        |
+| Evaluate                | 364 ms         | 238 ms                  | 336 ms                 | 207 ms       |
+| **Together**            | **736 ms**     | **502 ms**              | **398 ms**             | **275 ms**   |
+| **Peak of the process** | **253 MB**     | **364 MB** (362 to 369) | **248 MB**             | **307 MB**   |
+| Peak after load         | 206 MB         | 206 MB                  | 140 MB                 | 139 MB       |
+| One context later       | 56 ms          | 54 ms                   | 49 ms                  | 48 ms        |
 
-Against the goals: 1 is met, unless freeing cells is off (below); 2 is met, even on this
-machine. The RON loader's 1.2 s is beaten. Its 205 MB is not: 244 MB is the lowest peak
-so far, and that is without threads.
+On the i7-13700K, with the synthetic data set:
 
-### Now, on the development machine
+|                         | Text, one core | Text (default)          | `.crob` base, one core | `.crob` base |
+| ----------------------- | -------------- | ----------------------- | ---------------------- | ------------ |
+| Load                    | 379 ms         | 263 ms                  | 56 ms                  | 60 ms        |
+| Evaluate                | 310 ms         | 234 ms                  | 280 ms                 | 196 ms       |
+| **Together**            | **689 ms**     | **497 ms**              | **336 ms**             | **256 ms**   |
+| **Peak of the process** | **244 MB**     | **338 MB** (318 to 350) | **232 MB**             | **282 MB**   |
+| One context later       | 52 ms          | 47 ms                   | 46 ms                  | 42 ms        |
 
-The machine of the first table, measured again at `a339fd5`, with the real data as well.
+The synthetic data set tracks the real one closely. The real data set's peak is 9 to 26
+MB higher, and it evaluates about 20% slower on one core and 2 to 6% slower with threads.
 
-| | |
-| --- | --- |
-| CPU | Intel Core i7-13700K, 16 cores (8 performance, 8 efficient), 24 threads, 30 MiB L3 |
-| Memory | 62 GiB |
-| System | Arch Linux, kernel 7.2.11, glibc 2.44, `powersave` governor (`intel_pstate`) |
-| Compiler | rustc 1.99.1, release profile (thin LTO) |
-| Allocator | glibc's |
-| Load | idle: a load average under 1 |
+Of the load from a `.crob` base on the synthetic data set, reading the file takes 11 ms
+and linking it 46 ms.
 
-`c6d8861` and `a339fd5` were built side by side and run in turn, in one sitting. Each
-figure is the median of 5 runs, each in a fresh process. The files were in the page
-cache, and "Load" includes reading them. The real data is the game's converted data with
-one mod layer, as 3,187 documents and 8 MB of text: a quick conversion from RON that
-writes each definition on a line and drops comments, so it is half the size of the 17 MB
-of RON above. "One core" is `taskset -c 0`. The `.crob` columns are the base layer from a
-file written beforehand, and the mod layer from text. They are a program outside the
-workspace, as `game` does not time this path: it drops the file's bytes before compiling
-and moves the texts into `Sources`, which may be why its peaks are below those of the
-slower machine's table; that was not looked into.
+On the Ryzen 3900X, with the synthetic data set:
 
-Real data, 10 contexts:
+|                            | Text, no threads | Text, threads (default) | `.crob` base, 3 threads |
+| -------------------------- | ---------------- | ----------------------- | ----------------------- |
+| Compile or load            | 650 ms           | 438 ms                  | 102 ms                  |
+| Evaluate, 10 contexts      | 559 ms           | 419 ms                  | 360 ms                  |
+| **Together**               | **1.21 s**       | **857 ms**              | **462 ms**              |
+| **Peak of the process**    | **244 MB**       | **335 MB** (331 to 341) | **320 MB**              |
+| Peak after compile or load | 220 MB           | 220 MB                  | 164 MB                  |
+| One context later          |                  | 90 ms                   |                         |
 
-| | `c6d8861` | Text, one core | Text (default) | `.crob` base, one core | `.crob` base |
-| --- | --- | --- | --- | --- | --- |
-| Load | 455 ms | 372 ms | 264 ms | 62 ms | 68 ms |
-| Evaluate | 632 ms | 364 ms | 238 ms | 336 ms | 207 ms |
-| **Together** | **1.09 s** | **736 ms** | **502 ms** | **398 ms** | **275 ms** |
-| **Peak of the process** | **593 MB** | **253 MB** | **364 MB** (362 to 369) | **248 MB** | **307 MB** |
-| Peak after load | 234 MB | 206 MB | 206 MB | 140 MB | 139 MB |
-| One context later | 92 ms | 56 ms | 54 ms | 49 ms | 48 ms |
+The i7-13700K takes a little over half as long as the Ryzen 3900X in every phase, and the
+peaks from text agree. The peaks with a `.crob` base are lower on the i7-13700K, and the
+cause was not investigated. Those columns come from a different program on each.
 
-`game`, the same way:
+### Through `CrolComposer`
 
-| | `c6d8861` | Text, one core | Text (default) | `.crob` base, one core | `.crob` base |
-| --- | --- | --- | --- | --- | --- |
-| Load | 450 ms | 379 ms | 263 ms | 56 ms | 60 ms |
-| Evaluate | 559 ms | 310 ms | 234 ms | 280 ms | 196 ms |
-| **Together** | **1.01 s** | **689 ms** | **497 ms** | **336 ms** | **256 ms** |
-| **Peak of the process** | **595 MB** | **244 MB** | **338 MB** (318 to 350) | **232 MB** | **282 MB** |
-| One context later | 83 ms | 52 ms | 47 ms | 46 ms | 42 ms |
+`CrolComposer` adds a little to `crol_eval`. On the i7-13700K, with the real data set:
 
-`big`, from `cargo bench`, 15 measurements: 226 ms at `c6d8861` (209 to 254), 111 ms now
-(106 to 120), and 134 ms on one core (132 to 147).
+|                     | Text, one core | Text   | `.crob` base, one core | `.crob` base |
+| ------------------- | -------------- | ------ | ---------------------- | ------------ |
+| `compose_data`      | 752 ms         | 528 ms | 406 ms                 | 280 ms       |
+| Peak of the process | 256 MB         | 367 MB | 264 MB                 | 322 MB       |
 
-From the benches themselves, `game` compiles in 430 ms at `c6d8861` and 245 ms now, and
-reads and links a `.crob` base in 17 and 63 ms, now 11 and 46 ms.
+With a `.crob` base, 14 MB of the peak is the lowered bytes that `CrolData` keeps for
+`reload`. With `CrolConfig::keep_lowered: false` the peak is 250 MB on one core and 308
+MB with threads, and `reload` parses the layer instead.
 
-The fingerprints did not change: `c70beb7fde6e7406` for `game`, and the same one for the
-real data at both commits, in every run.
+`reload` of one new document over a `.crob` base took 451 ms and raised the peak to 514
+MB, as the old data stays in place until the new data has loaded.
 
-Against the slower machine, this one takes about 0.55 times as long, in every phase, and
-the peak from text agrees. Going from `c6d8861` to now is worth about the same on both: 2.2 times
-as fast from text, and 4 times with a `.crob` base. `game` also still stands in for the
-real data: the real data's peak is 9 to 26 MB above it, and it evaluates about 20% slower
-on one core and about 5% with threads. Its peak on one core, 253 MB, says that freeing a
-root key's cells works there too.
+### The target of `SPEC.md`
 
-Those figures call `crol_eval` directly. A program that uses `CrolComposer` pays a little
-more, on the real data, the same way:
+10,000 root keys and 16 contexts, with a target of under 200 ms:
 
-| | Text, one core | Text | `.crob` base, one core | `.crob` base |
-| --- | --- | --- | --- | --- |
-| `compose_data` | 752 ms | 528 ms | 406 ms | 280 ms |
-| Peak of the process | 256 MB | 367 MB | 264 MB | 322 MB |
+|                         | Time                |
+| ----------------------- | ------------------- |
+| i7-13700K               | 111 ms (106 to 120) |
+| i7-13700K, one core     | 134 ms (132 to 147) |
+| Ryzen 3900X             | 192 ms              |
+| Ryzen 3900X, no threads | 248 ms              |
 
-The 14 MB more with a `.crob` base is the lowered bytes that `CrolData` keeps for `reload`.
-With `CrolConfig::keep_lowered: false` the peak is 250 MB on one core and 308 MB with
-threads, as with `crol_eval`, and `reload` parses the layer instead. `reload` of one
-new document, over a `.crob` base, took 451 ms and raised the peak to 514 MB, as the old
-data stays in place until the new data has loaded.
+### Against an earlier version
 
-The RON loader's 1.2 s and 205 MB were measured on this machine, but earlier, and they
-include deserializing into the game's model and its own checks. The figures here stop at
-evaluated values, so they do not compare directly: CROL's 502 ms and 275 ms leave that
-work still to do. Its lowest peak on the real data is 248 MB, which 205 MB still beats.
+Commit `c6d8861`, before the work on evaluation that these figures reflect, was built
+beside `a339fd5` and run in turn on the i7-13700K, on the real data set:
 
-### Threads
+|                     | `c6d8861` | Text (default) | `.crob` base |
+| ------------------- | --------- | -------------- | ------------ |
+| Load                | 455 ms    | 264 ms         | 68 ms        |
+| Evaluate            | 632 ms    | 238 ms         | 207 ms       |
+| Together            | 1.09 s    | 502 ms         | 275 ms       |
+| Peak of the process | 593 MB    | 364 MB         | 307 MB       |
+| One context later   | 92 ms     | 54 ms          | 48 ms        |
 
-Two kinds, with different costs. Parsing takes up to 8 threads, one for each MB of text
-in a layer (`parse_all`). Contexts take up to 3, from at least 20 000 expressions
-(`DataOptions::threads`, `CrolConfig::threads`; `Some(1)` uses none).
+That is 2.2 times as fast from text, and 4 times with a `.crob` base. `big` went from 226
+ms to 111 ms. The Ryzen 3900X showed about the same ratios.
+
+### Against a RON loader
+
+A RON loader for the real data set took about 1.2 s and peaked at 205 MB on the i7-13700K.
+That was measured earlier, and it includes deserializing into the application's model and
+that application's own checks, so it does not compare directly: CROL's 502 ms and 275 ms
+leave that work still to do. CROL's lowest peak on this data, 248 MB, is above the RON
+loader's.
+
+## Threads
+
+CROL uses threads in two places, with different costs:
+
+- **Parsing** takes up to 8 threads, one for each MB of text in a layer.
+- **Contexts** take up to 3, from at least 20,000 expressions. `DataOptions::threads` and
+  `CrolConfig::threads` set this, and `Some(1)` uses none.
+
+Threads for contexts, on the Ryzen 3900X with the synthetic data set, in a sitting of its
+own, so its peaks run a little above the tables above:
 
 | Threads for contexts | Evaluate, from text | Peak, from text | Load and evaluate, `.crob` | Peak, `.crob` |
-| --- | --- | --- | --- | --- |
-| 1 | 622 ms | 324 MB | 641 ms | 270 MB |
-| 2 | 506 ms | 329 MB | 537 ms | 293 MB |
-| **3** | **425 ms** | **350 MB** | **462 ms** | **320 MB** |
-| 4 | 422 ms | 374 MB | 459 ms | 348 MB |
-| 6 | 387 ms | 413 MB | | |
-| 8 | 388 ms | 450 MB | | |
+| -------------------- | ------------------- | --------------- | -------------------------- | ------------- |
+| 1                    | 622 ms              | 324 MB          | 641 ms                     | 270 MB        |
+| 2                    | 506 ms              | 329 MB          | 537 ms                     | 293 MB        |
+| **3**                | **425 ms**          | **350 MB**      | **462 ms**                 | **320 MB**    |
+| 4                    | 422 ms              | 374 MB          | 459 ms                     | 348 MB        |
+| 6                    | 387 ms              | 413 MB          |                            |               |
+| 8                    | 388 ms              | 450 MB          |                            |               |
 
-This table has its own sitting and program, so its peaks run a little above the table
-before. 3 is where the time stops paying for the memory, partly because 9 contexts divide
-evenly over 3 threads: 4 threads take as many rounds. Data with another number of
-contexts may want another number. Beyond 6 there is nothing to gain.
+3 is the default limit, as that is where further time saved stops paying for the memory.
+That is partly because 9 contexts divide evenly over 3 threads, while 4 threads take as
+many rounds, so the best number can differ for data with another number of contexts.
+Nothing is gained beyond 6.
+
+Threads for parsing, also on the Ryzen 3900X with the synthetic data set:
 
 | Threads for parsing | Compile | Peak of `evaluate`, no context threads |
-| --- | --- | --- |
-| 1 | 663 ms | 244 MB |
-| 2 | 529 ms | 293 MB |
-| 3 | 485 ms | 308 MB |
-| 4 | 467 ms | 295 to 319 MB |
-| 6 | 444 ms | 310 MB |
-| 8 | 435 ms | 281 to 320 MB, usually 295 |
+| ------------------- | ------- | -------------------------------------- |
+| 1                   | 663 ms  | 244 MB                                 |
+| 2                   | 529 ms  | 293 MB                                 |
+| 3                   | 485 ms  | 308 MB                                 |
+| 4                   | 467 ms  | 295 to 319 MB                          |
+| 6                   | 444 ms  | 310 MB                                 |
+| 8                   | 435 ms  | 281 to 320 MB, usually 295             |
 
-Memory that parse trees took on another thread stays in that thread's glibc arena, and
-the main thread cannot reuse it. That costs about 50 MB however many threads there are,
-so fewer threads save nothing, and the peak varies from run to run. It also costs
-evaluation about 45 ms: 22 000 more page faults and 40 ms more system time, as the main
-thread gets about 88 MB of new pages rather than reusing what was freed.
-`arena_max=1` gives the memory back, but compile takes 1.24 s, on the lock, and evaluate
-stays about 35 ms slower, for reasons not measured. Another allocator may not have this
-cost; none has been tried.
+Parsing on threads costs about 50 MB of peak memory, however many threads there are,
+and the figure varies from run to run. Memory that parse trees took on another thread
+stays in that thread's glibc arena, where the main thread cannot reuse it. This also costs
+evaluation about 45 ms, as the main thread gets about 88 MB of new pages rather than
+reusing what was freed: 22,000 more page faults and 40 ms more system time. Limiting glibc
+to one arena returns the memory, but compile then takes 1.24 s, on the lock. Other
+allocators have not been measured.
 
-### What to do next
+The base is evaluated on one thread, as the evaluator's `Rc`s tie it to one. It sets the
+lower bound on evaluation: with a `.crob` base on the Ryzen 3900X, it takes 245 ms of the
+360 ms.
 
-1. **Load the base layer from `.crob`, in the game's loader.** It is the largest gain
-   left: 857 ms to 462 ms, and a lower peak. It needs a loader that writes the file when
-   the sources change. Drop the file's bytes and `read_layer`'s result after
-   `compile_binary`: holding them through evaluation costs 36 MB.
-2. **The base is now the critical path**, 245 ms of the 360 ms, on one thread, as the
-   evaluator's `Rc`s tie it to one. The ideas below are for that.
-3. **A context from a known base has a fixed cost.** Of 107 ms for one context, about a
-   third is evaluating it. `DataPlan::new` was 22%, and is now made once for all threads
-   but still once for each `evaluate_contexts`. `context_state` is about 13%, applying
-   every key's chain in the base. Much of the rest, by the profile, is allocating and
-   freeing.
-4. **The `.crob` link step**, about 78 ms, has not been profiled.
+## Memory
 
-### Already done
+By a counting allocator, on the Ryzen 3900X with the synthetic data set, 199 MB stays live
+after evaluation:
 
-So do not look there first:
+|                                   | Live   |
+| --------------------------------- | ------ |
+| Values                            | 102 MB |
+| `Compiled` (the IR and its texts) | 80 MB  |
+| Sources                           | 17 MB  |
 
-- Cells of a finished context are freed (`Evaluator::forget`), the base is not cloned,
-  `Shape::Keyed` and `ValueKind::Keyed` are boxed, and a context evaluated later does not
-  evaluate the base.
-- The cells of a root key that nothing reads are freed once its value is computed
-  (`Evaluator::full_base`). A read that the static analysis misses computes the key again
-  (`Job::Key`), so that this only ever costs time.
-- Field names and strings are shared (`Arc<str>`), interned by the lowerer.
-- Literals have a cell and recipe of their own, without an environment.
-- A context only looks at the keys that can differ.
-- `Expr` is 48 bytes, which a `const` assertion keeps, and the IR's spare capacity is
-  given back.
+With the default threads the heap peaks at 278 MB, and the allocator holds on to about 55
+MB more, which gives the peak of the process.
 
-Freeing a root key's cells is off when any key reads the whole root or another context
-(`evict` in `evaluate_raw`), so data that does keeps a far higher peak. Check that first
-if the peak of the real data is far from that of `game`.
+In the values, a map entry takes 96 bytes, as `Key` and `Value` are 16-aligned by their
+`i128`, and `Keyed` has a fixed cost for each block. In `Compiled`, an expression takes 48
+bytes and an `Entry` 96, along with the text of each string literal.
 
-Contexts are evaluated in order, without threads, if any key reads another context, as
-contexts then depend on each other, or if the base failed, as each context then reports
-its own errors. So is one context on its own.
+The working memory of evaluation stays small because it does not accumulate. The cells of
+a finished context are freed, and so are those of a root key that nothing reads once its
+value is computed. A context evaluates only the keys that can differ from the base, and a
+context evaluated later does not evaluate the base again.
 
-### Tried and dropped
+## Data that behaves differently
 
-- A faster hasher for `KeyedShape::slots`: no difference in `game`, and `big` was
-  slightly slower. Hashing looked like 8% of evaluation in the profile, and was not.
-- `arena_max=1` to keep parsing's memory: see above.
-- A plan for each thread: with 8 threads, evaluate took 448 ms, against 388 ms with one
-  plan for all of them.
+Some data takes a different path from the figures above:
 
-### What decides which keys a context evaluates
+- **Reading the whole root or another context.** If any key does, a root key's cells are
+  not freed, and the peak is far higher.
+- **Reading another context.** Contexts then depend on each other, so they are evaluated
+  in order, without threads.
+- **A failed base.** Contexts are evaluated in order, as each reports its own errors.
+- **One context.** It is evaluated without threads.
+- **Keys that copy a climbing reference.** They vary whenever anything does, so a context
+  evaluates more keys than it strictly needs to. The same goes for a key with an operation
+  that holds in the base, such as `x<!b>`.
 
-`DataPlan::varying` leaves out keys that cannot differ from the base, and that is the
-only thing here that can make data wrong rather than slow. Two bugs were found in it
-and fixed: it missed operations that hold in the base and not in a context (`x<!b>`),
-and references that a spread moves (`tank: { ..&root.unit.stats }`, with
-`stats: { defense: &parent.armor }`). Copied entries are evaluated where they land, so
-what `collect_reads` sees where they are written is not what they read.
+## Correctness of the figures
 
-It must only err on the wide side. `leaving_out_keys_that_cannot_differ_changes_nothing`
-compares it with `evaluate_every_key` on random data; change it with that test passing.
-A key that copies a climbing reference varies whenever anything does, which is wider
-than it must be. Recording what each key reads while the base is evaluated would be
-exact, as a key can only differ if a read returns something else, and the first such
-read also happens in the base; but it must count missing keys, treat templates as
-keys, and be kept for `evaluate_contexts`.
+Optimisations do not change results. The fingerprint was `c70beb7fde6e7406` for the
+synthetic data set at every commit above, and the real data set's was the same at both
+commits, in every run. A layer compiled to `.crob` gives the same fingerprint as its text,
+and the benchmark checks this. Threads change neither values nor messages, which a test
+checks on every conformance case.
 
-## Goals, in order
+## Not measured
 
-1. Peak memory of `evaluate` on `game` well below 593 MB. 300 MB would be very good.
-2. `big` back under 200 ms, without giving up the memory.
-3. Time of `evaluate` and `compile`.
-4. Live memory after evaluation.
-
-## Where the memory is
-
-The cells of one root key at a time now, so what they cost matters much less than it
-did, unless freeing them is off (see above). What stays:
-
-- The values, 102 MB. `Keyed` has a fixed cost for each block, and a map entry takes
-  96 bytes, as `Key` and `Value` are 16-aligned by their `i128`.
-- `Compiled`, 80 MB: expressions are 48 bytes each, `Entry` is 96, and the text of each
-  string literal.
-- What the allocator holds, about 55 MB with the default threads.
-- `Cell` holds `location: Option<Location>` for messages, one `Rc<PathLink>` each.
-  That no longer matters for memory, but it is the largest allocation left for a literal.
-
-Ideas, roughly by what they may give:
-
-- Make `Location` lazy or smaller: derive it for messages rather than store it per cell.
-- Keep `i128` out of the common case, so that `Value` and `Key` lose their 16-byte
-  alignment. `Expr` does this with `Wide`; for `Value` it means changing a public type,
-  for perhaps 15% of the values, by estimate.
-- Lower each document as it is parsed, which would take the peak of `compile` well
-  below that of `evaluate`. Templates are collected from every document first, so
-  this needs two passes.
-- `plan.varying` decides what a context re-evaluates. A key with an operation that holds
-  in the base varies in every context, which is wider than it must be for `x<!b>` in a
-  context without `b`.
-
-## Rules
-
-- **The fingerprint must not change.** `cargo test --workspace --all-features
-  --no-fail-fast` checks every conformance case's `expected.fingerprint`, and `game`
-  prints one. A different fingerprint means different data, so it is a bug, however fast.
-- Behaviour changes need `SPEC.md` first. Pure optimisations do not change it.
-- `#![forbid(unsafe_code)]` stays. New dependencies need a reason (`SPEC.md` 14.1).
-- The parser and evaluator never panic or loop, on any input. Run the fuzz targets in
-  [`fuzz/`](fuzz/README.md) after changing `eval.rs`. Their inputs are too small to use
-  threads, so what guards those are `threads_change_neither_values_nor_messages` and the
-  conformance test, which evaluates every case on threads as well.
-- `CrolData` stays `Send + Sync`: a test checks that.
-- `cargo fmt --all`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-  and the tests must pass. Note them with the results.
-- Keep changes small: one idea per commit, with the numbers before and after in the
-  commit message. Drop an idea that gives little, rather than keeping the complexity.
-
-## Working beside others
-
-`.crob`, a binary form of layers, reads and writes every type in `ir.rs`, in
-`crates/crol-eval/src/binary.rs`. If you change those types, change it too, raise
-`binary::FORMAT`, and keep `compiled_layers_evaluate_the_same` passing. `game` checks
-that a compiled layer gives the same fingerprint. Work on a branch of your own,
-`perf/<what>`.
-
-## What to hand back
-
-A short report: for each change kept, what it did, and the numbers before and after
-from the same machine (`game` and `big`, three runs each); what you tried and dropped,
-and why; and where the memory is now, measured.
+- Deserializing evaluated values into an application's types.
+- Files that are not in the page cache.
+- Systems other than Linux on x86-64.
+- Allocators other than glibc's.

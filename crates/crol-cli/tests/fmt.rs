@@ -112,7 +112,7 @@ fn check_and_eval_read_layers() {
     std::fs::write(dir.join("local/b.crod"), "+web: 1,").unwrap();
     let output = crol(&["check", "--color", "never", base, local]);
     assert_eq!(output.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("+: `web` already exists"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("+: `web` is already set"));
 }
 
 #[test]

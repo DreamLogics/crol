@@ -4,7 +4,7 @@ The lexer, error-recovering parser, lossless syntax tree, typed AST and formatte
 of [CROL](https://github.com/DreamLogics/crol), the Composable Rust Object
 Language.
 
-Most users want the [`crol`](../crol) crate instead. Use this one for tools that
+Most users want the [`crol`](https://crates.io/crates/crol) crate instead. Use this one for tools that
 work on source text:
 
 ```rust

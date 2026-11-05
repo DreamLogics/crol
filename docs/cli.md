@@ -1,9 +1,11 @@
 # Command-line reference
 
-`crol` checks, evaluates, formats and explains CROL data. Install it with:
+`crol` checks, evaluates, formats and explains CROL data. Take a binary for your
+platform from the [latest release](https://github.com/DreamLogics/crol/releases/latest),
+or install it with:
 
 ```console
-$ cargo install --git https://github.com/DreamLogics/crol crol-cli
+$ cargo install crol-cli
 ```
 
 | Command                             | Does                                                 |
@@ -44,7 +46,7 @@ Created /path/to/project/project.crol
 Created /path/to/project/data/base/main.crod
 
 Next:
-  - add `crol = { git = "https://github.com/DreamLogics/crol" }` to [dependencies] in Cargo.toml, if it is not there yet
+  - add `crol = "0.1"` to [dependencies] in Cargo.toml, if it is not there yet
   - write your data in data/base/main.crod
   - run `crol check`
 ```
@@ -291,7 +293,7 @@ standard output:
 ```console
 $ printf 'nope.x: 1,\n' > bad.crod
 $ crol check --message-format json data/base bad.crod
-{"severity":"error","message":"nope.x: `nope` does not exist, so it cannot be patched","file":"bad.crod","line":1,"column":1,"end_line":1,"end_column":7,"context":null,"related":[]}
+{"severity":"error","message":"nope.x: `nope` is not set, so it cannot be patched","file":"bad.crod","line":1,"column":1,"end_line":1,"end_column":7,"context":null,"related":[]}
 ```
 
 A problem that is about no place in a file, such as a key that is not a path, has

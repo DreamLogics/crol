@@ -162,7 +162,7 @@ jobs:
           workspaces: fuzz
       - name: Run each target, seeded with the test files
         run: |
-          for target in parse evaluate_value evaluate_data; do
+          for target in parse evaluate_value evaluate_data compiled_layer; do
             mkdir -p "fuzz/corpus/$target"
             cargo fuzz run --target x86_64-unknown-linux-gnu "$target" \
               "fuzz/corpus/$target" tests/syntax/valid tests/cases \

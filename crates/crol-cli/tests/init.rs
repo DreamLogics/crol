@@ -44,7 +44,7 @@ fn sets_up_a_cargo_project_that_the_tools_can_load() {
 
     let output = crol(&dir, &["--init"]);
     assert!(output.status.success(), "{output:?}");
-    assert!(stderr(&output).contains("crol = {"), "{output:?}");
+    assert!(stderr(&output).contains("crol = \""), "{output:?}");
     assert_eq!(std::fs::read(dir.join("Cargo.toml")).unwrap(), manifest);
 
     // The application's and the language server's view of the file.
@@ -220,8 +220,8 @@ fn says_what_the_guide_says() {
     let dir = cargo_project("as-the-guide");
     let output = crol(&dir, &["--init"]);
     assert!(output.status.success(), "{output:?}");
-    // `crol` is not on crates.io yet (`docs/getting-started.md`).
-    let dependency = "`crol = { git = \"https://github.com/DreamLogics/crol\" }`";
+    // As `docs/getting-started.md` has it.
+    let dependency = "`crol = \"0.1\"`";
     assert!(stderr(&output).contains(dependency), "{output:?}");
 
     // The schema where `crol::schema::check_file` puts it (`docs/schemas.md`).
