@@ -659,6 +659,13 @@ $ cargo run
 `diff` writes only what differs, at any depth. A struct that leaves fields out with
 `skip_serializing_if` gets `..`, so the output reads back.
 
+To write a reference, or any other expression, where a value goes, use
+`crol::Expression`, as a field of what you serialize:
+`writer.set("weapon", &crol::Expression::new("&root.rifle")?)` writes
+`weapon: &root.rifle`. Where the type has no place for one, change the value:
+`crol::to_value` it, put `expression.to_value()` where the reference goes, and write it
+as a `crol::RawValue`.
+
 ## Cargo features
 
 `crol` has no default features.

@@ -204,3 +204,73 @@ fn a_bad_condition_is_an_error() {
     writer.variant("a &", |w| w.set("x", &1)).unwrap();
     assert!(writer.finish().is_err());
 }
+
+#[test]
+fn an_expression_is_written_where_a_value_goes() {
+    #[derive(serde::Serialize)]
+    enum Slot {
+        Active(crol::Expression),
+    }
+    #[derive(serde::Serialize)]
+    struct Unit {
+        name: &'static str,
+        weapon: Slot,
+    }
+    let unit = Unit {
+        name: "trooper",
+        weapon: Slot::Active(crol::Expression::new("&root.rifle").unwrap()),
+    };
+    let mut writer = crol::DataWriter::new();
+    writer.declare("rifle", &1).unwrap();
+    writer.declare("trooper", &unit).unwrap();
+    let text = writer.finish().unwrap();
+    assert_eq!(
+        text,
+        "+rifle: 1\n+trooper: Unit { name: \"trooper\", weapon: Active(&root.rifle) }\n"
+    );
+    assert!(crol_syntax::parse(&text).errors().is_empty());
+}
+
+#[test]
+fn an_expression_can_replace_part_of_a_value() {
+    #[derive(serde::Serialize)]
+    struct Unit {
+        weapon: u32,
+    }
+    let mut value = crol::to_value(&Unit { weapon: 1 }).unwrap();
+    let crol::ValueKind::Keyed(keyed) = &mut value.kind else {
+        panic!("a block");
+    };
+    let reference = crol::Expression::new("&root.rifle").unwrap();
+    *keyed.entries.values_mut().next().unwrap() = reference.to_value();
+    let mut writer = crol::DataWriter::new();
+    writer.set("trooper", &crol::RawValue(value)).unwrap();
+    assert_eq!(
+        writer.finish().unwrap(),
+        "trooper: Unit { weapon: &root.rifle }\n"
+    );
+}
+
+#[test]
+fn only_one_expression_is_an_expression() {
+    for text in [
+        "",
+        "1, +x: 2",
+        "x: 1",
+        "1 // a comment",
+        "/* a */ 1",
+        "(",
+        "#![a] 1",
+    ] {
+        assert!(crol::Expression::new(text).is_err(), "{text}");
+    }
+    for text in [
+        "&root.x",
+        "& + 1",
+        "Active(&root.x)",
+        "{ a: 1 }",
+        "round!(& * 2.5)",
+    ] {
+        assert!(crol::Expression::new(text).is_ok(), "{text}");
+    }
+}

@@ -8,6 +8,7 @@ use serde::ser::{self, Serialize};
 use crol_eval::{Key, Keyed, Span, Value, ValueKind};
 
 use crate::error::Error;
+use crate::expression::{EXPRESSION_TOKEN, is_expression, text_value};
 use crate::id::ID_TOKEN;
 use crate::raw::RAW_TOKEN;
 
@@ -202,12 +203,21 @@ impl<'c> ser::Serializer for ValueSerializer<'c> {
     ) -> Result<Value, Error> {
         let config = self.config;
         let inner = v.serialize(self)?;
+        if name == EXPRESSION_TOKEN {
+            return match &inner.kind {
+                ValueKind::String(text) => Ok(text_value(text)),
+                _ => Err(Error::new("an expression must be CROL text")),
+            };
+        }
         if name == RAW_TOKEN {
             // The value's CROL text, read back as the value itself.
             return match &inner.kind {
-                ValueKind::String(text) => crate::raw::RawValue::from_text(text)
-                    .map(|raw| raw.0)
-                    .map_err(Error::new),
+                ValueKind::String(text) => match crate::raw::RawValue::from_text(text) {
+                    Ok(raw) => Ok(raw.0),
+                    // One that holds an `Expression` does not evaluate.
+                    Err(_) if is_expression(text) => Ok(text_value(text)),
+                    Err(message) => Err(Error::new(message)),
+                },
                 _ => Err(Error::new("a raw value must be CROL text")),
             };
         }

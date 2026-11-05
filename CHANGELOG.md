@@ -11,6 +11,8 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Added
 
+- `crol::Expression`, the text of one expression, which the serializer and
+  `DataWriter` write as it is where a value goes, for references (`SPEC.md` 10.8).
 - Compiled layers (`SPEC.md` 7.8): `crol compile` and `CrolLayer::to_binary` write a
   `.crob` file, a layer lowered ahead of time and compressed, that loads without
   parsing, about five times faster on large data. It evaluates exactly as its

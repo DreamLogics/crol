@@ -2233,6 +2233,12 @@ else a patch of what differs, at any depth, with `-key` for what is gone,
 or a set where `to` cannot be merged into `from`. `finish` formats the
 document, and is an error if it does not parse.
 
+A value cannot say what only an expression can, such as `&root.x`.
+`crol::Expression::new(text)` holds the text of one expression, without comments,
+and is an error for anything else. Serialized, it is written as it is, wherever it
+stands in a value; other formats see a string. It is not evaluated, so that
+what it means is up to the document it lands in.
+
 ### 10.9 Schema
 
 Evaluation and deserialization need no schema, except `&default`
