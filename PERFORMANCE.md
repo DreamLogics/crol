@@ -50,18 +50,25 @@ the table above, three runs each:
 
 | `game` and `big` | Before | After |
 | --- | --- | --- |
-| Peak of `evaluate` | 594 MB | 244 MB |
+| Peak of `evaluate` | 594 MB | about 295 MB (281 to 320) |
 | Peak of `compile` | 246 MB | 220 MB |
-| Compile | 746 ms | 662 ms |
-| Evaluate, 10 contexts | 1.08 s | 550 ms |
-| One context later | 150 ms | 97 ms |
-| Compile with the base layer from `.crob` | 139 ms | 88 ms |
+| Compile | 746 ms | 437 ms |
+| Evaluate, 10 contexts | 1.08 s | 592 ms |
+| One context later | 150 ms | 99 ms |
+| Compile with the base layer from `.crob` | 139 ms | 97 ms |
 | `big` | 443 ms | 255 ms |
 
 `big` at 255 ms here is about 145 ms on the development machine, by that ratio, though
 it has not been measured there. Measured with a counting allocator, 199 MB stays live
-after evaluation: 17 MB of sources, 80 MB of `Compiled`, and 102 MB of values. The peak
-is 36 MB above that.
+after evaluation: 17 MB of sources, 80 MB of `Compiled`, and 102 MB of values. The heap
+peaks 36 MB above that.
+
+Parsing on several threads (`parse_all`) is why the process peak is so far above the
+heap's. With glibc's allocator, about 50 MB that parse trees took on other threads is
+not reused by the main thread, whatever the number of threads, and the peak varies from
+run to run. On one thread, the peak is 244 MB, compile 662 ms and evaluate 550 ms. It
+was kept for the 190 ms it saves in all at every game start. Another allocator may not
+have this cost: measure before relying on that. `big` has too little text to use threads.
 
 Already done, so do not look there first: cells of a finished context are freed
 (`Evaluator::forget`), the base is not cloned, `Shape::Keyed` and `ValueKind::Keyed` are
@@ -78,10 +85,8 @@ Tried and dropped:
 
 - A faster hasher for `KeyedShape::slots`: no difference in `game`, and `big` was
   slightly slower.
-- Parsing documents on several threads: compile fell from 655 ms to 445 ms, but with
-  glibc's allocator the peak rose from 262 MB to between 306 and 324 MB, and evaluation
-  slowed by 7%, because memory freed from another thread's arena is not reused. It is
-  worth trying again with another allocator, or if time comes to matter more than memory.
+- Fewer threads for parsing: the cost in memory is the same with 2 threads as with 8,
+  and compile is slower (528 ms with 2, 465 ms with 4, 437 ms with 8).
 
 ## Goals, in order
 

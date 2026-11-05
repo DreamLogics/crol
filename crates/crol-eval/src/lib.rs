@@ -287,6 +287,62 @@ fn documents_of(layer: &Layer, schema: bool) -> Vec<&(String, FileId)> {
     documents
 }
 
+/// How much text is worth a thread.
+const PARSE_BYTES_PER_THREAD: usize = 1 << 20;
+
+/// The most threads that parsing uses.
+const MAX_PARSE_THREADS: usize = 8;
+
+/// The stack of a thread that parses, as much as a main thread usually has:
+/// the parser recurses, up to `crol_syntax::MAX_NESTING`.
+const PARSE_STACK: usize = 8 << 20;
+
+/// Parses documents, which do not depend on each other, on several threads
+/// if there is enough text. The results are in the order of `texts`.
+fn parse_all(texts: &[&str]) -> Vec<crol_syntax::Parse> {
+    let bytes: usize = texts.iter().map(|text| text.len()).sum();
+    let threads = std::thread::available_parallelism()
+        .map_or(1, std::num::NonZero::get)
+        .min(MAX_PARSE_THREADS)
+        .min(bytes / PARSE_BYTES_PER_THREAD);
+    if threads < 2 {
+        return texts.iter().map(|text| crol_syntax::parse(text)).collect();
+    }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let work = || {
+        let mut parsed = Vec::new();
+        loop {
+            let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let Some(text) = texts.get(index) else {
+                return parsed;
+            };
+            parsed.push((index, crol_syntax::parse(text)));
+        }
+    };
+    let mut parsed = std::thread::scope(|scope| {
+        // A thread that cannot start leaves its share to the others, and
+        // this one always works.
+        let workers: Vec<_> = (1..threads)
+            .filter_map(|_| {
+                std::thread::Builder::new()
+                    .stack_size(PARSE_STACK)
+                    .spawn_scoped(scope, work)
+                    .ok()
+            })
+            .collect();
+        let mut parsed = work();
+        for worker in workers {
+            match worker.join() {
+                Ok(more) => parsed.extend(more),
+                Err(panic) => std::panic::resume_unwind(panic),
+            }
+        }
+        parsed
+    });
+    parsed.sort_unstable_by_key(|(index, _)| *index);
+    parsed.into_iter().map(|(_, parse)| parse).collect()
+}
+
 fn compile_documents(
     sources: &Sources,
     layers: &[Layer],
@@ -334,8 +390,12 @@ fn compile_documents(
                 );
             }
         }
-        for (index, (_, file)) in documents.into_iter().enumerate() {
-            let parse = crol_syntax::parse(sources.file(*file).text());
+        let texts: Vec<&str> = documents
+            .iter()
+            .map(|(_, file)| sources.file(*file).text())
+            .collect();
+        let layer_parses = parse_all(&texts);
+        for (index, ((_, file), parse)) in documents.into_iter().zip(layer_parses).enumerate() {
             diagnostics.extend(
                 parse.errors().iter().map(|error| {
                     Diagnostic::error(Span::new(*file, error.range()), error.message())
@@ -788,5 +848,34 @@ pub fn evaluate_value(sources: &Sources, file: FileId) -> Evaluation {
         value,
         diagnostics,
         ..Evaluation::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parsing_on_threads_gives_what_parsing_in_order_gives() {
+        // Enough text for several threads, some of it with syntax errors.
+        let texts: Vec<String> = (0..600)
+            .map(|i| {
+                let broken = if i % 7 == 0 { "+: ,\n" } else { "" };
+                let entry = format!("k{i}: {{ a: {i}, b: \"text\" }},\n");
+                format!("{broken}{}", entry.repeat(200))
+            })
+            .collect();
+        let texts: Vec<&str> = texts.iter().map(String::as_str).collect();
+        let bytes: usize = texts.iter().map(|text| text.len()).sum();
+        assert!(bytes >= 2 * PARSE_BYTES_PER_THREAD);
+
+        let parsed = parse_all(&texts);
+        assert_eq!(parsed.len(), texts.len());
+        for (text, parse) in texts.iter().zip(&parsed) {
+            let alone = crol_syntax::parse(text);
+            assert_eq!(parse.syntax().to_string(), *text);
+            assert_eq!(parse.errors(), alone.errors());
+        }
+        assert!(parsed.iter().any(|parse| !parse.errors().is_empty()));
     }
 }
