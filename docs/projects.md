@@ -64,13 +64,11 @@ command prints.
 ```crol
 // project.crol
 Project {
-    layers: List(
-        [
-            { name: "base", dir: "data::base", read_only: true },
-            { name: "extension", dir: "data::extension", .. },
-            { name: "local", dir: "data::local", .. },
-        ],
-    ),
+    layers: List([
+        { name: "base", dir: "data::base", read_only: true },
+        { name: "extension", dir: "data::extension", .. },
+        { name: "local", dir: "data::local", .. },
+    ]),
     variants: [Grouped(["dev", "prod", "prod_eu"]), Discrete("cache")],
     parents: { prod_eu: "prod" },
     ..,

@@ -566,6 +566,105 @@ fn a_block_that_broke_does_not_change_the_layout_around_it() {
 }
 
 #[test]
+fn a_sole_container_argument_shares_the_brackets_of_its_call() {
+    check_with(
+        &FormatConfig::default().with_max_width(24),
+        "a: List([{ b: 1 }, { c: 2 }, { d: 3 }])\ne: Some({ f: 1, g: 2, h: 3, i: 4 })\nj: Some(List([1000, 2000, 3000]))\nk: Foo((1000, 2000, 3000, 4000))\nl: m!([1000, 2000, 3000, 4000])",
+        expect![[r#"
+            a: List([
+                { b: 1 },
+                { c: 2 },
+                { d: 3 },
+            ])
+            e: Some({
+                f: 1,
+                g: 2,
+                h: 3,
+                i: 4,
+            })
+            j: Some(List([
+                1000,
+                2000,
+                3000,
+            ]))
+            k: Foo((
+                1000,
+                2000,
+                3000,
+                4000,
+            ))
+            l: m!([
+                1000,
+                2000,
+                3000,
+                4000,
+            ])
+        "#]],
+    );
+}
+
+#[test]
+fn a_block_written_broken_shares_the_brackets_too() {
+    check(
+        "a: Some({\n    b: 1,\n})",
+        expect![[r#"
+        a: Some({
+            b: 1,
+        })
+    "#]],
+    );
+}
+
+#[test]
+fn other_arguments_keep_a_line_of_their_own() {
+    check_with(
+        &FormatConfig::default().with_max_width(12),
+        "a: Foo([1, 2], [3, 4])\nb: Foo(\"a long string\")\nc: Foo([])\nd: Foo(&x ~ { y: 1 })\ne: Foo([1, 2].long_key)",
+        expect![[r#"
+            a: Foo(
+                [1, 2],
+                [3, 4],
+            )
+            b: Foo(
+                "a long string",
+            )
+            c: Foo([])
+            d: Foo(
+                &x ~ {
+                    y: 1,
+                },
+            )
+            e: Foo(
+                [
+                    1,
+                    2,
+                ].long_key,
+            )
+        "#]],
+    );
+}
+
+#[test]
+fn a_comment_beside_a_sole_argument_keeps_it_on_its_own_line() {
+    check(
+        "a: Foo(\n    // why\n    [1],\n)\nb: Foo(\n    [1], // why\n)\nc: Foo([\n    // inside\n    1,\n])",
+        expect![[r#"
+            a: Foo(
+                // why
+                [1],
+            )
+            b: Foo(
+                [1], // why
+            )
+            c: Foo([
+                // inside
+                1,
+            ])
+        "#]],
+    );
+}
+
+#[test]
 fn long_use_attributes_break_one_path_per_line() {
     check_with(
         &FormatConfig::default().with_max_width(30),

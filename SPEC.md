@@ -2777,6 +2777,9 @@ tree.
   that does not fit fills each line up to an operator, and goes on one level
   further in; a block, list or tuple after an operator stays there and
   breaks inside instead;
+- a named tuple or macro call whose only argument is a block, list or tuple
+  breaks inside that argument, so `List([` and `])` each share a line, unless
+  the argument is empty or a comment stands beside it;
 - a `#![use(...)]` goes on one line if it fits, else one path per line with
   a trailing comma;
 - spaces around binary operators and after `:` and `,`; none inside

@@ -7,6 +7,8 @@
 //!   else one entry per line with a trailing comma; a block written with a
 //!   line break after its `{` stays broken;
 //! - so does the list of a `#![use(...)]`;
+//! - a named tuple or macro call with one argument, a block, list or tuple,
+//!   breaks inside that argument: `List([` on one line, `])` on the last;
 //! - a binary expression that does not fit breaks after an operator, and what
 //!   follows is indented one more level, unless it is a container, which
 //!   stays and breaks inside;
@@ -840,8 +842,33 @@ impl Formatter {
         })
     }
 
+    /// The only argument of a named tuple or macro call, if it is a container
+    /// with something in it and no comment around it. The two then break as
+    /// one, so `List([` shares a line. This must not depend on how the source
+    /// breaks its blocks, or formatting would not be idempotent.
+    fn sole_container(node: &SyntaxNode) -> Option<SyntaxNode> {
+        if !matches!(node.kind(), NAMED_TUPLE | MACRO_CALL) {
+            return None;
+        }
+        let items = container_items(&Self::items_node(node));
+        let [Item::Element(argument, None)] = items.as_slice() else {
+            return None;
+        };
+        let is_container = matches!(
+            argument.kind(),
+            BLOCK | LIST_EXPR | TUPLE_EXPR | NAMED_TUPLE | MACRO_CALL
+        );
+        (is_container
+            && !has_interior_comment(argument)
+            && !container_items(&Self::items_node(argument)).is_empty())
+        .then(|| argument.clone())
+    }
+
     fn broken(&self, node: &SyntaxNode, indent: usize) -> String {
         let (prefix, open, close) = self.container_parts(node);
+        if let Some(argument) = Self::sole_container(node) {
+            return format!("{prefix}{open}{}{close}", self.broken(&argument, indent));
+        }
         let mut out = format!("{prefix}{open}\n");
         let items = container_items(&Self::items_node(node));
         self.write_items(&items, indent + 1, &mut out);
