@@ -404,6 +404,88 @@ fn freeing_keys_changes_neither_values_nor_messages() {
     );
 }
 
+/// What a data set evaluates to with `threads`: the base, every context's
+/// root, and every message, each with its place.
+fn on_threads(
+    documents: &[&str],
+    threads: usize,
+) -> (
+    Option<crol_eval::Value>,
+    Vec<(crol_eval::Context, crol_eval::Value)>,
+    Vec<String>,
+) {
+    use crol_eval::{DataOptions, evaluate_data};
+
+    let mut sources = Sources::new();
+    let layers: Vec<Layer> = documents
+        .iter()
+        .enumerate()
+        .map(|(i, text)| {
+            let name = format!("{i}.crod");
+            Layer {
+                name: name.clone(),
+                documents: vec![(name.clone(), sources.add(name, *text))],
+            }
+        })
+        .collect();
+    let options = DataOptions::default().with_threads(Some(threads));
+    let evaluation = evaluate_data(&sources, &layers, &options);
+    let messages = evaluation
+        .diagnostics
+        .iter()
+        .map(|d| format!("{:?} {}", d.span, d.message))
+        .collect();
+    let contexts = evaluation.value.as_ref().map_or(Vec::new(), |base| {
+        let root = |data: &crol_eval::ContextData| (data.context.clone(), data.root(base));
+        evaluation.contexts.iter().map(root).collect()
+    });
+    (evaluation.value, contexts, messages)
+}
+
+#[test]
+fn threads_change_neither_values_nor_messages() {
+    let mut generator = Gen(0x7EAD_5AFE);
+    let mut with_contexts = 0;
+    for round in 0..1_500 {
+        // Conditions, references to other contexts, and values that spread
+        // each other, which fail in some contexts and not in others.
+        let base = if round % 2 == 0 {
+            generator.data_document()
+        } else {
+            generator.linked_document()
+        };
+        let local = generator.data_document().replace("t :=", "u :=");
+        if [&base, &local]
+            .iter()
+            .any(|t| !crol_syntax::parse(t).errors().is_empty())
+        {
+            continue;
+        }
+        let documents = [base.as_str(), local.as_str()];
+        let (value, contexts, messages) = on_threads(&documents, 1);
+        for threads in [2, 3, 8] {
+            let (other, other_contexts, other_messages) = on_threads(&documents, threads);
+            let text = format!("{threads} threads:\n{base}\n--\n{local}");
+            assert_eq!(messages, other_messages, "{text}");
+            match (&value, &other) {
+                (Some(a), Some(b)) => assert!(a.identical(b), "{text}"),
+                (None, None) => {}
+                _ => panic!("only one of them evaluates: {text}"),
+            }
+            assert_eq!(contexts.len(), other_contexts.len(), "{text}");
+            for ((context, a), (other, b)) in contexts.iter().zip(&other_contexts) {
+                assert_eq!(context, other, "{text}");
+                assert!(a.identical(b), "{text}");
+            }
+        }
+        with_contexts += usize::from(contexts.len() > 2);
+    }
+    assert!(
+        with_contexts > 100,
+        "only {with_contexts} data sets had enough contexts"
+    );
+}
+
 /// Inputs the fuzz targets (`fuzz/`) found problems with.
 #[test]
 fn fuzz_findings() {

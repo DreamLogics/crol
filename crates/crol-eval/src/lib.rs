@@ -110,6 +110,13 @@ pub struct DataOptions {
     /// Merge a block at a root key with the value below, instead of
     /// replacing it, as a `schema.crod` does (`SPEC.md` 10.12).
     pub merge_root: bool,
+    /// How many threads evaluate the contexts after the base, each its
+    /// share of them. `None` uses as many as the machine has, up to 3, when
+    /// there is enough work (at least 20 000 expressions); `Some(1)` uses
+    /// none. The result is the same either way; more threads cost memory,
+    /// as each holds its own cells, and computes again what its contexts
+    /// need of the base.
+    pub threads: Option<usize>,
 }
 
 /// A shared [`DefaultsProvider`], for [`DataOptions::defaults`].
@@ -137,11 +144,26 @@ impl Default for DataOptions {
             defaults: None,
             init_defaults: false,
             merge_root: false,
+            threads: None,
         }
     }
 }
 
+/// The most threads [`DataOptions::threads`] uses on its own: where
+/// PERFORMANCE.md measured the most speed for the least memory.
+const MAX_EVAL_THREADS: usize = 3;
+
+/// How many expressions there must be before [`DataOptions::threads`] uses
+/// threads on its own: below this, starting them costs more than they save.
+const THREADED_EXPRS: usize = 20_000;
+
 impl DataOptions {
+    /// Sets [`DataOptions::threads`].
+    pub fn with_threads(mut self, threads: Option<usize>) -> Self {
+        self.threads = threads;
+        self
+    }
+
     /// Sets [`DataOptions::merge_root`].
     pub fn with_merge_root(mut self, merge: bool) -> Self {
         self.merge_root = merge;
@@ -472,8 +494,20 @@ fn evaluate_lowered(
         init_defaults: options.init_defaults,
         merge_root: options.merge_root,
         known_base,
+        only: None,
     };
-    let (result, mut errors) = eval::evaluate_data(&lowered.ir, &input);
+    let threads = match options.threads {
+        Some(threads) => threads.max(1),
+        None if lowered.ir.exprs.len() >= THREADED_EXPRS => std::thread::available_parallelism()
+            .map_or(1, std::num::NonZero::get)
+            .min(MAX_EVAL_THREADS),
+        None => 1,
+    };
+    let (result, mut errors) = if threads > 1 {
+        eval::evaluate_data_threaded(&lowered.ir, &input, threads)
+    } else {
+        eval::evaluate_data(&lowered.ir, &input)
+    };
     diagnostics.append(&mut errors);
     let Some(result) = result else {
         return Evaluation {
@@ -683,6 +717,7 @@ fn explain_paths(
         init_defaults: options.init_defaults,
         merge_root: options.merge_root,
         known_base: None,
+        only: None,
     };
     eval::explain(&lowered.ir, &input, requests, context)
 }

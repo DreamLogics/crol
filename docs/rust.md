@@ -356,6 +356,7 @@ that out when you do not set `variants`.
 | `contexts`                | `None`: all        | the contexts `compose_data` evaluates                        |
 | `each_variant`            | `false`            | with no `contexts`, the base and [one context for each variant](variants.md#using-more-than-one-context) |
 | `max_contexts`            | `4096`             | the most contexts evaluated when `contexts` is `None`        |
+| `threads`                 | `None`: decided    | how many threads evaluate the contexts; `Some(1)` uses none. The result is the same, and more threads take more memory |
 | `variant_keys`            | `Any`              | [keys per context](variants.md#keys-that-exist-only-in-some-contexts) |
 | `implicit_some`           | `true`             | accept `x` for an `Option`, as `Some(x)`                     |
 | `allow_unknown_fields`    | `false`            | ignore fields a struct does not have                         |

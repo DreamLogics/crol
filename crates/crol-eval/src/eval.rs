@@ -52,6 +52,14 @@ struct Cell {
     /// The root key being evaluated when the cell was made (see
     /// [`Evaluator::window`]).
     born: u32,
+    /// The context the cell was made for, as [`context_tag`] gives it, so
+    /// that a context's cells can be freed and the base's kept.
+    context: u32,
+}
+
+/// A context's index as a cell records it.
+fn context_tag(context: usize) -> u32 {
+    u32::try_from(context).unwrap_or(u32::MAX)
 }
 
 enum State {
@@ -119,6 +127,7 @@ impl Cell {
             expr: None,
             location: None,
             born: 0,
+            context: 0,
         })
     }
 }
@@ -528,8 +537,6 @@ pub(crate) struct Evaluator<'ir> {
     /// Whether an older cell was computed meanwhile: what it holds outlives
     /// the key, and may hold cells made meanwhile.
     window_escaped: bool,
-    /// Whether a root key of the base was made again.
-    remade: bool,
 }
 
 impl Drop for Evaluator<'_> {
@@ -737,13 +744,13 @@ pub(crate) fn evaluate(ir: &Ir, root: ExprId) -> (Option<Value>, Vec<Diagnostic>
         window: 0,
         window_cell: std::ptr::null(),
         window_escaped: false,
-        remade: false,
     };
     let root_cell = Rc::new(Cell {
         state: RefCell::new(State::Running),
         expr: Some(root),
         location: None,
         born: 0,
+        context: 0,
     });
     evaluator.cells.borrow_mut().push(root_cell.clone());
     let location = root_location(&root_cell);
@@ -806,6 +813,9 @@ pub(crate) struct DataInput<'a> {
     pub(crate) merge_root: bool,
     /// The base root, if it was evaluated before.
     pub(crate) known_base: Option<&'a Value>,
+    /// Of the contexts to evaluate, only these, which the evaluation on
+    /// threads uses to give each thread its share; `None` for all of them.
+    pub(crate) only: Option<&'a [Context]>,
 }
 
 /// The evaluated data: the variants (declared, or found in the data), the
@@ -814,6 +824,12 @@ pub(crate) struct DataResult {
     pub(crate) variants: Variants,
     pub(crate) base: Option<Value>,
     pub(crate) contexts: Vec<ContextData>,
+    /// Every context to evaluate, the base first, whether or not this
+    /// evaluation did.
+    planned: Vec<Context>,
+    /// The errors of evaluation, each with the contexts it is in, in the
+    /// order found; [`finish`] turns them into diagnostics.
+    found: Vec<(Diagnostic, Vec<Context>)>,
 }
 
 /// How one context's data differs from the base: the keys whose value is
@@ -1028,7 +1044,244 @@ pub(crate) fn evaluate_data(
     let Some(plan) = DataPlan::new(ir, input, &mut diagnostics) else {
         return (None, diagnostics);
     };
-    let contexts = match plan.evaluated_contexts(input) {
+    in_order(ir, input, &plan, diagnostics)
+}
+
+/// Evaluates the contexts one after another, with the plan made and what
+/// making it found.
+fn in_order(
+    ir: &Ir,
+    input: &DataInput<'_>,
+    plan: &DataPlan<'_>,
+    diagnostics: Vec<Diagnostic>,
+) -> (Option<DataResult>, Vec<Diagnostic>) {
+    let (result, mut diagnostics) = evaluate_raw(ir, input, plan, diagnostics);
+    let result = result.map(|mut result| {
+        finish(&mut result, input, &mut diagnostics);
+        result
+    });
+    (result, diagnostics)
+}
+
+/// The stack of a thread that evaluates: as much as a main thread usually
+/// has, as [`MAX_DEPTH`] and [`MAX_VALUE_DEPTH`] were set against that.
+const EVAL_STACK: usize = 8 << 20;
+
+/// [`evaluate_data`], with the contexts after the base evaluated on up to
+/// `threads` threads. The base is evaluated first, alone; then each thread
+/// evaluates its share of the contexts from the base's value, as
+/// [`crate::evaluate_contexts`] does, computing what it needs of the base
+/// again. The result is the same as evaluating in order, diagnostics
+/// included; the cost is the memory the threads hold at once.
+pub(crate) fn evaluate_data_threaded(
+    ir: &Ir,
+    input: &DataInput<'_>,
+    threads: usize,
+) -> (Option<DataResult>, Vec<Diagnostic>) {
+    // One plan for every thread: it is much of the cost of a context.
+    let mut diagnostics = Vec::new();
+    let Some(plan) = DataPlan::new(ir, input, &mut diagnostics) else {
+        return (None, diagnostics);
+    };
+    // With one context or none threads have no use, and an error in the
+    // list of contexts is for the evaluation in order to report. A reference
+    // to another context makes contexts depend on each other (`SPEC.md`
+    // 8.4), so they are evaluated together.
+    let planned = match plan.evaluated_contexts(input) {
+        Ok(planned) if planned.len() > 2 && !plan.keys.values().any(|k| k.reads.switch) => planned,
+        _ => return in_order(ir, input, &plan, diagnostics),
+    };
+    // What making the plan found, for the evaluation that reports it.
+    let mut plan_diagnostics = std::mem::take(&mut diagnostics);
+    // The base alone, unless it is known. Its diagnostics are the static
+    // ones, which every thread would find again, so theirs are dropped;
+    // with a known base, the first thread's are kept instead.
+    let first = match input.known_base {
+        Some(_) => DataResult {
+            variants: plan.variants.clone(),
+            base: None,
+            contexts: Vec::new(),
+            planned: Vec::new(),
+            found: Vec::new(),
+        },
+        None => {
+            let base_input = DataInput {
+                only: Some(&[]),
+                ..*input
+            };
+            let reported = std::mem::take(&mut plan_diagnostics);
+            let (first, found) = evaluate_raw(ir, &base_input, &plan, reported.clone());
+            diagnostics = found;
+            plan_diagnostics = reported;
+            let Some(first) = first else {
+                return (None, diagnostics);
+            };
+            first
+        }
+    };
+    let base = first.base.as_ref().or(input.known_base);
+    let Some(base) = base.filter(|_| first.found.is_empty()) else {
+        // The base failed, so every context reports its own errors, in
+        // order (`SPEC.md` 12.5): the whole evaluation is done as usual.
+        return in_order(ir, input, &plan, plan_diagnostics);
+    };
+    let todo = &planned[1..];
+    let threads = threads.clamp(1, todo.len().max(1));
+    let shares: Vec<Vec<Context>> = (0..threads)
+        .map(|t| todo.iter().skip(t).step_by(threads).cloned().collect())
+        .collect();
+    let known_base = input.known_base.is_some();
+    let evaluate = |share: &[Context]| {
+        let share_input = DataInput {
+            known_base: Some(base),
+            only: Some(share),
+            ..*input
+        };
+        // Only the first thread reports what making the plan found, and only
+        // if the base was not evaluated here, which did.
+        let first_share = std::ptr::eq(share.as_ptr(), shares[0].as_ptr());
+        let reported = if known_base && first_share {
+            plan_diagnostics.clone()
+        } else {
+            Vec::new()
+        };
+        evaluate_raw(ir, &share_input, &plan, reported)
+    };
+    let mut results: Vec<Option<(Option<DataResult>, Vec<Diagnostic>)>> =
+        std::thread::scope(|scope| {
+            // A thread that cannot start leaves its share to this thread,
+            // which takes the first share itself.
+            let mut workers = Vec::with_capacity(shares.len());
+            for share in &shares[1..] {
+                let worker = std::thread::Builder::new()
+                    .stack_size(EVAL_STACK)
+                    .spawn_scoped(scope, || evaluate(share))
+                    .ok();
+                workers.push(worker);
+            }
+            let mut results = vec![Some(evaluate(&shares[0]))];
+            for (worker, share) in workers.into_iter().zip(&shares[1..]) {
+                results.push(match worker {
+                    Some(worker) => match worker.join() {
+                        Ok(result) => Some(result),
+                        Err(panic) => std::panic::resume_unwind(panic),
+                    },
+                    None => Some(evaluate(share)),
+                });
+            }
+            results
+        });
+
+    // Each context's data in the planned order, and the errors as the
+    // evaluation in order would find them: by the first context each is
+    // in, then by the order within that context.
+    let position: std::collections::HashMap<&Context, usize> = planned
+        .iter()
+        .enumerate()
+        .map(|(i, context)| (context, i))
+        .collect();
+    let mut contexts: Vec<Option<ContextData>> = todo.iter().map(|_| None).collect();
+    let mut found: Vec<((usize, usize), Diagnostic, Vec<usize>)> = Vec::new();
+    let mut merge = |result: DataResult, share: usize| {
+        for data in result.contexts {
+            let index = position[&data.context];
+            contexts[index - 1] = Some(data);
+        }
+        for (n, (diagnostic, in_contexts)) in result.found.into_iter().enumerate() {
+            let mut indices: Vec<usize> = in_contexts.iter().map(|c| position[c]).collect();
+            match found.iter_mut().find(|(_, d, _)| *d == diagnostic) {
+                Some((_, _, all)) => all.append(&mut indices),
+                None => found.push(((indices[0], n + share), diagnostic, indices)),
+            }
+        }
+    };
+    let DataResult {
+        variants,
+        base: own_base,
+        found: base_found,
+        ..
+    } = first;
+    let base_result = DataResult {
+        variants: variants.clone(),
+        base: None,
+        contexts: Vec::new(),
+        planned: Vec::new(),
+        found: base_found,
+    };
+    merge(base_result, 0);
+    for (share, result) in results.iter_mut().enumerate() {
+        let (result, mut own) = result.take().expect("every share has a result");
+        if share == 0 && input.known_base.is_some() {
+            diagnostics.append(&mut own);
+        }
+        let Some(result) = result else {
+            return (None, diagnostics);
+        };
+        merge(result, share);
+    }
+    found.sort_by_key(|(key, ..)| *key);
+    let found = found
+        .into_iter()
+        .map(|(_, diagnostic, mut indices)| {
+            indices.sort_unstable();
+            indices.dedup();
+            let in_contexts = indices.into_iter().map(|i| planned[i].clone()).collect();
+            (diagnostic, in_contexts)
+        })
+        .collect();
+    let mut result = DataResult {
+        variants,
+        base: own_base,
+        contexts: contexts.into_iter().flatten().collect(),
+        planned,
+        found,
+    };
+    finish(&mut result, input, &mut diagnostics);
+    (Some(result), diagnostics)
+}
+
+/// What comes after evaluating: the check of each context's keys against
+/// the base (`SPEC.md` 8.5), and the errors found, each saying which
+/// contexts it is in where that is not all of them (`SPEC.md` 12.5).
+fn finish(result: &mut DataResult, input: &DataInput<'_>, diagnostics: &mut Vec<Diagnostic>) {
+    let empty_keyed = Keyed::default();
+    let base = result.base.as_ref().or(input.known_base);
+    let base_keyed = match base.map(|v| &v.kind) {
+        Some(ValueKind::Keyed(keyed)) => keyed,
+        _ => &empty_keyed,
+    };
+    check_variant_keys(
+        base_keyed,
+        &result.contexts,
+        input.variant_keys,
+        &result.variants,
+        diagnostics,
+    );
+    for (mut diagnostic, in_contexts) in std::mem::take(&mut result.found) {
+        if in_contexts.len() < result.planned.len() {
+            let mut names: Vec<String> = in_contexts
+                .iter()
+                .take(3)
+                .map(|context| result.variants.display(context).to_string())
+                .collect();
+            if in_contexts.len() > 3 {
+                names.push(format!("and {} more", in_contexts.len() - 3));
+            }
+            diagnostic.message = format!("in {}: {}", names.join(", "), diagnostic.message);
+        }
+        diagnostics.push(diagnostic);
+    }
+    diagnostics.sort_by_key(|d| (d.span.file, d.span.range.start()));
+}
+
+/// [`evaluate_data`] up to, not including, [`finish`].
+fn evaluate_raw(
+    ir: &Ir,
+    input: &DataInput<'_>,
+    plan: &DataPlan<'_>,
+    mut diagnostics: Vec<Diagnostic>,
+) -> (Option<DataResult>, Vec<Diagnostic>) {
+    let planned = match plan.evaluated_contexts(input) {
         Ok(contexts) => contexts,
         Err(message) => {
             let span = input.ops.first().map_or(Span::detached(), |op| op.span);
@@ -1036,13 +1289,17 @@ pub(crate) fn evaluate_data(
             return (None, diagnostics);
         }
     };
+    let contexts: Vec<&Context> = match input.only {
+        Some(only) => only.iter().collect(),
+        None => planned[1..].iter().collect(),
+    };
     let mut evaluator = Evaluator {
         ir,
         diagnostics: Vec::new(),
         stack: Vec::new(),
         steps: 0,
         contexts: Vec::new(),
-        plan: Some(&plan),
+        plan: Some(plan),
         share: false,
         base_created: Vec::new(),
         defaults: input.defaults,
@@ -1053,7 +1310,6 @@ pub(crate) fn evaluate_data(
         window: 0,
         window_cell: std::ptr::null(),
         window_escaped: false,
-        remade: false,
     };
     // Errors in the static structure of the chains are reported once.
     evaluator.check_chains(input);
@@ -1063,25 +1319,26 @@ pub(crate) fn evaluate_data(
         return (None, diagnostics);
     }
 
-    let mut found: Vec<(Diagnostic, Vec<usize>)> = Vec::new();
-    let mut record = |evaluator: &mut Evaluator<'_>, index: usize| {
+    let mut found: Vec<(Diagnostic, Vec<Context>)> = Vec::new();
+    let mut record = |evaluator: &mut Evaluator<'_>, context: &Context| {
         for diagnostic in evaluator.diagnostics.drain(..) {
             match found.iter_mut().find(|(d, _)| *d == diagnostic) {
-                Some((_, in_contexts)) => in_contexts.push(index),
-                None => found.push((diagnostic, vec![index])),
+                Some((_, in_contexts)) => in_contexts.push(context.clone()),
+                None => found.push((diagnostic, vec![context.clone()])),
             }
         }
     };
 
     // What a context evaluates is not needed once it is done, unless a
     // reference reads another context, which may be in a cell of the base.
-    let forget = input.known_base.is_none() && !plan.keys.values().any(|key| key.reads.switch);
+    let forget = !plan.keys.values().any(|key| key.reads.switch);
     // Nor is what a root key of the base holds, unless something reads it.
-    evaluator.evict = forget && !plan.keys.values().any(|key| key.reads.whole);
+    evaluator.evict =
+        input.known_base.is_none() && forget && !plan.keys.values().any(|key| key.reads.whole);
 
     // The base, in full, unless it is known: then what a context needs of it
     // is computed when it does (`SPEC.md` 8.1).
-    let base_id = evaluator.context_state(&contexts[0]);
+    let base_id = evaluator.context_state(&planned[0]);
     let base_cell = evaluator.contexts[base_id].root_cell.clone();
     let base = match input.known_base {
         Some(known) => Some(std::borrow::Cow::Borrowed(known)),
@@ -1094,17 +1351,16 @@ pub(crate) fn evaluate_data(
     };
     let base_failed = base.is_none() || !evaluator.diagnostics.is_empty();
     evaluator.share = !base_failed && !input.evaluate_every_key;
-    record(&mut evaluator, 0);
+    record(&mut evaluator, &planned[0]);
     let empty_keyed = Keyed::default();
     let base_keyed = match base.as_ref().map(|v| &v.kind) {
         Some(ValueKind::Keyed(keyed)) => keyed,
         _ => &empty_keyed,
     };
 
-    let mut per_context = Vec::with_capacity(contexts.len() - 1);
-    for (index, context) in contexts.iter().enumerate().skip(1) {
+    let mut per_context = Vec::with_capacity(contexts.len());
+    for context in contexts {
         evaluator.steps = 0;
-        evaluator.remade = false;
         let cells_before = evaluator.cells.borrow().len();
         let contexts_before = evaluator.contexts.len();
         let id = evaluator.context_state(context);
@@ -1174,10 +1430,9 @@ pub(crate) fn evaluate_data(
             .map(|(_, key, change)| (key, change))
             .chain(own)
             .collect();
-        record(&mut evaluator, index);
-        // A root key of the base made again holds what the context made.
-        if forget && !evaluator.remade {
-            evaluator.forget(cells_before, contexts_before);
+        record(&mut evaluator, context);
+        if forget {
+            evaluator.forget(cells_before, contexts_before, id);
         }
         if !failed {
             per_context.push(ContextData {
@@ -1188,28 +1443,6 @@ pub(crate) fn evaluate_data(
             });
         }
     }
-    evaluator.check_variant_keys(
-        base_keyed,
-        &per_context,
-        input.variant_keys,
-        &mut diagnostics,
-    );
-    // An error in only some contexts says in which (`SPEC.md` 12.5).
-    for (mut diagnostic, in_contexts) in found {
-        if in_contexts.len() < contexts.len() {
-            let mut names: Vec<String> = in_contexts
-                .iter()
-                .take(3)
-                .map(|&i| plan.variants.display(&contexts[i]).to_string())
-                .collect();
-            if in_contexts.len() > 3 {
-                names.push(format!("and {} more", in_contexts.len() - 3));
-            }
-            diagnostic.message = format!("in {}: {}", names.join(", "), diagnostic.message);
-        }
-        diagnostics.push(diagnostic);
-    }
-    diagnostics.sort_by_key(|d| (d.span.file, d.span.range.start()));
     let variants = plan.variants.clone();
     (
         Some(DataResult {
@@ -1219,6 +1452,8 @@ pub(crate) fn evaluate_data(
                 std::borrow::Cow::Borrowed(_) => None,
             }),
             contexts: per_context,
+            planned,
+            found,
         }),
         diagnostics,
     )
@@ -1348,7 +1583,6 @@ pub(crate) fn explain(
         window: 0,
         window_cell: std::ptr::null(),
         window_escaped: false,
-        remade: false,
     };
     let id = evaluator.context_state(&context);
     Ok(requests
@@ -1676,12 +1910,23 @@ impl<'a> DataPlan<'a> {
 }
 
 impl Evaluator<'_> {
-    /// Drops the cells and contexts made since these counts, breaking what
-    /// cycles they hold, as dropping the evaluator does.
-    fn forget(&mut self, cells: usize, contexts: usize) {
-        for cell in self.cells.get_mut().drain(cells..) {
-            *cell.state.borrow_mut() = State::Running;
+    /// Drops the cells of `context` and the contexts made since these
+    /// counts, breaking what cycles they hold, as dropping the evaluator
+    /// does. Cells of other contexts made meanwhile, the base's as a context
+    /// reads a key of it, are kept: the base's values hold them.
+    fn forget(&mut self, cells: usize, contexts: usize, context: usize) {
+        let tag = context_tag(context);
+        let all = self.cells.get_mut();
+        let mut kept = cells;
+        for i in cells..all.len() {
+            if all[i].context == tag {
+                *all[i].state.borrow_mut() = State::Running;
+            } else {
+                all.swap(kept, i);
+                kept += 1;
+            }
         }
+        all.truncate(kept);
         self.contexts.truncate(contexts);
     }
 
@@ -1692,11 +1937,17 @@ impl Evaluator<'_> {
             Job::Literal(expr) => Some(*expr),
             Job::Path { .. } | Job::Merge { .. } | Job::Key(_) => None,
         };
+        let context = match &job {
+            Job::Expr { env, .. } => env.context,
+            Job::Path { context, .. } | Job::Merge { context, .. } => *context,
+            Job::Key(_) | Job::Literal(_) => 0,
+        };
         let cell = Rc::new(Cell {
             state: RefCell::new(State::Pending(Box::new(job))),
             expr,
             location,
             born: self.window,
+            context: context_tag(context),
         });
         self.cells.borrow_mut().push(cell.clone());
         cell
@@ -1710,6 +1961,7 @@ impl Evaluator<'_> {
             expr: Some(expr),
             location,
             born: self.window,
+            context: 0,
         })
     }
 
@@ -1796,44 +2048,45 @@ impl Evaluator<'_> {
             }
         }
     }
+}
 
-    /// Checks the keys of each context against the base (`SPEC.md` 8.5).
-    fn check_variant_keys(
-        &self,
-        base: &Keyed,
-        contexts: &[ContextData],
-        rule: VariantKeys,
-        diagnostics: &mut Vec<Diagnostic>,
-    ) {
-        if rule == VariantKeys::Any {
-            return;
-        }
-        let variants = &self.plan.expect("data mode").variants;
-        for data in contexts {
-            for (key, change) in &data.changes {
-                match (change, base.entries.get(key)) {
-                    (Some(value), None) => diagnostics.push(Diagnostic::error(
+/// Checks the keys of each context against the base (`SPEC.md` 8.5).
+fn check_variant_keys(
+    base: &Keyed,
+    contexts: &[ContextData],
+    rule: VariantKeys,
+    variants: &Variants,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if rule == VariantKeys::Any {
+        return;
+    }
+    for data in contexts {
+        for (key, change) in &data.changes {
+            match (change, base.entries.get(key)) {
+                (Some(value), None) => diagnostics.push(Diagnostic::error(
+                    value.span,
+                    format!(
+                        "in {}: `{key}` does not exist in the base, and the variant keys rule is `{rule:?}`",
+                        variants.display(&data.context)
+                    ),
+                )),
+                (None, Some(value)) if rule == VariantKeys::SameKeys => {
+                    diagnostics.push(Diagnostic::error(
                         value.span,
                         format!(
-                            "in {}: `{key}` does not exist in the base, and the variant keys rule is `{rule:?}`",
+                            "`{key}` does not exist in {}, and the variant keys rule is `SameKeys`",
                             variants.display(&data.context)
                         ),
-                    )),
-                    (None, Some(value)) if rule == VariantKeys::SameKeys => {
-                        diagnostics.push(Diagnostic::error(
-                            value.span,
-                            format!(
-                                "`{key}` does not exist in {}, and the variant keys rule is `SameKeys`",
-                                variants.display(&data.context)
-                            ),
-                        ));
-                    }
-                    _ => {}
+                    ));
                 }
+                _ => {}
             }
         }
     }
+}
 
+impl Evaluator<'_> {
     /// The index of a context's state, evaluating its root if it is new.
     fn context_state(&mut self, context: &Context) -> usize {
         if let Some(i) = self.contexts.iter().position(|c| c.context == *context) {
@@ -1845,6 +2098,7 @@ impl Evaluator<'_> {
             expr: None,
             location: None,
             born: 0,
+            context: context_tag(id),
         });
         self.cells.borrow_mut().push(root_cell.clone());
         let root = root_location(&root_cell);
@@ -1940,6 +2194,7 @@ impl Evaluator<'_> {
             expr: cell.expr,
             location: cell.location.clone(),
             born: 0,
+            context: 0,
         });
         let cells = self.cells.get_mut();
         for cell in cells.drain(cells_before..) {
@@ -1953,7 +2208,6 @@ impl Evaluator<'_> {
     /// operation here, as the job of the key's cell.
     fn run_key(&mut self, key: &Arc<str>) -> Eval<Rc<Shaped>> {
         let plan = self.plan.expect("only data mode has root keys");
-        self.remade = true;
         let base = &self.contexts[0];
         let order = plan.chain(&plan.keys[&**key], &base.context);
         let (root, chain, templates) = (
@@ -2213,6 +2467,7 @@ impl Evaluator<'_> {
                 expr: Some(ir.value_binds[bind].expr),
                 location: None,
                 born: self.window,
+                context: context_tag(context),
             });
             vbinds = Some(Rc::new(VBindLink {
                 id: bind,

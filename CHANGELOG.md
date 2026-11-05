@@ -50,10 +50,14 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 - Evaluation takes about 45% less memory at its peak on large data with many
   contexts, and a context evaluated later no longer evaluates the base again.
-- Evaluation takes about 50% less memory at its peak on large data and half the time,
+- Evaluation takes about 45% less memory at its peak on large data and 60% less time,
   as what a root key holds is freed once its value is computed.
 - Large data is parsed on up to 8 threads, which takes about a third off compiling, for
   about 50 MB more at the peak with glibc's allocator.
+- On large data, the contexts after the base are evaluated on up to 3 threads, which
+  takes about a third off evaluating 10 contexts, for about 25 MB more at the peak.
+  `threads` in `CrolConfig` and `DataOptions` sets how many, and `Some(1)` uses none. The
+  result is the same either way.
 - **Breaking:** `Key::Str` holds an `Arc<str>` rather than a `String`, so that values
   with the same field share its name. Write `Key::Str("port".into())`.
 - **Breaking:** `ValueKind::String`, `Id`, `UnitName` and `NamedTuple`, and

@@ -156,6 +156,10 @@ pub struct CrolConfig<T = String> {
     pub each_variant: bool,
     /// The most contexts evaluated without `contexts`. Default: 4096.
     pub max_contexts: usize,
+    /// How many threads evaluate the contexts after the base. `None` decides
+    /// from the machine and the size of the data, and `Some(1)` uses none.
+    /// The result is the same either way; more threads take more memory.
+    pub threads: Option<usize>,
     /// Which keys a context may have, compared with the base (`SPEC.md`
     /// 8.5). Default: `Any`.
     pub variant_keys: VariantKeys,
@@ -188,6 +192,7 @@ impl<T> Default for CrolConfig<T> {
             contexts: None,
             each_variant: false,
             max_contexts: 4096,
+            threads: None,
             variant_keys: VariantKeys::Any,
             implicit_some: true,
             allow_unknown_fields: false,
@@ -872,6 +877,7 @@ impl<T: VariantName> CrolComposer<T> {
             .with_contexts(contexts)
             .with_each_variant(self.config.each_variant)
             .with_max_contexts(self.config.max_contexts)
+            .with_threads(self.config.threads)
             .with_variant_keys(self.config.variant_keys)
             .with_defaults(schema);
         let lowered: Vec<Option<Arc<[u8]>>> =

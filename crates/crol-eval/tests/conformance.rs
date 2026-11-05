@@ -166,6 +166,38 @@ fn run(case: &Path) -> (Option<String>, Option<String>, String) {
         layers.push(Layer { name, documents });
     }
     let evaluation = evaluate_data(&sources, &layers, &options(case));
+    // On threads, the result is the same, diagnostics included.
+    let threaded = evaluate_data(&sources, &layers, &options(case).with_threads(Some(4)));
+    assert_eq!(
+        threaded.diagnostics,
+        evaluation.diagnostics,
+        "{}: diagnostics differ on threads",
+        case.display()
+    );
+    match (&threaded.value, &evaluation.value) {
+        (Some(a), Some(b)) => {
+            assert!(
+                a.identical(b),
+                "{}: the base differs on threads",
+                case.display()
+            );
+            assert_eq!(threaded.contexts.len(), evaluation.contexts.len());
+            for (a, b) in threaded.contexts.iter().zip(&evaluation.contexts) {
+                assert_eq!(a.context, b.context);
+                assert!(
+                    a.root(threaded.value.as_ref().unwrap())
+                        .identical(&b.root(b_value(&evaluation))),
+                    "{}: a context differs on threads",
+                    case.display()
+                );
+            }
+        }
+        (None, None) => {}
+        _ => panic!(
+            "{}: only one of the evaluations has a value",
+            case.display()
+        ),
+    }
     let data = evaluation.value.as_ref().map(|value| {
         print::to_all_contexts(
             value,
@@ -193,6 +225,10 @@ fn run(case: &Path) -> (Option<String>, Option<String>, String) {
         );
     }
     (data, fingerprint, errors)
+}
+
+fn b_value(evaluation: &crol_eval::Evaluation) -> &Value {
+    evaluation.value.as_ref().unwrap()
 }
 
 fn copy_formatted(from: &Path, to: &Path) {
