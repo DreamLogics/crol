@@ -93,7 +93,10 @@ fn a_missing_field_is_reported_for_the_composed_root_on_the_top_document() {
         text.contains("`Config` is missing the fields `options`, `note`, `level`"),
         "{text}"
     );
-    assert!(text.contains("local/a.crod:1:1"), "{text}");
+    assert!(
+        text.replace('\\', "/").contains("local/a.crod:1:1"),
+        "{text}"
+    );
     assert!(!text.contains("panicked"), "{text}");
 }
 
@@ -109,7 +112,10 @@ fn an_unknown_root_key_says_which_fields_there_are() {
         ),
         "{text}"
     );
-    assert!(text.contains("local/a.crod:1:"), "{text}");
+    assert!(
+        text.replace('\\', "/").contains("local/a.crod:1:"),
+        "{text}"
+    );
 }
 
 #[test]
