@@ -75,8 +75,8 @@ the texts) and the values. `big` was at about 245 ms.
 
 `big` took 1.8 times as long here as on the development machine at the same commit, so
 compare within these tables, and not with the one above. Everything below is from one
-sitting, three runs of each, on `game` unless it says `big`. The real data has not been
-measured since `c6d8861`.
+sitting, three runs of each, on `game` unless it says `big`. For the real data, see
+[the next section](#now-on-the-development-machine).
 
 | | `c6d8861` | Text, no threads | Text, threads (default) | `.crob` base, 3 threads |
 | --- | --- | --- | --- | --- |
@@ -98,6 +98,85 @@ about 55 MB of the process's peak is what the allocator holds on to.
 Against the goals: 1 is met, unless freeing cells is off (below); 2 is met, even on this
 machine. The RON loader's 1.2 s is beaten. Its 205 MB is not: 244 MB is the lowest peak
 so far, and that is without threads.
+
+### Now, on the development machine
+
+The machine of the first table, measured again at `a339fd5`, with the real data as well.
+
+| | |
+| --- | --- |
+| CPU | Intel Core i7-13700K, 16 cores (8 performance, 8 efficient), 24 threads, 30 MiB L3 |
+| Memory | 62 GiB |
+| System | Arch Linux, kernel 7.2.11, glibc 2.44, `powersave` governor (`intel_pstate`) |
+| Compiler | rustc 1.99.1, release profile (thin LTO) |
+| Allocator | glibc's |
+| Load | idle: a load average under 1 |
+
+`c6d8861` and `a339fd5` were built side by side and run in turn, in one sitting. Each
+figure is the median of 5 runs, each in a fresh process. The files were in the page
+cache, and "Load" includes reading them. The real data is the game's converted data with
+one mod layer, as 3,187 documents and 8 MB of text: a quick conversion from RON that
+writes each definition on a line and drops comments, so it is half the size of the 17 MB
+of RON above. "One core" is `taskset -c 0`. The `.crob` columns are the base layer from a
+file written beforehand, and the mod layer from text. They are a program outside the
+workspace, as `game` does not time this path: it drops the file's bytes before compiling
+and moves the texts into `Sources`, which may be why its peaks are below those of the
+slower machine's table; that was not looked into.
+
+Real data, 10 contexts:
+
+| | `c6d8861` | Text, one core | Text (default) | `.crob` base, one core | `.crob` base |
+| --- | --- | --- | --- | --- | --- |
+| Load | 455 ms | 372 ms | 264 ms | 62 ms | 68 ms |
+| Evaluate | 632 ms | 364 ms | 238 ms | 336 ms | 207 ms |
+| **Together** | **1.09 s** | **736 ms** | **502 ms** | **398 ms** | **275 ms** |
+| **Peak of the process** | **593 MB** | **253 MB** | **364 MB** (362 to 369) | **248 MB** | **307 MB** |
+| Peak after load | 234 MB | 206 MB | 206 MB | 140 MB | 139 MB |
+| One context later | 92 ms | 56 ms | 54 ms | 49 ms | 48 ms |
+
+`game`, the same way:
+
+| | `c6d8861` | Text, one core | Text (default) | `.crob` base, one core | `.crob` base |
+| --- | --- | --- | --- | --- | --- |
+| Load | 450 ms | 379 ms | 263 ms | 56 ms | 60 ms |
+| Evaluate | 559 ms | 310 ms | 234 ms | 280 ms | 196 ms |
+| **Together** | **1.01 s** | **689 ms** | **497 ms** | **336 ms** | **256 ms** |
+| **Peak of the process** | **595 MB** | **244 MB** | **338 MB** (318 to 350) | **232 MB** | **282 MB** |
+| One context later | 83 ms | 52 ms | 47 ms | 46 ms | 42 ms |
+
+`big`, from `cargo bench`, 15 measurements: 226 ms at `c6d8861` (209 to 254), 111 ms now
+(106 to 120), and 134 ms on one core (132 to 147).
+
+From the benches themselves, `game` compiles in 430 ms at `c6d8861` and 245 ms now, and
+reads and links a `.crob` base in 17 and 63 ms, now 11 and 46 ms.
+
+The fingerprints did not change: `c70beb7fde6e7406` for `game`, and the same one for the
+real data at both commits, in every run.
+
+Against the slower machine, this one takes about 0.55 times as long, in every phase, and
+the peak from text agrees. Going from `c6d8861` to now is worth about the same on both: 2.2 times
+as fast from text, and 4 times with a `.crob` base. `game` also still stands in for the
+real data: the real data's peak is 9 to 26 MB above it, and it evaluates about 20% slower
+on one core and about 5% with threads. Its peak on one core, 253 MB, says that freeing a
+root key's cells works there too.
+
+Those figures call `crol_eval` directly. A program that uses `CrolComposer` pays a little
+more, on the real data, the same way:
+
+| | Text, one core | Text | `.crob` base, one core | `.crob` base |
+| --- | --- | --- | --- | --- |
+| `compose_data` | 758 ms | 522 ms | 406 ms | 280 ms |
+| Peak of the process | 265 MB | 373 MB | 272 MB | 330 MB |
+
+With a `.crob` base that is 23 MB more. `CrolData` keeps the lowered bytes for `reload`,
+which is the likely cause, though it was not isolated; see point 1 below. `reload` of one
+new document, over a `.crob` base, took 451 ms and raised the peak to 514 MB, as the old
+data stays in place until the new data has loaded.
+
+The RON loader's 1.2 s and 205 MB were measured on this machine, but earlier, and they
+include deserializing into the game's model and its own checks. The figures here stop at
+evaluated values, so they do not compare directly: CROL's 502 ms and 275 ms leave that
+work still to do. Its lowest peak on the real data is 248 MB, which 205 MB still beats.
 
 ### Threads
 

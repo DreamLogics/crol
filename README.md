@@ -142,6 +142,28 @@ answer your question, please
 [`SPEC.md`](SPEC.md) is the precise definition of the format. You do not need it
 to use CROL, but it settles the fine points.
 
+## Performance
+
+CROL is built to load a whole game's data at every start. On the data of a real-time
+strategy game, with about 14,000 definitions, 8 MB of text in 3,200 files, a mod layer
+over them, and 9 variants, so 10 contexts:
+
+| Load and evaluate everything | Time | Peak memory |
+| --- | --- | --- |
+| From text | 522 ms | 373 MB |
+| From text, on one core | 758 ms | 265 MB |
+| Base layer from a [`.crob` file](docs/layers.md#compiled-layers) | 280 ms | 330 MB |
+| Base layer from a `.crob` file, on one core | 406 ms | 272 MB |
+
+That is `compose_data` on an Intel Core i7-13700K, the median of 5 runs with the files in
+the page cache, stopping at evaluated values, before any deserializing. Evaluating one
+more context afterwards takes about 50 ms. CROL uses a few threads only when the data is
+large enough to gain from them, and they cost memory: `CrolConfig::threads` sets how many
+evaluate contexts.
+
+`cargo bench -p crol-eval --bench game` measures data of the same shape on your machine.
+[`PERFORMANCE.md`](PERFORMANCE.md) has the method and the full figures.
+
 ## Status
 
 CROL is in early development: the format and the APIs will change before 1.0.
