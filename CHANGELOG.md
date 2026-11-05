@@ -54,6 +54,9 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Changed
 
+- Errors from `+`, `-` and path entries say whether a key is set, not whether it
+  exists, which also reads right for a struct field: ``+: `name` is already set``,
+  ``-: `name` is not set``, `` `web` is not set, so it cannot be patched`` (`SPEC.md` 5).
 - The formatter's default line width, and `PrettyConfig`'s, is 80 instead of 100,
   and more long lines break (`SPEC.md` 12.2). A binary expression breaks after an
   operator, with what follows indented one more level, and a `#![use(...)]` goes one

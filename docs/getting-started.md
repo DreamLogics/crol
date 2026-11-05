@@ -227,7 +227,7 @@ worker.count: 1
 
 ```console
 $ crol check config.crod local.crod
-error: worker.count: `worker` does not exist, so it cannot be patched
+error: worker.count: `worker` is not set, so it cannot be patched
   ┌─ local.crod:3:1
   │
 3 │ worker.count: 1

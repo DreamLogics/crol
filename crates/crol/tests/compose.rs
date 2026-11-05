@@ -247,10 +247,7 @@ fn extends_loads_the_layers_below() {
         .unwrap()
         .compose_data()
         .unwrap_err();
-    assert!(
-        error.to_string().contains("`web` does not exist"),
-        "{error}"
-    );
+    assert!(error.to_string().contains("`web` is not set"), "{error}");
 
     let config = CrolConfig {
         load_extends: true,
@@ -806,7 +803,7 @@ fn errors_in_a_compiled_layer_point_into_its_text() {
         .load_layer(top)
         .compose_data()
         .unwrap_err();
-    assert!(error.to_string().contains("already exists"), "{error}");
+    assert!(error.to_string().contains("is already set"), "{error}");
 }
 
 #[test]

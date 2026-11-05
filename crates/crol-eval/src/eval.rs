@@ -459,9 +459,8 @@ fn describe_target(entry: &Entry) -> String {
     out
 }
 
-/// The error for a step of a path entry that does not exist, as for a key
-/// that does not exist: `web.nope.x: `web.nope` does not exist, so it cannot
-/// be patched`. `here` is where the step would be, and `rest` the steps after
+/// The error for a step of a path entry that is not set, as for a key that
+/// is not set: `web.nope.x: `web.nope` is not set, so it cannot be patched`. `here` is where the step would be, and `rest` the steps after
 /// it; `op` is `None` for a removal.
 fn missing_step(
     selector: &Selector,
@@ -478,14 +477,14 @@ fn missing_step(
         Location::describe,
     );
     let Some(op) = op else {
-        return format!("-: `{missing}` does not exist");
+        return format!("-: `{missing}` is not set");
     };
     let prefix = match op {
         SetOp::Set => "",
         SetOp::Declare | SetOp::Ensure => op.symbol(),
     };
     let rest: String = rest.iter().map(describe_selector).collect();
-    format!("{prefix}{missing}{rest}: `{missing}` does not exist, so it cannot be patched")
+    format!("{prefix}{missing}{rest}: `{missing}` is not set, so it cannot be patched")
 }
 
 fn describe_selector(selector: &Selector) -> String {
@@ -2413,7 +2412,7 @@ impl Evaluator<'_> {
                     }
                     let _ = self.fail(
                         op.span,
-                        format!("{target}: `{key}` does not exist, so it cannot be patched"),
+                        format!("{target}: `{key}` is not set, so it cannot be patched"),
                     );
                     continue;
                 };
@@ -2451,7 +2450,7 @@ impl Evaluator<'_> {
             match op.op {
                 None => {
                     if value.take().is_none() {
-                        let _ = self.fail(op.span, format!("-: `{key}` does not exist"));
+                        let _ = self.fail(op.span, format!("-: `{key}` is not set"));
                     }
                 }
                 Some(set) => {
@@ -2460,9 +2459,9 @@ impl Evaluator<'_> {
                             SetOp::Declare => {
                                 let diagnostic = Diagnostic::error(
                                     op.span,
-                                    format!("+: `{key}` already exists"),
+                                    format!("+: `{key}` is already set"),
                                 )
-                                .with_related(ops[*created].span, "it is created here");
+                                .with_related(ops[*created].span, "it is set here");
                                 self.report(diagnostic);
                                 continue;
                             }
@@ -3636,7 +3635,7 @@ impl Evaluator<'_> {
                 let target = describe_target(entry);
                 let _ = self.fail(
                     entry.span,
-                    format!("{target}: `{key}` does not exist, so it cannot be patched"),
+                    format!("{target}: `{key}` is not set, so it cannot be patched"),
                 );
                 return;
             };
@@ -3665,7 +3664,7 @@ impl Evaluator<'_> {
         match entry.op {
             None => {
                 if existing.is_none() {
-                    let _ = self.fail(entry.span, format!("-: `{key}` does not exist"));
+                    let _ = self.fail(entry.span, format!("-: `{key}` is not set"));
                     return;
                 }
                 keyed.slots.shift_remove(key);
@@ -3677,7 +3676,7 @@ impl Evaluator<'_> {
                         SetOp::Declare => {
                             let other = self.span_of(&slot.value);
                             let mut diagnostic =
-                                Diagnostic::error(entry.span, format!("+: `{key}` already exists"));
+                                Diagnostic::error(entry.span, format!("+: `{key}` is already set"));
                             if let Some(other) = other {
                                 diagnostic = diagnostic.with_related(other, "its value");
                             }
@@ -3834,14 +3833,14 @@ impl Evaluator<'_> {
                 let exists = keyed.slots.contains_key(&key);
                 match recipe.op {
                     None if !exists => {
-                        return Err(self.fail(span, format!("-: `{key}` does not exist")));
+                        return Err(self.fail(span, format!("-: `{key}` is not set")));
                     }
                     None => {
                         keyed.slots.shift_remove(&key);
                         keyed.defaulted.insert(key);
                     }
                     Some(SetOp::Declare) if exists => {
-                        return Err(self.fail(span, format!("+: `{key}` already exists")));
+                        return Err(self.fail(span, format!("+: `{key}` is already set")));
                     }
                     Some(SetOp::Ensure) if exists => return Ok(value.clone()),
                     Some(_) => {

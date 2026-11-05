@@ -297,7 +297,7 @@ fn ensure_and_declare_work_on_fields() {
     let error = composer(&[WHOLE, "+name: \"y\""])
         .compose::<Config>()
         .unwrap_err();
-    assert!(error.to_string().contains("already exists"), "{error}");
+    assert!(error.to_string().contains("is already set"), "{error}");
 }
 
 #[test]
