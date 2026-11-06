@@ -56,9 +56,10 @@ pub fn derive_variant_name(input: TokenStream) -> TokenStream {
 }
 
 /// Implements `crol::View`: each field reads the value's field of its own
-/// name, or the path in `#[crol(path = "combat.range.max")]`, from a struct
+/// name, as serde names it, or the path in `#[crol(path = "combat.range.max")]`, from a struct
 /// with named fields (`SPEC.md` 10.11). An `Option` is `None` where the path
 /// is missing, and `#[crol(default)]` on a field takes its `Default` there.
+/// Other `crol` attributes are left to the derives they are for.
 #[proc_macro_derive(View, attributes(crol))]
 pub fn derive_view(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -70,7 +71,8 @@ pub fn derive_view(input: TokenStream) -> TokenStream {
 /// Implements `crol::Navigable`: for a struct with named fields, a path type
 /// with a method for each field, named as serde names the field for the
 /// data (`SPEC.md` 10.14). Anything else is a type paths end at. A field's type
-/// must be `Navigable`, unless `#[crol(leaf)]` ends the path there.
+/// must be `Navigable`, unless `#[crol(leaf)]` ends the path there, and
+/// `#[crol(path = "combat.range")]` goes where it says, as for a `View`.
 #[proc_macro_derive(Navigable, attributes(crol))]
 pub fn derive_navigable(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -246,7 +248,11 @@ fn navigable(input: &DeriveInput) -> syn::Result<TokenStream2> {
         let data_name = serde_name(&ident.to_string(), &attrs, rule.as_deref(), false)?;
         let (vis, ty) = (&field.vis, &field.ty);
         let doc = format!("The path of `{data_name}`.");
-        let path = if attrs.flatten {
+        let path = if let Some(path) = &attrs.view_path {
+            let steps: Vec<&str> = path.split('.').collect();
+            let (last, before) = steps.split_last().expect("split gives a step");
+            quote!(self.0 #(.__field::<()>(#before))* .__field(#last))
+        } else if attrs.flatten {
             quote!(self.0.__retype())
         } else {
             quote!(self.0.__field(#data_name))
@@ -323,24 +329,14 @@ fn view(input: &DeriveInput) -> syn::Result<TokenStream2> {
             "View is derived for a struct with named fields",
         ));
     };
+    let rule = Attrs::parse(&input.attrs)?.rename_all;
     let mut reads = Vec::new();
     for field in &fields.named {
         let ident = field.ident.as_ref().expect("a named field");
-        let mut path = ident.to_string();
-        let mut default = false;
-        for attr in field.attrs.iter().filter(|a| a.path().is_ident("crol")) {
-            attr.parse_nested_meta(|meta| {
-                if meta.path.is_ident("path") {
-                    path = meta.value()?.parse::<LitStr>()?.value();
-                    Ok(())
-                } else if meta.path.is_ident("default") {
-                    default = true;
-                    Ok(())
-                } else {
-                    Err(meta.error("expected `path = \"...\"` or `default`"))
-                }
-            })?;
-        }
+        let attrs = Attrs::parse(&field.attrs)?;
+        let name = serde_name(&ident.to_string(), &attrs, rule.as_deref(), false)?;
+        let path = attrs.view_path.unwrap_or(name);
+        let default = attrs.view_default;
         let steps = path.split('.');
         let ty = &field.ty;
         let read = if let Some(inner) = option_inner(ty) {
@@ -454,6 +450,10 @@ struct Attrs {
     sealed: bool,
     /// `#[crol(leaf)]`: a path ends at this field.
     leaf: bool,
+    /// `#[crol(path = "...")]`: where a field is, for `View` and `Navigable`.
+    view_path: Option<String>,
+    /// `#[crol(default)]`: a `View` takes the field type's `Default`.
+    view_default: bool,
     /// `#[crol(constraints(...))]` and `#[crol(open_constraints(...))]`:
     /// the name, the `Constraint` expression, and whether it is sealed.
     constraints: Vec<(String, TokenStream2, bool)>,
@@ -569,6 +569,10 @@ impl Attrs {
                         out.sealed = true;
                     } else if path.is_ident("leaf") {
                         out.leaf = true;
+                    } else if path.is_ident("path") {
+                        out.view_path = Some(string_value(&meta)?);
+                    } else if path.is_ident("default") {
+                        out.view_default = true;
                     } else if path.is_ident("constraints") || path.is_ident("open_constraints") {
                         let sealed = path.is_ident("constraints");
                         meta.parse_nested_meta(|inner| {
@@ -594,7 +598,7 @@ impl Attrs {
                         out.rename = Some(string_value(&meta)?);
                     } else {
                         return Err(meta.error(
-                            "unknown crol attribute; the attributes are `defaults`, `explicit_defaults`, `refers(...)`, `schema = ...` and `rename = \"...\"`",
+                            "unknown crol attribute; the attributes are `defaults`, `explicit_defaults`, `refers(...)`, `schema = ...`, `rename = \"...\"`, `constraint = \"...\"`, `key_constraint = \"...\"`, `constraints(...)`, `open_constraints(...)`, `sealed`, `leaf`, `path = \"...\"` and `default`",
                         ));
                     }
                     Ok(())

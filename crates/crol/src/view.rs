@@ -3,18 +3,23 @@
 
 use std::cmp::Ordering;
 
-use crol_eval::{Defaults, Sources, Value, ValueKind};
+use crol_eval::{Defaults, Key, Sources, Value, ValueKind};
 use serde::{Deserialize, Serialize};
 
 use crate::compose::{CrolContext, CrolData, VariantName};
 use crate::de;
 use crate::error::Error;
+use crate::path::{self, IntoPath, Step};
 use crate::ser::{self, PrettyConfig};
 
 /// A type that reads fields from anywhere in a value, by path, unlike a
 /// `Deserialize` type, which has to mirror it. `#[derive(crol::View)]`
-/// implements this: a field reads the value's field of its own name, or
-/// the path in `#[crol(path = "combat.range.max")]`.
+/// implements this: a field reads the value's field of its own name, as serde
+/// names it, or the path in `#[crol(path = "combat.range.max")]`.
+///
+/// [`CrolData::variations`] and [`Query::views`] read them, and so do
+/// [`Select::view`](crate::Select::view) and
+/// [`Transaction::view`](crate::Transaction::view), at a typed path.
 pub trait View: Sized {
     /// Reads the view from a value.
     fn read(source: &ViewSource<'_>) -> Result<Self, Error>;
@@ -81,7 +86,7 @@ fn at_path<'v>(value: &'v Value, path: &[&str]) -> Option<&'v Value> {
             ValueKind::Keyed(keyed) => keyed,
             _ => return None,
         };
-        value = keyed.entries.get(&crol_eval::Key::Str((*step).into()))?;
+        value = keyed.field(step)?;
     }
     Some(unwrap_some(value))
 }
@@ -93,10 +98,10 @@ fn unwrap_some(value: &Value) -> &Value {
     }
 }
 
-/// Whether what `path` reads is `wanted`, or a list that holds it. An id
+/// Whether what `steps` read is `wanted`, or a list that holds it. An id
 /// counts as its text.
-fn holds(value: &Value, path: &[&str], wanted: &Value) -> bool {
-    let Some(found) = at_path(value, path) else {
+fn holds(value: &Value, steps: &[Step], wanted: &Value) -> bool {
+    let Some(found) = path::value_at(value, steps).map(unwrap_some) else {
         return false;
     };
     let equal = |value: &Value| match (&value.kind, &wanted.kind) {
@@ -179,7 +184,7 @@ impl<T: VariantName> CrolData<T> {
         contexts
     }
 
-    fn read_view<V: View>(&self, key: &str, value: &Value) -> Result<V, Error> {
+    pub(crate) fn read_view<V: View>(&self, key: &str, value: &Value) -> Result<V, Error> {
         V::read(&ViewSource {
             key,
             value,
@@ -197,11 +202,17 @@ pub struct Query<'a, T> {
     data: &'a CrolData<T>,
     context: CrolContext,
     type_name: Option<String>,
-    holds: Vec<(Vec<String>, Value)>,
+    holds: Vec<(Vec<Step>, Value)>,
     error: Option<Error>,
 }
 
-impl<T: VariantName> Query<'_, T> {
+impl<'a, T: VariantName> Query<'a, T> {
+    /// A query that gives this error when it is read.
+    pub(crate) fn failed(mut self, error: Error) -> Self {
+        self.error = Some(error);
+        self
+    }
+
     /// Reads the values in this context.
     pub fn in_context(mut self, context: &CrolContext) -> Self {
         self.context = context.clone();
@@ -216,12 +227,24 @@ impl<T: VariantName> Query<'_, T> {
 
     /// Only values that hold `value` at `path`, a field path such as
     /// `"behaviour.tags"`: that value, or a list with that value in it.
-    pub fn holding<S: Serialize + ?Sized>(mut self, path: &str, value: &S) -> Self {
+    pub fn holding<S: Serialize + ?Sized>(self, path: &str, value: &S) -> Self {
+        let steps = path.split('.').map(|step| Step::Key(Key::Str(step.into())));
+        self.hold(steps.collect(), value)
+    }
+
+    /// [`holding`](Self::holding) at a typed path, which starts at the type of
+    /// the values: `Unit::path().combat().range()`. It can go through a list
+    /// or an `Option` as well.
+    pub fn holding_at<B, S: Serialize + ?Sized>(self, path: impl IntoPath<B>, value: &S) -> Self {
+        self.hold(path.into_path().into_steps(), value)
+    }
+
+    fn hold<S: Serialize + ?Sized>(mut self, steps: Vec<Step>, value: &S) -> Self {
         match ser::to_value(value, &PrettyConfig::default()) {
-            Ok(value) => self
-                .holds
-                .push((path.split('.').map(str::to_owned).collect(), value)),
-            Err(error) => self.error = Some(error),
+            Ok(value) => self.holds.push((steps, value)),
+            Err(error) => {
+                self.error.get_or_insert(error);
+            }
         }
         self
     }
@@ -235,35 +258,41 @@ impl<T: VariantName> Query<'_, T> {
         self.type_name
             .as_deref()
             .is_none_or(|wanted| type_name == Some(wanted))
-            && self.holds.iter().all(|(path, wanted)| {
-                let path: Vec<&str> = path.iter().map(String::as_str).collect();
-                holds(value, &path, wanted)
+            && self
+                .holds
+                .iter()
+                .all(|(steps, wanted)| holds(value, steps, wanted))
+    }
+
+    /// What matches, in the order of the keys.
+    fn matching(&self) -> Result<Vec<(String, &'a Value)>, Error> {
+        if let Some(error) = &self.error {
+            return Err(error.clone());
+        }
+        let mut found: Vec<(String, &'a Value)> = self
+            .data
+            .keys_in(&self.context)
+            .into_iter()
+            .filter_map(|key| {
+                let value = self.data.value(&key, &self.context)?;
+                self.matches(value).then_some((key, value))
             })
+            .collect();
+        found.sort_by(|(a, _), (b, _)| a.as_bytes().cmp(b.as_bytes()));
+        Ok(found)
     }
 
     /// The keys that match.
     pub fn keys(&self) -> Result<Vec<String>, Error> {
-        if let Some(error) = &self.error {
-            return Err(error.clone());
-        }
-        let mut keys = self.data.keys_in(&self.context);
-        keys.retain(|key| {
-            self.data
-                .value(key, &self.context)
-                .is_some_and(|value| self.matches(value))
-        });
-        keys.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
-        Ok(keys)
+        let found = self.matching()?;
+        Ok(found.into_iter().map(|(key, _)| key).collect())
     }
 
     /// What matches, each read into a [`View`].
     pub fn views<V: View>(&self) -> Result<Vec<(String, V)>, Error> {
-        self.keys()?
+        self.matching()?
             .into_iter()
-            .map(|key| {
-                let value = self.data.value(&key, &self.context).ok_or_else(|| {
-                    Error::new(format!("there is no root key `{key}` in this context"))
-                })?;
+            .map(|(key, value)| {
                 let view = self.data.read_view(&key, value)?;
                 Ok((key, view))
             })

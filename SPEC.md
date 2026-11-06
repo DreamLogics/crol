@@ -2562,8 +2562,10 @@ contexts, reads the evaluated data through these instead:
   names, the base first, and values by their first context.
 - **`View`** is a type that reads fields by path.
   `#[derive(crol::View)]` implements it for a struct with named fields:
-  a field reads the value's field of its own name, or
-  `#[crol(path = "combat.range.max")]`, through `Some(...)`. Where a path
+  a field reads the value's field of its own name, as serde names it, or
+  `#[crol(path = "combat.range.max")]`, through `Some(...)`. The attribute
+  means the same to `#[derive(crol::Navigable)]` (section 10.14), and other
+  `crol` attributes mean nothing to a view. Where a path
   is missing, the field takes the default the schema records for it from
   the value's type name (section 6.1.3). Failing that an `Option` is
   `None`, `#[crol(default)]` takes the field type's `Default`, and
@@ -2572,7 +2574,9 @@ contexts, reads the evaluated data through these instead:
 - **`CrolData::query()`** chooses root keys in one context, the base
   unless `in_context` names another: `of_type(name)` by type name, and
   `holding(path, value)` by a value at a field path, or a list that holds
-  it. An id counts as its text there. `keys()` and `views::<V>()` give the
+  it. An id counts as its text there. `holding_at(path, value)` does this
+  at a typed path (section 10.14) that starts at the type of the values, and
+  can go through a list or an `Option`. `keys()` and `views::<V>()` give the
   result in the order of the keys, compared byte by byte, so it is the
   same on every machine.
 
@@ -2750,6 +2754,12 @@ it does on the composer (section 10.7), the base if it is not called, and
 `get(path)` deserializes the value at the path. The context must be evaluated:
 `db.evaluate(variants)` does that.
 
+`view::<V>(path)` reads a `View` (section 10.11) of the value at the path, which
+must be set and at or below a root key. Inside that value the view's rules
+apply, so a field it lacks can take a default where `get` is an error. `query()`
+is a `Query` in that context, and if it was not evaluated, reading the query is an
+error.
+
 **Transactions.** `db.transaction()` takes `&mut self`, and runs its operations
 in sequence. `with_variant` chooses the transaction's context, and is an error
 after its first operation. Every step that can fail returns a `Result`.
@@ -2763,7 +2773,9 @@ after its first operation. Every step that can fail returns a `Result`.
   and writes what it returns as `set` does.
 - `remove()` writes `-target`.
 - `get(path)` reads the value at that point of the transaction, and leaves it
-  open.
+  open. `view::<V>(path)` reads a view the same way.
+- `query()` is a `Query` in the transaction's context, at that point of it, and
+  leaves it open. In a scope it still covers every root key.
 - `within(path, closure)` gives the closure a transaction whose paths start at
   `path`, and goes on from there when it returns. Scopes nest, and share the
   context and the operations of the transaction they are in.
@@ -2771,9 +2783,9 @@ after its first operation. Every step that can fail returns a `Result`.
   no change if there were none.
 
 The value at a point of the transaction includes its earlier operations.
-`get` and `update` evaluate if an operation is pending, and that takes about as
-long as a reload. `set`, `set_expr` and `remove` never evaluate. An error from
-`update` ends the transaction, and one from `get` leaves it open.
+`get`, `view`, `query` and `update` evaluate if an operation is pending, and that
+takes about as long as a reload. `set`, `set_expr` and `remove` never evaluate. An error from
+`update` ends the transaction, and one from `get`, `view` or `query` leaves it open.
 
 `commit` evaluates what is still pending and runs every check that loading runs,
 constraints and sealed fields included. If it fails, the data stays as it was,

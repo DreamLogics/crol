@@ -126,6 +126,11 @@ pub struct Keyed {
 }
 
 impl Keyed {
+    /// The value of a string key, without allocating one.
+    pub fn field(&self, name: &str) -> Option<&Value> {
+        self.entries.get(&KeyRef::Str(name))
+    }
+
     /// Whether it holds the string key `name`, without allocating a [`Key`].
     pub fn has_name(&self, name: &str) -> bool {
         self.entries.contains_key(&KeyRef::Str(name))

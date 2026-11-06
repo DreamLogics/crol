@@ -16,6 +16,7 @@ use crate::error::Error;
 use crate::expression::IntoExpression;
 use crate::path::{self, IntoPath, Step};
 use crate::ser::{self, PrettyConfig};
+use crate::view::{Query, View};
 use crate::writer::DataWriter;
 
 /// The layer of the operations of a database without an active layer.
@@ -326,17 +327,32 @@ fn read<T: DeserializeOwned, V: VariantName>(
     if steps.is_empty() {
         return data.deserialize_root(Some(context));
     }
-    let not_set = || {
-        let target = path::target(steps).unwrap_or_default();
-        Error::new(format!("`{target}` is not set in this context"))
-    };
-    let value = found(data, steps, context).ok_or_else(not_set)?;
+    let value = found(data, steps, context).ok_or_else(|| not_set(steps))?;
     let key = match &steps[0] {
         Step::Key(Key::Str(key)) => Some(&**key),
         _ => None,
     };
     let options = data.deserialize_options().clone();
     crate::deserialize(value, data.sources(), options, key).map(|(value, _)| value)
+}
+
+fn not_set(steps: &[Step]) -> Error {
+    let target = path::target(steps).unwrap_or_default();
+    Error::new(format!("`{target}` is not set in this context"))
+}
+
+/// Reads a [`View`] of the value at a path, which must be set. Fields the
+/// value lacks go by the rules of the view (`SPEC.md` 10.11).
+fn read_view<W: View, V: VariantName>(
+    data: &CrolData<V>,
+    steps: &[Step],
+    context: &CrolContext,
+) -> Result<W, Error> {
+    let Some(Step::Key(Key::Str(key))) = steps.first() else {
+        return Err(Error::new("a view needs a path to a root key or below it"));
+    };
+    let value = found(data, steps, context).ok_or_else(|| not_set(steps))?;
+    data.read_view(key, value)
 }
 
 /// Layered data, read through typed paths and changed by transactions
@@ -477,7 +493,7 @@ pub struct Select<'d, R, V = String> {
     root: PhantomData<fn() -> R>,
 }
 
-impl<R, V: VariantName> Select<'_, R, V> {
+impl<'d, R, V: VariantName> Select<'d, R, V> {
     /// Makes a variant active in the context to read, as it does on the
     /// composer. The context must be evaluated: see [`CrolDb::evaluate`].
     pub fn with_variant(mut self, variant: impl Into<V>) -> Result<Self, Error> {
@@ -494,6 +510,23 @@ impl<R, V: VariantName> Select<'_, R, V> {
     {
         let context = self.data.context(self.variants.iter().cloned())?;
         read(self.data, path.into_path().steps(), &context)
+    }
+
+    /// A [`View`] of the value at a path: `.view::<Stats>(path)`. Where the
+    /// value lacks a field, the view's rules say what it reads, but the path
+    /// itself must be set.
+    pub fn view<W: View>(&self, path: impl IntoPath<R>) -> Result<W, Error> {
+        let context = self.data.context(self.variants.iter().cloned())?;
+        read_view(self.data, path.into_path().steps(), &context)
+    }
+
+    /// A [`Query`] of this context. If it was not evaluated, reading the query
+    /// is an error.
+    pub fn query(&self) -> Query<'d, V> {
+        match self.data.context(self.variants.iter().cloned()) {
+            Ok(context) => self.data.query().in_context(&context),
+            Err(error) => self.data.query().failed(error),
+        }
     }
 }
 
@@ -740,6 +773,22 @@ impl<'d, B, V: VariantName> Transaction<'d, B, V> {
         let steps = self.full(path);
         let context = self.state.evaluate()?;
         read(self.state.data(), &steps, &context)
+    }
+
+    /// A [`View`] of the value at a path, at this point of the transaction:
+    /// `.view::<Stats>(path)`. An error leaves the transaction open.
+    pub fn view<W: View>(&mut self, path: impl IntoPath<B>) -> Result<W, Error> {
+        let steps = self.full(path);
+        let context = self.state.evaluate()?;
+        read_view(self.state.data(), &steps, &context)
+    }
+
+    /// A [`Query`] of the transaction's context, at this point of it, over the
+    /// whole data, whatever `within` says. An error leaves the transaction
+    /// open.
+    pub fn query(&mut self) -> Result<Query<'_, V>, Error> {
+        let context = self.state.evaluate()?;
+        Ok(self.state.data().query().in_context(&context))
     }
 
     /// Gives a closure this transaction with paths that start at `path`, and

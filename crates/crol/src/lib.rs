@@ -268,9 +268,14 @@
 //! ```
 //!
 //! [`CrolComposer::load_active`] names the file of the active layer, and
-//! [`CrolDb::save`] writes it. [The guide][database-guide] has the rest.
+//! [`CrolDb::save`] writes it. A selection and a transaction also read
+//! [`View`]s, small structs that read a few fields by path, and [`Query`]s,
+//! which choose keys by what they hold. A transaction sees its own writes in
+//! them. The guide has the rest, on [databases][database-guide] and on
+//! [views and queries][view-guide].
 //!
 //! [database-guide]: https://github.com/DreamLogics/crol/blob/main/docs/rust.md#changing-data-with-a-database
+//! [view-guide]: https://github.com/DreamLogics/crol/blob/main/docs/rust.md#views-and-queries
 //!
 //! # Errors
 //!

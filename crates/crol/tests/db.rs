@@ -878,3 +878,265 @@ fn a_string_key_that_is_no_identifier_is_written_as_an_accessor() {
     db.transaction().at(&path).set(2).unwrap().commit().unwrap();
     assert_eq!(db.select().get(&path).unwrap(), 2);
 }
+
+mod views {
+    use crol::{CrolComposer, CrolDb, CrolLayer, Navigable as _, schema};
+    use crol_derive::{Navigable, Schema, View};
+    use serde_derive::{Deserialize, Serialize};
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Navigable)]
+    struct Combat {
+        range: u32,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Navigable, Schema)]
+    #[crol(defaults)]
+    struct Unit {
+        hp: u32,
+        #[crol(schema = any)]
+        combat: Combat,
+        tags: Vec<String>,
+        #[serde(default = "three")]
+        speed: u32,
+    }
+
+    fn three() -> u32 {
+        3
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Navigable, Schema)]
+    enum Definition {
+        Unit(Unit),
+    }
+
+    #[derive(Debug, Serialize, Deserialize, Navigable)]
+    struct Game {
+        artillery: Unit,
+        trooper: Unit,
+    }
+
+    /// A view of a `Unit`.
+    #[derive(Debug, PartialEq, View)]
+    struct Stats {
+        hp: u32,
+        #[crol(path = "combat.range")]
+        range: u32,
+        armour: Option<u32>,
+    }
+
+    const TEXT: &str = r#"
+        +artillery: Unit { hp: 1100, combat: { range: 12 }, tags: ["mech"], speed: 1 }
+        +trooper: Unit { hp: 50, combat: { range: 5 }, tags: [], speed: 2 }
+        artillery<empire>.hp: 1200
+    "#;
+
+    fn db() -> CrolDb<Game> {
+        let layer = CrolLayer::from_sources("base", [("a.crod", TEXT)]);
+        CrolComposer::new().load_layer(layer).compose_db().unwrap()
+    }
+
+    fn stats(hp: u32, range: u32) -> Stats {
+        Stats {
+            hp,
+            range,
+            armour: None,
+        }
+    }
+
+    #[test]
+    fn select_reads_a_view_at_a_path_in_its_context() {
+        let db = db();
+        let artillery = Game::path().artillery();
+        let base = db.select().view::<Stats>(&artillery).unwrap();
+        assert_eq!(base, stats(1100, 12));
+        let empire = db.select().with_variant("empire").unwrap();
+        assert_eq!(empire.view::<Stats>(&artillery).unwrap(), stats(1200, 12));
+    }
+
+    #[test]
+    fn a_view_reads_below_a_root_key() {
+        #[derive(Debug, PartialEq, View)]
+        struct Reach {
+            range: u32,
+        }
+        let db = db();
+        let path = Game::path().trooper().combat();
+        let reach = db.select().view::<Reach>(path).unwrap();
+        assert_eq!(reach, Reach { range: 5 });
+    }
+
+    #[test]
+    fn a_view_needs_its_path_to_be_set_and_to_reach_a_root_key() {
+        let db: CrolDb<Game> = CrolComposer::new()
+            .load_layer(CrolLayer::from_sources("base", [("a.crod", "+a: 1")]))
+            .compose_db()
+            .unwrap();
+        let error = db.select().view::<Stats>(Game::path().trooper());
+        assert_eq!(
+            error.unwrap_err().to_string(),
+            "`trooper` is not set in this context"
+        );
+        let error = db.select().view::<Stats>(Game::path());
+        assert!(error.unwrap_err().to_string().contains("a root key"));
+    }
+
+    #[test]
+    fn a_view_takes_its_default_where_a_get_is_an_error() {
+        #[derive(Debug, PartialEq, View)]
+        struct Pace {
+            speed: u32,
+        }
+        let text = r#"
+            +artillery: Unit { hp: 1, combat: { range: 1 }, tags: [], .. }
+            +trooper: Unit { hp: 1, combat: { range: 1 }, tags: [], .. }
+        "#;
+        let db: CrolDb<Game> = CrolComposer::new()
+            .schema(schema::build::<Definition>())
+            .load_layer(CrolLayer::from_sources("base", [("a.crod", text)]))
+            .compose_db()
+            .unwrap();
+        let unit = Game::path().trooper();
+        assert_eq!(db.select().view::<Pace>(&unit).unwrap(), Pace { speed: 3 });
+        assert!(db.select().get(unit.speed()).is_err());
+    }
+
+    #[test]
+    fn select_queries_its_context() {
+        let db = db();
+        let empire = db.select().with_variant("empire").unwrap();
+        let query = empire.query();
+        let strong = query.holding_at(Unit::path().hp(), &1200);
+        assert_eq!(strong.keys().unwrap(), ["artillery"]);
+        let base = db.select().query();
+        let strong = base.holding_at(Unit::path().hp(), &1200);
+        assert!(strong.keys().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_typed_query_goes_through_lists_and_fields() {
+        let db = db();
+        let select = db.select();
+        let query = select.query();
+        let by_tag = query.holding_at(Unit::path().tags(), "mech");
+        assert_eq!(by_tag.keys().unwrap(), ["artillery"]);
+        let query = select.query();
+        let first = query.holding_at(Unit::path().tags().at(0), "mech");
+        assert_eq!(first.keys().unwrap(), ["artillery"]);
+        let query = select.query();
+        let range = query.holding_at(Unit::path().combat().range(), &5);
+        assert_eq!(range.keys().unwrap(), ["trooper"]);
+    }
+
+    #[test]
+    fn a_transaction_sees_its_own_writes_in_views_and_queries() {
+        let mut db = db();
+        let trooper = Game::path().trooper();
+        let mut tx = db
+            .transaction()
+            .at(trooper.clone().tags())
+            .set(vec!["mech".to_owned()])
+            .unwrap()
+            .at(trooper.clone().hp())
+            .set(60)
+            .unwrap();
+        assert_eq!(tx.view::<Stats>(&trooper).unwrap(), stats(60, 5));
+        let query = tx.query().unwrap();
+        let mechs = query.of_type("Unit").holding("tags", "mech");
+        assert_eq!(mechs.keys().unwrap(), ["artillery", "trooper"]);
+        drop(tx);
+        assert_eq!(db.select().view::<Stats>(&trooper).unwrap(), stats(50, 5));
+    }
+
+    #[test]
+    fn a_view_in_a_scope_starts_at_the_scope() {
+        let mut db = db();
+        db.transaction()
+            .within(Game::path().trooper(), |mut unit| {
+                let hp: Stats = unit.view(Unit::path()).unwrap();
+                assert_eq!(hp, stats(50, 5));
+                Ok(unit)
+            })
+            .unwrap()
+            .commit()
+            .unwrap();
+    }
+
+    #[test]
+    fn a_query_in_a_transaction_can_decide_what_to_write() {
+        let mut db = db();
+        let mut tx = db.transaction();
+        let mechs = tx.query().unwrap().holding("tags", "mech").keys().unwrap();
+        assert_eq!(mechs, ["artillery"]);
+        let tx = tx.at(Game::path().artillery().hp()).set(2000).unwrap();
+        tx.commit().unwrap();
+        let view = db.select().view::<Stats>(Game::path().artillery());
+        assert_eq!(view.unwrap().hp, 2000);
+    }
+
+    #[test]
+    fn one_struct_can_be_a_view_and_navigable() {
+        #[derive(Debug, PartialEq, View, Navigable)]
+        struct Both {
+            hp: u32,
+            #[crol(path = "combat.range")]
+            range: u32,
+            #[crol(default)]
+            #[crol(leaf)]
+            speed: u32,
+        }
+        let path = Both::path().range();
+        assert_eq!(
+            format!("{:?}", crol::IntoPath::<Both>::into_path(path)),
+            ".combat.range"
+        );
+        let db = db();
+        let both = db.select().view::<Both>(Game::path().trooper()).unwrap();
+        assert_eq!(
+            both,
+            Both {
+                hp: 50,
+                range: 5,
+                speed: 2
+            }
+        );
+    }
+
+    #[test]
+    fn a_view_names_a_field_as_serde_does() {
+        #[derive(Debug, PartialEq, Deserialize, View, Navigable)]
+        #[serde(rename_all = "camelCase")]
+        struct Renamed {
+            hit_points: u32,
+            #[serde(rename = "tags")]
+            labels: Vec<String>,
+        }
+        let text = r#"+a: { hitPoints: 3, tags: ["x"] }"#;
+        let data: crol::CrolData = CrolComposer::new()
+            .load_layer(CrolLayer::from_sources("base", [("a.crod", text)]))
+            .compose_data()
+            .unwrap();
+        let view = &data.variations::<Renamed>("a").unwrap()[0].value;
+        let expected = Renamed {
+            hit_points: 3,
+            labels: vec!["x".to_owned()],
+        };
+        assert_eq!(*view, expected);
+        let path = crol::IntoPath::<Renamed>::into_path(Renamed::path().hit_points());
+        assert_eq!(format!("{path:?}"), ".hitPoints");
+    }
+
+    #[test]
+    fn a_query_of_a_context_that_was_not_evaluated_fails_when_read() {
+        let db: CrolDb<Game> = CrolComposer::with_cfg(crol::CrolConfig {
+            variants: crol::CrolVariants::new().add_grouped(["empire", "rebel"]),
+            contexts: Some(Vec::new()),
+            ..Default::default()
+        })
+        .load_layer(CrolLayer::from_sources("base", [("a.crod", TEXT)]))
+        .compose_db()
+        .unwrap();
+        let select = db.select().with_variant("empire").unwrap();
+        let error = select.query().holding("tags", "mech").keys().unwrap_err();
+        assert!(error.to_string().contains("evaluated"), "{error}");
+    }
+}
