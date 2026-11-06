@@ -42,6 +42,10 @@ $ cargo run
 port 8080
 ```
 
+If your program writes that layer itself, as with settings a user changes, use
+[a database](rust.md#changing-data-with-a-database). `load_active` needs no check,
+since a file that does not exist is an empty layer.
+
 ## Choosing the environment at run time
 
 Files cannot read the environment, but your program can. Pick the variant in

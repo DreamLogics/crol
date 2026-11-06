@@ -675,8 +675,17 @@ operations in one layer of its own, the _active layer_. The layers below stay as
 they are, and references follow a change like any other. It needs the `derive`
 feature.
 
+```crol
+// data/base/config.crod
++retries: 1
++options: { dark: false, port: 80 }
+<prod> { retries: & * 10 }
+```
+
 ```rust
 // src/main.rs
+use std::path::Path;
+
 use crol::{CrolComposer, CrolDb, Navigable, croxp};
 use serde::{Deserialize, Serialize};
 
@@ -694,14 +703,15 @@ struct Config {
 
 fn main() -> Result<(), crol::Error> {
     let mut db: CrolDb<Config> = CrolComposer::new()
-        .load("data/base")?
+        .load(Path::new("data/base"))?
         .load_active("user.crod")?
         .compose_db()?;
 
     let dark = Config::path().options().dark();
     println!("{}", db.select().get(&dark)?);
 
-    db.transaction()
+    let reloaded = db
+        .transaction()
         .at(Config::path().retries())
         .set_expr(croxp! { & + 2 })?
         .within(Config::path().options(), |options| {
@@ -712,16 +722,66 @@ fn main() -> Result<(), crol::Error> {
                 .set(8080)
         })?
         .commit()?;
+    println!("{:?}", reloaded.changed);
+    println!("{}", db.select().get(&dark)?);
+
+    let prod = db.select().with_variant("prod")?;
+    println!("{}", prod.get(Config::path().retries())?);
 
     db.save()
 }
 ```
 
-`Config::path()` starts a path, and each field continues it. Lists take
-`.at(index)`, maps `.key(key)`, `Option` `.some()`, which goes through `None` too,
-and tuples `.t0()`, `.t1()`. A
-path holds no data, so keep it and use it as often as you like. A field whose type
-has no `Navigable` needs `#[crol(leaf)]`, and enums are where a path ends.
+```console
+$ cargo run
+false
+[Changed("options"), Changed("retries")]
+true
+30
+```
+
+```crol
+// user.crod, as the program saved it
+retries: & + 2
+options.dark: !&
+^options.port: 8080
+```
+
+### Paths
+
+`Config::path()` starts a path, and each field continues it. A path holds no data,
+so keep it and use it as often as you like: pass `&path` to use it again.
+
+| On a                                | Step                             |
+| ----------------------------------- | -------------------------------- |
+| struct with `#[derive(Navigable)]`  | `.field()`, named as in the Rust |
+| `Vec`                               | `.at(index)`                     |
+| `HashMap`, `BTreeMap`, `IndexMap`   | `.key(key)`, a string or an integer |
+| `Option`                            | `.some()`                        |
+| tuple of up to four                 | `.t0()`, `.t1()`, ...            |
+
+A `Box` is walked through, and so is a `#[serde(flatten)]` field. `#[serde(rename)]`
+changes the key the path writes, not the method's name. A `#[serde(skip)]` field has
+no method. A field whose type has no `Navigable` needs `#[crol(leaf)]`. Paths end at
+enums and sets: they do not go into an enum's variants yet.
+
+`.at(i)` is positional: a saved write goes to that index, whatever element is there
+by then.
+
+### Reading
+
+`db.select().get(path)` reads the value at a path, as the type the path ends at.
+`Config::path()` on its own reads the whole root. A path that is not there is an
+error when it is read, and that includes a field left out for its default and a path
+through a `None`.
+
+`.with_variant("prod")?` chooses the context, as it does on the composer, and the
+base context is read without it. If you limited the contexts with
+`CrolConfig::contexts` or `each_variant`, a context that was not evaluated is an
+error: `db.evaluate(["prod"])?` evaluates it first. `db.data()` gives the
+[`CrolData`](#inspecting-the-result) as it is now, with what has been committed.
+
+### Writing
 
 | On a place, after `.at(path)` | Writes                                           |
 | ----------------------------- | ------------------------------------------------ |
@@ -730,32 +790,52 @@ has no `Navigable` needs `#[crol(leaf)]`, and enums are where a path ends.
 | `.update(closure)`            | a fixed value, computed in Rust                  |
 | `.remove()`                   | a remove                                         |
 
+Each gives the transaction back, to go on with `.at`, or to `commit`. The root itself
+cannot be written: a path has to reach a root key. A write through `.some()` goes
+through a `None` too, as [`?`](language.md#changing-what-is-already-there) does, so it can start a value
+that is not there.
+
 **Prefer `set_expr`.** `croxp! { & + 2 }` is kept as written, so if the base later
 goes from 1 to 10, the value goes from 3 to 12. A mistake in it is a compile error,
-and `#name` puts a Rust variable in it: `croxp! { & + #delta }`. `update` is for
-what CROL cannot say. It stores a constant, so on a computed value it ends the
-computing, and each one after a write evaluates the data again, which takes about
-as long as a reload. `set`, `set_expr` and `remove` wait for `commit`.
+though nothing checks its type before it is read. `#name` puts a Rust variable in
+it: `croxp! { & + #delta }`. That makes the macro a `Result`, because the value may
+not serialize, and `set_expr` takes that too. `update` is for what CROL cannot say.
+It stores a constant, so on a computed value it ends the computing, and each one
+after a write evaluates the data again, which takes about as long as a reload. `set`,
+`set_expr` and `remove` wait for `commit`.
 
 **A transaction runs in sequence.** `tx.get(path)` and `update` see the operations
-before them. `commit` applies them all or none, and until then nothing changes.
-Dropping a transaction discards it. `commit` changes the data in memory, and
-`save` writes the file.
+before them. `.within(path, closure)` gives the closure the transaction with paths
+that start at `path`, as the example does for `Options`, and scopes can nest. An
+error from `get` leaves the transaction open. An error from anything else ends it.
 
-**A write applies to the transaction's context.** `.with_variant("prod")` first, and
+**`commit` applies them all or none.** It runs every check that loading runs,
+[constraints](schemas.md#constraints) and [sealed fields](schemas.md#sealed-fields)
+included, and if one fails the data stays as it was. It returns what
+[`reload`](#reloading) does, so `changed` lists the root keys that changed, those that
+follow a reference included. Until then nothing changes, and dropping a transaction
+discards it. `commit` changes the data in memory, and `save` writes the file.
+
+**A write applies to the transaction's context.** `.with_variant("prod")?` first, and
 the write goes under `<prod>`. Without it, the write is a base operation, which
-reaches every context except where something more specific applies. `commit` is an
-error if a write did not take effect in the transaction's context, and names the
-operation that won.
+reaches every context except where something more specific applies: with
+`<prod> { retries: & * 10 }` in the base, setting `retries` to 3 gives 3 in the base
+and 30 in `prod`. `commit` is an error if a write did not take effect in the
+transaction's context, and names the operation that won.
 
-**The database owns the active layer.** It rewrites the whole file, so comments are
-not kept, and anything it did not write is an error on loading. A file that does not
-exist yet is an empty layer. `save` refuses to overwrite a file that changed since it
-was read: a `CrolDb` is for one process, not several writing at once. Without
-`load_active`, transactions still work, and `save_as(file)` starts a new file.
+### The active layer
 
-A saved `.at(i)` goes to that index, whatever element is there by then. Paths do not
-go into an enum's variants yet.
+**It is the last layer.** `load_active` takes one `.crod` file, once, and a `load`
+after it is an error. A file that does not exist yet is an empty layer, so a first
+run needs nothing else. It is an ordinary layer, so tools can stack it on the others:
+`crol explain data/base user.crod retries` shows what the program wrote.
+
+**The database owns it.** It rewrites the whole file, so comments are not kept, and
+anything it did not write is an error on loading. `save` refuses to overwrite a file
+that changed since it was read: a `CrolDb` is for one process, not several writing
+at once. Without `load_active`, transactions still work in memory, `save` is an
+error, and `save_as(file)` starts a new file, which must not exist. The next run has
+to load that file with `load_active`.
 
 ## Cargo features
 

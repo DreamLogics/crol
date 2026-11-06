@@ -165,6 +165,53 @@ what you passed to `--group` and `--discrete`, the project file and
 one". If they can be active together, declare them as discrete variants, or
 give one [a parent](variants.md#declaring-variants).
 
+## Databases
+
+**`` the write to `retries` did not take effect: `retries<!prod>` in the layer `base` decides it ``**
+
+`commit` found that the write changed nothing in the transaction's context, because
+the operation it names applies there and wins. Change that operation, or write in a
+context where it does not apply, with `with_variant`. Nothing was changed.
+
+**`` `inner?.port` is not set in this context ``**
+
+A read reached something that is not there: a key that is missing, a field left out
+for its default, or a `None`. `update` reads first, so it fails the same way, and that
+ends the transaction. To write through a `None` without reading it, use `set`.
+
+**`` the context {prod} was not evaluated ``**
+
+`CrolConfig::contexts` or `each_variant` left that context out. Call
+`db.evaluate(["prod"])` before `select`. A transaction does this for itself.
+
+**`` user.crod: the active layer holds `+extra: 1`, which a database does not write ``**
+
+The file was edited by hand, or it is not the database's. A database owns its active
+layer, and writes only `^target: value`, `target: expression` and `-target`, in
+variant blocks. Move everything else to [a layer below](rust.md#the-active-layer).
+
+**`` user.crod changed since it was read; nothing was saved ``**
+
+Something else wrote the file after it was loaded or saved. A `CrolDb` is for one
+process. Load the file again, and repeat the transaction.
+
+**`` there is no active layer to save to: use `save_as` ``**
+
+The composer had no `load_active`. Add it, or call `save_as` with a new file.
+
+**`` composer: the active layer `user.crod` is the last layer ``**
+
+`load` or `load_active` came after `load_active`. Load the other layers first.
+
+**`` `with_variant` comes before a transaction's first operation ``**
+
+A transaction has one context. Call `with_variant` straight after `transaction()`, and
+use a second transaction for another context.
+
+**`` a write needs a path to a root key or below it ``**
+
+The root itself cannot be written. Write its keys one at a time.
+
 ## Finding files and schemas
 
 **`` a `.crol` file is a value document and cannot be a layer ``**

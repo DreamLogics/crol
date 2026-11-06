@@ -18,8 +18,8 @@ New here? Start with [getting started](getting-started.md).
 
 ## Build
 
-6. [Loading data in Rust](rust.md): how values map onto your types, and what you
-   can do with the result.
+6. [Loading data in Rust](rust.md): how values map onto your types, what you can
+   do with the result, and how your program can change it and save it.
 7. [Schemas](schemas.md): how they are generated from your Rust types, and how
    tools find them.
 8. [Project structure](projects.md): the project file, how files name each other,
@@ -42,6 +42,7 @@ New here? Start with [getting started](getting-started.md).
 | have different values in dev and production        | [Variants](variants.md)                                 |
 | know why `from_str` rejects what `compose` accepts | [Modes](modes.md#side-by-side)                          |
 | get completion in my editor                        | [Schemas](schemas.md), then [Editors](editors.md)       |
+| change data from my program and save it            | [Databases](rust.md#changing-data-with-a-database)      |
 | know where a value came from                       | [`crol explain`](cli.md#crol-explain)                   |
 | know which schema a tool is using                  | [How schemas are found](schemas.md#how-schemas-are-found) |
 | lay out a new project                              | [Recommended layouts](projects.md#recommended-layouts)  |

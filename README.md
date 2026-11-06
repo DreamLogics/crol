@@ -46,6 +46,8 @@ you:
   written next to the value they change.
 - [Schemas](docs/schemas.md), generated from Rust with
   `#[derive(crol::Schema)]`, for type checks without running your program.
+- [A database](docs/rust.md#changing-data-with-a-database): typed reads, and
+  transactions that save your program's changes to a layer of their own.
 - [A command-line tool](docs/cli.md) to check, evaluate, format and explain data.
 - [A language server](docs/editors.md) with completion, hover and diagnostics,
   and a Zed extension.
@@ -185,10 +187,10 @@ publishing the Zed extension. See the [changelog](CHANGELOG.md), and
 
 | Crate                                  | Contents                                                                                    | Status                                                                                                                                   |
 | -------------------------------------- | ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| [`crol`](crates/crol)                  | the library: `CrolComposer`, serde `Deserializer` and `Serializer`, `from_str`, `to_string` | done                                                                                                                                     |
+| [`crol`](crates/crol)                  | the library: `CrolComposer`, `CrolDb`, serde support, `from_str`, `to_string`               | done                                                                                                                                     |
 | [`crol-syntax`](crates/crol-syntax)    | lexer, error-recovering parser, lossless syntax tree, typed AST, formatter                  | done                                                                                                                                     |
 | [`crol-eval`](crates/crol-eval)        | layers, chains, the evaluator, variants, fingerprints                                       | done                                                                                                                                     |
-| [`crol-derive`](crates/crol-derive)    | `#[derive(Schema)]` and `#[derive(VariantName)]`                                            | done                                                                                                                                     |
+| [`crol-derive`](crates/crol-derive)    | `#[derive(Schema)]`, `VariantName`, `View`, `Navigable`, and `croxp!`                      | done                                                                                                                                     |
 | [`crol-lsp`](crates/crol-lsp)          | the language server, as a library                                                           | diagnostics, symbols, formatting, hover, completion, definition, references, rename of binds, semantic tokens, inlay hints, code actions |
 | [`crol-cli`](crates/crol-cli)          | the `crol` command-line tool                                                                | done                                                                                                                                     |
 | [`tree-sitter-crol`](tree-sitter-crol) | the tree-sitter grammar and queries                                                         | done                                                                                                                                     |

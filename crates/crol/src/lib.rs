@@ -12,6 +12,8 @@
 //! * [Variants][variants], for differences per environment, region or feature.
 //! * [Schemas][schemas], generated from your Rust types, which let tools check
 //!   data without running your program.
+//! * A [database][databases], which reads through typed paths and saves changes
+//!   to a layer of its own.
 //!
 //! Guide-level documentation is found in the [guide].
 //!
@@ -19,6 +21,7 @@
 //! [layers]: #layers
 //! [variants]: #variants
 //! [schemas]: #schemas
+//! [databases]: #databases
 //! [guide]: https://github.com/DreamLogics/crol/blob/main/docs/README.md
 //!
 //! # A tour of CROL
@@ -228,6 +231,46 @@
 //!
 //! [schema-guide]: https://github.com/DreamLogics/crol/blob/main/docs/schemas.md
 //! [project-guide]: https://github.com/DreamLogics/crol/blob/main/docs/projects.md
+//!
+//! ## Databases
+//!
+//! A program that changes its own data, such as settings a user edits, should
+//! not write over the files it loaded. [`CrolComposer::compose_db`] gives a
+//! [`CrolDb`], which reads through typed paths from `#[derive(crol::Navigable)]`
+//! and changes data in transactions. A transaction writes operations to the
+//! _active layer_, on top of the others, so the layers below stay as they are
+//! and references follow the change:
+//!
+//! ```
+//! use crol::{CrolComposer, CrolDb, CrolLayer, Navigable as _};
+//! # use crol_derive::{Navigable, croxp};
+//! use serde::{Deserialize, Serialize};
+//!
+//! #[derive(Deserialize, Serialize, Navigable)] // `crol::Navigable`
+//! struct Config {
+//!     port: u16,
+//!     url: String,
+//! }
+//!
+//! let base = CrolLayer::from_sources("base", [("a.crod", r#"
+//!     +port: 80
+//!     +url: "http://web:" + &root.port
+//! "#)]);
+//! let mut db: CrolDb<Config> = CrolComposer::new().load_layer(base).compose_db()?;
+//!
+//! db.transaction()
+//!     .at(Config::path().port())
+//!     .set_expr(croxp! { & + 1 })? // `crol::croxp!`, checked when compiling
+//!     .commit()?;
+//!
+//! assert_eq!(db.select().get(Config::path().url())?, "http://web:81");
+//! # Ok::<(), crol::Error>(())
+//! ```
+//!
+//! [`CrolComposer::load_active`] names the file of the active layer, and
+//! [`CrolDb::save`] writes it. [The guide][database-guide] has the rest.
+//!
+//! [database-guide]: https://github.com/DreamLogics/crol/blob/main/docs/rust.md#changing-data-with-a-database
 //!
 //! # Errors
 //!
