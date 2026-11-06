@@ -30,7 +30,7 @@ New here? Start with [getting started](getting-started.md).
 ## Reference
 
 10. [Command-line reference](cli.md): every `crol` command.
-11. [Editor setup](editors.md): the language server, Zed and other editors.
+11. [Editor setup](editors.md): the language server, Zed, Helix and other editors.
 12. [Troubleshooting](troubleshooting.md): common errors and what they mean.
 
 ## Which page answers my question?

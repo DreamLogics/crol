@@ -1,0 +1,21 @@
+# CROL for Helix: add this to your own languages.toml.
+
+[[language]]
+name = "crol"
+scope = "source.crol"
+injection-regex = "^crol$"
+file-types = ["crod", "crol"]
+roots = ["project.crol"]
+comment-tokens = ["//", "///"]
+block-comment-tokens = { start = "/*", end = "*/" }
+indent = { tab-width = 4, unit = "    " }
+auto-pairs = { "(" = ")", "{" = "}", "[" = "]", '"' = '"', "'" = "'" }
+language-servers = ["crol"]
+
+[language-server.crol]
+command = "crol"
+args = ["lsp"]
+
+[[grammar]]
+name = "crol"
+source = { git = "https://github.com/DreamLogics/crol", rev = "ef119be13ad4871f81ee8d47957a7e3ee6ad63c5", subpath = "tree-sitter-crol" }

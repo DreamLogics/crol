@@ -28,4 +28,4 @@ and choose this directory.
 The query files in `languages/crol/` are copies of those in
 `tree-sitter-crol/queries/`; CI checks that they are the same. The grammar is
 pinned to a commit in `extension.toml`: after changing the grammar, update
-`rev` to a commit that contains the change.
+`rev` to a commit that contains the change. CI checks that it does.

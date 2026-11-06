@@ -130,6 +130,54 @@ so they have to say `lsp`:
 }
 ```
 
+## Helix
+
+[Helix](https://helix-editor.com) needs no extension, only some configuration, which
+lives in [`editors/helix`](../editors/helix). It gives you highlighting, indentation,
+text objects and rainbow brackets, along with the language server.
+
+1. Install `crol`, and make sure it is on your `PATH`.
+2. Add [`languages.toml`](../editors/helix/languages.toml) to your own
+   `~/.config/helix/languages.toml`.
+3. Fetch and build the grammar. Helix does this for every language it knows, so
+   the first time takes a while:
+
+   ```sh
+   hx --grammar fetch
+   hx --grammar build
+   ```
+
+4. Copy the queries from a copy of the repository:
+
+   ```sh
+   mkdir -p ~/.config/helix/runtime/queries
+   cp -r editors/helix/queries/crol ~/.config/helix/runtime/queries/
+   ```
+
+`hx --health crol` then shows what Helix found. This is tested with Helix 25.07.
+
+In a block, `mae` selects an entry, `mie` its value, `mat` the block, and `mit` what
+is in it. In a list or a call, `mia` and `maa` select an element.
+
+Settings go in `languages.toml`, under `language-server.crol.config`. Inlay hints also
+have to be on in Helix itself, in `config.toml`:
+
+```toml
+# languages.toml
+[language-server.crol.config]
+context = ["prod"]
+inlay_hints = true
+```
+
+```toml
+# config.toml
+[editor.lsp]
+display-inlay-hints = true
+```
+
+Helix does not ask for semantic highlighting, so what you see comes from the
+tree-sitter queries.
+
 ## Other editors
 
 Any LSP client can use the server. Configure it to:

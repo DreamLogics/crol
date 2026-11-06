@@ -3111,7 +3111,7 @@ alone, never on what else exists.
 The language server (`crol lsp`, library crate `crol-lsp`) gives an
 editor what the loader knows, while typing. It speaks LSP over standard
 input and output, through `lsp-server` and `lsp-types`, and is
-editor-neutral; section 12.7 is the Zed client.
+editor-neutral; section 12.7 is the Zed client, and 12.8 the Helix one.
 
 **Workspace.** The extension gives a document's mode, in a project or
 not (section 4). Without a project file, it serves each open document on
@@ -3353,8 +3353,21 @@ The Zed extension lives in `editors/zed/`:
 
 The extension is first installed as a dev extension from the repository,
 and published to Zed's extension registry once the grammar and server
-are stable. Clients for other editors (VS Code, Neovim, Helix) need only
+are stable. Clients for other editors (VS Code, Neovim) need only
 small configurations, which can follow later.
+
+### 12.8 Helix configuration
+
+Helix has no extensions, so `editors/helix/` holds what a user adds to
+their own configuration:
+
+- `languages.toml`: the language (as in 12.7, with `project.crol` marking
+  the root), the `crol lsp` server, and the grammar from 12.6, pinned to a
+  commit. The server's settings (section 12.5) are its `config`.
+- `queries/crol/`: `highlights.scm`, `indents.scm`, `textobjects.scm` and
+  `rainbows.scm`. Helix has its own names for captures and its own model of
+  indentation, so these are not the queries from 12.6, but written for the same
+  grammar. CI checks that they compile against it.
 
 ---
 
@@ -3436,6 +3449,7 @@ and an `extends` naming something that is not a lower layer.
 | `crol-cli` | the `crol` binary, including `crol lsp` |
 | `tree-sitter-crol` | the tree-sitter grammar and its queries (12.6); not a Rust crate |
 | `editors/zed` | the Zed extension (12.7) |
+| `editors/helix` | the Helix configuration (12.8) |
 
 Dependencies are kept small: `serde`, `blake3`, `indexmap`; a CST
 library such as `rowan` in `crol-syntax`; `clap` and a diagnostic
