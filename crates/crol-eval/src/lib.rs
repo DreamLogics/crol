@@ -307,6 +307,17 @@ pub fn encode_layer(sources: &Sources, layer: &Layer) -> Result<Vec<u8>, Vec<Dia
     ))
 }
 
+/// What a layer lowers to on its own, as a `.crob` file holds it, for
+/// [`compile_binary`]; `None` if it does not stand alone: it uses a template of
+/// another layer, or there is something to say about it (`SPEC.md` 7.8).
+pub fn lower_layer(sources: &Sources, layer: &Layer) -> Option<Vec<u8>> {
+    let (compiled, diagnostics) = compile(sources, std::slice::from_ref(layer));
+    let compiled = compiled.filter(|_| diagnostics.is_empty())?;
+    let all = documents_of(layer, true);
+    let files: Vec<FileId> = all.iter().map(|(_, file)| *file).collect();
+    Some(binary::write_lowered(&compiled.lowered, &files))
+}
+
 /// [`compile`], for a layer's `schema.crod` too, which is otherwise left out.
 pub fn compile_schema_documents(
     sources: &Sources,

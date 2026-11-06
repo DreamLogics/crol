@@ -272,34 +272,59 @@ fn formatting_keeps_data_and_fingerprints() {
 /// Every case with a fingerprint evaluates the same with its layers read
 /// from `.crob` files (`SPEC.md` 7.8). A layer that cannot be compiled alone,
 /// for using a template of another, stays text.
+/// A case's layers, and its fingerprint, if it has both.
+fn fingerprinted(case: &Path) -> Option<(Sources, Vec<Layer>, String)> {
+    let expected = fs::read_to_string(case.join("expected.fingerprint")).ok()?;
+    let dirs = fs::read_dir(case.join("layers")).ok()?;
+    let mut dirs: Vec<PathBuf> = dirs.map(|e| e.unwrap().path()).collect();
+    dirs.sort();
+    let mut sources = Sources::new();
+    let mut layers = Vec::new();
+    for dir in &dirs {
+        let mut files = Vec::new();
+        crol_files(dir, dir, &mut files);
+        let documents = files
+            .into_iter()
+            .map(|(relative, path)| {
+                let file = sources.add(relative.clone(), fs::read_to_string(path).unwrap());
+                (relative, file)
+            })
+            .collect();
+        let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+        layers.push(Layer { name, documents });
+    }
+    Some((sources, layers, expected))
+}
+
+/// That layers evaluate to a fingerprint, with `lowered` for some of them.
+fn assert_evaluates(
+    case: &Path,
+    sources: &Sources,
+    layers: &[Layer],
+    lowered: &[Option<&[u8]>],
+    expected: &str,
+) {
+    let (compiled, diagnostics) = crol_eval::compile_binary(sources, layers, lowered);
+    let compiled = compiled.unwrap_or_else(|| panic!("{case:?}: {diagnostics:?}"));
+    let evaluation = crol_eval::evaluate_compiled(&compiled, &options(case));
+    let base = evaluation
+        .value
+        .as_ref()
+        .unwrap_or_else(|| panic!("{case:?}: {:?}", evaluation.diagnostics));
+    let hash =
+        crol_eval::fingerprint::fingerprint(base, &evaluation.contexts, &evaluation.variants);
+    let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(hex, expected.trim(), "{case:?}");
+}
+
 #[test]
 fn compiled_layers_evaluate_the_same() {
     let mut compared = 0;
     for entry in fs::read_dir(cases_dir()).unwrap() {
         let case = entry.unwrap().path();
-        let Ok(expected) = fs::read_to_string(case.join("expected.fingerprint")) else {
+        let Some((sources, layers, expected)) = fingerprinted(&case) else {
             continue;
         };
-        let Ok(dirs) = fs::read_dir(case.join("layers")) else {
-            continue;
-        };
-        let mut dirs: Vec<PathBuf> = dirs.map(|e| e.unwrap().path()).collect();
-        dirs.sort();
-        let mut sources = Sources::new();
-        let mut layers = Vec::new();
-        for dir in &dirs {
-            let mut files = Vec::new();
-            crol_files(dir, dir, &mut files);
-            let documents = files
-                .into_iter()
-                .map(|(relative, path)| {
-                    let file = sources.add(relative.clone(), fs::read_to_string(path).unwrap());
-                    (relative, file)
-                })
-                .collect();
-            let name = dir.file_name().unwrap().to_string_lossy().into_owned();
-            layers.push(Layer { name, documents });
-        }
         let encoded: Vec<Option<Vec<u8>>> = layers
             .iter()
             .map(|layer| crol_eval::encode_layer(&sources, layer).ok())
@@ -316,19 +341,36 @@ fn compiled_layers_evaluate_the_same() {
             .map(|layer| layer.as_ref().map(|l| &*l.lowered))
             .collect();
         compared += usize::from(lowered.iter().any(Option::is_some));
-        let (compiled, diagnostics) = crol_eval::compile_binary(&sources, &layers, &lowered);
-        let compiled = compiled.unwrap_or_else(|| panic!("{case:?}: {diagnostics:?}"));
-        let evaluation = crol_eval::evaluate_compiled(&compiled, &options(&case));
-        let base = evaluation
-            .value
-            .as_ref()
-            .unwrap_or_else(|| panic!("{case:?}: {:?}", evaluation.diagnostics));
-        let hash =
-            crol_eval::fingerprint::fingerprint(base, &evaluation.contexts, &evaluation.variants);
-        let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
-        assert_eq!(hex, expected.trim(), "{case:?}");
+        assert_evaluates(&case, &sources, &layers, &lowered, &expected);
     }
     assert!(compared > 10, "only {compared} cases compared");
+}
+
+/// What a reload does: each layer that stands alone comes lowered, and the
+/// layer that changed comes as text, whichever one that is.
+#[test]
+fn layers_lowered_for_a_reload_evaluate_the_same() {
+    let mut compared = 0;
+    for entry in fs::read_dir(cases_dir()).unwrap() {
+        let case = entry.unwrap().path();
+        let Some((sources, layers, expected)) = fingerprinted(&case) else {
+            continue;
+        };
+        let bytes: Vec<Option<Vec<u8>>> = layers
+            .iter()
+            .map(|layer| crol_eval::lower_layer(&sources, layer))
+            .collect();
+        for changed in 0..=layers.len() {
+            let lowered: Vec<Option<&[u8]>> = bytes
+                .iter()
+                .enumerate()
+                .map(|(index, bytes)| bytes.as_deref().filter(|_| index != changed))
+                .collect();
+            compared += usize::from(lowered.iter().any(Option::is_some));
+            assert_evaluates(&case, &sources, &layers, &lowered, &expected);
+        }
+    }
+    assert!(compared > 20, "only {compared} cases compared");
 }
 
 #[test]
