@@ -492,6 +492,7 @@ the current limits.
 | string, string            | `+` concatenates                                  |
 | string, number/char/bool  | `+` formats the value into the string             |
 | list, list                | `+` concatenates, `-` removes the elements on the right |
+| boolean                   | `!x` inverts it                                   |
 
 An integer and a float together count as floats. Integer division truncates.
 Overflow and division by zero are errors, not surprises.
@@ -542,7 +543,7 @@ armour: 0
 speed: 1.5
 ```
 
-The operators bind in the usual order: selectors, unary `-`, `* / %`, `+ -`,
+The operators bind in the usual order: selectors, unary `-` and `!`, `* / %`, `+ -`,
 then `~` and `~^`, then `|`. Parentheses group.
 
 ## Fallback

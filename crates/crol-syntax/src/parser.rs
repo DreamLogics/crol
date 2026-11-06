@@ -108,6 +108,7 @@ fn starts_expr(kind: SyntaxKind) -> bool {
             | L_PAREN
             | IDENT
             | MINUS
+            | BANG
     )
 }
 
@@ -1102,7 +1103,7 @@ impl Parser<'_> {
     }
 
     fn unary(&mut self) {
-        if self.at(MINUS) {
+        if matches!(self.current(), MINUS | BANG) {
             if !self.enter() {
                 return;
             }

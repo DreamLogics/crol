@@ -9,8 +9,14 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ## [Unreleased]
 
+### Added
+
+- `!x` inverts a boolean, so `flag: !&` flips a value in a layer above it. It is an
+  error on anything else.
+
 ### Changed
 
+- `.crob` files are format 3, for `!`; compile layers again.
 - The language server evaluates on a thread of its own, and answers requests at once
   from the latest evaluation. It keeps what it compiled, so hover, go to definition and
   completion look at one key rather than everything, with what lookups share worked out

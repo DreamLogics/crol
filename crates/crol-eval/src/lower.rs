@@ -1201,6 +1201,13 @@ impl Lowerer {
         let fixed = self.fixed.take();
         match expr {
             ast::Expr::Literal(literal) => self.literal(literal, false, span),
+            ast::Expr::Prefix(prefix) if prefix.is_not() => match prefix.operand() {
+                Some(operand) => {
+                    let operand = self.detached(|this| this.expr(&operand));
+                    self.ir.add_expr(ExprKind::Not(operand), span)
+                }
+                None => self.ir.add_expr(ExprKind::Error, span),
+            },
             ast::Expr::Prefix(prefix) => match prefix.operand() {
                 // `-` directly before a number is part of it (`SPEC.md` 6.2).
                 Some(ast::Expr::Literal(literal))

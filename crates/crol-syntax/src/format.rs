@@ -132,6 +132,15 @@ fn significant_tokens(node: &SyntaxNode) -> impl Iterator<Item = SyntaxToken> + 
         .filter(|t| !t.kind().is_trivia())
 }
 
+/// The text of a prefix expression's operator.
+fn prefix_operator(node: &SyntaxNode) -> &'static str {
+    if child_token(node, &[BANG]).is_some() {
+        "!"
+    } else {
+        "-"
+    }
+}
+
 fn child_token(node: &SyntaxNode, kinds: &[SyntaxKind]) -> Option<SyntaxToken> {
     node.children_with_tokens()
         .filter_map(|it| it.into_token())
@@ -559,7 +568,7 @@ impl Formatter {
                 let operand = operand.map_or_else(String::new, |operand| {
                     self.render(&operand, indent, col + 1, trailing)
                 });
-                format!("-{operand}")
+                format!("{}{operand}", prefix_operator(node))
             }
             PAREN_EXPR => {
                 let inner = node.children().next();
@@ -607,7 +616,11 @@ impl Formatter {
                 self.flat_container(node)?
             }
             PAREN_EXPR => format!("({})", self.flat(&node.children().next()?)?),
-            PREFIX_EXPR => format!("-{}", self.flat(&node.children().next()?)?),
+            PREFIX_EXPR => format!(
+                "{}{}",
+                prefix_operator(node),
+                self.flat(&node.children().next()?)?
+            ),
             PATH_EXPR => {
                 let base = node.children().next()?;
                 let selectors = self.selectors(node);

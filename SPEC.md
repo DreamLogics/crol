@@ -35,8 +35,8 @@ RFC 2119 sense.
 
 - A programming language. CROL has no functions of your own, no
   conditionals, comparisons, loops, imports or I/O. Every expression is
-  pure arithmetic and structural combination, with four built-in macros
-  for numbers (section 6.7).
+  pure arithmetic, boolean negation and structural combination, with four
+  built-in macros for numbers (section 6.7).
 - A schema language. The format has no types. Types, defaults,
   required fields and the meaning of ids come from the Rust program
   (section 10), and for tools from a schema generated from it (10.9).
@@ -1092,13 +1092,14 @@ From tightest to loosest:
 | Level | Operators | Associates |
 |---|---|---|
 | 1 | postfix `.field`, `.0`, `[key]`, `<v>` | left |
-| 2 | unary `-` | right |
+| 2 | unary `-`, `!` | right |
 | 3 | `*`, `/`, `%` | left |
 | 4 | `+`, `-` | left |
 | 5 | `~`, `~^` (merge) | left |
 | 6 | `\|` (fallback) | left |
 
-Parentheses group. `&-1` is `&` minus 1, and `-&` negates `&`.
+Parentheses group. `&-1` is `&` minus 1, `-&` negates `&`, and `!&`
+inverts it.
 
 A unary `-` directly before an integer or float literal is folded into
 the literal, so `-170141183460469231731687303715884105728` (`i128::MIN`)
@@ -1127,6 +1128,9 @@ Postfix selectors apply to any expression: `(&root.a ~ { b: 1 }).b`,
   error, because without types `[[1]] + [2]` could not tell an element
   from a list to append.
 - Any other combination is an error naming both kinds.
+
+`!x` inverts a boolean, and is an error on anything else. It is not a
+comparison or a condition: nothing in the language branches on the result.
 
 ### 6.4 Merge `a ~ b`, `a ~^ b`
 
@@ -1754,7 +1758,7 @@ expr         ::= merge ( "|" merge )*
 merge        ::= sum ( ( "~" | "~^" ) sum )*
 sum          ::= product ( ( "+" | "-" ) product )*
 product      ::= unary ( ( "*" | "/" | "%" ) unary )*
-unary        ::= "-" unary | postfix
+unary        ::= ( "-" | "!" ) unary | postfix
 postfix      ::= primary selector*
 primary      ::= literal
                | id

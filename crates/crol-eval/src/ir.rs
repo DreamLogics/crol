@@ -68,6 +68,7 @@ pub(crate) enum ExprKind {
     UnitName(Arc<str>),
     Path(ExprId, Box<[Selector]>),
     Neg(ExprId),
+    Not(ExprId),
     Binary(BinOp, ExprId, ExprId),
     Macro(MacroKind, Box<[ExprId]>),
     /// An expression that failed to lower; the error is already reported.

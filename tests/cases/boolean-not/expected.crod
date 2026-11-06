@@ -1,0 +1,15 @@
+flag: true
+twice: true
+web: {
+    on: true,
+    off: false,
+    double: true,
+    grouped: false,
+    fallback: false,
+    path: true,
+}
+opts: { a: false }
+
+<prod & !dev> {
+    flag: false,
+}
