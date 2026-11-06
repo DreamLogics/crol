@@ -16,6 +16,7 @@ readme = "README.md"
 proc-macro = true
 
 [dependencies]
+crol-syntax.workspace = true
 proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true

@@ -582,6 +582,8 @@ pub struct CrolComposer<T = String> {
     structs: Option<std::sync::Arc<de::Structs>>,
     /// The variants made active with `with_variant`.
     chosen: Vec<T>,
+    /// The document `load_active` named.
+    active: Option<crate::db::Active>,
 }
 
 impl Default for CrolComposer<String> {
@@ -606,6 +608,7 @@ impl<T: VariantName> CrolComposer<T> {
             loaded: HashSet::new(),
             error: None,
             chosen: Vec::new(),
+            active: None,
             schema: None,
             structs: None,
         }
@@ -632,6 +635,51 @@ impl<T: VariantName> CrolComposer<T> {
     pub fn load(mut self, source: impl LayerSource) -> Result<Self, Error> {
         let layer = source.load(&self.config)?;
         self.add(layer, &mut Vec::new())?;
+        Ok(self)
+    }
+
+    /// Adds the active layer of a [`CrolDb`](crate::CrolDb) (`SPEC.md` 10.14):
+    /// a `.crod` file the database owns, as the last layer. A file that does
+    /// not exist is an empty layer, so a program's first run needs nothing
+    /// else.
+    pub fn load_active(mut self, file: impl AsRef<Path>) -> Result<Self, Error> {
+        let file = file.as_ref();
+        if !self.config.file_loaders.file_system() {
+            return Err(Error::new(format!(
+                "cannot read {}: the file system is turned off",
+                file.display()
+            )));
+        }
+        crate::db::check_document(file)?;
+        let name = file.display().to_string();
+        let read = crate::db::read_document(file)?;
+        let text = read.clone().unwrap_or_default();
+        let log = crate::db::Log::parse(&name, &text)?;
+        let document = Document {
+            relative: file
+                .file_name()
+                .map_or_else(|| name.clone(), |n| n.to_string_lossy().into_owned()),
+            display: name.clone(),
+            text,
+            source: None,
+            directory: None,
+        };
+        let active = crate::db::Active {
+            layer: name.clone(),
+            document: document.relative.clone(),
+            file: Some(file.to_owned()),
+            read,
+            log,
+        };
+        self.add(
+            CrolLayer {
+                name,
+                documents: vec![document],
+                lowered: None,
+            },
+            &mut Vec::new(),
+        )?;
+        self.active = Some(active);
         Ok(self)
     }
 
@@ -743,6 +791,12 @@ impl<T: VariantName> CrolComposer<T> {
     /// application names stays whole. `in_progress` holds the sources whose
     /// extends are being loaded, to find cycles, and is empty for the latter.
     fn add(&mut self, mut layer: CrolLayer, in_progress: &mut Vec<SourceId>) -> Result<(), Error> {
+        if let Some(active) = &self.active {
+            return Err(Error::new(format!(
+                "composer: the active layer `{}` is the last layer",
+                active.layer
+            )));
+        }
         let for_extends = !in_progress.is_empty();
         if self.config.load_extends {
             // In document order: by path (`SPEC.md` 7.1).
@@ -839,6 +893,32 @@ impl<T: VariantName> CrolComposer<T> {
             names
         });
         self.evaluate(contexts)
+    }
+
+    /// Evaluates as [`compose_data`](Self::compose_data) does, and returns a
+    /// database with `R` as its root (`SPEC.md` 10.14). Without an active
+    /// layer, transactions work and `save` is an error.
+    pub fn compose_db<R: crate::Navigable>(mut self) -> Result<crate::CrolDb<R, T>, Error> {
+        let active = match self.active.clone() {
+            Some(active) => active,
+            None => {
+                let active = crate::db::Active::in_memory();
+                let layer = CrolLayer::from_sources(
+                    active.layer.clone(),
+                    [(active.document.clone(), String::new())],
+                );
+                self.add(layer, &mut Vec::new())?;
+                active
+            }
+        };
+        let same_name = self.layers.iter().filter(|l| l.name == active.layer);
+        if same_name.count() > 1 {
+            return Err(Error::new(format!(
+                "composer: a layer has the name of the active layer, `{}`",
+                active.layer
+            )));
+        }
+        Ok(crate::CrolDb::new(self.compose_data()?, active))
     }
 
     fn evaluate(mut self, contexts: Option<Vec<Vec<String>>>) -> Result<CrolData<T>, Error> {
@@ -1058,6 +1138,10 @@ pub struct Reloaded {
 pub struct CrolContext(Context);
 
 impl CrolContext {
+    pub(crate) fn new(context: Context) -> Self {
+        Self(context)
+    }
+
     pub(crate) fn base() -> Self {
         Self(Context::base())
     }
@@ -1224,7 +1308,7 @@ impl<T: VariantName> CrolData<T> {
     }
 
     /// The context of these variants, evaluated or not.
-    fn context_of<V: Into<T>>(
+    pub(crate) fn context_of<V: Into<T>>(
         &self,
         variants: impl IntoIterator<Item = V>,
     ) -> Result<Context, Error> {
@@ -1448,6 +1532,35 @@ impl<T: VariantName> CrolData<T> {
         Ok(Reloaded {
             changed: changed_keys(&before, &self.key_fingerprints()),
         })
+    }
+
+    /// [`explain`](Self::explain) for several paths, working out what they
+    /// share once.
+    pub(crate) fn explain_all(
+        &self,
+        paths: &[&str],
+        context: &CrolContext,
+    ) -> Result<Vec<Vec<ExplainStep>>, Error> {
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
+        let failed =
+            |diagnostics: Vec<Diagnostic>| Error::from_diagnostics(&self.sources, &diagnostics);
+        let names: Vec<String> = self
+            .variants
+            .chosen_names(&context.0)
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let plan = crol_eval::explain_plan(&self.compiled, &self.variants, &self.data_options)
+            .map_err(failed)?;
+        paths
+            .iter()
+            .map(|path| {
+                crol_eval::explain_compiled(&self.compiled, &plan, &self.data_options, path, &names)
+                    .map_err(failed)
+            })
+            .collect()
     }
 
     /// The operations that produced a value, in order, with the value after

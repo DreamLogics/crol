@@ -13,6 +13,12 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 - `!x` inverts a boolean, so `flag: !&` flips a value in a layer above it. It is an
   error on anything else.
+- `CrolDb`, from `CrolComposer::compose_db`: read data through typed paths from
+  `#[derive(Navigable)]`, and change it in transactions that write operations to an
+  active layer, from `load_active`. `croxp!` checks an expression when the program is
+  compiled, so that `croxp! { & + 2 }` stays relative to the layers below.
+- `ExplainStep::uses_below`, and `crol_eval::uses_value_below`, say whether an
+  operation uses the value below it.
 
 ### Changed
 

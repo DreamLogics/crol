@@ -652,6 +652,22 @@ pub fn explain(
     Ok(found.pop().unwrap_or_default())
 }
 
+/// Whether `expression`, written as the value of an entry, uses the value
+/// below the entry (`SPEC.md` 7.2): `& + 1` does, `&root.x` does not.
+pub fn uses_value_below(expression: &str) -> bool {
+    let mut sources = Sources::new();
+    let file = sources.add("expression".to_owned(), format!("key: {expression}\n"));
+    let parse = crol_syntax::parse(sources.file(file).text());
+    let document = parse.document();
+    let (lowered, _) = lower::lower_data(&[lower::DataDocument {
+        file,
+        document: &document,
+        layer: 0,
+        index: 0,
+    }]);
+    lowered.ops.iter().any(|op| op.uses_below)
+}
+
 /// The value of the root key after each root operation in `file`, in the
 /// context of the `context` variants, as [`explain`] gives it: for editors,
 /// which show what an entry computes. Operations whose chain fails have no

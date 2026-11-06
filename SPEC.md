@@ -2685,7 +2685,7 @@ let name = db.select()
     .with_variant(Variant::Prod)?
     .get(Config::path().items().at(1).name())?;
 
-let tx = db.transaction()
+let mut tx = db.transaction()
     .with_variant(Variant::Prod)?
     .at(Config::path().retries()).set_expr(croxp! { & + 2 })?
     .at(&a).set_expr(croxp! { !& })?
@@ -2711,18 +2711,21 @@ target's selectors (section 5.1):
 | `.at(i)` | a list | `[i]` |
 | `.key(k)` | a map | `.k` or `["k"]`, as section 3.1 writes it |
 | `.t0()`, `.t1()`, … | a tuple | `.0`, `.1`, … |
-| `.some()` | an `Option` | none |
+| `.some()` | an `Option` | `.0` where the value is held as `Some(x)` and the path goes on, else none |
 
 A step can be taken whatever the data holds. A path that is missing is an error
-where it is used. A field whose type has no `Navigable`, and is not one of the
-types above or a scalar, needs `#[crol(leaf)]`, and a path ends there.
+where it is used, and that includes a field left out for its default. A field whose
+type has no `Navigable` needs `#[crol(leaf)]`, and a path ends there. The derive
+makes any type but a struct with named fields, enums included, one that paths
+end at.
 
 `at(i)` is positional. A saved write goes to index `i`, whatever element is
 there by then.
 
 **Reading.** `db.select()` takes `&self`. `with_variant` chooses the context, as
 it does on the composer (section 10.7), the base if it is not called, and
-`get(path)` deserializes the value at the path.
+`get(path)` deserializes the value at the path. The context must be evaluated:
+`db.evaluate(variants)` does that.
 
 **Transactions.** `db.transaction()` takes `&mut self`, and runs its operations
 in sequence. `with_variant` chooses the transaction's context, and is an error
@@ -2736,12 +2739,13 @@ after its first operation. Every step that can fail returns a `Result`.
 - `update(closure)` gives the closure the value at that point of the transaction,
   and writes what it returns as `set` does.
 - `remove()` writes `-target`.
-- `get(path)` takes `&self`, and reads the value at that point of the
-  transaction.
+- `get(path)` reads the value at that point of the transaction, and leaves it
+  open.
 - `within(path, closure)` gives the closure a transaction whose paths start at
   `path`, and goes on from there when it returns. Scopes nest, and share the
   context and the operations of the transaction they are in.
-- `commit()` applies the operations, and returns `Reloaded` (section 10.8).
+- `commit()` applies the operations, and returns `Reloaded` (section 10.8), with
+  no change if there were none.
 
 The value at a point of the transaction includes its earlier operations.
 `get` and `update` evaluate if an operation is pending, and that takes about as
@@ -2782,15 +2786,15 @@ the data, and it needs no evaluation.
 
 **`croxp!`.** `crol::croxp! { ... }` is an `Expression` (section 10.8), parsed
 when the program is compiled, so that a mistake in it is a compile error. Types
-are not known then: the result is deserialized as the path's type at `commit`.
-`#name` puts a Rust variable in the expression, as a value serialized
-as in section 10.8 (`croxp! { & + #delta }`), and `set_expr` reports it if that
-fails. `#` means nothing else in an expression. The macro keeps the adjacency
+are not known then, so nothing checks the result against the path's type before
+it is read. `#name` puts a Rust variable in the expression, as a value serialized
+as in section 10.8 (`croxp! { & + #delta }`). The macro is then a `Result` of an
+`Expression`, which `set_expr` also takes, and reports if serializing failed. `#` means nothing else in an expression. The macro keeps the adjacency
 rules of section 2.5, by the positions of the tokens.
 
-**The active layer.** `load_active(source)` names one data-mode document, is
+**The active layer.** `load_active(file)` names one `.crod` file, is
 the last layer, and can be used once: a `load` after it is an error, and so
-are a directory and a `.crob` file. A document that does not exist is an empty
+is any other kind of file, or a directory. A document that does not exist is an empty
 layer, so a program's first run needs nothing else.
 
 The database owns this document, and writes all of it (a non-goal of section 0
@@ -2811,7 +2815,7 @@ committed operations to the active layer's document, through a temporary file
 in the same directory and a rename. If the document's text is not what was last
 read or saved, `save` is an error and writes nothing. Without an active layer,
 transactions work and `save` is an error. `db.save_as(source)` writes a new
-document, an error if it exists, which becomes the active layer. The next run
+document, an error if it exists, which becomes the active layer's. The next run
 has to load it.
 
 ---
@@ -3387,7 +3391,7 @@ and an `extends` naming something that is not a lower layer.
 | `crol-syntax` | lexer, error-recovering parser, lossless CST, typed AST, formatter |
 | `crol-eval` | lowering to operations and chains, the evaluator, `Value`, diagnostics, fingerprint |
 | `crol` | facade: `CrolComposer`, `CrolConfig`, `CrolVariants`, `CrolLayer`, `CrolData`, `CrolDb`, serde `Deserializer` and `Serializer`, `from_str`, `to_string` |
-| `crol-derive` | `#[derive(Schema)]`, `#[derive(VariantName)]`, `#[derive(Navigable)]` and `croxp!`, re-exported by `crol` with the feature `derive`; the `Schema` trait and model live in `crol` (10.9) |
+| `crol-derive` | `#[derive(Schema)]`, `#[derive(VariantName)]`, `#[derive(View)]`, `#[derive(Navigable)]` and `croxp!`, re-exported by `crol` with the feature `derive`; the `Schema` trait and model live in `crol` (10.9) |
 | `crol-lsp` | the language server, as a library (section 12.5) |
 | `crol-cli` | the `crol` binary, including `crol lsp` |
 | `tree-sitter-crol` | the tree-sitter grammar and its queries (12.6); not a Rust crate |

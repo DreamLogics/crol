@@ -11,6 +11,7 @@ to use what you get back.
 | one document (`.crol`)                | [`crol::from_str`](modes.md#value-mode-a-file-is-a-value) |
 | one document and a [schema](schemas.md) | `crol::from_str_with_schema`                      |
 | layers, variants or several files (`.crod`) | `CrolComposer`, then `compose` or `compose_data` |
+| layers your program changes and saves | [`CrolComposer`, then `compose_db`](#changing-data-with-a-database) |
 
 [Data mode and value mode](modes.md) explains the difference. Everything below
 about types applies to both.
@@ -667,13 +668,101 @@ To write a reference, or any other expression, where a value goes, use
 `crol::to_value` it, put `expression.to_value()` where the reference goes, and write it
 as a `crol::RawValue`.
 
+## Changing data with a database
+
+`compose_db` gives a `CrolDb`: typed reads, and changes that are written as
+operations in one layer of its own, the _active layer_. The layers below stay as
+they are, and references follow a change like any other. It needs the `derive`
+feature.
+
+```rust
+// src/main.rs
+use crol::{CrolComposer, CrolDb, Navigable, croxp};
+use serde::{Deserialize, Serialize};
+
+#[derive(Deserialize, Serialize, Navigable)]
+struct Options {
+    dark: bool,
+    port: u16,
+}
+
+#[derive(Deserialize, Serialize, Navigable)]
+struct Config {
+    retries: u32,
+    options: Options,
+}
+
+fn main() -> Result<(), crol::Error> {
+    let mut db: CrolDb<Config> = CrolComposer::new()
+        .load("data/base")?
+        .load_active("user.crod")?
+        .compose_db()?;
+
+    let dark = Config::path().options().dark();
+    println!("{}", db.select().get(&dark)?);
+
+    db.transaction()
+        .at(Config::path().retries())
+        .set_expr(croxp! { & + 2 })?
+        .within(Config::path().options(), |options| {
+            options
+                .at(Options::path().dark())
+                .set_expr(croxp! { !& })?
+                .at(Options::path().port())
+                .set(8080)
+        })?
+        .commit()?;
+
+    db.save()
+}
+```
+
+`Config::path()` starts a path, and each field continues it. Lists take
+`.at(index)`, maps `.key(key)`, `Option` `.some()` and tuples `.t0()`, `.t1()`. A
+path holds no data, so keep it and use it as often as you like. A field whose type
+has no `Navigable` needs `#[crol(leaf)]`, and enums are where a path ends.
+
+| On a place, after `.at(path)` | Writes                                           |
+| ----------------------------- | ------------------------------------------------ |
+| `.set(value)`                 | a fixed value, in place of what is there         |
+| `.set_expr(expression)`       | the expression, which stays relative             |
+| `.update(closure)`            | a fixed value, computed in Rust                  |
+| `.remove()`                   | a remove                                         |
+
+**Prefer `set_expr`.** `croxp! { & + 2 }` is kept as written, so if the base later
+goes from 1 to 10, the value goes from 3 to 12. A mistake in it is a compile error,
+and `#name` puts a Rust variable in it: `croxp! { & + #delta }`. `update` is for
+what CROL cannot say. It stores a constant, so on a computed value it ends the
+computing, and each one after a write evaluates the data again, which takes about
+as long as a reload. `set`, `set_expr` and `remove` wait for `commit`.
+
+**A transaction runs in sequence.** `tx.get(path)` and `update` see the operations
+before them. `commit` applies them all or none, and until then nothing changes.
+Dropping a transaction discards it. `commit` changes the data in memory, and
+`save` writes the file.
+
+**A write applies to the transaction's context.** `.with_variant("prod")` first, and
+the write goes under `<prod>`. Without it, the write is a base operation, which
+reaches every context except where something more specific applies. `commit` is an
+error if a write did not take effect in the transaction's context, and names the
+operation that won.
+
+**The database owns the active layer.** It rewrites the whole file, so comments are
+not kept, and anything it did not write is an error on loading. A file that does not
+exist yet is an empty layer. `save` refuses to overwrite a file that changed since it
+was read: a `CrolDb` is for one process, not several writing at once. Without
+`load_active`, transactions still work, and `save_as(file)` starts a new file.
+
+A saved `.at(i)` goes to that index, whatever element is there by then. Paths do not
+go into an enum's variants yet.
+
 ## Cargo features
 
 `crol` has no default features.
 
 | Feature                | Gives                                                      |
 | ---------------------- | ---------------------------------------------------------- |
-| `derive`               | `#[derive(crol::Schema)]`, `#[derive(crol::VariantName)]` and `#[derive(crol::View)]` |
+| `derive`               | `#[derive(crol::Schema)]`, `#[derive(crol::VariantName)]`, `#[derive(crol::View)]`, `#[derive(crol::Navigable)]` and `crol::croxp!` |
 | `remote-schemas`       | [fetch schemas](schemas.md#remote-schemas) with a blocking client, for tools of your own |
 | `remote-schemas-async` | the same, without blocking, using Tokio and reqwest        |
 

@@ -10,6 +10,9 @@ crol = { version = "0.1", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 ```
 
+`#[derive(crol::Navigable)]` gives a type paths for `CrolDb`, and `crol::croxp!`
+checks an expression when the program is compiled.
+
 `#[derive(crol::Schema)]` describes a type for tools and for `&default`, from its
 fields, doc comments and serde attributes. `#[derive(crol::VariantName)]` lets an
 enum without fields name your variants, in snake case:

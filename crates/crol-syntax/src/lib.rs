@@ -109,6 +109,31 @@ impl Parse {
     }
 }
 
+/// Whether `text` is one expression, and nothing else: no entries, attributes
+/// or comments.
+pub fn is_expression(text: &str) -> bool {
+    use ast::AstNode as _;
+
+    let parse = parse(text);
+    if !parse.errors().is_empty() {
+        return false;
+    }
+    let tree = parse.syntax();
+    let comment = tree.descendants_with_tokens().any(|e| {
+        matches!(
+            e.kind(),
+            SyntaxKind::LINE_COMMENT | SyntaxKind::BLOCK_COMMENT
+        )
+    });
+    let Some(document) = ast::Document::cast(tree) else {
+        return false;
+    };
+    !comment
+        && document.expr().is_some()
+        && document.entries().next().is_none()
+        && document.attributes().next().is_none()
+}
+
 /// Parses a document. This never fails: the tree holds every byte of `text`,
 /// and the problems are in [`Parse::errors`].
 pub fn parse(text: &str) -> Parse {

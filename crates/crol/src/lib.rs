@@ -244,7 +244,8 @@
 //!
 //! CROL has no default features, and needs none to load data.
 //!
-//! - `derive`: `#[derive(crol::Schema)]` and `#[derive(crol::VariantName)]`.
+//! - `derive`: `#[derive(crol::Schema)]`, `#[derive(crol::VariantName)]`,
+//!   `#[derive(crol::View)]`, `#[derive(crol::Navigable)]` and `crol::croxp!`.
 //! - `remote-schemas`: fetch schemas named by URL or crate, with a blocking
 //!   client, for tools of your own.
 //! - `remote-schemas-async`: the same, without blocking, using Tokio and
@@ -265,6 +266,7 @@
 mod check;
 mod compose;
 mod constraints;
+mod db;
 mod de;
 mod error;
 mod expression;
@@ -273,6 +275,7 @@ mod id;
 mod loader;
 mod mode;
 mod module_path;
+mod path;
 pub mod project;
 mod raw;
 #[cfg(feature = "_remote")]
@@ -292,12 +295,15 @@ pub use compose::{
 };
 pub use crol_eval::{ExplainStep, StepKind, VariantKeys};
 pub use crol_eval::{Key, Keyed, Sources, Span, Value, ValueKind};
+pub use db::{CrolDb, Cursor, Select, Transaction};
 pub use error::Error;
 pub use fill::{fill_defaults, fill_defaults_value};
 
 /// The error type of `crol`, as the specification names it.
 pub type CrolError = Error;
-pub use expression::Expression;
+#[doc(hidden)]
+pub use expression::__value_text;
+pub use expression::{Expression, IntoExpression};
 pub use id::{Id, IdUse};
 pub use loader::{
     FileLoader, FileLoaders, FsLoader, Loaded, LoaderError, ModulePath, ResolvedSource, SourceId,
@@ -307,7 +313,11 @@ pub use raw::RawValue;
 pub use schema::Schema;
 
 #[cfg(feature = "derive")]
-pub use crol_derive::{Schema, VariantName, View};
+pub use crol_derive::{Navigable, Schema, VariantName, View, croxp};
+pub use path::{
+    IntoPath, ListPath, MapPath, Navigable, OptionPath, Path, PathKey, Tuple1Path, Tuple2Path,
+    Tuple3Path, Tuple4Path,
+};
 pub use ser::PrettyConfig;
 pub use view::{Query, Variation, View, ViewSource};
 pub use writer::DataWriter;
