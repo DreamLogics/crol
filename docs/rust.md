@@ -13,6 +13,9 @@ to use what you get back.
 | layers, variants or several files (`.crod`) | `CrolComposer`, then `compose` or `compose_data` |
 | layers your program changes and saves | [`CrolComposer`, then `compose_db`](#changing-data-with-a-database) |
 
+To read a few fields of many values rather than whole values, see
+[views and queries](#views-and-queries).
+
 [Data mode and value mode](modes.md) explains the difference. Everything below
 about types applies to both.
 
@@ -474,14 +477,45 @@ is evaluated again, so a reload takes about as long as loading.
 
 ## Views and queries
 
-Deserializing gives you a whole value in one context. For a few fields of many
-values, or to see how a value differs between contexts, read the data through a
-_view_ instead: a small struct whose fields read by path. This needs the `derive`
-feature.
+Deserializing gives you a whole value in one context, in a type that mirrors it.
+That is often more than you want. A program may need two fields of every unit, or
+want to know how one value differs between contexts, or which keys hold something.
+
+| You want                                       | Use                                     |
+| ---------------------------------------------- | --------------------------------------- |
+| a whole value, as your own type                | `get`, or `compose`                     |
+| a few fields, from anywhere in a value         | [a view](#views)                        |
+| how a value differs between contexts           | [`variations`](#across-contexts)        |
+| the keys that match something                  | [`query`](#queries)                     |
+| one known place, typed, or to change the data  | [a database](#changing-data-with-a-database), which reads views and queries too |
+
+All of them read evaluated data, so they see every layer and every patch. These
+examples read this file:
+
+```crol
+// units.crod
++artillery: Unit {
+    hp: 1100,
+    combat: { range: 12, reload: 8 },
+    tags: ["mech", "heavy"],
+}
++trooper: Unit { hp: 50, combat: { range: 5, reload: 1 }, tags: [] }
++tree: Scenery { hp: 10 }
+
+artillery<empire>.hp: 1200
+```
+
+### Views
+
+A _view_ is a small struct whose fields say what to read. Unlike a `Deserialize` type,
+it does not mirror the value: it leaves out what it does not need, and can lift a
+field from deep inside. Views need the `derive` feature.
 
 ```rust
 // src/main.rs
-use crol::{CrolComposer, CrolConfig, CrolLayer, CrolVariants, View};
+use std::path::Path;
+
+use crol::{CrolComposer, View};
 
 #[derive(Debug, View)]
 struct Stats {
@@ -489,46 +523,158 @@ struct Stats {
     #[crol(path = "combat.range")]
     range: u32,
     armour: Option<u32>,
+    #[crol(default)]
+    tags: Vec<String>,
 }
 
 fn main() -> Result<(), crol::Error> {
-    let text = r#"
-        +artillery: Unit { hp: 1100, combat: { range: 12 }, tags: ["mech"] }
-        +trooper: Unit { hp: 50, combat: { range: 5 }, tags: [] }
-        artillery<empire>.hp: 1200
-    "#;
-    let data = CrolComposer::with_cfg(CrolConfig {
-        variants: CrolVariants::new().add_grouped(["empire", "rebel"]),
-        ..Default::default()
-    })
-    .load_layer(CrolLayer::from_sources("base", [("a.crod", text)]))
-    .compose_data()?;
-
-    // Each distinct value of a key, and the contexts that have it.
-    for variation in data.variations::<Stats>("artillery")? {
-        let contexts: Vec<_> = variation.contexts.iter().map(|c| data.context_names(c)).collect();
-        println!("{:?}: {:?}", contexts, variation.value);
+    let data = CrolComposer::new().load(Path::new("units.crod"))?.compose_data()?;
+    let units = data.query().of_type("Unit").views::<Stats>()?;
+    for (key, stats) in units {
+        println!("{key}: {stats:?}");
     }
-
-    // The keys that match, in key order.
-    let mechs = data.query().of_type("Unit").holding("tags", "mech");
-    println!("{:?}", mechs.keys()?);
     Ok(())
 }
 ```
 
 ```console
 $ cargo run
-[[], ["rebel"]]: Stats { hp: 1100, range: 12, armour: None }
-[["empire"]]: Stats { hp: 1200, range: 12, armour: None }
+artillery: Stats { hp: 1100, range: 12, armour: None, tags: ["mech", "heavy"] }
+trooper: Stats { hp: 50, range: 5, armour: None, tags: [] }
+```
+
+A field reads the value's field of its own name, or the path in
+`#[crol(path = "...")]`. The name is the one serde gives it, if the struct also derives
+`Deserialize` or `Serialize` with `#[serde(rename)]` or `rename_all`. A path is field
+names with dots, and it goes through `Some(...)`, but not into a list. A field can be
+any type that deserializes.
+
+Nothing has to be there. Where a path is missing, the first of these that applies
+decides:
+
+1. The default your [schema](schemas.md) records for it, if the value has a type name
+   and the composer has the schema.
+2. An `Option` is `None`.
+3. `#[crol(default)]` takes the field type's `Default`.
+4. Anything else is an error: `` `tree` has no `combat.range`, and no default for it ``.
+
+That is why `of_type` comes first in the example: a `tree` has no range, and no
+`Stats`.
+
+A view is a trait, so you can write one for what a derive cannot say. `key` gives the
+root key:
+
+```rust
+// src/main.rs
+use std::path::Path;
+
+use crol::{CrolComposer, View, ViewSource};
+
+#[derive(Debug)]
+struct Label(String);
+
+impl View for Label {
+    fn read(source: &ViewSource<'_>) -> Result<Self, crol::Error> {
+        let hp: u32 = source.field(&["hp"])?;
+        let range: Option<u32> = source.optional(&["combat", "range"])?;
+        Ok(Label(format!("{}: {hp} hp, range {range:?}", source.key())))
+    }
+}
+
+fn main() -> Result<(), crol::Error> {
+    let data = CrolComposer::new().load(Path::new("units.crod"))?.compose_data()?;
+    for (_, label) in data.query().views::<Label>()? {
+        println!("{}", label.0);
+    }
+    Ok(())
+}
+```
+
+```console
+$ cargo run
+artillery: 1100 hp, range Some(12)
+tree: 10 hp, range None
+trooper: 50 hp, range Some(5)
+```
+
+### Across contexts
+
+`variations` gives each distinct value of a key, read into a view, with the contexts
+that have it. Values are compared whole, before the view reads them, so two variations
+can look the same through a view that leaves out the field that differs.
+
+```rust
+// src/main.rs
+use std::path::Path;
+
+use crol::{CrolComposer, View};
+
+#[derive(Debug, View)]
+struct Health {
+    hp: u32,
+}
+
+fn main() -> Result<(), crol::Error> {
+    let data = CrolComposer::new().load(Path::new("units.crod"))?.compose_data()?;
+    for variation in data.variations::<Health>("artillery")? {
+        let contexts: Vec<_> = variation.contexts.iter().map(|c| data.context_names(c)).collect();
+        println!("{:?}: {:?}", contexts, variation.value);
+    }
+    Ok(())
+}
+```
+
+```console
+$ cargo run
+[[]]: Health { hp: 1100 }
+[["empire"]]: Health { hp: 1200 }
+```
+
+`distinct` gives the same variations as raw values, without a view. Only
+[evaluated contexts](variants.md) count, and the order does not depend on the order
+they were evaluated in.
+
+### Queries
+
+`query` chooses root keys in one context, the base unless `in_context` names another.
+
+| On a query                  | Does                                                  |
+| --------------------------- | ----------------------------------------------------- |
+| `of_type(name)`             | keeps values of that type name                        |
+| `holding(path, value)`      | keeps values with that value at a field path, or a list holding it; an id counts as its text |
+| `holding_at(path, value)`   | the same, at a [typed path](#paths)                   |
+| `in_context(&context)`      | reads another context                                 |
+| `keys()`                    | the keys, compared byte by byte                       |
+| `views::<V>()`              | each key and its view                                 |
+
+```rust
+// src/main.rs
+use std::path::Path;
+
+use crol::CrolComposer;
+
+fn main() -> Result<(), crol::Error> {
+    let data = CrolComposer::new().load(Path::new("units.crod"))?.compose_data()?;
+    let mechs = data.query().of_type("Unit").holding("tags", "mech");
+    println!("{:?}", mechs.keys()?);
+    let short = data.query().holding("combat.range", &5);
+    println!("{:?}", short.keys()?);
+    let empire = data.context(["empire"])?;
+    let strong = data.query().in_context(&empire).holding("hp", &1200);
+    println!("{:?}", strong.keys()?);
+    Ok(())
+}
+```
+
+```console
+$ cargo run
+["artillery"]
+["trooper"]
 ["artillery"]
 ```
 
-Where a path is missing, a field takes the default your [schema](schemas.md) records
-for it. Failing that, an `Option` is `None`, `#[crol(default)]` on a field takes its
-`Default`, and any other field is an error. `distinct` gives the same variations as
-raw values, and `in_context` makes a query read another context. Results do not depend
-on the order contexts were evaluated in.
+A query only reads evaluated data. A patch cannot choose keys by what they hold, since
+what it selects would then depend on what patches do.
 
 ## Errors
 
@@ -822,6 +968,106 @@ reaches every context except where something more specific applies: with
 `<prod> { retries: & * 10 }` in the base, setting `retries` to 3 gives 3 in the base
 and 30 in `prod`. `commit` is an error if a write did not take effect in the
 transaction's context, and names the operation that won.
+
+### Views and queries
+
+A database reads [views and queries](#views-and-queries) too, with the context it
+already has, and with typed paths instead of strings. A transaction sees its own
+writes in them, so it can look at the data before it commits.
+
+```rust
+// src/main.rs
+use std::path::Path;
+
+use crol::{CrolComposer, CrolDb, Navigable, View};
+use serde::{Deserialize, Serialize};
+
+#[derive(Deserialize, Serialize, Navigable)]
+struct Combat {
+    range: u32,
+    reload: u32,
+}
+
+#[derive(Deserialize, Serialize, Navigable)]
+struct Unit {
+    hp: u32,
+    combat: Combat,
+    tags: Vec<String>,
+}
+
+#[derive(Deserialize, Serialize, Navigable)]
+struct Game {
+    artillery: Unit,
+    trooper: Unit,
+}
+
+#[derive(Debug, View)]
+struct Stats {
+    hp: u32,
+    #[crol(path = "combat.range")]
+    range: u32,
+}
+
+fn main() -> Result<(), crol::Error> {
+    let mut db: CrolDb<Game> =
+        CrolComposer::new().load(Path::new("units.crod"))?.compose_db()?;
+
+    let artillery = Game::path().artillery();
+    let empire = db.select().with_variant("empire")?;
+    println!("{:?}", empire.view::<Stats>(&artillery)?);
+
+    let tags = Unit::path().tags();
+    println!("{:?}", db.select().query().holding_at(&tags, "mech").keys()?);
+
+    let trooper = Game::path().trooper();
+    let mut tx = db
+        .transaction()
+        .at(trooper.clone().tags())
+        .set(vec!["mech".to_owned()])?
+        .at(trooper.clone().hp())
+        .update(|hp| hp * 2)?;
+    println!("{:?}", tx.query()?.holding_at(&tags, "mech").keys()?);
+    println!("{:?}", tx.view::<Stats>(&trooper)?);
+    drop(tx);
+
+    println!("{:?}", db.select().view::<Stats>(&trooper)?);
+    Ok(())
+}
+```
+
+```console
+$ cargo run
+Stats { hp: 1200, range: 12 }
+["artillery"]
+["artillery", "trooper"]
+Stats { hp: 100, range: 5 }
+Stats { hp: 50, range: 5 }
+```
+
+| On a selection or transaction | Gives                                                 |
+| ----------------------------- | ----------------------------------------------------- |
+| `.view::<V>(path)`            | a view of the value at a typed path, at any depth     |
+| `.query()`                    | a query of its context; call `keys` or `views` on it. On a transaction it is a `Result`, because it evaluates |
+
+A typed path given to `holding_at` starts at the values' type, not the root:
+`Unit::path().tags()`. It can go through a list or an `Option`, which a string cannot.
+In a `within` scope, a view's path starts at the scope, and a query still covers
+every root key. For `variations`, which covers every context, use `db.data()`.
+
+**Batch your writes before you read.** On a transaction, `get`, `view` and `query`
+evaluate the data if a write is pending, which takes about as long as a reload,
+however small the write. Two writes and one read pay for that once, and a loop that
+writes and reads in turn pays for it every time round. With nothing pending, they
+cost no more than on a selection. Evaluating parses text layers again, so a
+[compiled layer](layers.md#compiled-layers) below the active layer makes it cheaper.
+
+**`get` and `view` treat what is missing differently.** `get` reads one place, so a
+value that is not there is an error, even if it has a default. A view follows
+[its rules](#views), so the same field can be a default or `None`. The path you give
+`view` itself must be set, though, as it must for `get`.
+
+A struct can derive both `View` and `Navigable`, and `#[crol(path = "combat.range")]`
+then means the same to both: `Stats::path().range()` goes to `combat.range`.
 
 ### The active layer
 

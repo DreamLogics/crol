@@ -11,7 +11,8 @@ serde = { version = "1", features = ["derive"] }
 ```
 
 `#[derive(crol::Navigable)]` gives a type paths for `CrolDb`, and `crol::croxp!`
-checks an expression when the program is compiled.
+checks an expression when the program is compiled. `#[derive(crol::View)]` makes a
+struct whose fields read by path, for a few fields of many values.
 
 `#[derive(crol::Schema)]` describes a type for tools and for `&default`, from its
 fields, doc comments and serde attributes. `#[derive(crol::VariantName)]` lets an
@@ -48,12 +49,15 @@ pub enum Env {
 | `#[crol(schema = any)]`            | a field      | accept anything here                                  |
 | `#[crol(rename = "...")]`          | an enum variant | the name data uses, for `VariantName`              |
 | `#[crol(leaf)]`                    | a field      | a path ends here, for a type without `Navigable`     |
+| `#[crol(path = "a.b")]`            | a field      | where it is, for `View` and `Navigable`               |
+| `#[crol(default)]`                 | a field      | a `View` takes its `Default` where the path is missing |
 
 ## Documentation
 
 - [Schemas](https://github.com/DreamLogics/crol/blob/main/docs/schemas.md)
 - [Typed variants](https://github.com/DreamLogics/crol/blob/main/docs/variants.md#typed-variants)
 - [Changing data with a database](https://github.com/DreamLogics/crol/blob/main/docs/rust.md#changing-data-with-a-database)
+- [Views and queries](https://github.com/DreamLogics/crol/blob/main/docs/rust.md#views-and-queries)
 
 ## Licence
 

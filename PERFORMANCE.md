@@ -60,6 +60,10 @@ blocks, long strings, definitions that spread others, and a layer of patches.
 A third workload, `crates/crol-eval/benches/big.rs`, is the target of `SPEC.md`: 10,000
 root keys that spread a template and refer to one another, with 16 contexts.
 
+`crates/crol/benches/db.rs` measures reads and transactions on 10,000 root keys:
+queries, views, and what a read after a write pays for, over a text layer and a
+compiled one.
+
 ### Measurements
 
 The figures are from commit `a339fd5`, and those of `CrolComposer` from `5a1c109`. A rerun

@@ -56,6 +56,10 @@ toml = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 ureq = { workspace = true, optional = true }
 
+[[bench]]
+name = "db"
+harness = false
+
 [dev-dependencies]
 crol-derive.workspace = true
 expect-test.workspace = true

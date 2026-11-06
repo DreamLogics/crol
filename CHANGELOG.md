@@ -20,6 +20,12 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   `#[derive(Navigable)]`, and change it in transactions that write operations to an
   active layer, from `load_active`. `croxp!` checks an expression when the program is
   compiled, so that `croxp! { & + 2 }` stays relative to the layers below.
+- A view names a field as serde does, so `#[serde(rename)]` and `rename_all` apply.
+- `CrolDb` reads views and queries: `view::<V>(path)` and `query()` on a selection and
+  on a transaction, which sees its own writes in them. `Query::holding_at` takes a
+  typed path, which can go through a list or an `Option`.
+- A struct can derive `View` and `Navigable` together, and `#[crol(path = "...")]` means
+  the same to both. `View` leaves other `crol` attributes to their derives.
 - `ExplainStep::uses_below`, and `crol_eval::uses_value_below`, say whether an
   operation uses the value below it.
 

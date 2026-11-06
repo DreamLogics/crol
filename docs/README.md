@@ -43,6 +43,8 @@ New here? Start with [getting started](getting-started.md).
 | know why `from_str` rejects what `compose` accepts | [Modes](modes.md#side-by-side)                          |
 | get completion in my editor                        | [Schemas](schemas.md), then [Editors](editors.md)       |
 | change data from my program and save it            | [Databases](rust.md#changing-data-with-a-database)      |
+| read a few fields of many values                   | [Views](rust.md#views)                                  |
+| find the keys that hold something                  | [Queries](rust.md#queries)                              |
 | know where a value came from                       | [`crol explain`](cli.md#crol-explain)                   |
 | know which schema a tool is using                  | [How schemas are found](schemas.md#how-schemas-are-found) |
 | lay out a new project                              | [Recommended layouts](projects.md#recommended-layouts)  |

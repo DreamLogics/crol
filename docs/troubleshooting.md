@@ -179,6 +179,16 @@ A read reached something that is not there: a key that is missing, a field left 
 for its default, or a `None`. `update` reads first, so it fails the same way, and that
 ends the transaction. To write through a `None` without reading it, use `set`.
 
+**`` `tree` has no `combat.range`, and no default for it ``**
+
+A [view](rust.md#views) reads a field that this value lacks. Make the field an
+`Option`, give it `#[crol(default)]`, or read fewer values: `of_type` keeps a query to
+values that have the field.
+
+**`` a view needs a path to a root key or below it ``**
+
+A view reads one value, and the root is not one. Give `view` a path to a key.
+
 **`` the context {prod} was not evaluated ``**
 
 `CrolConfig::contexts` or `each_variant` left that context out. Call
