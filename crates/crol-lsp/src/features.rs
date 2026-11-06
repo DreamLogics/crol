@@ -469,21 +469,22 @@ pub(crate) fn value_in(
     context: &[String],
 ) -> Option<Value> {
     let base = evaluation.value.as_ref()?;
-    let root = if context.is_empty() {
-        base.clone()
+    let ValueKind::Keyed(keyed) = &base.kind else {
+        return None;
+    };
+    let key = Key::Str(key.into());
+    let data = if context.is_empty() {
+        None
     } else {
         let ids: Option<Vec<_>> = context.iter().map(|n| evaluation.variants.id(n)).collect();
         let wanted = evaluation.variants.context(&ids?).ok()?;
-        evaluation
-            .contexts
-            .iter()
-            .find(|d| d.context == wanted)
-            .map_or_else(|| base.clone(), |d| d.root(base))
+        evaluation.contexts.iter().find(|d| d.context == wanted)
     };
-    let ValueKind::Keyed(keyed) = &root.kind else {
-        return None;
+    let value = match data {
+        Some(data) => data.get(base, &key),
+        None => keyed.entries.get(&key),
     };
-    crol_eval::value_at_path(keyed.entries.get(&Key::Str(key.into()))?, path).cloned()
+    crol_eval::value_at_path(value?, path).cloned()
 }
 
 /// A value on one line, in code: nothing for what does not fit on one.
@@ -711,7 +712,7 @@ fn history(
     settings: &Settings,
 ) -> Option<String> {
     let (layers, options) = snapshot.chain_of(file)?;
-    let steps = crol_eval::explain(&snapshot.sources, layers, options, path, &settings.context);
+    let steps = snapshot.explain(layers, options, path, &settings.context);
     let steps = steps.ok().filter(|steps| steps.len() > 1)?;
     let lines: Vec<String> = steps
         .into_iter()
@@ -786,14 +787,9 @@ pub(crate) fn definition(
     let (layers, options) = file
         .and_then(|file| snapshot.chain_of(file))
         .unwrap_or((&snapshot.layers, &snapshot.options));
-    let steps = crol_eval::explain(
-        &snapshot.sources,
-        layers,
-        options,
-        &Key::Str(key.into()).to_string(),
-        &[],
-    )
-    .ok()?;
+    let steps = snapshot
+        .explain(layers, options, &Key::Str(key.into()).to_string(), &[])
+        .ok()?;
     let step = steps
         .iter()
         .find(|s| s.kind == StepKind::Definition)
@@ -822,14 +818,9 @@ fn value_below(
         path.extend(selector_steps(selected.selectors()));
     }
     let (layers, options) = snapshot.chain_of(file)?;
-    let steps = crol_eval::explain(
-        &snapshot.sources,
-        layers,
-        options,
-        &describe_path(&key, &path),
-        &[],
-    )
-    .ok()?;
+    let steps = snapshot
+        .explain(layers, options, &describe_path(&key, &path), &[])
+        .ok()?;
     // The operation the `&` is in: the innermost entry around it whose
     // target an operation in this file starts at.
     let at = reference

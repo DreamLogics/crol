@@ -718,14 +718,55 @@ fn explain_paths(
         .collect();
     let (lowered, _) = lower::lower_data(&documents);
     let layer_names: Vec<String> = layers.iter().map(|l| l.name.clone()).collect();
+    explain_lowered(
+        &lowered,
+        &layer_names,
+        &evaluation.variants,
+        options,
+        requests,
+        context,
+    )
+}
+
+/// [`explain`] for layers compiled and evaluated before, without errors: only
+/// the key is looked at, so an editor can ask as it goes. `variants` are the
+/// evaluation's.
+pub fn explain_compiled(
+    compiled: &Compiled,
+    variants: &Variants,
+    options: &DataOptions,
+    path: &str,
+    context: &[String],
+) -> Result<Vec<ExplainStep>, Vec<Diagnostic>> {
+    let (key, steps) =
+        parse_path(path).map_err(|message| vec![Diagnostic::error(Span::detached(), message)])?;
+    let mut found = explain_lowered(
+        &compiled.lowered,
+        &compiled.layer_names,
+        variants,
+        options,
+        &[(&key, &steps)],
+        context,
+    )?;
+    Ok(found.pop().unwrap_or_default())
+}
+
+fn explain_lowered(
+    lowered: &lower::LoweredData,
+    layer_names: &[String],
+    variants: &Variants,
+    options: &DataOptions,
+    requests: &[(&str, &[PathStep])],
+    context: &[String],
+) -> Result<Vec<Vec<ExplainStep>>, Vec<Diagnostic>> {
     let input = eval::DataInput {
         ops: &lowered.ops,
         templates: &lowered.templates,
         root_defaults: &lowered.root_defaults,
         root_span: lowered.root_span,
-        layer_names: &layer_names,
+        layer_names,
         warn_cross_file_patches: false,
-        variants: &evaluation.variants,
+        variants,
         contexts: options.contexts.as_deref(),
         each_variant: options.each_variant,
         max_contexts: options.max_contexts,

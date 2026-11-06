@@ -1943,14 +1943,14 @@ fn sealed_fields_and_constraints_in_a_project() {
         ],
     );
     let mut client = Client::start(&dir);
-    let local = Buffer::open(&client, &dir, "local/a.crod");
+    let mut local = Buffer::open(&client, &dir, "local/a.crod");
+    local.change(&client, "x.hp: -1\nx.original: 2\n");
     client.diagnostics_for(&uri(&dir.join("local/a.crod")), |found| {
         says(found, "-1 is below 0")
     });
 
     // Completion above the defining layer leaves the sealed field out.
     let mut own = Buffer::open(&client, &dir, "base/a.crod");
-    let mut local = local;
     check_completions(
         &mut client,
         &mut local,

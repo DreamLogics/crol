@@ -1,5 +1,6 @@
 //! Doc comments written in data (`SPEC.md` 2.2, 12.5).
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use crol_eval::{FileId, Key, Layer, Span};
@@ -21,7 +22,7 @@ pub(crate) fn of_path(
     if !has_docs(snapshot, layers) {
         return None;
     }
-    let steps = crol_eval::explain(&snapshot.sources, layers, options, path, &settings.context);
+    let steps = snapshot.explain(layers, options, path, &settings.context);
     let mut docs: Vec<String> = Vec::new();
     for step in steps.ok()? {
         if let Some(doc) = at_step(snapshot, step.span, path)
@@ -36,10 +37,17 @@ pub(crate) fn of_path(
 /// Whether any document of the layers has a doc comment: most generated data
 /// has none, and is then not parsed again.
 fn has_docs(snapshot: &Snapshot, layers: &[Layer]) -> bool {
-    layers
-        .iter()
-        .flat_map(|layer| &layer.documents)
-        .any(|(_, file)| snapshot.sources.file(*file).text().contains("///"))
+    let find = || {
+        layers
+            .iter()
+            .flat_map(|layer| &layer.documents)
+            .any(|(_, file)| snapshot.sources.file(*file).text().contains("///"))
+    };
+    if std::ptr::eq(layers, snapshot.layers.as_slice()) {
+        snapshot.project_has_docs(find)
+    } else {
+        find()
+    }
 }
 
 /// The doc comment of what an operation does at `path`.
@@ -116,10 +124,21 @@ fn target_text(entry: &ast::Entry) -> Option<String> {
 /// The doc comments of root keys, by key as completion labels them, for
 /// where looking each up in turn would take too long. Entries in variant
 /// blocks are left out.
-pub(crate) fn of_root_keys(snapshot: &Snapshot, file: Option<FileId>) -> HashMap<String, String> {
+pub(crate) fn of_root_keys<'a>(
+    snapshot: &'a Snapshot,
+    file: Option<FileId>,
+) -> Cow<'a, HashMap<String, String>> {
     let layers = file
         .and_then(|file| snapshot.chain_of(file))
         .map_or(snapshot.layers.as_slice(), |(layers, _)| layers);
+    if std::ptr::eq(layers, snapshot.layers.as_slice()) {
+        Cow::Borrowed(snapshot.project_root_docs(|| root_docs_in(snapshot, layers)))
+    } else {
+        Cow::Owned(root_docs_in(snapshot, layers))
+    }
+}
+
+fn root_docs_in(snapshot: &Snapshot, layers: &[Layer]) -> HashMap<String, String> {
     let mut docs: HashMap<String, String> = HashMap::new();
     for (_, id) in layers.iter().flat_map(|layer| &layer.documents) {
         let text = snapshot.sources.file(*id).text();

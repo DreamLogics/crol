@@ -10,7 +10,8 @@
 //! extends. Open buffers replace their files, saved or not. After an edit it
 //! parses the file again at
 //! once, for syntax errors, and evaluates everything after a pause in
-//! typing; requests are answered from the latest evaluation.
+//! typing, on a thread of its own: requests are answered at once from the
+//! latest evaluation, whatever is being evaluated.
 
 #![forbid(unsafe_code)]
 
@@ -25,6 +26,7 @@ mod place;
 mod remote;
 mod schema;
 mod tokens;
+mod worker;
 mod workspace;
 
 use std::collections::{HashMap, HashSet};
@@ -112,16 +114,42 @@ pub struct Server {
     snapshot: Option<Snapshot>,
     /// When the last edit happened, if it is not evaluated yet.
     dirty_since: Option<Instant>,
-    /// The files diagnostics were last published for, by URI. (A `Uri`
-    /// caches internally, so it is not a hash key.)
-    published: HashSet<String>,
+    /// The diagnostics last published, by URI, for the files that have
+    /// any. (A `Uri` caches internally, so it is not a hash key.)
+    published: HashMap<String, Vec<lsp_types::Diagnostic>>,
+    /// Until it runs, the application's own checks.
     checks: Option<Checks>,
+    /// Whether every file has had its diagnostics, even none, which clears
+    /// what an editor still shows of an earlier session.
+    published_all: bool,
+    /// Evaluates, once the server runs.
+    worker: Option<worker::Worker>,
+    /// Whether the worker is evaluating.
+    evaluating: bool,
+    /// Whether to evaluate once the worker is done: what it is evaluating
+    /// is out of date.
+    evaluate_again: bool,
+    /// Requests that wait for an evaluation, as nothing is known yet of the
+    /// document they are about.
+    waiting: Vec<Request>,
+    /// Whether requests wait until the next evaluation is done.
+    hold_requests: bool,
     /// Whether the client can be asked to request inlay hints again.
     refresh_hints: bool,
     /// How many requests the server has sent the client, for their ids.
     requests_sent: u64,
     /// Fetches schemas named by URL or crate.
     fetcher: remote::Fetcher,
+}
+
+/// Whether a request is about the text of a document alone.
+fn answered_from_text(method: &str) -> bool {
+    [
+        request::DocumentSymbolRequest::METHOD,
+        request::Formatting::METHOD,
+        request::PrepareRenameRequest::METHOD,
+    ]
+    .contains(&method)
 }
 
 /// Runs `crol lsp`: the server on standard input and output.
@@ -241,8 +269,14 @@ impl Server {
             open: HashMap::new(),
             snapshot: None,
             dirty_since: None,
-            published: HashSet::new(),
+            published: HashMap::new(),
+            published_all: false,
             checks,
+            worker: None,
+            evaluating: false,
+            evaluate_again: false,
+            waiting: Vec::new(),
+            hold_requests: true,
             refresh_hints,
             requests_sent: 0,
             fetcher: remote::Fetcher::new(),
@@ -250,7 +284,6 @@ impl Server {
         if watch_files {
             server.watch_files();
         }
-        server.evaluate();
         Ok(server)
     }
 
@@ -287,6 +320,12 @@ impl Server {
 
     /// Serves until the client asks the server to shut down.
     pub fn run(mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let worker = worker::Worker::start(self.root.clone(), self.checks.take());
+        let results = worker.results.clone();
+        self.worker = Some(worker);
+        // After a pause, as the document an editor opens at once is known
+        // then, and need not be evaluated for again.
+        self.dirty_since = Some(Instant::now());
         loop {
             // A schema fetched, a message, or the pause in typing over.
             let wait = self.dirty_since.map(|since| {
@@ -306,6 +345,10 @@ impl Server {
                         self.fetcher.done(fetched);
                         self.evaluate();
                     }
+                    continue;
+                }
+                recv(results) -> evaluated => {
+                    self.evaluated(evaluated?);
                     continue;
                 }
                 recv(timeout) -> _ => {
@@ -360,6 +403,7 @@ impl Server {
                         s.file_of(&path)
                             .is_some_and(|f| s.evaluation_of(f).is_some())
                     }) {
+                        self.hold_requests = true;
                         self.evaluate();
                     }
                 }
@@ -419,6 +463,8 @@ impl Server {
                 })
                 .collect();
             if !diagnostics.is_empty() {
+                self.published
+                    .insert(uri.as_str().to_owned(), diagnostics.clone());
                 self.notify::<notification::PublishDiagnostics>(
                     lsp_types::PublishDiagnosticsParams {
                         uri: uri.clone(),
@@ -426,57 +472,55 @@ impl Server {
                         version: None,
                     },
                 );
-                self.published.insert(uri.as_str().to_owned());
             }
         }
         self.dirty_since = Some(Instant::now());
     }
 
-    /// Evaluates everything and publishes the diagnostics.
+    /// Has the worker evaluate everything, now or as soon as it is done.
     fn evaluate(&mut self) {
         self.dirty_since = None;
-        let evaluate = |status: &workspace::RemoteStatus| {
-            workspace::evaluate(
-                self.root.as_deref(),
-                &self.settings,
-                &self.open,
-                self.checks.as_ref(),
-                status,
-            )
+        if self.evaluating {
+            self.evaluate_again = true;
+            return;
+        }
+        let Some(worker) = &self.worker else {
+            return;
         };
-        let mut snapshot = evaluate(&self.fetcher.status());
+        self.evaluating = true;
+        worker.evaluate(worker::Job {
+            settings: self.settings.clone(),
+            open: self.open.clone(),
+            remote: self.fetcher.status(),
+            encoding: self.encoding,
+        });
+    }
+
+    /// Takes over an evaluation and publishes its diagnostics, unless
+    /// something newer is on its way.
+    fn evaluated(&mut self, evaluated: worker::Evaluated) {
+        self.evaluating = false;
+        let worker::Evaluated {
+            mut snapshot,
+            diagnostics,
+        } = evaluated;
         // Schemas named by URL or crate come from the cache; those not
         // fetched yet this session are fetched, and evaluation says so.
-        if self.settings.remote_schemas && self.fetcher.fetch(&snapshot.remote) {
-            snapshot = evaluate(&self.fetcher.status());
-        }
+        let fetching = self.settings.remote_schemas && self.fetcher.fetch(&snapshot.remote);
         if let Some(previous) = self.snapshot.take() {
             snapshot.keep_last_good(previous);
         }
-        let by_file = snapshot.diagnostics(self.encoding);
-        let mut published = HashSet::new();
-        for (uri, diagnostics) in by_file {
-            published.insert(uri.as_str().to_owned());
-            self.notify::<notification::PublishDiagnostics>(lsp_types::PublishDiagnosticsParams {
-                uri,
-                diagnostics,
-                version: None,
-            });
-        }
-        // Clear the files whose diagnostics went away.
-        for uri in self.published.difference(&published) {
-            if let Ok(uri) = uri.parse::<Uri>() {
-                self.notify::<notification::PublishDiagnostics>(
-                    lsp_types::PublishDiagnosticsParams {
-                        uri,
-                        diagnostics: Vec::new(),
-                        version: None,
-                    },
-                );
-            }
-        }
-        self.published = published;
         self.snapshot = Some(snapshot);
+        let again = fetching || std::mem::take(&mut self.evaluate_again);
+        if again {
+            self.evaluate();
+            return;
+        }
+        self.publish(diagnostics);
+        self.hold_requests = false;
+        for request in std::mem::take(&mut self.waiting) {
+            self.request(request);
+        }
         // Hints are left out while a document has edits not evaluated yet.
         if self.settings.inlay_hints && self.refresh_hints {
             self.requests_sent += 1;
@@ -488,13 +532,55 @@ impl Server {
         }
     }
 
+    /// Publishes what changed, and what is open whether it did or not: the
+    /// editor is waiting for that. The rest would be a lot of messages for
+    /// nothing in a large project.
+    fn publish(&mut self, by_file: Vec<(Uri, Vec<lsp_types::Diagnostic>)>) {
+        let mut now = HashMap::new();
+        let mut listed = HashSet::new();
+        for (uri, diagnostics) in by_file {
+            let key = uri.as_str().to_owned();
+            listed.insert(key.clone());
+            let open = convert::uri_to_path(&uri).is_some_and(|path| self.open.contains_key(&path));
+            let last = self.published.get(&key).map_or(&[][..], Vec::as_slice);
+            if open || !self.published_all || last != diagnostics.as_slice() {
+                self.notify::<notification::PublishDiagnostics>(
+                    lsp_types::PublishDiagnosticsParams {
+                        uri,
+                        diagnostics: diagnostics.clone(),
+                        version: None,
+                    },
+                );
+            }
+            if !diagnostics.is_empty() {
+                now.insert(key, diagnostics);
+            }
+        }
+        // Clear the files that are not listed any more.
+        self.published.retain(|key, _| !listed.contains(key));
+        for key in self.published.keys() {
+            if let Ok(uri) = key.parse::<Uri>() {
+                self.notify::<notification::PublishDiagnostics>(
+                    lsp_types::PublishDiagnosticsParams {
+                        uri,
+                        diagnostics: Vec::new(),
+                        version: None,
+                    },
+                );
+            }
+        }
+        self.published = now;
+        self.published_all = true;
+    }
+
     // ---- Requests ----
 
     fn request(&mut self, request: Request) {
-        // Requests are answered from the latest evaluation; one pending
-        // from an edit is run first if there is none.
-        if self.snapshot.is_none() {
-            self.evaluate();
+        // Requests are answered from the latest evaluation, unless one is
+        // needed to know anything at all.
+        if self.hold_requests && !answered_from_text(&request.method) {
+            self.waiting.push(request);
+            return;
         }
         let id = request.id.clone();
         let encoding = self.encoding;

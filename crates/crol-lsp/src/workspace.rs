@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crol::project::Project;
 use crol::schema::{DataRoot, SchemaFile};
@@ -11,7 +11,9 @@ use crol::{
     CheckOptions, CrolComposer, CrolConfig, CrolLayer, ExtendsLoad, FileLoader, FileLoaders,
     FsLoader, Loaded, LoaderError, Mode, ModulePath, SourceId,
 };
-use crol_eval::{DataOptions, Diagnostic, Evaluation, FileId, Layer, Severity, Sources};
+use crol_eval::{
+    Compiled, DataOptions, Diagnostic, Evaluation, ExplainStep, FileId, Layer, Severity, Sources,
+};
 use lsp_types::Uri;
 
 use crate::Settings;
@@ -113,6 +115,13 @@ pub struct Snapshot {
     pub options: DataOptions,
     /// The project's evaluation; empty without a project.
     pub evaluation: Evaluation,
+    /// The project's layers compiled, for looking up one key at a time;
+    /// `None` if they do not compile.
+    compiled: Option<Compiled>,
+    /// The doc comments of root keys in the project's layers.
+    root_docs: OnceLock<HashMap<String, String>>,
+    /// Whether any document of the project's layers has a doc comment.
+    has_docs: OnceLock<bool>,
     /// While the layers do not evaluate (as while a document is being
     /// typed): the latest evaluation of them that did, for completion.
     pub last_good: Option<Evaluation>,
@@ -377,6 +386,44 @@ impl Snapshot {
     /// The layers and options a data document was evaluated with: the
     /// project's for a file in its layers, else its own (`SPEC.md` 4.1).
     /// Nothing for a document that is not data.
+    /// What [`crol_eval::explain`] says of `path` in `layers`, which are the
+    /// project's or a [`Snapshot::chain_of`]: from what is compiled already,
+    /// if they are the project's.
+    pub(crate) fn explain(
+        &self,
+        layers: &[Layer],
+        options: &DataOptions,
+        path: &str,
+        context: &[String],
+    ) -> Result<Vec<ExplainStep>, Vec<Diagnostic>> {
+        if !std::ptr::eq(layers, self.layers.as_slice()) {
+            return crol_eval::explain(&self.sources, layers, options, path, context);
+        }
+        if self.evaluation.has_errors() {
+            return Err(self.evaluation.diagnostics.clone());
+        }
+        match &self.compiled {
+            Some(compiled) => {
+                let variants = &self.evaluation.variants;
+                crol_eval::explain_compiled(compiled, variants, options, path, context)
+            }
+            None => Err(Vec::new()),
+        }
+    }
+
+    /// Whether any document of the project's layers has a doc comment.
+    pub(crate) fn project_has_docs(&self, find: impl FnOnce() -> bool) -> bool {
+        *self.has_docs.get_or_init(find)
+    }
+
+    /// The doc comments of root keys in the project's layers.
+    pub(crate) fn project_root_docs(
+        &self,
+        find: impl FnOnce() -> HashMap<String, String>,
+    ) -> &HashMap<String, String> {
+        self.root_docs.get_or_init(find)
+    }
+
     pub(crate) fn chain_of(&self, file: FileId) -> Option<(&[Layer], &DataOptions)> {
         if self.in_layers(file) {
             return Some((&self.layers, &self.options));
@@ -604,6 +651,9 @@ pub(crate) fn evaluate(
         layers: Vec::new(),
         options: DataOptions::default(),
         evaluation: Evaluation::default(),
+        compiled: None,
+        root_docs: OnceLock::new(),
+        has_docs: OnceLock::new(),
         last_good: None,
         last_good_documents: HashMap::new(),
         documents: Vec::new(),
@@ -664,8 +714,20 @@ pub(crate) fn evaluate(
                 .as_ref()
                 .map(|s| s.defaults_for(snapshot.root_type.as_deref())),
         );
-        snapshot.evaluation =
-            crol_eval::evaluate_data(&snapshot.sources, &snapshot.layers, &snapshot.options);
+        let (compiled, mut diagnostics) = crol_eval::compile(&snapshot.sources, &snapshot.layers);
+        snapshot.evaluation = match &compiled {
+            Some(compiled) => {
+                let mut evaluation = crol_eval::evaluate_compiled(compiled, &snapshot.options);
+                diagnostics.append(&mut evaluation.diagnostics);
+                evaluation.diagnostics = diagnostics;
+                evaluation
+            }
+            None => Evaluation {
+                diagnostics,
+                ..Evaluation::default()
+            },
+        };
+        snapshot.compiled = compiled;
         // What does not evaluate above a gap says little: keep what is below
         // it, until there is better.
         if let Some((gap, _)) = &loading.gap

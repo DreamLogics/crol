@@ -395,14 +395,14 @@ impl Document<'_> {
         let file = self.file?;
         let (layers, options) = snapshot.chain_of(file)?;
         let (key, path) = features::block_path(block)?;
-        let steps = crol_eval::explain(
-            &snapshot.sources,
-            layers,
-            options,
-            &features::describe_path(&key, &path),
-            self.context,
-        )
-        .ok()?;
+        let steps = snapshot
+            .explain(
+                layers,
+                options,
+                &features::describe_path(&key, &path),
+                self.context,
+            )
+            .ok()?;
         // The operation the block is in: the innermost entry around it
         // whose target an operation in this file starts at.
         let at = block
