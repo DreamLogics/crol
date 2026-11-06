@@ -180,9 +180,11 @@ pub struct CrolConfig<T = String> {
     /// Let a path go through a field left out, from its default. Needs a
     /// [schema](CrolComposer::schema) (`SPEC.md` 5.1).
     pub init_defaults: bool,
-    /// Keep what `.crob` layers hold beyond their text, so that
-    /// [`CrolData::reload`] need not parse them (`SPEC.md` 7.8). Without it,
-    /// loading takes less memory. Default: `true`.
+    /// Keep what layers lower to, so that [`CrolData::reload`] need not parse
+    /// the ones that did not change: what `.crob` layers hold beyond their
+    /// text, and from the first reload, what a text layer that stands alone
+    /// lowers to (`SPEC.md` 7.8). Without it, data takes less memory. Default:
+    /// `true`.
     pub keep_lowered: bool,
 }
 
@@ -979,9 +981,11 @@ impl<T: VariantName> CrolComposer<T> {
         let Some(compiled) = compiled else {
             return Err(Error::from_diagnostics(&sources, &diagnostics));
         };
-        if !self.config.keep_lowered {
+        let keep_lowered = self.config.keep_lowered;
+        if !keep_lowered {
             lowered.fill(None);
         }
+        let lower_tried = vec![false; layers.len()];
         let mut evaluation = evaluate_compiled(&compiled, &options);
         diagnostics.append(&mut evaluation.diagnostics);
         evaluation.diagnostics = diagnostics;
@@ -1006,6 +1010,8 @@ impl<T: VariantName> CrolComposer<T> {
             layers,
             compiled: Arc::new(compiled),
             lowered,
+            lower_tried,
+            keep_lowered,
             schema: self.schema.map(Arc::new),
             data_options: options,
             base,
@@ -1161,8 +1167,13 @@ pub struct CrolData<T = String> {
     layers: Vec<Layer>,
     /// For evaluating another context later.
     compiled: Arc<Compiled>,
-    /// For each layer from a `.crob` file, what it holds, until it changes.
+    /// For each layer, what it lowers to, until it changes: what a `.crob`
+    /// file holds, or what `lower_unchanged` found.
     lowered: Vec<Option<Arc<[u8]>>>,
+    /// For each layer, whether `lower_unchanged` tried it since it changed.
+    lower_tried: Vec<bool>,
+    /// [`CrolConfig::keep_lowered`].
+    keep_lowered: bool,
     /// The schema as given, for reloading a `schema.crod`.
     schema: Option<Arc<crate::schema::SchemaFile>>,
     data_options: DataOptions,
@@ -1450,9 +1461,12 @@ impl<T: VariantName> CrolData<T> {
     /// watches. If the result does not load, the error is returned and the
     /// data stays as it was. Unchanged documents are not read again.
     pub fn reload(&mut self, changes: &[DocumentChange<'_>]) -> Result<Reloaded, Error> {
+        let changed: Vec<&str> = changes.iter().map(|change| change.layer).collect();
+        self.lower_unchanged(&changed);
         let mut sources = self.sources.clone();
         let mut layers = self.layers.clone();
         let mut lowered = self.lowered.clone();
+        let mut lower_tried = self.lower_tried.clone();
         for change in changes {
             let index = layers
                 .iter()
@@ -1463,6 +1477,7 @@ impl<T: VariantName> CrolData<T> {
             if let Some(slot) = lowered.get_mut(index) {
                 *slot = None;
             }
+            lower_tried[index] = false;
             let at = layer.documents.iter().position(|(p, _)| p == change.path);
             match (change.text, at) {
                 (Some(text), Some(at)) => {
@@ -1522,6 +1537,7 @@ impl<T: VariantName> CrolData<T> {
         self.sources = sources;
         self.layers = layers;
         self.lowered = lowered;
+        self.lower_tried = lower_tried;
         self.compiled = Arc::new(compiled);
         self.data_options = options;
         self.base = base;
@@ -1532,6 +1548,25 @@ impl<T: VariantName> CrolData<T> {
         Ok(Reloaded {
             changed: changed_keys(&before, &self.key_fingerprints()),
         })
+    }
+
+    /// Lowers each text layer but those named, once, so that evaluating them
+    /// again need not parse them. A layer that does not stand alone stays as
+    /// it is: a template can reach it from any layer (`SPEC.md` 7.8).
+    pub(crate) fn lower_unchanged(&mut self, changing: &[&str]) {
+        if !self.keep_lowered {
+            return;
+        }
+        for (index, layer) in self.layers.iter().enumerate() {
+            if self.lower_tried[index]
+                || self.lowered[index].is_some()
+                || changing.contains(&layer.name.as_str())
+            {
+                continue;
+            }
+            self.lower_tried[index] = true;
+            self.lowered[index] = crol_eval::lower_layer(&self.sources, layer).map(Arc::from);
+        }
     }
 
     /// [`explain`](Self::explain) for several paths, working out what they

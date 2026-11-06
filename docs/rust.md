@@ -366,7 +366,7 @@ that out when you do not set `variants`.
 | `allow_unknown_fields`    | `false`            | ignore fields a struct does not have                         |
 | `require_complete`        | `true`             | require every field of a struct without `..`, unless the [type decides](#types-that-decide-for-themselves) |
 | `warn_cross_file_patches` | `true`             | warn about [patches from several files](layers.md#definitions-and-patches) of a layer |
-| `keep_lowered`            | `true`             | keep what `.crob` layers hold for `reload`; off takes less memory, and `reload` parses them |
+| `keep_lowered`            | `true`             | keep what layers lower to, so that `reload` need not parse them; off takes less memory |
 | `init_defaults`           | `false`            | let a path go through a field left out, from its default; needs a [schema](schemas.md#using-default) |
 
 ## Inspecting the result
@@ -473,7 +473,10 @@ true
 ```
 
 Keep `CrolContext`s from before a reload only if your variants are declared. Everything
-is evaluated again, so a reload takes about as long as loading.
+is evaluated again, so the first reload takes about as long as loading. It also keeps
+what each layer that did not change lowers to, so later reloads do not parse those
+layers, which takes about half the time. A layer that uses a template of another layer
+is parsed every time, and `keep_lowered: false` turns this off.
 
 ## Views and queries
 
@@ -1058,8 +1061,7 @@ every root key. For `variations`, which covers every context, use `db.data()`.
 evaluate the data if a write is pending, which takes about as long as a reload,
 however small the write. Two writes and one read pay for that once, and a loop that
 writes and reads in turn pays for it every time round. With nothing pending, they
-cost no more than on a selection. Evaluating parses text layers again, so a
-[compiled layer](layers.md#compiled-layers) below the active layer makes it cheaper.
+cost no more than on a selection.
 
 **`get` and `view` treat what is missing differently.** `get` reads one place, so a
 value that is not there is an error, even if it has a default. A view follows

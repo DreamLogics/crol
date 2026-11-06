@@ -572,6 +572,13 @@ impl<V: VariantName> State<'_, V> {
         self.work.as_ref().unwrap_or(&*self.db.data)
     }
 
+    /// The data to work on. What the layers below lower to stays in the
+    /// original, for the transactions after this one, whatever becomes of it.
+    fn clone_data(&mut self) -> CrolData<V> {
+        self.db.data.lower_unchanged(&[&self.db.active.layer]);
+        self.db.data.clone()
+    }
+
     fn reload(&self, data: &mut CrolData<V>, text: &str) -> Result<(), Error> {
         let change = DocumentChange {
             layer: &self.db.active.layer,
@@ -590,7 +597,7 @@ impl<V: VariantName> State<'_, V> {
         let mut below = match self.below.take() {
             Some(below) => below,
             None => {
-                let mut below = self.db.data.clone();
+                let mut below = self.clone_data();
                 self.reload(&mut below, "")?;
                 below
             }
@@ -614,7 +621,7 @@ impl<V: VariantName> State<'_, V> {
             let text = self.log.render()?;
             let mut work = match self.work.take() {
                 Some(work) => work,
-                None => self.db.data.clone(),
+                None => self.clone_data(),
             };
             let reloaded = self.reload(&mut work, &text);
             self.work = Some(work);

@@ -702,10 +702,11 @@ impl Formatter {
             }
         }
         let selectors = self.selectors(target);
-        out.push_str(separator(
-            child_node(target, |k| k == KEY).as_ref(),
-            &selectors,
-        ));
+        // After `?`, the `.` cannot join the key, and `1? .0` would not parse.
+        let key = child_node(target, |k| k == KEY);
+        if !key.as_ref().is_some_and(before_question) {
+            out.push_str(separator(key.as_ref(), &selectors));
+        }
         out.push_str(&selectors);
         out
     }

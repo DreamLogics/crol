@@ -109,6 +109,19 @@ fn main() -> Result<(), Error> {
         db.select().view::<Stats>(&unit).map(|view| view.sum())
     })?;
 
+    println!("the first read after a write, which also lowers the layers");
+    let layer = CrolLayer::from_sources("base", [("a.crod", text.as_str())]);
+    let mut fresh: CrolDb<Game> = CrolComposer::new().load_layer(layer).compose_db()?;
+    let start = Instant::now();
+    let mut tx = fresh.transaction().at(&hp).set(1)?;
+    black_box(tx.view::<Stats>(&unit)?.sum());
+    drop(tx);
+    println!(
+        "{:<36} {:>12.1} us",
+        "write, view",
+        start.elapsed().as_secs_f64() * 1e6
+    );
+
     println!("what a read after a write pays for");
     time("clone the data", 5, || Ok(db.data().clone()))?;
     let mut reloaded = db.data().clone();
@@ -123,7 +136,7 @@ fn main() -> Result<(), Error> {
     time("reload an empty document", 5, || reload(""))?;
     time("reload a one-line document", 5, || reload("^u1.hp: 1\n"))?;
 
-    println!("the same over a compiled layer, which is not parsed again");
+    println!("the same over a compiled layer");
     let layer = CrolLayer::from_sources("base", [("a.crod", text.as_str())]);
     let binary = CrolLayer::from_binary("base", &layer.to_binary()?)?;
     let mut compiled: CrolDb<Game> = CrolComposer::new().load_layer(binary).compose_db()?;

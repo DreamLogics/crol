@@ -31,12 +31,16 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Fixed
 
+- `crol fmt` wrote `1?.a` as `1? .a`, which does not parse.
 - With `init_defaults`, a path through a `None` whose type has no default said
   `cannot select in a unit name`; it now says the step is not set.
 
 ### Changed
 
 - `.crob` files are format 3, for `!`; compile layers again.
+- `reload`, and a read after a write in a transaction, take about half the time from
+  the second one on: a text layer that did not change is lowered once and not parsed
+  again, as a `.crob` layer is. `CrolConfig::keep_lowered: false` turns this off.
 - The language server evaluates on a thread of its own, and answers requests at once
   from the latest evaluation. It keeps what it compiled, so hover, go to definition and
   completion look at one key rather than everything, with what lookups share worked out

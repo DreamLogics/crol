@@ -914,3 +914,123 @@ fn a_compiled_layer_says_whether_it_matches_its_text() {
     damaged[50] ^= 1;
     assert!(CrolLayer::from_binary("base", &damaged).is_err());
 }
+
+/// Reloads one document of a layer, and gives the value of `a`.
+fn reload_a(data: &mut crol::CrolData, layer: &str, text: &str) -> Result<i64, crol::Error> {
+    let change = crol::DocumentChange {
+        layer,
+        path: "a.crod",
+        text: Some(text),
+    };
+    data.reload(&[change])?;
+    data.get("a")
+}
+
+fn two_layers(base: &str, top: &str) -> crol::CrolData {
+    CrolComposer::new()
+        .load_layer(CrolLayer::from_sources("base", [("a.crod", base)]))
+        .load_layer(CrolLayer::from_sources("top", [("a.crod", top)]))
+        .compose_data()
+        .unwrap()
+}
+
+#[test]
+fn a_layer_lowered_for_a_reload_changes_with_its_text() {
+    let mut data = two_layers("+a: 1", "a: & + 1");
+    assert_eq!(reload_a(&mut data, "top", "a: & + 2").unwrap(), 3);
+    assert_eq!(reload_a(&mut data, "top", "a: & + 3").unwrap(), 4);
+    assert_eq!(reload_a(&mut data, "base", "+a: 10").unwrap(), 13);
+    assert_eq!(reload_a(&mut data, "top", "a: & + 4").unwrap(), 14);
+    assert_eq!(reload_a(&mut data, "base", "+a: 20").unwrap(), 24);
+}
+
+#[test]
+fn a_failed_reload_keeps_what_was_lowered_right() {
+    let mut data = two_layers("+a: 1", "a: & + 1");
+    assert!(reload_a(&mut data, "base", "+a: (").is_err());
+    assert_eq!(data.get::<i64>("a").unwrap(), 2);
+    assert_eq!(reload_a(&mut data, "top", "a: & + 2").unwrap(), 3);
+}
+
+#[test]
+fn a_layer_that_uses_a_template_above_it_follows_the_template() {
+    let mut data = two_layers("+a: &one", "one := 1");
+    assert_eq!(reload_a(&mut data, "top", "one := 2").unwrap(), 2);
+    assert_eq!(reload_a(&mut data, "top", "one := 3").unwrap(), 3);
+    let error = reload_a(&mut data, "top", "two := 3").unwrap_err();
+    assert!(error.to_string().contains("one"), "{error}");
+    assert_eq!(data.get::<i64>("a").unwrap(), 3);
+}
+
+#[test]
+fn a_layer_that_uses_a_template_below_it_follows_the_template() {
+    let mut data = two_layers("one := 1\n+b: 0", "+a: &one");
+    assert_eq!(reload_a(&mut data, "base", "one := 2\n+b: 0").unwrap(), 2);
+    assert_eq!(reload_a(&mut data, "base", "one := 3\n+b: 0").unwrap(), 3);
+}
+
+#[test]
+fn a_template_defined_twice_is_an_error_after_lowering_too() {
+    let mut data = two_layers("one := 1\n+a: &one", "+b: 0");
+    assert_eq!(reload_a(&mut data, "top", "+b: 1").unwrap(), 1);
+    let error = reload_a(&mut data, "top", "one := 2\n+b: 1").unwrap_err();
+    assert!(error.to_string().contains("defined twice"), "{error}");
+    assert_eq!(reload_a(&mut data, "top", "+b: 2").unwrap(), 1);
+}
+
+#[test]
+fn an_error_in_a_lowered_layer_still_points_at_its_text() {
+    let base = "+a: 1\n+b: 1 + \"x\"\n-b";
+    let mut data = two_layers("+a: 1", "");
+    assert_eq!(reload_a(&mut data, "top", "").unwrap(), 1);
+    let error = reload_a(&mut data, "base", base);
+    let lowered_first = error.map(|_| ()).map_err(|error| error.to_string());
+    let fresh = CrolComposer::<String>::new()
+        .load_layer(CrolLayer::from_sources("base", [("a.crod", base)]))
+        .load_layer(CrolLayer::from_sources("top", [("a.crod", "")]))
+        .compose_data()
+        .map(|_| ())
+        .map_err(|error| error.to_string());
+    assert_eq!(lowered_first, fresh);
+}
+
+#[test]
+fn reloading_without_keep_lowered_gives_the_same() {
+    let config = CrolConfig::<String> {
+        keep_lowered: false,
+        ..CrolConfig::default()
+    };
+    let mut data = CrolComposer::with_cfg(config)
+        .load_layer(CrolLayer::from_sources("base", [("a.crod", "+a: 1")]))
+        .load_layer(CrolLayer::from_sources("top", [("a.crod", "a: & + 1")]))
+        .compose_data()
+        .unwrap();
+    assert_eq!(reload_a(&mut data, "top", "a: & + 2").unwrap(), 3);
+    assert_eq!(reload_a(&mut data, "base", "+a: 10").unwrap(), 12);
+}
+
+#[test]
+fn a_reload_gives_the_fingerprint_of_loading() {
+    let base = "one := 1\n+a: &one\n<x> { a: 5 }";
+    let top = "a: & + 1";
+    let fresh = two_layers(base, top);
+    let mut data = two_layers(base, "a: & + 9");
+    reload_a(&mut data, "top", "a: & + 8").unwrap();
+    reload_a(&mut data, "top", top).unwrap();
+    assert_eq!(data.fingerprint(), fresh.fingerprint());
+    let read_x = |data: &crol::CrolData| {
+        let context = data.context(["x"]).unwrap();
+        data.get_in::<i64>("a", &context).unwrap()
+    };
+    assert_eq!(read_x(&data), read_x(&fresh));
+    let base = data.context::<&str>([]).unwrap();
+    let history = data.explain("a", &base).unwrap();
+    let again = fresh
+        .explain("a", &fresh.context::<&str>([]).unwrap())
+        .unwrap();
+    assert_eq!(history.len(), again.len());
+    let entries = |steps: &[crol::ExplainStep]| -> Vec<String> {
+        steps.iter().map(|step| step.entry.to_string()).collect()
+    };
+    assert_eq!(entries(&history), entries(&again));
+}
