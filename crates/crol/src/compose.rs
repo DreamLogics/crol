@@ -968,6 +968,9 @@ fn extends_of(text: &str) -> Vec<String> {
 /// The module paths a document's `#![extends(...)]` attributes name, each
 /// with where it is written.
 fn extends_attributes(text: &str) -> Vec<(String, TextRange)> {
+    if !crate::schema::may_have_attributes(text) {
+        return Vec::new();
+    }
     let parse = crol_syntax::parse(text);
     parse
         .document()

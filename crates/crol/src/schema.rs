@@ -664,6 +664,9 @@ pub fn attribute_path(
     fetch: bool,
 ) -> Option<(crol_syntax::TextRange, Result<PathBuf, Error>)> {
     use crol_syntax::ast::{AstNode, AttributeKind};
+    if !may_have_attributes(text) {
+        return None;
+    }
     let parse = crol_syntax::parse(text);
     let attr = parse.document().attributes().find_map(|a| match a.kind() {
         Some(AttributeKind::Schema(attr)) => Some(attr),
@@ -742,10 +745,19 @@ pub fn attribute_disagrees(
     }
 }
 
+/// Whether a document can have attributes: most have none, and need not be
+/// parsed to know that.
+pub(crate) fn may_have_attributes(text: &str) -> bool {
+    text.contains("#!")
+}
+
 /// The URL or crate a document's `#![schema("...")]` names, if it names
 /// one: what [`attribute_path`] resolves, for fetching it beforehand.
 pub fn attribute_remote(text: &str) -> Option<String> {
     use crol_syntax::ast::AttributeKind;
+    if !may_have_attributes(text) {
+        return None;
+    }
     let parse = crol_syntax::parse(text);
     parse.document().attributes().find_map(|a| match a.kind() {
         Some(AttributeKind::Schema(attr)) => attr

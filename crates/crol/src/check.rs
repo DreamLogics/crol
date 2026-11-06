@@ -212,27 +212,55 @@ fn check_keys(
         base.push((key, diagnostics.clone(), ids));
         merge(&mut found, diagnostics, 0);
     }
-    for (index, context) in contexts.iter().enumerate().skip(1) {
-        let Some(data_in) = context else { continue };
-        let mut checker = Checker::new(schema, options, data, *context);
+    // Each context on its own, and with enough to do on a thread of its own.
+    let check_context = |context: &&ContextData| {
+        let mut checker = Checker::new(schema, options, data, Some(context));
+        let mut same = Vec::new();
         for (key, diagnostics, ids) in &base {
-            if data_in.changes.contains_key(*key) {
+            if context.changes.contains_key(*key) {
                 continue;
             }
-            merge(&mut found, diagnostics.clone(), index);
+            same.extend(diagnostics.iter().cloned());
             for id in ids {
                 checker.id(id.value, id.id, id.refers, &id.path);
             }
         }
-        for (key, change) in &data_in.changes {
+        for (key, change) in &context.changes {
             if let (Key::Str(name), Some(value)) = (key, change) {
                 checker.value(value, root_type, name, None);
             }
         }
-        merge(&mut found, checker.found, index);
+        same.append(&mut checker.found);
+        same
+    };
+    let others: Vec<&ContextData> = contexts.iter().skip(1).flatten().copied().collect();
+    let threaded = root.entries.len() >= THREADED_KEYS && others.len() > 1;
+    let results: Vec<Vec<Diagnostic>> = if threaded {
+        std::thread::scope(|scope| {
+            let check_context = &check_context;
+            let threads: Vec<_> = (others.iter())
+                .map(|context| scope.spawn(move || check_context(context)))
+                .collect();
+            (threads.into_iter())
+                .map(|thread| {
+                    thread
+                        .join()
+                        .unwrap_or_else(|e| std::panic::resume_unwind(e))
+                })
+                .collect()
+        })
+    } else {
+        others.iter().map(check_context).collect()
+    };
+    for (index, diagnostics) in results.into_iter().enumerate() {
+        merge(&mut found, diagnostics, index + 1);
     }
     found
 }
+
+/// How many root keys there must be before contexts are checked on threads:
+/// below this, starting them costs more than they save.
+const THREADED_KEYS: usize = 2_000;
 
 /// An id met in a value, to check in the other contexts.
 struct IdUse<'a> {

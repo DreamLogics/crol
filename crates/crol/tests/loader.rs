@@ -618,3 +618,33 @@ fn a_tolerant_load_follows_nothing_without_load_extends() {
     assert!(loads.is_empty());
     assert_eq!(composer.layers().len(), 1);
 }
+
+/// A directory is read without looking at each file, but a symbolic link is
+/// followed all the same.
+#[cfg(unix)]
+#[test]
+fn a_directory_follows_symbolic_links_to_files_and_directories() {
+    let root = std::env::temp_dir().join(format!("crol-links-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let layer = root.join("layer");
+    let elsewhere = root.join("elsewhere");
+    std::fs::create_dir_all(layer.join("plain")).unwrap();
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    std::fs::write(layer.join("plain/a.crod"), "+a: 1\n").unwrap();
+    std::fs::write(elsewhere.join("b.crod"), "+b: 2\n").unwrap();
+    std::fs::write(elsewhere.join("c.crod"), "+c: 3\n").unwrap();
+    std::fs::write(layer.join("picture.png"), "not data").unwrap();
+    std::os::unix::fs::symlink(elsewhere.join("b.crod"), layer.join("linked.crod")).unwrap();
+    std::fs::create_dir(root.join("more")).unwrap();
+    std::fs::rename(elsewhere.join("c.crod"), root.join("more/c.crod")).unwrap();
+    std::os::unix::fs::symlink(root.join("more"), layer.join("linked_dir")).unwrap();
+
+    let data = crol::CrolComposer::<String>::new()
+        .load_layer(crol::CrolLayer::from_path("layer", &layer).unwrap())
+        .compose_data()
+        .unwrap();
+    assert_eq!(data.get::<i32>("a").unwrap(), 1);
+    assert_eq!(data.get::<i32>("b").unwrap(), 2);
+    assert_eq!(data.get::<i32>("c").unwrap(), 3);
+    std::fs::remove_dir_all(&root).unwrap();
+}

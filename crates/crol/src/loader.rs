@@ -310,10 +310,20 @@ fn read_directory(
         if entry.file_name().to_string_lossy().starts_with('.') {
             continue;
         }
-        // `is_dir` and `is_file` follow symbolic links.
-        if path.is_dir() {
+        // Most entries need no look at the file itself, which matters for a
+        // directory that also holds thousands of other files. A symbolic
+        // link is followed.
+        let kind = entry.file_type().map_err(failed)?;
+        let is_dir = if kind.is_symlink() {
+            path.is_dir()
+        } else {
+            kind.is_dir()
+        };
+        if is_dir {
             read_directory(base, &path, documents)?;
-        } else if path.is_file() && mode::is_document(&entry.file_name().to_string_lossy()) {
+        } else if mode::is_document(&entry.file_name().to_string_lossy())
+            && (kind.is_file() || path.is_file())
+        {
             let relative = path
                 .strip_prefix(base)
                 .unwrap_or(&path)
