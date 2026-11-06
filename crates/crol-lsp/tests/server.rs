@@ -4084,3 +4084,107 @@ fn doc_comments_in_data_show_in_hover_and_completion() {
     let rocket = items.iter().find(|i| i["label"] == "rocket").unwrap();
     assert_eq!(rocket["documentation"]["value"], "A rocket.");
 }
+
+/// A read-only layer is kept in its binary form between evaluations, which
+/// must not outlive what it was made from.
+#[test]
+fn a_read_only_layer_that_changes_is_read_again() {
+    let dir = workspace(
+        "lsp-read-only-changes",
+        &[
+            (
+                "project.crol",
+                r#"Project {
+                    layers: List([
+                        { name: "base", dir: "base", read_only: true },
+                        { name: "local", dir: "local", .. },
+                    ]),
+                    ..
+                }"#,
+            ),
+            ("base/a.crod", "+x: { a: 1 }\n"),
+            ("local/a.crod", "x.a: & + 1\n"),
+        ],
+    );
+    let client = Client::start(&dir);
+    let local = uri(&dir.join("local/a.crod"));
+    let mut buffer = Buffer::open(&client, &dir, "local/a.crod");
+    // The first evaluation was from text; this one is from what was kept.
+    buffer.change(&client, "x.a: & + 2\n");
+    client.diagnostics_for(&local, <[Value]>::is_empty);
+
+    std::fs::write(dir.join("base/a.crod"), "+x: { b: 1 }\n").unwrap();
+    buffer.change(&client, "x.a: & + 3\n");
+    client.diagnostics_for(&local, |found| !found.is_empty());
+
+    std::fs::write(dir.join("base/a.crod"), "+x: { a: 1 }\n").unwrap();
+    buffer.change(&client, "x.a: & + 4\n");
+    client.diagnostics_for(&local, <[Value]>::is_empty);
+    client.stop();
+}
+
+/// Thousands of root keys are too many to send at every key: the list is cut
+/// to what matches, and says so, so that the editor asks again.
+#[test]
+fn a_long_completion_list_is_narrowed_to_what_is_typed() {
+    let keys: String = (0..800).map(|i| format!("+key_{i}: {i}\n")).collect();
+    let dir = workspace(
+        "lsp-long-completion",
+        &[
+            (
+                "project.crol",
+                r#"Project { layers: List([{ name: "base", dir: "base", .. }]), .. }"#,
+            ),
+            ("base/a.crod", &format!("{keys}+user: 1\n")),
+        ],
+    );
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "base/a.crod");
+    let at = |character| json!({ "line": 800, "character": character });
+    buffer.change(&client, &format!("{keys}+user: &root.\n"));
+    let all = client.request(
+        "textDocument/completion",
+        json!({ "textDocument": { "uri": buffer.uri }, "position": at(13) }),
+    );
+    assert_eq!(all["isIncomplete"], true);
+    assert_eq!(all["items"].as_array().unwrap().len(), 500);
+
+    buffer.change(&client, &format!("{keys}+user: &root.key_79\n"));
+    let typed = client.request(
+        "textDocument/completion",
+        json!({ "textDocument": { "uri": buffer.uri }, "position": at(19) }),
+    );
+    // Short enough now to send as it is, the closest first.
+    let items = typed.get("items").unwrap_or(&typed).as_array().unwrap();
+    let labels = labels(items);
+    assert_eq!(labels.first().copied(), Some("key_79"), "{labels:?}");
+    client.stop();
+}
+
+/// A key that is not an identifier is not found by its text alone.
+#[test]
+fn references_find_a_key_written_in_quotes() {
+    let dir = workspace(
+        "lsp-quoted-references",
+        &[
+            (
+                "project.crol",
+                r#"Project { layers: List([{ name: "base", dir: "base", .. }]), .. }"#,
+            ),
+            ("base/a.crod", "+\"a b\": 1\n"),
+            ("base/b.crod", "\"a b\": & + 1\n"),
+        ],
+    );
+    let mut client = Client::start(&dir);
+    let buffer = Buffer::open(&client, &dir, "base/a.crod");
+    let found = client.request(
+        "textDocument/references",
+        json!({
+            "textDocument": { "uri": buffer.uri },
+            "position": { "line": 0, "character": 3 },
+            "context": { "includeDeclaration": true },
+        }),
+    );
+    assert_eq!(found.as_array().unwrap().len(), 2, "{found}");
+    client.stop();
+}

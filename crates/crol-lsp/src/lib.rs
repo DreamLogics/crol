@@ -639,7 +639,17 @@ impl Server {
                             &self.settings,
                         ))
                     });
-                self.respond(id, result.map(lsp_types::CompletionResponse::Array));
+                let response = result.map(|(items, incomplete)| {
+                    if incomplete {
+                        lsp_types::CompletionResponse::List(lsp_types::CompletionList {
+                            is_incomplete: true,
+                            items,
+                        })
+                    } else {
+                        lsp_types::CompletionResponse::Array(items)
+                    }
+                });
+                self.respond(id, response);
             }
             request::GotoDefinition::METHOD => {
                 let result =

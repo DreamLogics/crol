@@ -275,3 +275,34 @@ checks on every conformance case.
 - Files that are not in the page cache.
 - Systems other than Linux on x86-64.
 - Allocators other than glibc's.
+
+## Tools
+
+`crol check` and the language server on the data of a game, on the i7-13700K: 2,839
+generated documents as a `read_only` layer, 355 written by hand above them, a schema of
+300 KB and 9 variants with `each_variant`. The directories also hold 260,000 images.
+Requests were made from a script over standard input, on a file of 100 lines in the
+upper layer, and each time is the best of three.
+
+| `crol check` | Before | After |
+| ------------ | ------ | ----- |
+| Whole run    | 9.7 s  | 1.0 s |
+
+| Language server                  | Before            | After           |
+| -------------------------------- | ----------------- | --------------- |
+| First answer                     | 9.6 s             | 0.75 s          |
+| Diagnostics after an edit        | 14.6 s            | 0.8 s           |
+| Hover, while evaluating          | 16.9 s            | 33 ms           |
+| Hover                            | 2.5 s             | 34 ms           |
+| Go to definition                 | 1.1 s             | 17 ms           |
+| Code actions                     | 1.1 s             | 18 ms           |
+| Find references                  | 271 ms            | 11 ms           |
+| Workspace symbols                | 240 ms            | 66 ms           |
+| Completion of fields             | 2.4 s             | 0.4 ms          |
+| Completion of root keys          | 116 ms and 3.2 MB | 5 ms and 100 KB |
+| Peak memory                      | 871 MB            | 771 MB          |
+
+An evaluation now spends about 170 ms reading the project, 60 ms compiling, 270 ms
+evaluating and 130 ms checking, after a pause of 150 ms in typing. Evaluating is bound by
+the base, which is not split over threads: 10 threads instead of 3 save 60 ms and cost
+130 MB.

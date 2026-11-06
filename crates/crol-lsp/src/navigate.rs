@@ -116,7 +116,7 @@ fn documents(snapshot: Option<&Snapshot>, uri: &Uri, text: &str) -> Vec<(Uri, St
     if let Some(snapshot) = snapshot {
         for (id, file) in snapshot.sources.files() {
             if let Some(other) = snapshot.path(id).and_then(convert::path_to_uri)
-                && out.iter().all(|(u, _)| *u != other)
+                && other != *uri
             {
                 out.push((other, file.text().to_owned()));
             }
@@ -243,7 +243,12 @@ pub(crate) fn references(
     let (_, token) = crate::features::token_at(text, position, encoding)?;
     let key = crate::features::root_key_at(&token)?;
     let mut out = Vec::new();
+    // A plain key is written as it is, so most files need no parsing.
+    let plain = crol_eval::is_identifier(&key);
     for (file, text) in documents(snapshot, uri, text) {
+        if plain && !text.contains(&key) {
+            continue;
+        }
         let index = LineIndex::new(&text);
         let parse = crol_syntax::parse(&text);
         for range in key_occurrences(&parse.syntax(), &key, include_declaration) {
@@ -345,13 +350,19 @@ pub(crate) fn workspace_symbols(
     encoding: Encoding,
 ) -> Vec<SymbolInformation> {
     let query = query.to_lowercase();
+    // A file without the query holds no key with it, unless written with an
+    // escape, and most files need no parsing.
+    let plain = query.chars().all(|c| c.is_alphanumeric() || c == '_');
     // By key: definitions, and else the first operation.
     let mut found: Vec<(String, Vec<Location>, bool)> = Vec::new();
     for (id, file) in snapshot.sources.files() {
+        let text = file.text();
+        if plain && !query.is_empty() && !text.to_lowercase().contains(&query) {
+            continue;
+        }
         let Some(uri) = snapshot.path(id).and_then(convert::path_to_uri) else {
             continue;
         };
-        let text = file.text();
         let index = LineIndex::new(text);
         let parse = crol_syntax::parse(text);
         for entry in root_entries(&parse.syntax()) {

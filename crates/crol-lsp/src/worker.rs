@@ -9,7 +9,7 @@ use lsp_types::Uri;
 
 use crate::Settings;
 use crate::convert::Encoding;
-use crate::workspace::{self, Checks, RemoteStatus, Snapshot};
+use crate::workspace::{self, Binaries, Checks, RemoteStatus, Snapshot};
 
 /// What to evaluate.
 pub(crate) struct Job {
@@ -37,6 +37,7 @@ impl Worker {
         let (jobs, job_receiver) = crossbeam_channel::unbounded::<Job>();
         let (result_sender, results) = crossbeam_channel::unbounded();
         std::thread::spawn(move || {
+            let mut binaries = Binaries::default();
             for job in job_receiver {
                 let snapshot = workspace::evaluate(
                     root.as_deref(),
@@ -44,8 +45,10 @@ impl Worker {
                     &job.open,
                     checks.as_ref(),
                     &job.remote,
+                    &binaries,
                 );
                 let diagnostics = snapshot.diagnostics(job.encoding);
+                let wanted = binaries.wanted(&snapshot);
                 let evaluated = Evaluated {
                     snapshot,
                     diagnostics,
@@ -53,6 +56,7 @@ impl Worker {
                 if result_sender.send(evaluated).is_err() {
                     return;
                 }
+                binaries.keep(wanted);
             }
         });
         Self { jobs, results }

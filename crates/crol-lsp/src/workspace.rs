@@ -411,6 +411,12 @@ impl Snapshot {
         }
     }
 
+    /// Whether every document of a layer is read only.
+    fn is_read_only_layer(&self, layer: &Layer) -> bool {
+        !layer.documents.is_empty()
+            && (layer.documents.iter()).all(|(_, file)| self.read_only.contains(file))
+    }
+
     /// Whether any document of the project's layers has a doc comment.
     pub(crate) fn project_has_docs(&self, find: impl FnOnce() -> bool) -> bool {
         *self.has_docs.get_or_init(find)
@@ -524,6 +530,81 @@ impl Snapshot {
         }
         out
     }
+}
+
+/// Read-only layers in their binary form (`SPEC.md` 7.8), by name, kept
+/// between evaluations: they are the bulk of a large project, and do not
+/// change as a document is edited, so they need not be parsed each time. They
+/// get no diagnostics, which is all that is lost.
+#[derive(Default)]
+pub(crate) struct Binaries {
+    /// What lowering a layer gave, with what identifies its documents.
+    layers: HashMap<String, ([u8; 32], Arc<[u8]>)>,
+    /// Layers that have no binary form, as they use a template of another,
+    /// by what identifies their documents.
+    refused: HashSet<[u8; 32]>,
+}
+
+impl Binaries {
+    /// For each of the snapshot's layers, what is kept of it, if that is
+    /// made from just these documents.
+    fn for_layers<'a>(&'a self, snapshot: &Snapshot) -> Vec<Option<&'a [u8]>> {
+        let of_layer = |layer: &Layer| {
+            let (hash, lowered) = self.layers.get(&layer.name)?;
+            (*hash == hash_of(snapshot, layer)).then_some(&**lowered)
+        };
+        snapshot.layers.iter().map(of_layer).collect()
+    }
+
+    /// Encodes the snapshot's read-only layers that are not kept yet, from
+    /// what [`Binaries::wanted`] said.
+    pub(crate) fn keep(&mut self, wanted: Wanted) {
+        for (layer, hash) in &wanted.layers {
+            let bytes = crol_eval::encode_layer(&wanted.sources, layer);
+            let read = bytes.ok().map(|b| crol_eval::binary::read_layer(&b));
+            match read {
+                Some(Ok(binary)) => {
+                    self.layers
+                        .insert(layer.name.clone(), (*hash, binary.lowered));
+                }
+                _ => {
+                    self.refused.insert(*hash);
+                }
+            }
+        }
+    }
+
+    /// What to encode of a snapshot, if anything, to do after it is sent.
+    pub(crate) fn wanted(&self, snapshot: &Snapshot) -> Wanted {
+        let layers = (snapshot.layers.iter())
+            .filter(|layer| snapshot.is_read_only_layer(layer))
+            .map(|layer| (layer, hash_of(snapshot, layer)))
+            .filter(|(layer, hash)| {
+                let kept = self.layers.get(&layer.name).map(|(kept, _)| kept);
+                kept != Some(hash) && !self.refused.contains(hash)
+            })
+            .map(|(layer, hash)| (layer.clone(), hash))
+            .collect();
+        Wanted {
+            sources: snapshot.sources.clone(),
+            layers,
+        }
+    }
+}
+
+/// Layers to encode, with their text.
+pub(crate) struct Wanted {
+    sources: Sources,
+    layers: Vec<(Layer, [u8; 32])>,
+}
+
+/// What identifies a layer's documents in its binary form.
+fn hash_of(snapshot: &Snapshot, layer: &Layer) -> [u8; 32] {
+    let documents = layer
+        .documents
+        .iter()
+        .map(|(relative, file)| (relative.as_str(), snapshot.sources.file(*file).text()));
+    crol_eval::binary::hash_documents(documents)
 }
 
 /// What loading found, besides the layers.
@@ -645,6 +726,7 @@ pub(crate) fn evaluate(
     open: &HashMap<PathBuf, String>,
     checks: Option<&crate::Checks>,
     remote: &RemoteStatus,
+    binaries: &Binaries,
 ) -> Snapshot {
     let mut snapshot = Snapshot {
         sources: Sources::new(),
@@ -714,7 +796,14 @@ pub(crate) fn evaluate(
                 .as_ref()
                 .map(|s| s.defaults_for(snapshot.root_type.as_deref())),
         );
-        let (compiled, mut diagnostics) = crol_eval::compile(&snapshot.sources, &snapshot.layers);
+        let lowered = binaries.for_layers(&snapshot);
+        let (mut compiled, mut diagnostics) =
+            crol_eval::compile_binary(&snapshot.sources, &snapshot.layers, &lowered);
+        // What is wrong may be what was kept, and it would not show: there
+        // are no diagnostics in a read-only layer.
+        if compiled.is_none() && lowered.iter().any(Option::is_some) {
+            (compiled, diagnostics) = crol_eval::compile(&snapshot.sources, &snapshot.layers);
+        }
         snapshot.evaluation = match &compiled {
             Some(compiled) => {
                 let mut evaluation = crol_eval::evaluate_compiled(compiled, &snapshot.options);
@@ -1189,7 +1278,14 @@ mod tests {
         let settings = Settings::default();
         let remote = RemoteStatus::new();
         let open = HashMap::from([(root.join("data/web.crod"), "+port: 81,".to_owned())]);
-        let snapshot = evaluate(Some(&root), &settings, &open, None, &remote);
+        let snapshot = evaluate(
+            Some(&root),
+            &settings,
+            &open,
+            None,
+            &remote,
+            &Binaries::default(),
+        );
         assert_eq!(snapshot.problem, None);
         assert_eq!(snapshot.layers.len(), 1);
         let file = snapshot.file_of(&root.join("data/web.crod")).unwrap();
@@ -1197,7 +1293,14 @@ mod tests {
         assert!(snapshot.in_layers(file));
 
         // Closed, the file is read again.
-        let snapshot = evaluate(Some(&root), &settings, &HashMap::new(), None, &remote);
+        let snapshot = evaluate(
+            Some(&root),
+            &settings,
+            &HashMap::new(),
+            None,
+            &remote,
+            &Binaries::default(),
+        );
         let file = snapshot.file_of(&root.join("data/web.crod")).unwrap();
         assert_eq!(snapshot.sources.file(file).text(), "+port: 80,");
         let _ = std::fs::remove_dir_all(&root);
@@ -1213,6 +1316,7 @@ mod tests {
             &open,
             None,
             &RemoteStatus::new(),
+            &Binaries::default(),
         );
         let file = snapshot.file_of(path).unwrap();
         let evaluation = snapshot.evaluation_of(file).unwrap();
@@ -1282,6 +1386,7 @@ mod tests {
             &open,
             None,
             &RemoteStatus::new(),
+            &Binaries::default(),
         );
         let file = snapshot.file_of(&path).unwrap();
         let evaluation = snapshot.evaluation_of(file).unwrap();
@@ -1300,6 +1405,7 @@ mod tests {
             &HashMap::new(),
             None,
             &RemoteStatus::new(),
+            &Binaries::default(),
         );
         assert!(snapshot.problem.is_some());
         let file = snapshot.file_of(&root.join("data/stray.crol")).unwrap();
@@ -1332,6 +1438,7 @@ mod tests {
             &HashMap::new(),
             None,
             &RemoteStatus::new(),
+            &Binaries::default(),
         );
         assert_eq!(snapshot.problem, None);
         let _ = std::fs::remove_dir_all(&root);

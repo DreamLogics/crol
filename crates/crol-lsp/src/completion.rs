@@ -91,11 +91,12 @@ pub(crate) fn complete(
     position: Position,
     encoding: Encoding,
     settings: &Settings,
-) -> Vec<CompletionItem> {
+) -> (Vec<CompletionItem>, bool) {
     let offset = convert::offset(text, position, encoding);
     let at = usize::from(offset);
     if in_string_or_comment(text, at) {
-        return type_paths_in_string(snapshot, uri, text, offset, encoding);
+        let items = type_paths_in_string(snapshot, uri, text, offset, encoding);
+        return (items, false);
     }
     let line_start = text[..at].rfind('\n').map_or(0, |i| i + 1);
     let before = &text[line_start..at];
@@ -114,6 +115,7 @@ pub(crate) fn complete(
         (offset, word_start, word_end),
         settings,
     );
+    let incomplete = narrow(&mut items, &text[word_start..at]);
     let index = LineIndex::new(text);
     let word = TextRange::new(
         TextSize::try_from(word_start).unwrap_or_default(),
@@ -125,7 +127,38 @@ pub(crate) fn complete(
         item.text_edit = Some(CompletionTextEdit::Edit(TextEdit::new(range, new_text)));
         item.filter_text = Some(item.label.clone());
     }
-    items
+    (items, incomplete)
+}
+
+/// The most items a list of completions holds: a large project has thousands
+/// of root keys, too many to send at every key.
+const MAX_ITEMS: usize = 500;
+
+/// Keeps a list too long to send to the items that match what is typed, as
+/// editors match them, the best first, up to [`MAX_ITEMS`]. Returns whether
+/// it left any out: the editor then asks again as the word grows.
+fn narrow(items: &mut Vec<CompletionItem>, typed: &str) -> bool {
+    if items.len() <= MAX_ITEMS {
+        return false;
+    }
+    let typed = typed.to_lowercase();
+    let in_order = |label: &str| {
+        let mut chars = label.chars();
+        typed.chars().all(|wanted| chars.any(|c| c == wanted))
+    };
+    items.retain(|item| in_order(&item.label.to_lowercase()));
+    items.sort_by_cached_key(|item| {
+        let label = item.label.to_lowercase();
+        (
+            !label.starts_with(&typed),
+            !label.contains(&typed),
+            label.len(),
+            label,
+        )
+    });
+    let left_out = items.len() > MAX_ITEMS;
+    items.truncate(MAX_ITEMS);
+    left_out
 }
 
 /// Whether a schema is the one of schema files.

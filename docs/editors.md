@@ -74,6 +74,14 @@ list your layers in `project.crol`.
 While a file does not evaluate, as in the middle of an edit, hover and completion
 use the last evaluation that did. A value on hover says so.
 
+The server evaluates on a thread of its own, after a pause in typing, so requests never
+wait for it: they are answered from the latest evaluation, and syntax errors appear
+at once. Only requests made before the first evaluation wait, as nothing is known
+yet. `read_only` layers are parsed once, and again only if they change.
+
+A completion list of more than 500 items, such as the root keys of a large project,
+holds those that match what you typed, and the editor asks again as you type.
+
 A layer that does not load does not stop the others, as it does for `crol check`.
 A wrong file in a layer, such as a `.crol` file, is reported on that file and
 left out, and the rest of the layer loads. A layer that cannot be read at
