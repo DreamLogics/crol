@@ -25,7 +25,7 @@ use crate::value::Key;
 const MAGIC: &[u8; 4] = b"CROB";
 
 /// The version of the format: files of another are refused, and made again.
-pub const FORMAT: u32 = 2;
+pub const FORMAT: u32 = 3;
 
 /// The magic, the format, the hash of the rest of the file, the hash of the
 /// documents and the size of what is compressed.
@@ -259,6 +259,10 @@ impl Writer<'_> {
             }
             ExprKind::Neg(operand) => {
                 self.out.push(14);
+                self.id(*operand);
+            }
+            ExprKind::Not(operand) => {
+                self.out.push(18);
                 self.id(*operand);
             }
             ExprKind::Binary(op, lhs, rhs) => {
@@ -739,6 +743,7 @@ impl Reader<'_> {
                 ExprKind::Macro(kind, args.into())
             }
             17 => ExprKind::Error,
+            18 => ExprKind::Not(self.expr_id()?),
             _ => return Err(Corrupt),
         };
         Ok(Expr {
@@ -934,7 +939,9 @@ fn check(ir: &Ir, first_expr: usize, first_block: usize, first_bind: usize) -> R
                     holds(item)?;
                 }
             }
-            ExprKind::Path(child, _) | ExprKind::Neg(child) => holds(*child)?,
+            ExprKind::Path(child, _) | ExprKind::Neg(child) | ExprKind::Not(child) => {
+                holds(*child)?
+            }
             ExprKind::Binary(_, lhs, rhs) => {
                 holds(*lhs)?;
                 holds(*rhs)?;

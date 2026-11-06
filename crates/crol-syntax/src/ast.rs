@@ -933,14 +933,21 @@ impl PathExpr {
 }
 
 ast_node!(
-    /// `-expr`
+    /// `-expr` or `!expr`
     PrefixExpr, PREFIX_EXPR
 );
 
 impl PrefixExpr {
-    /// The negated expression.
+    /// The expression the operator applies to.
     pub fn operand(&self) -> Option<Expr> {
         child(&self.0)
+    }
+
+    /// Whether this is `!expr`, rather than `-expr`.
+    pub fn is_not(&self) -> bool {
+        self.0
+            .children_with_tokens()
+            .any(|element| element.kind() == SyntaxKind::BANG)
     }
 }
 

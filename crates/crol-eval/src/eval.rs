@@ -1011,7 +1011,9 @@ fn collect_reads(
                 collect_reads(ir, item, depth, templates, out);
             }
         }
-        ExprKind::Neg(operand) => collect_reads(ir, *operand, depth, templates, out),
+        ExprKind::Neg(operand) | ExprKind::Not(operand) => {
+            collect_reads(ir, *operand, depth, templates, out)
+        }
         ExprKind::Binary(op, lhs, rhs) => {
             out.copies |= matches!(op, BinOp::Merge | BinOp::MergeShallow);
             collect_reads(ir, *lhs, depth, templates, out);
@@ -3020,6 +3022,16 @@ impl Evaluator<'_> {
                     other => {
                         let kind = other.kind_name();
                         Err(self.fail(span, format!("-: cannot negate {kind}")))
+                    }
+                }
+            }
+            ExprKind::Not(operand) => {
+                let value = self.eval(*operand, &Self::detached(env))?;
+                match &value.shape {
+                    Shape::Bool(b) => Self::shaped(Shape::Bool(!b), span),
+                    other => {
+                        let kind = other.kind_name();
+                        Err(self.fail(span, format!("!: cannot invert {kind}")))
                     }
                 }
             }

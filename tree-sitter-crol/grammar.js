@@ -168,7 +168,7 @@ module.exports = grammar({
       prec.left(PREC.sum, seq(field('lhs', $._expression), field('op', choice('+', '-')), field('rhs', $._expression))),
       prec.left(PREC.product, seq(field('lhs', $._expression), field('op', choice('*', '/', '%')), field('rhs', $._expression))),
     ),
-    prefix_expr: $ => prec(PREC.prefix, seq('-', field('operand', $._expression))),
+    prefix_expr: $ => prec(PREC.prefix, seq(choice('-', '!'), field('operand', $._expression))),
 
     _postfix: $ => choice($.path_expr, $._primary),
     path_expr: $ => prec.left(PREC.path, seq(field('base', $._primary), repeat1($._selector))),

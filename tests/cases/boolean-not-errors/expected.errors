@@ -1,0 +1,4 @@
+0-base/a.crod:1:7: !: cannot invert an integer
+0-base/a.crod:2:8: !: cannot invert a string
+0-base/a.crod:3:8: !: cannot invert a unit name
+0-base/a.crod:4:8: !: cannot invert a list

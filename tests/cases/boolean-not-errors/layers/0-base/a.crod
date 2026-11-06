@@ -1,0 +1,4 @@
++int: !1
++text: !"yes"
++none: !None
++list: ![true]
