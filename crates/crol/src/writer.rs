@@ -47,7 +47,7 @@ impl DataWriter {
         ser::to_value(value, &self.config)
     }
 
-    fn entry(&mut self, prefix: &str, target: &str, value: &str) {
+    pub(crate) fn entry(&mut self, prefix: &str, target: &str, value: &str) {
         let _ = writeln!(self.text, "{prefix}{target}: {value},");
     }
 
@@ -130,6 +130,11 @@ impl DataWriter {
             let _ = writeln!(self.text, "<{condition}> {{\n{}}}", inner.text);
         }
         Ok(())
+    }
+
+    /// `-target`, with the target written as it is.
+    pub(crate) fn remove_target(&mut self, target: &str) {
+        let _ = writeln!(self.text, "-{target},");
     }
 
     /// `// text`, one comment for each line of `text`.

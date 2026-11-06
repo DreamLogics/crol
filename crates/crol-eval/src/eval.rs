@@ -1508,6 +1508,9 @@ pub struct ExplainStep {
     /// The value at the explained path after the operation; `None` where it
     /// does not exist.
     pub value: Option<Value>,
+    /// Whether the operation uses the value below it (`SPEC.md` 7.2). One
+    /// that does not decides the value, whatever came before it.
+    pub uses_below: bool,
 }
 
 /// The kind of an [`ExplainStep`] (`SPEC.md` 7.2).
@@ -1707,6 +1710,7 @@ fn explain_key(
             entry,
             kind: op.kind(),
             value: value.as_ref().and_then(|v| value_at_path(v, path)).cloned(),
+            uses_below: op.uses_below,
         });
     }
     steps

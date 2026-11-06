@@ -8,9 +8,10 @@ use serde::ser::{self, Serialize};
 use crol_eval::{Key, Keyed, Span, Value, ValueKind};
 
 use crate::error::Error;
-use crate::expression::{EXPRESSION_TOKEN, is_expression, text_value};
+use crate::expression::{EXPRESSION_TOKEN, text_value};
 use crate::id::ID_TOKEN;
 use crate::raw::RAW_TOKEN;
+use crol_syntax::is_expression;
 
 /// Options for [`to_string_pretty`](crate::to_string_pretty).
 #[derive(Debug, Clone, PartialEq, Eq)]

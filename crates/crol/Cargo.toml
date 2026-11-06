@@ -19,7 +19,8 @@ exclude = ["tests/conformance.rs"]
 all-features = true
 
 [features]
-# `#[derive(Schema)]` and `#[derive(VariantName)]`.
+# `#[derive(Schema)]`, `#[derive(VariantName)]`, `#[derive(View)]`,
+# `#[derive(Navigable)]` and `croxp!`.
 derive = ["dep:crol-derive"]
 # Schemas from URLs and crates (`SPEC.md` 4.1), for tools, fetched with a
 # blocking client.

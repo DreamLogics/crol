@@ -2,8 +2,7 @@
 //! cannot say, such as a reference (`SPEC.md` 10.8).
 
 use crol_eval::{Span, Value, ValueKind};
-use crol_syntax::SyntaxKind;
-use crol_syntax::ast::{self, AstNode};
+use crol_syntax::is_expression;
 use serde::ser::{Serialize, Serializer};
 
 use crate::error::Error;
@@ -41,6 +40,12 @@ impl Expression {
         }
     }
 
+    /// An expression `croxp!` checked when the program was compiled.
+    #[doc(hidden)]
+    pub fn __checked(text: impl Into<String>) -> Self {
+        Self(text.into())
+    }
+
     /// The expression's text.
     pub fn as_str(&self) -> &str {
         &self.0
@@ -52,31 +57,35 @@ impl Expression {
     }
 }
 
+/// What `set_expr` takes: an [`Expression`], or a `Result` of one, which is
+/// what `croxp!` gives when it holds Rust values.
+pub trait IntoExpression {
+    /// The expression, or why there is none.
+    fn into_expression(self) -> Result<Expression, Error>;
+}
+
+impl IntoExpression for Expression {
+    fn into_expression(self) -> Result<Expression, Error> {
+        Ok(self)
+    }
+}
+
+impl IntoExpression for Result<Expression, Error> {
+    fn into_expression(self) -> Result<Expression, Error> {
+        self
+    }
+}
+
+/// The text of a Rust value in an expression, for `croxp!`.
+#[doc(hidden)]
+pub fn __value_text<T: Serialize + ?Sized>(value: &T) -> Result<String, Error> {
+    let value = crate::ser::to_value(value, &crate::PrettyConfig::default())?;
+    Ok(crol_eval::print::to_text(&value))
+}
+
 /// A value that prints as `text`, as printing a name writes it as it is.
 pub(crate) fn text_value(text: &str) -> Value {
     Value::new(ValueKind::UnitName(text.into()), Span::detached())
-}
-
-/// Whether `text` is one expression, and nothing else.
-pub(crate) fn is_expression(text: &str) -> bool {
-    let parse = crol_syntax::parse(text);
-    if !parse.errors().is_empty() {
-        return false;
-    }
-    let tree = parse.syntax();
-    let comment = tree.descendants_with_tokens().any(|e| {
-        matches!(
-            e.kind(),
-            SyntaxKind::LINE_COMMENT | SyntaxKind::BLOCK_COMMENT
-        )
-    });
-    let Some(document) = ast::Document::cast(tree) else {
-        return false;
-    };
-    !comment
-        && document.expr().is_some()
-        && document.entries().next().is_none()
-        && document.attributes().next().is_none()
 }
 
 impl Serialize for Expression {

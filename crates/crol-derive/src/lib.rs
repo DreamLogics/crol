@@ -1,6 +1,6 @@
-//! Derive macros for CROL: `#[derive(Schema)]`, `#[derive(VariantName)]` and
-//! `#[derive(View)]`, re-exported by `crol` with the cargo feature `derive`
-//! (`SPEC.md` 8.1, 10.9, 10.11).
+//! Macros for CROL: `#[derive(Schema)]`, `#[derive(VariantName)]`,
+//! `#[derive(View)]`, `#[derive(Navigable)]` and `croxp!`, re-exported by
+//! `crol` with the cargo feature `derive` (`SPEC.md` 8.1, 10.9, 10.11, 10.14).
 
 #![forbid(unsafe_code)]
 
@@ -65,6 +65,249 @@ pub fn derive_view(input: TokenStream) -> TokenStream {
     view(&input)
         .unwrap_or_else(Error::into_compile_error)
         .into()
+}
+
+/// Implements `crol::Navigable`: for a struct with named fields, a path type
+/// with a method for each field, named as serde names the field for the
+/// data (`SPEC.md` 10.14). Anything else is a type paths end at. A field's type
+/// must be `Navigable`, unless `#[crol(leaf)]` ends the path there.
+#[proc_macro_derive(Navigable, attributes(crol))]
+pub fn derive_navigable(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    navigable(&input)
+        .unwrap_or_else(Error::into_compile_error)
+        .into()
+}
+
+/// An `Expression`, parsed when the program is compiled (`SPEC.md` 10.14):
+/// `croxp! { & + 2 }`. `#name` puts a Rust variable in it as a value, and it
+/// is then a `Result`, since the value may not serialize:
+/// `croxp! { & + #delta }`.
+#[proc_macro]
+pub fn croxp(input: TokenStream) -> TokenStream {
+    expression(input)
+        .unwrap_or_else(Error::into_compile_error)
+        .into()
+}
+
+/// One piece of an expression's source: text, or a Rust variable.
+enum Piece {
+    Text(String),
+    Variable(proc_macro::Ident),
+}
+
+/// Where a token starts and ends.
+#[derive(Clone, Copy, PartialEq)]
+struct Place {
+    start: (usize, usize),
+    end: (usize, usize),
+}
+
+impl Place {
+    fn of(span: proc_macro::Span) -> Self {
+        let (start, end) = (span.start(), span.end());
+        Self {
+            start: (start.line(), start.column()),
+            end: (end.line(), end.column()),
+        }
+    }
+}
+
+/// Puts tokens back together as they were written: CROL tells `&port` from
+/// `& port`, and a line break can end an entry, which tokens do not say.
+#[derive(Default)]
+struct Source {
+    pieces: Vec<Piece>,
+    last: Option<Place>,
+}
+
+impl Source {
+    fn text(&mut self, text: &str, place: Place) {
+        let gap = match self.last {
+            None => "",
+            Some(last) if last.end == place.start => "",
+            Some(last) if last.end.0 != place.start.0 => "\n",
+            Some(_) => " ",
+        };
+        self.last = Some(place);
+        if let Some(Piece::Text(written)) = self.pieces.last_mut() {
+            written.push_str(gap);
+            written.push_str(text);
+        } else {
+            self.pieces.push(Piece::Text(format!("{gap}{text}")));
+        }
+    }
+
+    fn tokens(&mut self, tokens: proc_macro::TokenStream) -> syn::Result<()> {
+        use proc_macro::{Delimiter, TokenTree};
+        let mut tokens = tokens.into_iter().peekable();
+        while let Some(token) = tokens.next() {
+            match token {
+                TokenTree::Punct(punct) if punct.as_char() == '#' => {
+                    let Some(TokenTree::Ident(name)) = tokens.next() else {
+                        return Err(Error::new(
+                            punct.span().into(),
+                            "`#` is followed by the name of a Rust variable",
+                        ));
+                    };
+                    self.text("", Place::of(punct.span()));
+                    self.pieces.push(Piece::Variable(name.clone()));
+                    self.last = Some(Place::of(name.span()));
+                }
+                TokenTree::Group(group) => {
+                    let (open, close) = match group.delimiter() {
+                        Delimiter::Parenthesis => ("(", ")"),
+                        Delimiter::Brace => ("{", "}"),
+                        Delimiter::Bracket => ("[", "]"),
+                        Delimiter::None => ("", ""),
+                    };
+                    self.text(open, Place::of(group.span_open()));
+                    self.tokens(group.stream())?;
+                    self.text(close, Place::of(group.span_close()));
+                }
+                token => self.text(&token.to_string(), Place::of(token.span())),
+            }
+        }
+        Ok(())
+    }
+}
+
+fn expression(input: TokenStream) -> syn::Result<TokenStream2> {
+    let mut source = Source::default();
+    source.tokens(input)?;
+    // A variable is a value there, so an integer stands in for it.
+    let text: String = source
+        .pieces
+        .iter()
+        .map(|piece| match piece {
+            Piece::Text(text) => text.as_str(),
+            Piece::Variable(_) => "0",
+        })
+        .collect();
+    if !crol_syntax::is_expression(&text) {
+        return Err(Error::new(
+            Span::call_site(),
+            format!("`{text}` is not one expression"),
+        ));
+    }
+    if !source
+        .pieces
+        .iter()
+        .any(|p| matches!(p, Piece::Variable(_)))
+    {
+        return Ok(quote!(::crol::Expression::__checked(#text)));
+    }
+    let parts = source.pieces.iter().map(|piece| match piece {
+        Piece::Text(text) => quote!(__text.push_str(#text);),
+        Piece::Variable(name) => {
+            let name = syn::Ident::new(&name.to_string(), name.span().into());
+            quote!(__text.push_str(&::crol::__value_text(&#name)?);)
+        }
+    });
+    Ok(quote!(
+        (|| -> ::std::result::Result<::crol::Expression, ::crol::Error> {
+            let mut __text = ::std::string::String::new();
+            #(#parts)*
+            ::std::result::Result::Ok(::crol::Expression::__checked(__text))
+        })()
+    ))
+}
+
+fn navigable(input: &DeriveInput) -> syn::Result<TokenStream2> {
+    let name = &input.ident;
+    if !input.generics.params.is_empty() {
+        return Err(Error::new_spanned(
+            &input.generics,
+            "Navigable is not derived for a generic type",
+        ));
+    }
+    let fields = match &input.data {
+        Data::Struct(data) if matches!(data.fields, Fields::Named(_)) => &data.fields,
+        _ => {
+            return Ok(quote! {
+                impl ::crol::Navigable for #name {
+                    type Nav<__B> = ::crol::Path<__B, Self>;
+
+                    fn nav<__B>(path: ::crol::Path<__B, Self>) -> ::crol::Path<__B, Self> {
+                        path
+                    }
+                }
+            });
+        }
+    };
+    let rule = Attrs::parse(&input.attrs)?.rename_all;
+    let mut methods = Vec::new();
+    for field in fields {
+        let attrs = Attrs::parse(&field.attrs)?;
+        if attrs.skip {
+            continue;
+        }
+        let ident = field.ident.as_ref().expect("named fields");
+        let data_name = serde_name(&ident.to_string(), &attrs, rule.as_deref(), false)?;
+        let (vis, ty) = (&field.vis, &field.ty);
+        let doc = format!("The path of `{data_name}`.");
+        let path = if attrs.flatten {
+            quote!(self.0.__retype())
+        } else {
+            quote!(self.0.__field(#data_name))
+        };
+        methods.push(if attrs.leaf {
+            quote! {
+                #[doc = #doc]
+                #vis fn #ident(self) -> ::crol::Path<__B, #ty> {
+                    #path
+                }
+            }
+        } else {
+            quote! {
+                #[doc = #doc]
+                #vis fn #ident(self) -> <#ty as ::crol::Navigable>::Nav<__B> {
+                    <#ty as ::crol::Navigable>::nav(#path)
+                }
+            }
+        });
+    }
+    let path_type = quote::format_ident!("{name}Path");
+    let vis = &input.vis;
+    let doc = format!("A path that has reached a `{name}`.");
+    Ok(quote! {
+        #[doc = #doc]
+        #vis struct #path_type<__B>(::crol::Path<__B, #name>);
+
+        impl<__B> ::std::clone::Clone for #path_type<__B> {
+            fn clone(&self) -> Self {
+                Self(::std::clone::Clone::clone(&self.0))
+            }
+        }
+
+        impl<__B> #path_type<__B> {
+            #(#methods)*
+        }
+
+        impl<__B> ::crol::IntoPath<__B> for #path_type<__B> {
+            type Target = #name;
+
+            fn into_path(self) -> ::crol::Path<__B, #name> {
+                self.0
+            }
+        }
+
+        impl<__B> ::crol::IntoPath<__B> for &#path_type<__B> {
+            type Target = #name;
+
+            fn into_path(self) -> ::crol::Path<__B, #name> {
+                ::std::clone::Clone::clone(&self.0)
+            }
+        }
+
+        impl ::crol::Navigable for #name {
+            type Nav<__B> = #path_type<__B>;
+
+            fn nav<__B>(path: ::crol::Path<__B, Self>) -> #path_type<__B> {
+                #path_type(path)
+            }
+        }
+    })
 }
 
 fn view(input: &DeriveInput) -> syn::Result<TokenStream2> {
@@ -209,6 +452,8 @@ struct Attrs {
     key_constraint: Option<String>,
     /// `#[crol(sealed)]`
     sealed: bool,
+    /// `#[crol(leaf)]`: a path ends at this field.
+    leaf: bool,
     /// `#[crol(constraints(...))]` and `#[crol(open_constraints(...))]`:
     /// the name, the `Constraint` expression, and whether it is sealed.
     constraints: Vec<(String, TokenStream2, bool)>,
@@ -322,6 +567,8 @@ impl Attrs {
                         out.key_constraint = Some(string_value(&meta)?);
                     } else if path.is_ident("sealed") {
                         out.sealed = true;
+                    } else if path.is_ident("leaf") {
+                        out.leaf = true;
                     } else if path.is_ident("constraints") || path.is_ident("open_constraints") {
                         let sealed = path.is_ident("constraints");
                         meta.parse_nested_meta(|inner| {
