@@ -2,6 +2,7 @@
 //! only a schema, and id checks (`SPEC.md` 10.9).
 
 use crol_eval::{Context, ContextData, Diagnostic, Key, Span, Value, ValueKind, Variants};
+use indexmap::IndexMap;
 
 use crate::compose::{CrolData, VariantName};
 use crate::schema::{
@@ -56,21 +57,6 @@ impl<'a> DataView<'a> {
         }
     }
 
-    fn keys(&self, context: Option<&ContextData>) -> Vec<String> {
-        let root = context.map_or_else(|| self.base.clone(), |data| data.root(self.base));
-        match &root.kind {
-            ValueKind::Keyed(keyed) => keyed
-                .entries
-                .keys()
-                .filter_map(|k| match k {
-                    Key::Str(s) => Some(s.to_string()),
-                    Key::Int(_) => None,
-                })
-                .collect(),
-            _ => Vec::new(),
-        }
-    }
-
     fn names(&self, context: &Context) -> String {
         format!("{{{}}}", self.variants.chosen_names(context).join(", "))
     }
@@ -101,18 +87,13 @@ pub fn check_value(
     options: &CheckOptions,
 ) -> Vec<Diagnostic> {
     let variants = Variants::default();
-    let mut checker = Checker {
-        schema,
-        options,
-        data: DataView {
-            base: value,
-            contexts: &[],
-            variants: &variants,
-        },
-        context: None,
-        found: Vec::new(),
+    let data = DataView {
+        base: value,
+        contexts: &[],
+        variants: &variants,
     };
     let root_type = TypeExpr::Named(root.unwrap_or(&schema.root).to_owned());
+    let mut checker = Checker::new(schema, options, data, None);
     checker.value(value, &root_type, "", None);
     checker.found
 }
@@ -142,33 +123,11 @@ pub fn check_view(
     let contexts: Vec<Option<&ContextData>> = std::iter::once(None)
         .chain(data.contexts.iter().map(Some))
         .collect();
-    // Each error with the contexts it occurs in.
-    let mut found: Vec<(Diagnostic, Vec<usize>)> = Vec::new();
-    for (index, context) in contexts.iter().enumerate() {
-        let mut checker = Checker {
-            schema,
-            options,
-            data,
-            context: *context,
-            found: Vec::new(),
-        };
-        if whole {
-            let root = context.map(|data_in| data_in.root(data.base));
-            checker.value(root.as_ref().unwrap_or(data.base), &root_type, "", None);
-        } else {
-            for key in data.keys(*context) {
-                if let Some(value) = data.value(&key, *context) {
-                    checker.value(value, &root_type, &key, None);
-                }
-            }
-        }
-        for diagnostic in checker.found {
-            match found.iter_mut().find(|(d, _)| *d == diagnostic) {
-                Some((_, in_contexts)) => in_contexts.push(index),
-                None => found.push((diagnostic, vec![index])),
-            }
-        }
-    }
+    let found = if whole {
+        check_whole(data, schema, &root_type, options, &contexts)
+    } else {
+        check_keys(data, schema, &root_type, options, &contexts)
+    };
     // An error in only some contexts says in which (`SPEC.md` 12.5).
     found
         .into_iter()
@@ -192,12 +151,105 @@ pub fn check_view(
         .collect()
 }
 
+/// Each error with the indices of the contexts it occurs in.
+type Found = Vec<(Diagnostic, Vec<usize>)>;
+
+/// Adds what context `index` found.
+fn merge(found: &mut Found, diagnostics: Vec<Diagnostic>, index: usize) {
+    for diagnostic in diagnostics {
+        match found.iter_mut().find(|(d, _)| *d == diagnostic) {
+            Some((_, in_contexts)) => {
+                if in_contexts.last() != Some(&index) {
+                    in_contexts.push(index);
+                }
+            }
+            None => found.push((diagnostic, vec![index])),
+        }
+    }
+}
+
+/// The root as a whole, in each context.
+fn check_whole(
+    data: DataView<'_>,
+    schema: &SchemaFile,
+    root_type: &TypeExpr,
+    options: &CheckOptions,
+    contexts: &[Option<&ContextData>],
+) -> Found {
+    let mut found = Found::new();
+    for (index, context) in contexts.iter().enumerate() {
+        let mut checker = Checker::new(schema, options, data, *context);
+        let root = context.map(|data_in| data_in.root(data.base));
+        checker.value(root.as_ref().unwrap_or(data.base), root_type, "", None);
+        merge(&mut found, checker.found, index);
+    }
+    found
+}
+
+/// Each root value, in each context. A context holds what differs from the
+/// base, and a value that does not differ checks the same there, but for the
+/// ids in it, which name root keys of that context.
+fn check_keys(
+    data: DataView<'_>,
+    schema: &SchemaFile,
+    root_type: &TypeExpr,
+    options: &CheckOptions,
+    contexts: &[Option<&ContextData>],
+) -> Found {
+    let ValueKind::Keyed(root) = &data.base.kind else {
+        return Found::new();
+    };
+    let mut found = Found::new();
+    // What each base value found, and the ids in it.
+    let mut base = Vec::with_capacity(root.entries.len());
+    let mut checker = Checker::new(schema, options, data, None);
+    for (key, value) in &root.entries {
+        let Key::Str(name) = key else { continue };
+        checker.ids = Some(Vec::new());
+        checker.value(value, root_type, name, None);
+        let diagnostics = std::mem::take(&mut checker.found);
+        let ids = checker.ids.take().unwrap_or_default();
+        base.push((key, diagnostics.clone(), ids));
+        merge(&mut found, diagnostics, 0);
+    }
+    for (index, context) in contexts.iter().enumerate().skip(1) {
+        let Some(data_in) = context else { continue };
+        let mut checker = Checker::new(schema, options, data, *context);
+        for (key, diagnostics, ids) in &base {
+            if data_in.changes.contains_key(*key) {
+                continue;
+            }
+            merge(&mut found, diagnostics.clone(), index);
+            for id in ids {
+                checker.id(id.value, id.id, id.refers, &id.path);
+            }
+        }
+        for (key, change) in &data_in.changes {
+            if let (Key::Str(name), Some(value)) = (key, change) {
+                checker.value(value, root_type, name, None);
+            }
+        }
+        merge(&mut found, checker.found, index);
+    }
+    found
+}
+
+/// An id met in a value, to check in the other contexts.
+struct IdUse<'a> {
+    value: &'a Value,
+    id: &'a str,
+    refers: &'a [String],
+    path: String,
+}
+
 struct Checker<'a> {
     schema: &'a SchemaFile,
     options: &'a CheckOptions,
     data: DataView<'a>,
     context: Option<&'a ContextData>,
     found: Vec<Diagnostic>,
+    /// The ids met, if they are being recorded.
+    ids: Option<Vec<IdUse<'a>>>,
 }
 
 fn found(value: &Value) -> String {
@@ -216,7 +268,23 @@ fn found(value: &Value) -> String {
     }
 }
 
-impl Checker<'_> {
+impl<'a> Checker<'a> {
+    fn new(
+        schema: &'a SchemaFile,
+        options: &'a CheckOptions,
+        data: DataView<'a>,
+        context: Option<&'a ContextData>,
+    ) -> Self {
+        Self {
+            schema,
+            options,
+            data,
+            context,
+            found: Vec::new(),
+            ids: None,
+        }
+    }
+
     fn error(&mut self, span: Span, message: String, path: &str) {
         let mut diagnostic = Diagnostic::error(span, message);
         if !path.is_empty() {
@@ -233,7 +301,7 @@ impl Checker<'_> {
         );
     }
 
-    fn value(&mut self, value: &Value, ty: &TypeExpr, path: &str, variant: Option<&str>) {
+    fn value(&mut self, value: &'a Value, ty: &'a TypeExpr, path: &str, variant: Option<&str>) {
         let int =
             |min: i128, max: i128| matches!(value.kind, ValueKind::Int(i) if i >= min && i <= max);
         let ok = match ty {
@@ -260,6 +328,14 @@ impl Checker<'_> {
             }
             TypeExpr::Id(refers) => {
                 if let ValueKind::Id(id) = &value.kind {
+                    if let Some(ids) = &mut self.ids {
+                        ids.push(IdUse {
+                            value,
+                            id,
+                            refers,
+                            path: path.to_owned(),
+                        });
+                    }
                     self.id(value, id, refers, path);
                     true
                 } else {
@@ -337,7 +413,7 @@ impl Checker<'_> {
         }
     }
 
-    fn named(&mut self, value: &Value, type_path: &str, path: &str, variant: Option<&str>) {
+    fn named(&mut self, value: &'a Value, type_path: &str, path: &str, variant: Option<&str>) {
         let Some(definition) = self.schema.get(type_path) else {
             // A type the schema does not describe is not checked.
             return;
@@ -348,100 +424,7 @@ impl Checker<'_> {
                 fields,
                 explicit_defaults,
                 ..
-            } => {
-                let ValueKind::Keyed(keyed) = &value.kind else {
-                    return self.expected(value, &format!("`{name} {{ ... }}`"), path);
-                };
-                if let Some(written) = &keyed.name
-                    && **written != **name
-                    && Some(&**written) != variant
-                {
-                    return self.error(
-                        value.span,
-                        format!("expected a `{name}`, found a `{written}`"),
-                        path,
-                    );
-                }
-                let flattened = fields.values().any(|f| f.flatten);
-                for (key, item) in &keyed.entries {
-                    let Key::Str(field_name) = key else {
-                        self.error(
-                            item.span,
-                            format!("`{name}` has named fields; the key {key} is not one"),
-                            path,
-                        );
-                        continue;
-                    };
-                    let field = fields.get(&**field_name).or_else(|| {
-                        fields
-                            .values()
-                            .find(|f| f.aliases.iter().any(|a| **a == **field_name))
-                    });
-                    match field {
-                        Some(field) => self.value(item, &field.ty, &join(path, field_name), None),
-                        None if self.options.allow_unknown_fields || flattened => {}
-                        None => {
-                            // As serde lists them: each field's aliases, then its name.
-                            let names: Vec<&str> = fields
-                                .iter()
-                                .flat_map(|(n, f)| {
-                                    f.aliases.iter().map(String::as_str).chain([n.as_str()])
-                                })
-                                .collect();
-                            self.error(
-                                item.span,
-                                format!(
-                                    "`{name}` has no field `{field_name}`; its fields are `{}`",
-                                    names.join("`, `")
-                                ),
-                                &join(path, field_name),
-                            );
-                        }
-                    }
-                }
-                // A field is written when its name or an alias is.
-                let names = |f: &'_ str, field: &Field| -> Vec<Key> {
-                    std::iter::once(f.to_owned())
-                        .chain(field.aliases.iter().cloned())
-                        .map(|name| Key::Str(name.into()))
-                        .collect()
-                };
-                let written = |f: &str, field: &Field| {
-                    names(f, field)
-                        .iter()
-                        .any(|n| keyed.entries.contains_key(n))
-                };
-                let removed = |f: &str, field: &Field| {
-                    names(f, field).iter().any(|n| keyed.defaulted.contains(n))
-                };
-                // Fields may be left out with `..`, or without it when
-                // neither the type nor the options ask for it.
-                let may_leave_out =
-                    keyed.defaults || !explicit_defaults.unwrap_or(self.options.require_complete);
-                let left_out: Vec<&str> = fields
-                    .iter()
-                    .filter(|(f, field)| !field.flatten && !written(f, field) && !removed(f, field))
-                    .map(|(f, _)| f.as_str())
-                    .collect();
-                // Serde fills fields that have defaults, also removed ones.
-                let required = fields.iter().find(|(f, field)| {
-                    !field.flatten && !written(f, field) && field.default == FieldDefault::Required
-                });
-                if !may_leave_out && !left_out.is_empty() {
-                    let s = if left_out.len() == 1 { "" } else { "s" };
-                    self.error(
-                        value.span,
-                        format!(
-                            "`{name}` is missing the field{s} `{}`; write {}, or end the block with `..` to leave out fields that have defaults",
-                            left_out.join("`, `"),
-                            if left_out.len() == 1 { "it" } else { "them" },
-                        ),
-                        path,
-                    );
-                } else if let Some((field, _)) = required {
-                    self.error(value.span, format!("missing field `{field}`"), path);
-                }
-            }
+            } => self.fields(value, name, fields, *explicit_defaults, path, variant),
             TypeDef::Newtype { name, inner, .. } => match &value.kind {
                 ValueKind::NamedTuple(written, items)
                     if **written == **name && items.len() == 1 =>
@@ -526,27 +509,8 @@ impl Checker<'_> {
                         }
                     }
                     (VariantShape::Struct(fields), ValueKind::Keyed(_)) => {
-                        let definition = TypeDef::Struct {
-                            name: variant_name.clone(),
-                            doc: String::new(),
-                            source: (String::new(), 0),
-                            fields: fields.clone(),
-                            deny_unknown_fields: false,
-                            default: None,
-                            explicit_defaults: variant.explicit_defaults,
-                        };
-                        let mut schema = self.schema.clone();
-                        let synthetic = format!("{type_path}::{variant_name}");
-                        schema.types.insert(synthetic.clone(), definition);
-                        let mut inner = Checker {
-                            schema: &schema,
-                            options: self.options,
-                            data: self.data,
-                            context: self.context,
-                            found: Vec::new(),
-                        };
-                        inner.named(value, &synthetic, path, None);
-                        self.found.append(&mut inner.found);
+                        let explicit = variant.explicit_defaults;
+                        self.fields(value, variant_name, fields, explicit, path, None);
                     }
                     _ => self.expected(
                         value,
@@ -555,6 +519,108 @@ impl Checker<'_> {
                     ),
                 }
             }
+        }
+    }
+
+    /// Checks a struct, or a variant with named fields.
+    fn fields(
+        &mut self,
+        value: &'a Value,
+        name: &str,
+        fields: &'a IndexMap<String, Field>,
+        explicit_defaults: Option<bool>,
+        path: &str,
+        variant: Option<&str>,
+    ) {
+        let ValueKind::Keyed(keyed) = &value.kind else {
+            return self.expected(value, &format!("`{name} {{ ... }}`"), path);
+        };
+        if let Some(written) = &keyed.name
+            && **written != *name
+            && Some(&**written) != variant
+        {
+            return self.error(
+                value.span,
+                format!("expected a `{name}`, found a `{written}`"),
+                path,
+            );
+        }
+        for (key, item) in &keyed.entries {
+            let Key::Str(field_name) = key else {
+                self.error(
+                    item.span,
+                    format!("`{name}` has named fields; the key {key} is not one"),
+                    path,
+                );
+                continue;
+            };
+            let field = fields.get(&**field_name).or_else(|| {
+                fields
+                    .values()
+                    .find(|f| f.aliases.iter().any(|a| **a == **field_name))
+            });
+            match field {
+                Some(field) => self.value(item, &field.ty, &join(path, field_name), None),
+                None if self.options.allow_unknown_fields || fields.values().any(|f| f.flatten) => {
+                }
+                None => {
+                    // As serde lists them: each field's aliases, then its name.
+                    let names: Vec<&str> = fields
+                        .iter()
+                        .flat_map(|(n, f)| f.aliases.iter().map(String::as_str).chain([n.as_str()]))
+                        .collect();
+                    self.error(
+                        item.span,
+                        format!(
+                            "`{name}` has no field `{field_name}`; its fields are `{}`",
+                            names.join("`, `")
+                        ),
+                        &join(path, field_name),
+                    );
+                }
+            }
+        }
+        // A field is written when its name or an alias is.
+        let written = |f: &str, field: &Field| {
+            keyed.has_name(f) || field.aliases.iter().any(|a| keyed.has_name(a))
+        };
+        let removed = |f: &str, field: &Field| {
+            let is = |name: &str| {
+                let same = |key: &Key| matches!(key, Key::Str(s) if &**s == name);
+                keyed.defaulted.iter().any(same)
+            };
+            is(f) || field.aliases.iter().any(|a| is(a))
+        };
+        // Fields may be left out with `..`, or without it when
+        // neither the type nor the options ask for it.
+        let may_leave_out =
+            keyed.defaults || !explicit_defaults.unwrap_or(self.options.require_complete);
+        let left_out: Vec<&str> = if may_leave_out {
+            Vec::new()
+        } else {
+            fields
+                .iter()
+                .filter(|(f, field)| !field.flatten && !written(f, field) && !removed(f, field))
+                .map(|(f, _)| f.as_str())
+                .collect()
+        };
+        // Serde fills fields that have defaults, also removed ones.
+        let required = fields.iter().find(|(f, field)| {
+            field.default == FieldDefault::Required && !field.flatten && !written(f, field)
+        });
+        if !may_leave_out && !left_out.is_empty() {
+            let s = if left_out.len() == 1 { "" } else { "s" };
+            self.error(
+                value.span,
+                format!(
+                    "`{name}` is missing the field{s} `{}`; write {}, or end the block with `..` to leave out fields that have defaults",
+                    left_out.join("`, `"),
+                    if left_out.len() == 1 { "it" } else { "them" },
+                ),
+                path,
+            );
+        } else if let Some((field, _)) = required {
+            self.error(value.span, format!("missing field `{field}`"), path);
         }
     }
 

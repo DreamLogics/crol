@@ -294,6 +294,41 @@ fn check_validates_ids() {
     );
 }
 
+/// A context is checked by what differs from the base, but an id in a value
+/// that does not differ names a root key of that context all the same.
+#[test]
+fn check_validates_ids_in_the_context_of_an_unchanged_value() {
+    let schema = schema::build::<Definition>();
+    let data = crol::CrolComposer::new()
+        .load_layer(crol::CrolLayer::from_sources(
+            "base",
+            [(
+                "a.crod",
+                r#"
+                +web: Service { replicas: 1, depends_on: [@db], url: None, .. },
+                +db: Volume { size_gb: 1 },
+                +other: Service { replicas: 1, depends_on: [], url: None, .. },
+                <cloud> { -db }
+                <wrong> { web.replicas: "many" }
+                "#,
+            )],
+        ))
+        .compose_data()
+        .unwrap();
+    let mut messages: Vec<String> = crol::check(&data, &schema, None, &Default::default())
+        .into_iter()
+        .map(|d| d.message)
+        .collect();
+    messages.sort();
+    assert_eq!(
+        messages,
+        [
+            "in {cloud}, {cloud, wrong}: the id `@db` names no root key",
+            "in {wrong}, {cloud, wrong}: expected u32, found \"many\"",
+        ]
+    );
+}
+
 /// `&default` reads the Rust defaults from the schema (`SPEC.md` 6.1.3).
 #[test]
 fn default_references() {

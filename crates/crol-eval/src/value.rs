@@ -125,6 +125,13 @@ pub struct Keyed {
     pub defaulted: BTreeSet<Key>,
 }
 
+impl Keyed {
+    /// Whether it holds the string key `name`, without allocating a [`Key`].
+    pub fn has_name(&self, name: &str) -> bool {
+        self.entries.contains_key(&KeyRef::Str(name))
+    }
+}
+
 /// The kind and contents of a [`Value`].
 #[derive(Debug, Clone)]
 pub enum ValueKind {
