@@ -342,6 +342,9 @@ fn rust_blocks_build_and_run() {
         .args(["build", "--bins", "--keep-going", "--message-format=short"])
         .current_dir(&directory)
         .env("CARGO_TARGET_DIR", directory.join("target"))
+        // CI denies warnings, and an example need not read every field.
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .output()
         .unwrap();
     assert!(
