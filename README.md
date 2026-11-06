@@ -50,7 +50,7 @@ you:
   transactions that save your program's changes to a layer of their own.
 - [A command-line tool](docs/cli.md) to check, evaluate, format and explain data.
 - [A language server](docs/editors.md) with completion, hover and diagnostics,
-  and a Zed extension.
+  a Zed extension and a Helix configuration.
 
 ## Example
 
@@ -195,6 +195,7 @@ publishing the Zed extension. See the [changelog](CHANGELOG.md), and
 | [`crol-cli`](crates/crol-cli)          | the `crol` command-line tool                                                                | done                                                                                                                                     |
 | [`tree-sitter-crol`](tree-sitter-crol) | the tree-sitter grammar and queries                                                         | done                                                                                                                                     |
 | [`editors/zed`](editors/zed)           | the Zed extension                                                                           | syntax and language server; not in the registry yet                                                                                      |
+| [`editors/helix`](editors/helix)       | the Helix configuration and queries                                                         | syntax and language server                                                                                                               |
 
 ## Development
 

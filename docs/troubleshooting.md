@@ -331,6 +331,10 @@ and this may only be a result of that. Fix the error on the file it names, or on
 `PATH`. With no `crol` there, it tries to download a release, and none exists yet.
 Set `binary.path`.
 
+**Helix shows no colours.** Run `hx --health crol`. A cross at the parser means the
+grammar is not built, and one at the queries that they are not in
+`~/.config/helix/runtime/queries/crol`. See [the setup](editors.md#helix).
+
 **No diagnostics in one layer.** Check whether it is marked `read_only`.
 
 ## Asking for help

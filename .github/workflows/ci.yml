@@ -135,6 +135,13 @@ jobs:
             diff -u "tree-sitter-crol/queries/$query.scm" "editors/zed/languages/crol/$query.scm"
           done
 
+      - name: The Helix queries compile against the grammar
+        working-directory: tree-sitter-crol
+        run: |
+          for query in ../editors/helix/queries/crol/*.scm; do
+            tree-sitter query --quiet "$query" test/corpus/crol.txt
+          done
+
   zed:
     name: Zed extension
     runs-on: ubuntu-latest

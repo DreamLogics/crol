@@ -11,6 +11,8 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Added
 
+- Support for Helix, in `editors/helix`: a configuration, and queries for
+  highlighting, indentation, text objects and rainbow brackets.
 - `!x` inverts a boolean, so `flag: !&` flips a value in a layer above it. It is an
   error on anything else.
 - `?` after a step of a path goes through it whatever it holds: `foo.bar?.baz: 2`
