@@ -14,6 +14,7 @@ and the conformance suite with both.
 tree-sitter generate      # after changing grammar.js
 tree-sitter test          # the cases in test/corpus/
 TREE_SITTER=tree-sitter ./check-corpus.sh
+./check-pins.sh           # the editors pin this grammar
 ```
 
 `src/` holds the generated parser, committed so that editors can build the

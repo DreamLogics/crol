@@ -114,6 +114,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The pins name commits, which check-pins.sh looks up.
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/cache-cargo-install-action@v2
         with:
@@ -129,6 +132,8 @@ jobs:
       - name: The grammar and the Rust parser agree (SPEC.md 12.6)
         working-directory: tree-sitter-crol
         run: ./check-corpus.sh
+      - name: The editors pin the current grammar
+        run: tree-sitter-crol/check-pins.sh
       - name: The Zed extension's queries are the grammar's
         run: |
           for query in highlights brackets indents outline textobjects; do

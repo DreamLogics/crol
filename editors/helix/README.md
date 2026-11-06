@@ -13,4 +13,4 @@ The queries in `queries/crol/` are not copies of those in
 model of indentation. Where several highlight patterns match a node, Helix takes the
 last, so the general ones come first; CI checks that the queries compile against the
 grammar. The grammar is pinned to a commit in `languages.toml`: after changing the
-grammar, update `rev` to a commit that contains the change.
+grammar, update `rev` to a commit that contains the change. CI checks that it does.

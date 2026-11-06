@@ -33,6 +33,8 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Fixed
 
+- The Zed extension builds the current grammar, so `!x` and `?` in a path are no
+  longer parse errors in its highlighting.
 - `crol fmt` wrote `1?.a` as `1? .a`, which does not parse.
 - With `init_defaults`, a path through a `None` whose type has no default said
   `cannot select in a unit name`; it now says the step is not set.
