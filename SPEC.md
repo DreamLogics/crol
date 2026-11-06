@@ -2666,6 +2666,154 @@ only for a schema with sealed fields.
 The schema records the mark on the field, and a `schema.crod` cannot
 change it. Sealing changes no value and no fingerprint.
 
+### 10.14 Databases and transactions
+
+A `CrolDb` reads layered data through typed paths, and changes it by writing
+operations to one layer, the **active layer**. A change is an ordinary
+operation (section 5): the layers below stay as they are written, late
+references follow it, and `explain` shows it.
+
+```rust
+let mut db = CrolComposer::<Variant>::with_cfg(config)
+    .load("base")?
+    .load_active("user.crod")?
+    .compose_db::<Config>()?;
+
+let a = Config::path().options().a();
+
+let name = db.select()
+    .with_variant(Variant::Prod)?
+    .get(Config::path().items().at(1).name())?;
+
+let tx = db.transaction()
+    .with_variant(Variant::Prod)?
+    .at(Config::path().retries()).set_expr(croxp! { & + 2 })?
+    .at(&a).set_expr(croxp! { !& })?
+    .within(Config::path().options(), |o| o
+        .at(Options::path().port()).update(|p| p + 1)?
+        .at(Options::path().limits().cpu()).set(2))?;
+
+let retries = tx.get(Config::path().retries())?;
+tx.at(&a).set(retries)?.commit()?;
+
+db.save()?;
+```
+
+**Paths.** `#[derive(crol::Navigable)]` gives a type `T::path()`, which starts
+a path at `T`, and a method for each field that continues it. A path is a plain
+value that does not borrow the database, so it can be kept and used again. It
+is typed by where it starts and by the type it ends at, and it stands for a
+target's selectors (section 5.1):
+
+| Step | On | Selector |
+|---|---|---|
+| `.field()` | a struct, as serde names the field | `.field` |
+| `.at(i)` | a list | `[i]` |
+| `.key(k)` | a map | `.k` or `["k"]`, as section 3.1 writes it |
+| `.t0()`, `.t1()`, … | a tuple | `.0`, `.1`, … |
+| `.some()` | an `Option` | none |
+
+A step can be taken whatever the data holds. A path that is missing is an error
+where it is used. A field whose type has no `Navigable`, and is not one of the
+types above or a scalar, needs `#[crol(leaf)]`, and a path ends there.
+
+`at(i)` is positional. A saved write goes to index `i`, whatever element is
+there by then.
+
+**Reading.** `db.select()` takes `&self`. `with_variant` chooses the context, as
+it does on the composer (section 10.7), the base if it is not called, and
+`get(path)` deserializes the value at the path.
+
+**Transactions.** `db.transaction()` takes `&mut self`, and runs its operations
+in sequence. `with_variant` chooses the transaction's context, and is an error
+after its first operation. Every step that can fail returns a `Result`.
+
+- `at(path)` moves to a path, and cannot fail: it records a place. What follows
+  it is one of `set`, `set_expr`, `update` and `remove`, which returns the
+  transaction.
+- `set(value)` writes `^target: value`, so a block never merges (section 5.1).
+- `set_expr(expression)` writes `target: expression`.
+- `update(closure)` gives the closure the value at that point of the transaction,
+  and writes what it returns as `set` does.
+- `remove()` writes `-target`.
+- `get(path)` takes `&self`, and reads the value at that point of the
+  transaction.
+- `within(path, closure)` gives the closure a transaction whose paths start at
+  `path`, and goes on from there when it returns. Scopes nest, and share the
+  context and the operations of the transaction they are in.
+- `commit()` applies the operations, and returns `Reloaded` (section 10.8).
+
+The value at a point of the transaction includes its earlier operations.
+`get` and `update` evaluate if an operation is pending, and that takes about as
+long as a reload. `set`, `set_expr` and `remove` never evaluate. An error from
+`update` ends the transaction, and one from `get` leaves it open.
+
+`commit` evaluates what is still pending and runs every check that loading runs,
+constraints and sealed fields included. If it fails, the data stays as it was,
+as for `reload`. Dropping a transaction without `commit` discards it.
+
+**Where a write applies.** A transaction in the base context writes base
+operations. Any other writes under the condition that names its whole context:
+`<prod_eu & cache>` for `{prod_eu, cache}`. Nothing that holds in a context is
+more specific than that condition (section 8.3), and the active layer is the
+last, so the write holds in that context. It reaches other contexts only as
+any operation under that condition does: not `{prod}`, and `{prod_eu, cache, x}`
+unless something more specific applies there.
+
+A base write reaches every context, except where a more specific operation
+applies. That is not an error: `web.port: 5` under `<prod> { web.port: & * 4 }`
+reads 5 in the base and 20 in `{prod}`.
+
+`commit` still checks that each write took effect in the transaction's context,
+which a condition that holds in the base, such as `<!cache>`, can prevent. After
+`set` or `update`, the value at the path must equal what was written (section
+3.3), unless a later operation of the transaction changed it. After `set_expr`,
+the operation must be in the value's history (section 12.3), with nothing after
+it that does not use the value below. Otherwise `commit` is an error naming the
+operation that won.
+
+**Expressions stay relative.** `set_expr` stores the operation, not its result.
+`& + 2` means two more than the layers below say, every time the data is loaded:
+if the base goes from 1 to 10, the value goes from 3 to 12. `set` is for a fixed
+value. An expression means what it means written at that target in the active
+layer. `update` always stores a constant, so on a computed value it ends the
+computing. Where the language can say it, `set_expr` is preferred: it follows
+the data, and it needs no evaluation.
+
+**`croxp!`.** `crol::croxp! { ... }` is an `Expression` (section 10.8), parsed
+when the program is compiled, so that a mistake in it is a compile error. Types
+are not known then: the result is deserialized as the path's type at `commit`.
+`#name` puts a Rust variable in the expression, as a value serialized
+as in section 10.8 (`croxp! { & + #delta }`), and `set_expr` reports it if that
+fails. `#` means nothing else in an expression. The macro keeps the adjacency
+rules of section 2.5, by the positions of the tokens.
+
+**The active layer.** `load_active(source)` names one data-mode document, is
+the last layer, and can be used once: a `load` after it is an error, and so
+are a directory and a `.crob` file. A document that does not exist is an empty
+layer, so a program's first run needs nothing else.
+
+The database owns this document, and writes all of it (a non-goal of section 0
+rules out editing around what people wrote). It holds only what a transaction
+writes, in order, under variant blocks: `^target: value`, `target: expression`
+and `-target`. Anything else in it is an error on loading, and comments are not
+kept.
+
+It holds a list of operations for each condition, in the order they were
+made. An operation that uses the value below is added to the list. One that does
+not, and a remove, also takes out the operations under that condition at its
+target and below it, since they can no longer matter, and so that a root key
+is never defined twice in the layer (section 7.2). A remove of something the
+layers below do not set takes those out and is not written.
+
+**Saving.** `commit` changes the data in memory, and `db.save()` writes the
+committed operations to the active layer's document, through a temporary file
+in the same directory and a rename. If the document's text is not what was last
+read or saved, `save` is an error and writes nothing. Without an active layer,
+transactions work and `save` is an error. `db.save_as(source)` writes a new
+document, an error if it exists, which becomes the active layer. The next run
+has to load it.
+
 ---
 
 ## 11. Command-line tool
@@ -3238,8 +3386,8 @@ and an `extends` naming something that is not a lower layer.
 |---|---|
 | `crol-syntax` | lexer, error-recovering parser, lossless CST, typed AST, formatter |
 | `crol-eval` | lowering to operations and chains, the evaluator, `Value`, diagnostics, fingerprint |
-| `crol` | facade: `CrolComposer`, `CrolConfig`, `CrolVariants`, `CrolLayer`, `CrolData`, serde `Deserializer` and `Serializer`, `from_str`, `to_string` |
-| `crol-derive` | `#[derive(Schema)]` and `#[derive(VariantName)]`, re-exported by `crol` with the feature `derive`; the `Schema` trait and model live in `crol` (10.9) |
+| `crol` | facade: `CrolComposer`, `CrolConfig`, `CrolVariants`, `CrolLayer`, `CrolData`, `CrolDb`, serde `Deserializer` and `Serializer`, `from_str`, `to_string` |
+| `crol-derive` | `#[derive(Schema)]`, `#[derive(VariantName)]`, `#[derive(Navigable)]` and `croxp!`, re-exported by `crol` with the feature `derive`; the `Schema` trait and model live in `crol` (10.9) |
 | `crol-lsp` | the language server, as a library (section 12.5) |
 | `crol-cli` | the `crol` binary, including `crol lsp` |
 | `tree-sitter-crol` | the tree-sitter grammar and its queries (12.6); not a Rust crate |
@@ -3349,6 +3497,10 @@ only in major releases.
    would cover this without comparisons in the language, but
    `min(a, b)` already parses as a named tuple, so they need their own
    syntax.
+2. **Enums in paths.** Section 10.14 has no step into an enum's variant.
+   Such a step can fail for what the data holds, unlike a field's.
+3. **Active layers elsewhere.** `save` writes files. A program with a
+   `FileLoader`, or layers in memory, needs something to save through.
 
 ---
 
