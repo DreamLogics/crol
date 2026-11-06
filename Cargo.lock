@@ -327,6 +327,7 @@ dependencies = [
  "indexmap",
  "proptest",
  "reqwest",
+ "rustc-hash",
  "rustls",
  "semver",
  "serde",
@@ -370,6 +371,7 @@ dependencies = [
  "expect-test",
  "indexmap",
  "lz4_flex",
+ "rustc-hash",
 ]
 
 [[package]]

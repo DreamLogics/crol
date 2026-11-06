@@ -44,6 +44,7 @@ crol-eval.workspace = true
 crol-syntax.workspace = true
 flate2 = { workspace = true, optional = true }
 indexmap = { workspace = true, features = ["serde"] }
+rustc-hash.workspace = true
 reqwest = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
 semver = { workspace = true, optional = true }

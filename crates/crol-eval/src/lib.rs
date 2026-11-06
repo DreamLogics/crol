@@ -728,26 +728,43 @@ fn explain_paths(
     )
 }
 
-/// [`explain`] for layers compiled and evaluated before, without errors: only
-/// the key is looked at, so an editor can ask as it goes. `variants` are the
-/// evaluation's.
-pub fn explain_compiled(
+/// What [`explain_compiled`] works out once of layers compiled and evaluated
+/// before, without errors, for as many lookups as there are.
+#[derive(Clone)]
+pub struct ExplainPlan(Arc<eval::PlanData>);
+
+impl std::fmt::Debug for ExplainPlan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExplainPlan").finish_non_exhaustive()
+    }
+}
+
+/// Works out an [`ExplainPlan`]. `variants` are the evaluation's.
+pub fn explain_plan(
     compiled: &Compiled,
     variants: &Variants,
+    options: &DataOptions,
+) -> Result<ExplainPlan, Vec<Diagnostic>> {
+    let input = explain_input(&compiled.lowered, &compiled.layer_names, variants, options);
+    eval::plan_data(&compiled.lowered.ir, &input).map(ExplainPlan)
+}
+
+/// [`explain`] of layers compiled before: only the key is looked at, so an
+/// editor can ask as it goes.
+pub fn explain_compiled(
+    compiled: &Compiled,
+    plan: &ExplainPlan,
     options: &DataOptions,
     path: &str,
     context: &[String],
 ) -> Result<Vec<ExplainStep>, Vec<Diagnostic>> {
     let (key, steps) =
         parse_path(path).map_err(|message| vec![Diagnostic::error(Span::detached(), message)])?;
-    let mut found = explain_lowered(
-        &compiled.lowered,
-        &compiled.layer_names,
-        variants,
-        options,
-        &[(&key, &steps)],
-        context,
-    )?;
+    let lowered = &compiled.lowered;
+    let variants = &plan.0.variants;
+    let input = explain_input(lowered, &compiled.layer_names, variants, options);
+    let requests = [(key.as_str(), steps.as_slice())];
+    let mut found = eval::explain_planned(&lowered.ir, &input, &plan.0, &requests, context)?;
     Ok(found.pop().unwrap_or_default())
 }
 
@@ -759,7 +776,17 @@ fn explain_lowered(
     requests: &[(&str, &[PathStep])],
     context: &[String],
 ) -> Result<Vec<Vec<ExplainStep>>, Vec<Diagnostic>> {
-    let input = eval::DataInput {
+    let input = explain_input(lowered, layer_names, variants, options);
+    eval::explain(&lowered.ir, &input, requests, context)
+}
+
+fn explain_input<'a>(
+    lowered: &'a lower::LoweredData,
+    layer_names: &'a [String],
+    variants: &'a Variants,
+    options: &'a DataOptions,
+) -> eval::DataInput<'a> {
+    eval::DataInput {
         ops: &lowered.ops,
         templates: &lowered.templates,
         root_defaults: &lowered.root_defaults,
@@ -777,8 +804,7 @@ fn explain_lowered(
         merge_root: options.merge_root,
         known_base: None,
         only: None,
-    };
-    eval::explain(&lowered.ir, &input, requests, context)
+    }
 }
 
 /// Whether an operation's path leads to a field path, or past it. An

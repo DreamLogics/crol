@@ -306,14 +306,19 @@ fn read_directory(
     let failed = |e: std::io::Error| Error::new(format!("cannot read {}: {e}", dir.display()));
     for entry in std::fs::read_dir(dir).map_err(failed)? {
         let entry = entry.map_err(failed)?;
-        let path = entry.path();
-        if entry.file_name().to_string_lossy().starts_with('.') {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.') {
             continue;
         }
-        // Most entries need no look at the file itself, which matters for a
-        // directory that also holds thousands of other files. A symbolic
-        // link is followed.
+        // Most entries need no look at the file itself, and no path of their
+        // own, which matters for a directory that also holds thousands of
+        // other files. A symbolic link is followed.
         let kind = entry.file_type().map_err(failed)?;
+        if !(kind.is_dir() || kind.is_symlink() || mode::is_document(&name)) {
+            continue;
+        }
+        let path = entry.path();
         let is_dir = if kind.is_symlink() {
             path.is_dir()
         } else {
@@ -321,9 +326,7 @@ fn read_directory(
         };
         if is_dir {
             read_directory(base, &path, documents)?;
-        } else if mode::is_document(&entry.file_name().to_string_lossy())
-            && (kind.is_file() || path.is_file())
-        {
+        } else if mode::is_document(&name) && (kind.is_file() || path.is_file()) {
             let relative = path
                 .strip_prefix(base)
                 .unwrap_or(&path)

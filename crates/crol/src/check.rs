@@ -1,8 +1,11 @@
 //! `crol::check`: the deserializer's rules applied to evaluated data with
 //! only a schema, and id checks (`SPEC.md` 10.9).
 
+use std::rc::Rc;
+
 use crol_eval::{Context, ContextData, Diagnostic, Key, Span, Value, ValueKind, Variants};
 use indexmap::IndexMap;
+use rustc_hash::FxHashMap;
 
 use crate::compose::{CrolData, VariantName};
 use crate::schema::{
@@ -94,7 +97,7 @@ pub fn check_value(
     };
     let root_type = TypeExpr::Named(root.unwrap_or(&schema.root).to_owned());
     let mut checker = Checker::new(schema, options, data, None);
-    checker.value(value, &root_type, "", None);
+    checker.value(value, &root_type, Path::Root(""), None);
     checker.found
 }
 
@@ -180,7 +183,12 @@ fn check_whole(
     for (index, context) in contexts.iter().enumerate() {
         let mut checker = Checker::new(schema, options, data, *context);
         let root = context.map(|data_in| data_in.root(data.base));
-        checker.value(root.as_ref().unwrap_or(data.base), root_type, "", None);
+        checker.value(
+            root.as_ref().unwrap_or(data.base),
+            root_type,
+            Path::Root(""),
+            None,
+        );
         merge(&mut found, checker.found, index);
     }
     found
@@ -206,7 +214,7 @@ fn check_keys(
     for (key, value) in &root.entries {
         let Key::Str(name) = key else { continue };
         checker.ids = Some(Vec::new());
-        checker.value(value, root_type, name, None);
+        checker.value(value, root_type, Path::Root(name), None);
         let diagnostics = std::mem::take(&mut checker.found);
         let ids = checker.ids.take().unwrap_or_default();
         base.push((key, diagnostics.clone(), ids));
@@ -222,12 +230,12 @@ fn check_keys(
             }
             same.extend(diagnostics.iter().cloned());
             for id in ids {
-                checker.id(id.value, id.id, id.refers, &id.path);
+                checker.id(id.value, id.id, id.refers, Path::Root(&id.path));
             }
         }
         for (key, change) in &context.changes {
             if let (Key::Str(name), Some(value)) = (key, change) {
-                checker.value(value, root_type, name, None);
+                checker.value(value, root_type, Path::Root(name), None);
             }
         }
         same.append(&mut checker.found);
@@ -262,6 +270,40 @@ fn check_keys(
 /// below this, starting them costs more than they save.
 const THREADED_KEYS: usize = 2_000;
 
+/// Where a value is, for the diagnostics of the few values that have any: it
+/// costs nothing to go deeper, and is only written out if needed.
+#[derive(Clone, Copy)]
+enum Path<'p> {
+    /// A root key, or nothing for the root.
+    Root(&'p str),
+    Field(&'p Path<'p>, &'p str),
+    Key(&'p Path<'p>, &'p Key),
+    /// An element of a list.
+    Index(&'p Path<'p>, usize),
+    /// An element of a tuple.
+    Element(&'p Path<'p>, usize),
+}
+
+impl Path<'_> {
+    fn is_empty(&self) -> bool {
+        matches!(self, Path::Root(""))
+    }
+}
+
+impl std::fmt::Display for Path<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Path::Root(key) => f.write_str(key),
+            Path::Field(path, field) if path.is_empty() => f.write_str(field),
+            Path::Field(path, field) => write!(f, "{path}.{field}"),
+            Path::Key(path, key) if path.is_empty() => write!(f, "{key}"),
+            Path::Key(path, key) => write!(f, "{path}.{key}"),
+            Path::Index(path, index) => write!(f, "{path}[{index}]"),
+            Path::Element(path, index) => write!(f, "{path}.{index}"),
+        }
+    }
+}
+
 /// An id met in a value, to check in the other contexts.
 struct IdUse<'a> {
     value: &'a Value,
@@ -278,6 +320,41 @@ struct Checker<'a> {
     found: Vec<Diagnostic>,
     /// The ids met, if they are being recorded.
     ids: Option<Vec<IdUse<'a>>>,
+    /// The types by path.
+    types: FxHashMap<&'a str, &'a TypeDef>,
+    /// What is looked up in each struct met, by its fields.
+    structs: FxHashMap<*const IndexMap<String, Field>, Rc<StructIndex<'a>>>,
+}
+
+/// A struct's fields as checking looks them up: for every value of it, so
+/// not one by one, and not with the hash of a map open to attack.
+struct StructIndex<'a> {
+    /// By name and alias; a name comes before an alias.
+    by_name: FxHashMap<&'a str, &'a Field>,
+    /// The fields a value has to have.
+    required: Vec<(&'a str, &'a Field)>,
+    flattened: bool,
+}
+
+impl<'a> StructIndex<'a> {
+    fn new(fields: &'a IndexMap<String, Field>) -> Self {
+        let aliases = fields.values().flat_map(|field| {
+            field
+                .aliases
+                .iter()
+                .map(move |alias| (alias.as_str(), field))
+        });
+        let names = fields.iter().map(|(name, field)| (name.as_str(), field));
+        Self {
+            by_name: aliases.chain(names).collect(),
+            required: fields
+                .iter()
+                .filter(|(_, field)| field.default == FieldDefault::Required && !field.flatten)
+                .map(|(name, field)| (name.as_str(), field))
+                .collect(),
+            flattened: fields.values().any(|field| field.flatten),
+        }
+    }
 }
 
 fn found(value: &Value) -> String {
@@ -310,18 +387,28 @@ impl<'a> Checker<'a> {
             context,
             found: Vec::new(),
             ids: None,
+            types: (schema.types.iter())
+                .map(|(path, definition)| (path.as_str(), definition))
+                .collect(),
+            structs: FxHashMap::default(),
         }
     }
 
-    fn error(&mut self, span: Span, message: String, path: &str) {
+    fn struct_index(&mut self, fields: &'a IndexMap<String, Field>) -> Rc<StructIndex<'a>> {
+        let key: *const IndexMap<String, Field> = fields;
+        let index = self.structs.entry(key);
+        Rc::clone(index.or_insert_with(|| Rc::new(StructIndex::new(fields))))
+    }
+
+    fn error(&mut self, span: Span, message: String, path: Path<'_>) {
         let mut diagnostic = Diagnostic::error(span, message);
         if !path.is_empty() {
-            diagnostic.context = Some(path.to_owned());
+            diagnostic.context = Some(path.to_string());
         }
         self.found.push(diagnostic);
     }
 
-    fn expected(&mut self, value: &Value, what: &str, path: &str) {
+    fn expected(&mut self, value: &Value, what: &str, path: Path<'_>) {
         self.error(
             value.span,
             format!("expected {what}, found {}", found(value)),
@@ -329,7 +416,7 @@ impl<'a> Checker<'a> {
         );
     }
 
-    fn value(&mut self, value: &'a Value, ty: &'a TypeExpr, path: &str, variant: Option<&str>) {
+    fn value(&mut self, value: &'a Value, ty: &'a TypeExpr, path: Path<'_>, variant: Option<&str>) {
         let int =
             |min: i128, max: i128| matches!(value.kind, ValueKind::Int(i) if i >= min && i <= max);
         let ok = match ty {
@@ -361,7 +448,7 @@ impl<'a> Checker<'a> {
                             value,
                             id,
                             refers,
-                            path: path.to_owned(),
+                            path: path.to_string(),
                         });
                     }
                     self.id(value, id, refers, path);
@@ -385,7 +472,7 @@ impl<'a> Checker<'a> {
             TypeExpr::List(inner) | TypeExpr::Set(inner) => match &value.kind {
                 ValueKind::List(items) => {
                     for (i, item) in items.iter().enumerate() {
-                        self.value(item, inner, &format!("{path}[{i}]"), None);
+                        self.value(item, inner, Path::Index(&path, i), None);
                     }
                     true
                 }
@@ -394,7 +481,7 @@ impl<'a> Checker<'a> {
             TypeExpr::Array(inner, n) => match &value.kind {
                 ValueKind::Tuple(items) if items.len() == *n => {
                     for (i, item) in items.iter().enumerate() {
-                        self.value(item, inner, &format!("{path}.{i}"), None);
+                        self.value(item, inner, Path::Element(&path, i), None);
                     }
                     true
                 }
@@ -403,7 +490,7 @@ impl<'a> Checker<'a> {
             TypeExpr::Tuple(types) => match &value.kind {
                 ValueKind::Tuple(items) if items.len() == types.len() => {
                     for (i, (item, ty)) in items.iter().zip(types).enumerate() {
-                        self.value(item, ty, &format!("{path}.{i}"), None);
+                        self.value(item, ty, Path::Element(&path, i), None);
                     }
                     true
                 }
@@ -427,7 +514,7 @@ impl<'a> Checker<'a> {
                                 path,
                             );
                         }
-                        self.value(item, value_type, &join(path, &key.to_string()), None);
+                        self.value(item, value_type, Path::Key(&path, key), None);
                     }
                     true
                 }
@@ -441,8 +528,8 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn named(&mut self, value: &'a Value, type_path: &str, path: &str, variant: Option<&str>) {
-        let Some(definition) = self.schema.get(type_path) else {
+    fn named(&mut self, value: &'a Value, type_path: &str, path: Path<'_>, variant: Option<&str>) {
+        let Some(&definition) = self.types.get(type_path) else {
             // A type the schema does not describe is not checked.
             return;
         };
@@ -476,7 +563,7 @@ impl<'a> Checker<'a> {
                     );
                 }
                 for (i, (item, ty)) in items.iter().zip(fields).enumerate() {
-                    self.value(item, ty, &format!("{path}.{i}"), None);
+                    self.value(item, ty, Path::Element(&path, i), None);
                 }
             }
             TypeDef::UnitStruct { name, .. } => {
@@ -533,7 +620,7 @@ impl<'a> Checker<'a> {
                         if items.len() == types.len() =>
                     {
                         for (i, (item, ty)) in items.iter().zip(types).enumerate() {
-                            self.value(item, ty, &format!("{path}.{i}"), None);
+                            self.value(item, ty, Path::Element(&path, i), None);
                         }
                     }
                     (VariantShape::Struct(fields), ValueKind::Keyed(_)) => {
@@ -557,7 +644,7 @@ impl<'a> Checker<'a> {
         name: &str,
         fields: &'a IndexMap<String, Field>,
         explicit_defaults: Option<bool>,
-        path: &str,
+        path: Path<'_>,
         variant: Option<&str>,
     ) {
         let ValueKind::Keyed(keyed) = &value.kind else {
@@ -573,6 +660,7 @@ impl<'a> Checker<'a> {
                 path,
             );
         }
+        let index = self.struct_index(fields);
         for (key, item) in &keyed.entries {
             let Key::Str(field_name) = key else {
                 self.error(
@@ -582,15 +670,10 @@ impl<'a> Checker<'a> {
                 );
                 continue;
             };
-            let field = fields.get(&**field_name).or_else(|| {
-                fields
-                    .values()
-                    .find(|f| f.aliases.iter().any(|a| **a == **field_name))
-            });
+            let field = index.by_name.get(&**field_name).copied();
             match field {
-                Some(field) => self.value(item, &field.ty, &join(path, field_name), None),
-                None if self.options.allow_unknown_fields || fields.values().any(|f| f.flatten) => {
-                }
+                Some(field) => self.value(item, &field.ty, Path::Field(&path, field_name), None),
+                None if self.options.allow_unknown_fields || index.flattened => {}
                 None => {
                     // As serde lists them: each field's aliases, then its name.
                     let names: Vec<&str> = fields
@@ -603,7 +686,7 @@ impl<'a> Checker<'a> {
                             "`{name}` has no field `{field_name}`; its fields are `{}`",
                             names.join("`, `")
                         ),
-                        &join(path, field_name),
+                        Path::Field(&path, field_name),
                     );
                 }
             }
@@ -633,9 +716,7 @@ impl<'a> Checker<'a> {
                 .collect()
         };
         // Serde fills fields that have defaults, also removed ones.
-        let required = fields.iter().find(|(f, field)| {
-            field.default == FieldDefault::Required && !field.flatten && !written(f, field)
-        });
+        let required = index.required.iter().find(|(f, field)| !written(f, field));
         if !may_leave_out && !left_out.is_empty() {
             let s = if left_out.len() == 1 { "" } else { "s" };
             self.error(
@@ -653,7 +734,7 @@ impl<'a> Checker<'a> {
     }
 
     /// An id must name a root key in the same context, of an allowed type.
-    fn id(&mut self, value: &Value, id: &str, refers: &[String], path: &str) {
+    fn id(&mut self, value: &Value, id: &str, refers: &[String], path: Path<'_>) {
         let Some(target) = self.data.value(id, self.context) else {
             return self.error(
                 value.span,
@@ -708,14 +789,6 @@ fn is_integer(ty: &TypeExpr) -> bool {
             | TypeExpr::U64
             | TypeExpr::U128
     )
-}
-
-fn join(path: &str, field: &str) -> String {
-    if path.is_empty() {
-        field.to_owned()
-    } else {
-        format!("{path}.{field}")
-    }
 }
 
 fn describe(ty: &TypeExpr) -> String {

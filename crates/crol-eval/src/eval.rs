@@ -172,10 +172,15 @@ impl Shape {
     }
 }
 
+/// A map for what the evaluator looks up all the time, where hashing is much
+/// of the cost, and nobody chooses keys to attack it: the order is that of
+/// insertion all the same.
+type FastMap<K, V> = IndexMap<K, V, std::hash::BuildHasherDefault<rustc_hash::FxHasher>>;
+
 #[derive(Clone, Default)]
 struct KeyedShape {
     name: Option<Arc<str>>,
-    slots: IndexMap<Key, Slot>,
+    slots: FastMap<Key, Slot>,
     defaults: bool,
     defaulted: BTreeSet<Key>,
 }
@@ -887,7 +892,22 @@ impl ContextData {
 pub(crate) struct DataPlan<'a> {
     ops: &'a [RootOp],
     templates: &'a [BindId],
-    variants: Variants,
+    data: Arc<PlanData>,
+}
+
+impl std::ops::Deref for DataPlan<'_> {
+    type Target = PlanData;
+
+    fn deref(&self) -> &PlanData {
+        &self.data
+    }
+}
+
+/// What a plan works out from the operations, which stays the same for as
+/// long as they do: an editor looks up one key after the other, and this
+/// takes much longer than a lookup.
+pub(crate) struct PlanData {
+    pub(crate) variants: Variants,
     /// Each operation's condition, resolved; `None` for a base operation.
     conditions: Vec<Option<Resolved>>,
     /// The condition of each `..` at a root, resolved.
@@ -1555,9 +1575,31 @@ pub(crate) fn explain(
     requests: &[(&str, &[PathStep])],
     context: &[String],
 ) -> Result<Vec<Vec<ExplainStep>>, Vec<Diagnostic>> {
+    let data = plan_data(ir, input)?;
+    explain_planned(ir, input, &data, requests, context)
+}
+
+/// What [`explain_planned`] needs of the operations.
+pub(crate) fn plan_data(ir: &Ir, input: &DataInput<'_>) -> Result<Arc<PlanData>, Vec<Diagnostic>> {
     let mut diagnostics = Vec::new();
-    let Some(plan) = DataPlan::new(ir, input, &mut diagnostics) else {
-        return Err(diagnostics);
+    match DataPlan::new(ir, input, &mut diagnostics) {
+        Some(plan) => Ok(plan.data),
+        None => Err(diagnostics),
+    }
+}
+
+/// [`explain`] with what was worked out of the same operations before.
+pub(crate) fn explain_planned(
+    ir: &Ir,
+    input: &DataInput<'_>,
+    data: &Arc<PlanData>,
+    requests: &[(&str, &[PathStep])],
+    context: &[String],
+) -> Result<Vec<Vec<ExplainStep>>, Vec<Diagnostic>> {
+    let plan = DataPlan {
+        ops: input.ops,
+        templates: input.templates,
+        data: Arc::clone(data),
     };
     let mut ids = Vec::new();
     for name in context {
@@ -1817,11 +1859,13 @@ impl<'a> DataPlan<'a> {
         Some(Self {
             ops: input.ops,
             templates: input.templates,
-            variants,
-            conditions,
-            root_defaults,
-            keys,
-            dependents,
+            data: Arc::new(PlanData {
+                variants,
+                conditions,
+                root_defaults,
+                keys,
+                dependents,
+            }),
         })
     }
 

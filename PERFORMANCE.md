@@ -284,25 +284,30 @@ generated documents as a `read_only` layer, 355 written by hand above them, a sc
 Requests were made from a script over standard input, on a file of 100 lines in the
 upper layer, and each time is the best of three.
 
-| `crol check` | Before | After |
-| ------------ | ------ | ----- |
-| Whole run    | 9.7 s  | 1.0 s |
+| `crol check` | Before | After  |
+| ------------ | ------ | ------ |
+| Whole run    | 9.7 s  | 0.72 s |
 
-| Language server                  | Before            | After           |
-| -------------------------------- | ----------------- | --------------- |
-| First answer                     | 9.6 s             | 0.75 s          |
-| Diagnostics after an edit        | 14.6 s            | 0.8 s           |
-| Hover, while evaluating          | 16.9 s            | 33 ms           |
-| Hover                            | 2.5 s             | 34 ms           |
-| Go to definition                 | 1.1 s             | 17 ms           |
-| Code actions                     | 1.1 s             | 18 ms           |
-| Find references                  | 271 ms            | 11 ms           |
-| Workspace symbols                | 240 ms            | 66 ms           |
-| Completion of fields             | 2.4 s             | 0.4 ms          |
-| Completion of root keys          | 116 ms and 3.2 MB | 5 ms and 100 KB |
-| Peak memory                      | 871 MB            | 771 MB          |
+| Language server           | Before            | After           |
+| ------------------------- | ----------------- | --------------- |
+| First answer              | 9.6 s             | 0.75 s          |
+| Diagnostics after an edit | 14.6 s            | 0.8 s           |
+| Hover, while evaluating   | 16.9 s            | 7 ms            |
+| Hover                     | 2.5 s             | 7 ms            |
+| Go to definition          | 1.1 s             | 3.5 ms          |
+| Code actions              | 1.1 s             | 3.6 ms          |
+| Find references           | 271 ms            | 10 ms           |
+| Workspace symbols         | 240 ms            | 66 ms           |
+| Completion of fields      | 2.4 s             | 0.4 ms          |
+| Completion of root keys   | 116 ms and 3.2 MB | 5 ms and 100 KB |
+| Peak memory               | 870 MB            | 1.07 GB         |
 
-An evaluation now spends about 170 ms reading the project, 60 ms compiling, 270 ms
-evaluating and 130 ms checking, after a pause of 150 ms in typing. Evaluating is bound by
-the base, which is not split over threads: 10 threads instead of 3 save 60 ms and cost
-130 MB.
+The first lookup after an evaluation takes about 16 ms more, as it works out what the
+lookups share. Memory is higher because the latest evaluation stays while the next one is
+made, which is what lets requests be answered meanwhile; over 150 edits the server stayed
+between 800 and 920 MB.
+
+Of the 0.8 s after an edit, 150 ms is the pause in typing, 157 ms reading the project,
+65 ms compiling, 294 ms evaluating and 28 ms checking. Evaluating is bound by the base,
+which is not split over threads: 10 threads instead of 3 save 60 ms and cost 130 MB. A
+profile of it is flat, so going further takes evaluating only what an edit can reach.

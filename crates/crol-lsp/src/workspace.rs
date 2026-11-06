@@ -12,7 +12,8 @@ use crol::{
     FsLoader, Loaded, LoaderError, Mode, ModulePath, SourceId,
 };
 use crol_eval::{
-    Compiled, DataOptions, Diagnostic, Evaluation, ExplainStep, FileId, Layer, Severity, Sources,
+    Compiled, DataOptions, Diagnostic, Evaluation, ExplainPlan, ExplainStep, FileId, Layer,
+    Severity, Sources,
 };
 use lsp_types::Uri;
 
@@ -118,6 +119,8 @@ pub struct Snapshot {
     /// The project's layers compiled, for looking up one key at a time;
     /// `None` if they do not compile.
     compiled: Option<Compiled>,
+    /// What looking up keys in `compiled` takes.
+    explain_plan: OnceLock<Result<ExplainPlan, Vec<Diagnostic>>>,
     /// The doc comments of root keys in the project's layers.
     root_docs: OnceLock<HashMap<String, String>>,
     /// Whether any document of the project's layers has a doc comment.
@@ -402,12 +405,15 @@ impl Snapshot {
         if self.evaluation.has_errors() {
             return Err(self.evaluation.diagnostics.clone());
         }
-        match &self.compiled {
-            Some(compiled) => {
-                let variants = &self.evaluation.variants;
-                crol_eval::explain_compiled(compiled, variants, options, path, context)
-            }
-            None => Err(Vec::new()),
+        let Some(compiled) = &self.compiled else {
+            return Err(Vec::new());
+        };
+        let plan = self
+            .explain_plan
+            .get_or_init(|| crol_eval::explain_plan(compiled, &self.evaluation.variants, options));
+        match plan {
+            Ok(plan) => crol_eval::explain_compiled(compiled, plan, options, path, context),
+            Err(diagnostics) => Err(diagnostics.clone()),
         }
     }
 
@@ -734,6 +740,7 @@ pub(crate) fn evaluate(
         options: DataOptions::default(),
         evaluation: Evaluation::default(),
         compiled: None,
+        explain_plan: OnceLock::new(),
         root_docs: OnceLock::new(),
         has_docs: OnceLock::new(),
         last_good: None,

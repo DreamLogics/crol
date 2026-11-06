@@ -13,14 +13,14 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 - The language server evaluates on a thread of its own, and answers requests at once
   from the latest evaluation. It keeps what it compiled, so hover, go to definition and
-  completion look at one key rather than everything, and keeps read-only layers in their
-  binary form between evaluations.
+  completion look at one key rather than everything, with what lookups share worked out
+  once, and keeps read-only layers in their binary form between evaluations.
 - A completion list of more than 500 items holds those that match what is typed, the
   closest first, and is marked incomplete, so that the editor asks again.
 - The language server publishes each file's diagnostics the first time, and after that
   those that changed and those of open files.
-- `crol check` is about ten times as fast on large data: a context is checked by what
-  differs from the base, on threads, and a directory is read without looking at each
+- `crol check` is more than ten times as fast on large data: a context is checked by
+  what differs from the base, on threads, and a directory is read without looking at each
   file in it. Documents are not parsed to find attributes they do not have.
 
 ## [0.1.0] - 2026-11-05

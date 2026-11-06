@@ -19,6 +19,7 @@ blake3.workspace = true
 crol-syntax.workspace = true
 indexmap.workspace = true
 lz4_flex.workspace = true
+rustc-hash.workspace = true
 
 [dev-dependencies]
 expect-test.workspace = true
