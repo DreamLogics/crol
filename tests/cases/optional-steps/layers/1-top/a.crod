@@ -1,0 +1,15 @@
+a.none?.x: 2
+a.some?.x: & + 1
+a.plain?.x: & + 1
+a.missing?.b?.c: 3
+a.list[0]?.x: 4
+a.deep?.inner?.z: 5
+a.named?.x: 6
+["a"].some?["y"]: 7
+rootnone?.x: 1
+rootsome?.x: 2
+rootplain?.x: 3
+rootmissing?.x: 4
+a.variant?.x<prod>: 8
+a.removed?.gone: 1
+-a.removed?.gone

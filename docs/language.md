@@ -219,7 +219,11 @@ web: {
 }
 ```
 
-Every step of the path but the last must exist, or you get an error that
+A `?` after a step goes through it whatever it holds: `web.limits?.cpu: 2.0` works
+if `limits` is not set or is `None`, starting from its default, or `{ .. }` if it has
+none. If `limits` is `Some(...)`, the path goes into what it holds.
+
+Every other step of the path but the last must exist, or you get an error that
 names the missing step. Removing works the same way: `-web.limits.memory_mb`.
 With a schema, [`init_defaults`](rust.md#configuration) lets a path go through a
 field that was left out, from its default.

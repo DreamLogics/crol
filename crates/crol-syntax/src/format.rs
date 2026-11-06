@@ -132,6 +132,12 @@ fn significant_tokens(node: &SyntaxNode) -> impl Iterator<Item = SyntaxToken> + 
         .filter(|t| !t.kind().is_trivia())
 }
 
+/// Whether a `?` directly follows a step of a target.
+fn before_question(node: &SyntaxNode) -> bool {
+    node.next_sibling_or_token()
+        .is_some_and(|next| next.kind() == QUESTION)
+}
+
 /// The text of a prefix expression's operator.
 fn prefix_operator(node: &SyntaxNode) -> &'static str {
     if child_token(node, &[BANG]).is_some() {
@@ -691,6 +697,9 @@ impl Formatter {
             } else if let Some(token) = significant_tokens(&key).next() {
                 out.push_str(string_as_identifier(&token).unwrap_or(token.text()));
             }
+            if before_question(&key) {
+                out.push('?');
+            }
         }
         let selectors = self.selectors(target);
         out.push_str(separator(
@@ -718,6 +727,9 @@ impl Formatter {
                 }
                 VARIANT => out.push_str(&self.variant(&selector)),
                 _ => out.extend(significant_tokens(&selector).map(|t| t.to_string())),
+            }
+            if before_question(&selector) {
+                out.push('?');
             }
         }
         out

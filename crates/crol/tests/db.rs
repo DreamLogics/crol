@@ -830,6 +830,26 @@ fn a_path_through_an_option_held_as_a_plain_value() {
 }
 
 #[test]
+fn a_path_through_an_option_that_is_none() {
+    let directory = Directory::new("through-none");
+    let file = directory.file("user.crod");
+    let mut db = open(&file);
+    let deep = Config::path().tree().child().some();
+    let value = deep.child().some().value();
+    db.transaction()
+        .at(&value)
+        .set(5)
+        .unwrap()
+        .commit()
+        .unwrap();
+    assert_eq!(db.select().get(&value).unwrap(), 5);
+    db.save().unwrap();
+    let written = std::fs::read_to_string(&file).unwrap();
+    assert_eq!(written, "^tree.child?.child?.value: 5\n");
+    assert_eq!(open(&file).select().get(&value).unwrap(), 5);
+}
+
+#[test]
 fn writing_what_an_option_holds_replaces_it() {
     let mut db = db();
     let child = Config::path().tree().child();

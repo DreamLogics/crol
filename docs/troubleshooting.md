@@ -18,8 +18,9 @@ create the key, write `+web: { port: 80 }`.
 
 The same goes for every step of a longer path: `web.limits.cpu: 2` with no `limits`
 gives ``web.limits.cpu: `web.limits` is not set, so it cannot be patched``.
-If `limits` is a field with a default, [`init_defaults`](schemas.md#paths-through-fields-left-out)
-lets the path start from it.
+Write `web.limits?.cpu: 2` to start from `limits`' default, or `{ .. }` if it has none.
+For every path at once, [`init_defaults`](schemas.md#paths-through-fields-left-out)
+does the same where there is a default.
 
 **`` +: `web` is already set ``**
 

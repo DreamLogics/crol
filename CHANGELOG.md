@@ -13,12 +13,20 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 - `!x` inverts a boolean, so `flag: !&` flips a value in a layer above it. It is an
   error on anything else.
+- `?` after a step of a path goes through it whatever it holds: `foo.bar?.baz: 2`
+  starts `bar` from its default, or `{ .. }`, where it is not set or `None`, and goes
+  into a `Some(...)`.
 - `CrolDb`, from `CrolComposer::compose_db`: read data through typed paths from
   `#[derive(Navigable)]`, and change it in transactions that write operations to an
   active layer, from `load_active`. `croxp!` checks an expression when the program is
   compiled, so that `croxp! { & + 2 }` stays relative to the layers below.
 - `ExplainStep::uses_below`, and `crol_eval::uses_value_below`, say whether an
   operation uses the value below it.
+
+### Fixed
+
+- With `init_defaults`, a path through a `None` whose type has no default said
+  `cannot select in a unit name`; it now says the step is not set.
 
 ### Changed
 

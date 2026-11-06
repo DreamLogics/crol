@@ -40,12 +40,14 @@ fn spacing() {
 #[test]
 fn binds_spreads_and_references() {
     check(
-        "t:={p=port:80,..&base,x:&parent.&parent.y<a&!b>},-web<dev>.limits,c:-&,d:!&",
+        "t:={p=port:80,..&base,x:&parent.&parent.y<a&!b>},-web<dev>.limits,c:-&,d:!&,e?.f?[0]:1,-g?.h",
         expect![[r#"
             t := { p = port: 80, ..&base, x: &parent.&parent.y<a & !b> }
             -web<dev>.limits
             c: -&
             d: !&
+            e?.f?[0]: 1
+            -g?.h
         "#]],
     );
 }

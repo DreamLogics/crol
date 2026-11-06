@@ -374,9 +374,18 @@ tuples!(
 /// first step is no string key, which no root key is without.
 fn write_steps(steps: &[Step], mut root: bool) -> Option<String> {
     let mut text = String::new();
+    let mut through_option = false;
     for step in steps {
+        if *step == Step::Some {
+            through_option = true;
+            continue;
+        }
+        // An `Option` may be `None`, or a plain value (`SPEC.md` 5.1).
+        if std::mem::take(&mut through_option) {
+            text.push('?');
+        }
         match step {
-            Step::Some => continue,
+            Step::Some => {}
             Step::Key(key @ Key::Str(_)) if root => text.push_str(&key.to_string()),
             Step::Key(key @ Key::Str(name)) => {
                 if crol_eval::is_identifier(name) {
@@ -421,14 +430,9 @@ fn step_into<'v>(value: &'v Value, step: &Step) -> Option<&'v Value> {
     }
 }
 
-/// Whether a value is written `Some(x)`.
-pub(crate) fn is_some(value: &Value) -> bool {
-    matches!(&value.kind, ValueKind::NamedTuple(name, items) if &**name == "Some" && items.len() == 1)
-}
-
 fn unwrap_some(value: &Value) -> &Value {
     match &value.kind {
-        ValueKind::NamedTuple(_, items) if is_some(value) => &items[0],
+        ValueKind::NamedTuple(name, items) if &**name == "Some" && items.len() == 1 => &items[0],
         _ => value,
     }
 }

@@ -883,9 +883,11 @@ impl SchemaDefaults {
                 if rest.is_empty() {
                     let empty = own.as_ref().is_none_or(is_none);
                     return match named_type(&field.ty) {
-                        Some(inner) if start && empty => {
-                            self.resolve(inner, &[], start, depth + 1).or(own)
-                        }
+                        // `None` is no value to start from: a path goes
+                        // through it to nothing.
+                        Some(inner) if start && empty => self
+                            .resolve(inner, &[], start, depth + 1)
+                            .or(own.filter(|value| !is_none(value))),
                         _ => own,
                     };
                 }

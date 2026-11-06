@@ -204,12 +204,14 @@ result counts as a literal.
 { } [ ] ( ) < > , : :: := . .. + - * / % ~ ~^ | & ^ @ ? = # !
 ```
 
-Two adjacency rules, both to keep one-token lookahead:
+Three adjacency rules, all to keep one-token lookahead:
 
 - In a reference, a name or keyword must follow `&` directly:
   `&port`, `&root`, `.&parent`. `& port` is an error ("a reference name must follow
   `&` directly"); `& + 1` is `&` plus 1.
 - In an id, the identifier or string must follow `@` directly.
+- In a target, a `?` between steps has no space on either side (section 5.1):
+  apart from them, it is the `?` of an entry.
 
 `..` is one token; `...` is an error.
 
@@ -670,6 +672,25 @@ applies at the last step:
 
 A path entry is always a patch: `web.replicas: 4` needs `web` to exist.
 
+**Optional steps.** A `?` after a step that is not the last makes the path go
+through that step whatever it holds: `foo.bar?.baz: 2`. The key can have one too,
+and so can any number of steps: `a?.b?.c: 1`.
+
+- Where the step is not set, or is `None`, it starts from its default, found as
+  below, with or without `init_defaults`. With no default, it starts from `{ .. }`.
+  A required field left out of that fails when it is deserialized.
+- Where it holds `Some(x)`, the path goes into `x`, and the result stays in the
+  `Some`.
+- Anything else, the path goes into as it would without the `?`, and a step that
+  cannot go on is the same error.
+
+`&` in such an entry reads what the step starts from. A `?` goes in a target, not a
+reference, where `|` says what to do about a missing value (section 6.5). It
+cannot make a list longer: `a.list[5]?.b` needs the index to exist. It must directly
+follow a key, field or accessor and directly precede the next step, not a
+condition, so that it is never the `?` of an entry on the next line. To set the last
+step only if it is not set, write `?a.b`.
+
 **Initialising defaults.** With the option `init_defaults` and a schema
 that records defaults (section 6.1.3), a field that was left out does
 not stop a path. In a data-mode document, where a step of a path would be
@@ -680,7 +701,7 @@ so that `web.limits.cpu: 2.0` works when `limits` was left out:
   type name: of the value the path goes through, else of the blocks
   around the entry, else the root type.
 - An `Option` with no default of its own, or `None` as its default,
-  starts from the default of the type it holds.
+  starts from the default of the type it holds, if that type has one.
 - `&` in such an entry reads the default, and a block that merges
   (section 5.2) with a field left out starts from it.
 - A step with no default is missing as before, and an error.
@@ -1743,7 +1764,8 @@ entry        ::= "-" target
                | identifier ":=" expr                (* value bind, 6.1.2 *)
                | variant "{" entries "}"
                | ".." postfix?
-target       ::= key selector*
+target       ::= key "?"? step*
+step         ::= selector "?"?          (a "?" not after a variant, and not last)
 key          ::= identifier | string | integer | accessor
 accessor     ::= "[" ( string | "-"? integer ) "]"
 selector     ::= "." identifier | "." tuple_index | accessor | variant
@@ -2711,7 +2733,7 @@ target's selectors (section 5.1):
 | `.at(i)` | a list | `[i]` |
 | `.key(k)` | a map | `.k` or `["k"]`, as section 3.1 writes it |
 | `.t0()`, `.t1()`, … | a tuple | `.0`, `.1`, … |
-| `.some()` | an `Option` | `.0` where the value is held as `Some(x)` and the path goes on, else none |
+| `.some()` | an `Option` | `?` on the step before it where the path goes on, else none |
 
 A step can be taken whatever the data holds. A path that is missing is an error
 where it is used, and that includes a field left out for its default. A field whose

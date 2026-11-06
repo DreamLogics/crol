@@ -230,6 +230,8 @@ struct EntryRecipe {
 struct PathRecipe {
     base: Recipe,
     base_value: Lazy,
+    /// `a?.b`: the path goes through the value at its start whatever it holds.
+    key_optional: bool,
     path: Vec<Selector>,
     op: Option<SetOp>,
     value: Option<Rc<EntryRecipe>>,
@@ -276,6 +278,9 @@ enum Below {
     Defaulted(Rc<DefaultedBelow>),
     /// Below an element of a tuple or named tuple (`SPEC.md` 6.1).
     Element(Rc<ElementBelow>),
+    /// A step with `?`: what it holds, through `Some`, or where it is unset,
+    /// what it starts from (`SPEC.md` 5.1).
+    Optional(Rc<DefaultedBelow>),
 }
 
 struct ElementBelow {
@@ -299,7 +304,9 @@ impl Below {
             Below::Missing => true,
             Below::Value(_) => false,
             Below::Select(inner, _) => inner.is_nothing(),
-            Below::Defaulted(defaulted) => defaulted.below.is_nothing(),
+            Below::Defaulted(defaulted) | Below::Optional(defaulted) => {
+                defaulted.below.is_nothing()
+            }
             Below::Element(element) => element.below.is_nothing(),
         }
     }
@@ -346,6 +353,33 @@ enum Step {
     Index(usize),
     /// `[i]`: an integer key, or a list index, depending on the value.
     Accessor(i128),
+}
+
+/// The value a path starts from, and whether it has a `?`.
+#[derive(Clone, Copy)]
+struct PathStart<'a> {
+    base: &'a Lazy,
+    optional: bool,
+}
+
+/// What a path goes on from, and whether it came through a `?`.
+#[derive(Clone, Copy)]
+struct PathInto<'a> {
+    at: &'a Below,
+    optional: bool,
+}
+
+/// Whether a value is an `Option`'s `None`.
+fn is_none(value: &Shaped) -> bool {
+    matches!(&value.shape, Shape::UnitName(name) if &**name == "None")
+}
+
+/// What a `Some(...)` holds.
+fn some_payload(value: &Shaped) -> Option<&Lazy> {
+    match &value.shape {
+        Shape::Named(name, items) if &**name == "Some" && items.len() == 1 => Some(&items[0]),
+        _ => None,
+    }
 }
 
 /// The step a selector takes; `None` for a context selector.
@@ -446,7 +480,11 @@ fn key_selector(key: &Key, span: Span) -> Selector {
         Key::Str(s) => SelectorKind::Field(s.clone()),
         Key::Int(i) => SelectorKind::Accessor(*i),
     };
-    Selector { kind, span }
+    Selector {
+        kind,
+        span,
+        optional: false,
+    }
 }
 
 /// An entry's target as written: `web.limits.cpu`, with its operator.
@@ -458,6 +496,9 @@ fn describe_target(entry: &Entry) -> String {
         Some(SetOp::Set) => String::new(),
     };
     out.push_str(&entry.key.to_string());
+    if entry.key_optional {
+        out.push('?');
+    }
     for selector in &entry.path {
         out.push_str(&describe_selector(selector));
     }
@@ -493,11 +534,12 @@ fn missing_step(
 }
 
 fn describe_selector(selector: &Selector) -> String {
+    let mark = if selector.optional { "?" } else { "" };
     match &selector.kind {
-        SelectorKind::Field(name) if crate::value::is_identifier(name) => format!(".{name}"),
-        SelectorKind::Field(name) => format!("[{}]", crate::value::quote(name)),
-        SelectorKind::Element(i) => format!(".{i}"),
-        SelectorKind::Accessor(i) => format!("[{i}]"),
+        SelectorKind::Field(name) if crate::value::is_identifier(name) => format!(".{name}{mark}"),
+        SelectorKind::Field(name) => format!("[{}]{mark}", crate::value::quote(name)),
+        SelectorKind::Element(i) => format!(".{i}{mark}"),
+        SelectorKind::Accessor(i) => format!("[{i}]{mark}"),
         SelectorKind::Context(_) => "<...>".to_owned(),
     }
 }
@@ -1698,6 +1740,9 @@ fn explain_key(
             Some(SetOp::Set) => String::new(),
         };
         entry.push_str(&Key::Str(key.clone()).to_string());
+        if op.key_optional {
+            entry.push('?');
+        }
         if let Some(condition) = &op.condition {
             entry.push_str(&format!("<{condition}>"));
         }
@@ -2447,7 +2492,8 @@ impl Evaluator<'_> {
                         chain: chain.clone(),
                         here: Some(here.clone()),
                     };
-                    self.default_cell(&below, op.span).map(|cell| (i, cell))
+                    self.start_of(&below, op.span, op.key_optional)
+                        .map(|cell| (i, cell))
                 } else {
                     None
                 };
@@ -2467,7 +2513,11 @@ impl Evaluator<'_> {
                     continue;
                 };
                 let entry = op.value.map(|expr| {
-                    let below = self.path_below(&base, &op.path, &chain, &Some(here.clone()));
+                    let start = PathStart {
+                        base: &base,
+                        optional: op.key_optional,
+                    };
+                    let below = self.path_below(start, &op.path, &chain, &Some(here.clone()));
                     Rc::new(EntryRecipe {
                         expr,
                         below,
@@ -2479,6 +2529,7 @@ impl Evaluator<'_> {
                 let recipe = Rc::new(PathRecipe {
                     base: Recipe::Fixed,
                     base_value: base.clone(),
+                    key_optional: op.key_optional,
                     path: op.path.clone(),
                     op: op.op,
                     value: entry,
@@ -2847,9 +2898,26 @@ impl Evaluator<'_> {
                 here,
                 context,
             } => {
-                let shaped = self.force(&base, recipe.span)?;
-                let at = Below::Value(base);
-                self.apply_path(&shaped, &at, &recipe.path, &recipe, &chain, here, context)
+                let mut shaped = self.force(&base, recipe.span)?;
+                let mut at = Below::Value(base);
+                if recipe.key_optional {
+                    let below = DefaultedBelow {
+                        below: at,
+                        chain: chain.clone(),
+                        here: here.clone(),
+                    };
+                    if is_none(&shaped) {
+                        let start = self.start_or_empty(&below, recipe.span);
+                        shaped = self.force(&start, recipe.span)?;
+                    }
+                    at = Below::Optional(Rc::new(below));
+                }
+                let path = &recipe.path;
+                let into = PathInto {
+                    at: &at,
+                    optional: recipe.key_optional,
+                };
+                self.descend(&shaped, into, path, &recipe, &chain, here, context)
             }
             Job::Merge {
                 left,
@@ -3256,7 +3324,7 @@ impl Evaluator<'_> {
             Below::Select(inner, selector) => {
                 let cell = self.resolve_below(inner, span)?;
                 let value = self.force(&cell, span)?;
-                if self.is_unset(&value) {
+                if self.is_unset(&value, false) {
                     return Err(Fail::Missing(
                         span,
                         "&: there is no value below here".to_owned(),
@@ -3265,6 +3333,7 @@ impl Evaluator<'_> {
                 let selector = Selector {
                     kind: selector.kind.clone(),
                     span,
+                    optional: false,
                 };
                 match self.select(&value, &selector) {
                     Err(Fail::Missing(..)) => Err(Fail::Missing(
@@ -3288,19 +3357,58 @@ impl Evaluator<'_> {
                 })
             }
             Below::Defaulted(defaulted) => match self.resolve_below(&defaulted.below, span) {
-                Err(Fail::Missing(at, message)) => match self.default_cell(defaulted, span) {
-                    Some(cell) => Ok(cell),
-                    None => Err(Fail::Missing(at, message)),
-                },
+                Err(Fail::Missing(at, message)) => {
+                    match self.default_cell(defaulted, span, false) {
+                        Some(cell) => Ok(cell),
+                        None => Err(Fail::Missing(at, message)),
+                    }
+                }
                 result => result,
             },
+            Below::Optional(optional) => {
+                let cell = match self.resolve_below(&optional.below, span) {
+                    Ok(cell) => cell,
+                    Err(Fail::Missing(..)) => return Ok(self.start_or_empty(optional, span)),
+                    Err(fail) => return Err(fail),
+                };
+                let value = self.force(&cell, span)?;
+                if is_none(&value) {
+                    return Ok(self.start_or_empty(optional, span));
+                }
+                Ok(some_payload(&value).cloned().unwrap_or(cell))
+            }
+        }
+    }
+
+    /// What a `?` step starts from where it is unset: its default, or else
+    /// an empty block with `..` (`SPEC.md` 5.1).
+    fn start_or_empty(&mut self, below: &DefaultedBelow, span: Span) -> Lazy {
+        self.default_cell(below, span, true).unwrap_or_else(|| {
+            let keyed = Keyed {
+                defaults: true,
+                ..Keyed::default()
+            };
+            let value = Value::new(ValueKind::Keyed(Box::new(keyed)), span);
+            Cell::done(shaped_from_value(&value))
+        })
+    }
+
+    /// What a path starts from at a step that is not set: for a `?`, as
+    /// [`start_or_empty`](Self::start_or_empty) says, and otherwise the
+    /// default with `init_defaults`.
+    fn start_of(&mut self, below: &DefaultedBelow, span: Span, optional: bool) -> Option<Lazy> {
+        if optional {
+            Some(self.start_or_empty(below, span))
+        } else {
+            self.default_cell(below, span, false)
         }
     }
 
     /// Whether a path goes through this value from a default instead: with
-    /// `init_defaults`, an `Option` that is `None` (`SPEC.md` 5.1).
-    fn is_unset(&self, value: &Shaped) -> bool {
-        self.init_defaults && matches!(&value.shape, Shape::UnitName(name) if &**name == "None")
+    /// `init_defaults` or at a `?` step, an `Option` that is `None`
+    /// (`SPEC.md` 5.1).
+    fn is_unset(&self, value: &Shaped, optional: bool) -> bool {
+        (self.init_defaults || optional) && is_none(value)
     }
 
     /// `below` at `here`, or with `init_defaults`, its default where it is
@@ -3317,15 +3425,26 @@ impl Evaluator<'_> {
         }
     }
 
-    /// What is below a path from `base`, which is at `here`.
+    /// What is below a path from `start`, which is at `here`.
     fn path_below(
         &self,
-        base: &Lazy,
+        start: PathStart<'_>,
         path: &[Selector],
         chain: &Chain,
         here: &Option<Location>,
     ) -> Below {
-        let mut below = Below::Value(base.clone());
+        let optional = |below: Below, optional: bool, here: &Option<Location>| {
+            if optional {
+                Below::Optional(Rc::new(DefaultedBelow {
+                    below,
+                    chain: chain.clone(),
+                    here: here.clone(),
+                }))
+            } else {
+                below
+            }
+        };
+        let mut below = optional(Below::Value(start.base.clone()), start.optional, here);
         let mut here = here.clone();
         for selector in path {
             if let Some(step) = selector_step(selector) {
@@ -3336,14 +3455,20 @@ impl Evaluator<'_> {
                 chain,
                 &here,
             );
+            below = optional(below, selector.optional, &here);
         }
         below
     }
 
     /// The default of what is missing at `defaulted`, if it has one
     /// (`SPEC.md` 5.1).
-    fn default_cell(&mut self, defaulted: &DefaultedBelow, span: Span) -> Option<Lazy> {
-        if !self.init_defaults {
+    fn default_cell(
+        &mut self,
+        defaulted: &DefaultedBelow,
+        span: Span,
+        optional: bool,
+    ) -> Option<Lazy> {
+        if !self.init_defaults && !optional {
             return None;
         }
         let defaults = self.defaults?;
@@ -3384,7 +3509,9 @@ impl Evaluator<'_> {
                 path.push(selector_field(selector)?);
                 Some((name, path))
             }
-            Below::Defaulted(defaulted) => self.type_path(&defaulted.below, span),
+            Below::Defaulted(defaulted) | Below::Optional(defaulted) => {
+                self.type_path(&defaulted.below, span)
+            }
             Below::Missing | Below::Value(_) | Below::Element(_) => None,
         }
     }
@@ -3686,7 +3813,8 @@ impl Evaluator<'_> {
                 chain: chain.clone(),
                 here: here.clone(),
             });
-            let filled = filled.and_then(|below| self.default_cell(&below, entry.span));
+            let filled =
+                filled.and_then(|below| self.start_of(&below, entry.span, entry.key_optional));
             let filled = filled.map(|value| Slot {
                 value,
                 recipe: Recipe::Fixed,
@@ -3700,7 +3828,11 @@ impl Evaluator<'_> {
                 return;
             };
             let value = entry.value.map(|expr| {
-                let below = self.path_below(&slot.value, &entry.path, chain, &here);
+                let start = PathStart {
+                    base: &slot.value,
+                    optional: entry.key_optional,
+                };
+                let below = self.path_below(start, &entry.path, chain, &here);
                 Rc::new(EntryRecipe {
                     expr,
                     below,
@@ -3712,6 +3844,7 @@ impl Evaluator<'_> {
             let recipe = Recipe::Path(Rc::new(PathRecipe {
                 base: slot.recipe.clone(),
                 base_value: slot.value.clone(),
+                key_optional: entry.key_optional,
                 path: entry.path.clone(),
                 op: entry.op,
                 value,
@@ -3838,7 +3971,7 @@ impl Evaluator<'_> {
         let found = match self.select(value, selector) {
             Ok(child) => {
                 let forced = self.force(&child, selector.span)?;
-                (!self.is_unset(&forced)).then_some(child)
+                (!self.is_unset(&forced, selector.optional)).then_some(child)
             }
             Err(Fail::Missing(..)) => None,
             Err(fail) => return Err(fail),
@@ -3851,7 +3984,9 @@ impl Evaluator<'_> {
                     chain: chain.clone(),
                     here: here.clone(),
                 };
-                let Some(child) = self.default_cell(&below, selector.span) else {
+                // Only a keyed value can take a key it does not have.
+                let optional = selector.optional && matches!(value.shape, Shape::Keyed(_));
+                let Some(child) = self.start_of(&below, selector.span, optional) else {
                     let message = missing_step(selector, rest, recipe.op, here.as_ref());
                     return Err(self.fail(selector.span, message));
                 };
@@ -3859,8 +3994,48 @@ impl Evaluator<'_> {
             }
         };
         let child = self.force(&child, selector.span)?;
-        let new_child = self.apply_path(&child, &child_at, rest, recipe, chain, here, context)?;
+        let child_at = if selector.optional {
+            Below::Optional(Rc::new(DefaultedBelow {
+                below: child_at,
+                chain: chain.clone(),
+                here: here.clone(),
+            }))
+        } else {
+            child_at
+        };
+        let into = PathInto {
+            at: &child_at,
+            optional: selector.optional,
+        };
+        let new_child = self.descend(&child, into, rest, recipe, chain, here, context)?;
         Ok(self.with_child(value, selector, Cell::done(new_child)))
+    }
+
+    /// Goes on with a path from `value`. A `?` step goes into what a
+    /// `Some(...)` holds, and the result stays in it (`SPEC.md` 5.1).
+    #[allow(clippy::too_many_arguments)]
+    fn descend(
+        &mut self,
+        value: &Rc<Shaped>,
+        into: PathInto<'_>,
+        path: &[Selector],
+        recipe: &PathRecipe,
+        chain: &Chain,
+        here: Option<Location>,
+        context: usize,
+    ) -> Eval<Rc<Shaped>> {
+        let held = some_payload(value).filter(|_| into.optional).cloned();
+        let Some(held) = held else {
+            return self.apply_path(value, into.at, path, recipe, chain, here, context);
+        };
+        let inner = self.force(&held, recipe.span)?;
+        let new = self.apply_path(&inner, into.at, path, recipe, chain, here, context)?;
+        let element = Selector {
+            kind: SelectorKind::Element(0),
+            span: recipe.span,
+            optional: false,
+        };
+        Ok(self.with_child(value, &element, Cell::done(new)))
     }
 
     fn apply_last(

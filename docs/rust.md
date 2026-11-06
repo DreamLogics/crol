@@ -718,7 +718,8 @@ fn main() -> Result<(), crol::Error> {
 ```
 
 `Config::path()` starts a path, and each field continues it. Lists take
-`.at(index)`, maps `.key(key)`, `Option` `.some()` and tuples `.t0()`, `.t1()`. A
+`.at(index)`, maps `.key(key)`, `Option` `.some()`, which goes through `None` too,
+and tuples `.t0()`, `.t1()`. A
 path holds no data, so keep it and use it as often as you like. A field whose type
 has no `Navigable` needs `#[crol(leaf)]`, and enums are where a path ends.
 

@@ -661,6 +661,8 @@ impl<'a> Walker<'_, 'a> {
         let dot = std::mem::take(&mut top.dot);
         match token.kind {
             DOT => self.top().dot = true,
+            // An optional step (`SPEC.md` 5.1) stays on the same path.
+            QUESTION if matches!(self.kind(i + 1), Some(DOT | L_BRACK)) => {}
             COLON => {
                 self.write_key();
                 self.top().progress = Progress::Value { started: false };
@@ -709,6 +711,7 @@ impl<'a> Walker<'_, 'a> {
             match self.kind(n) {
                 Some(COLON) => return true,
                 Some(DOT) if self.kind(n + 1).is_some_and(is_key) => n += 2,
+                Some(QUESTION) if matches!(self.kind(n + 1), Some(DOT | L_BRACK)) => n += 1,
                 Some(L_BRACK) => match self.accessor(n) {
                     Some((_, after)) => n = after,
                     None => return false,

@@ -1,0 +1,17 @@
++a: {
+    none: None,
+    some: Some({ x: 1, y: 1 }),
+    plain: { x: 1, y: 1 },
+    list: [{ x: 1 }],
+    deep: Some({ inner: None }),
+    named: Point { x: 1, y: 1 },
+}
++rootnone: None
++rootsome: Some({ x: 1 })
++rootplain: { x: 1 }
++block: {
+    q: None,
+    q?.r: 1,
+    new?.r: 2,
+}
++reads: { from: &root.a.none.x }

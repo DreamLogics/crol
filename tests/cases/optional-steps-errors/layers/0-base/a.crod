@@ -1,0 +1,9 @@
++list: { items: [1] }
++number: { n: 1 }
++nothing: { none: None }
++unset: { y: 1 }
+list.items[5]?.x: 1
+number.n?.x: 2
+nothing.none?.x: & + 1
+unset.other?.x: & + 1
+missing?.x: & + 1

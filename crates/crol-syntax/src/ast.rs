@@ -523,6 +523,12 @@ ast_node!(
     Target, TARGET
 );
 
+/// Whether a `?` directly follows a step of a target (`SPEC.md` 5.1).
+fn before_question(node: &SyntaxNode) -> bool {
+    node.next_sibling_or_token()
+        .is_some_and(|next| next.kind() == QUESTION)
+}
+
 impl Target {
     /// The key.
     pub fn key(&self) -> Option<Key> {
@@ -542,6 +548,11 @@ ast_node!(
 );
 
 impl Key {
+    /// Whether the key has a `?` after it: `a?.b` (`SPEC.md` 5.1).
+    pub fn is_optional(&self) -> bool {
+        before_question(self.syntax())
+    }
+
     /// The identifier, string or integer token, if the key is not an
     /// accessor.
     pub fn token(&self) -> Option<SyntaxToken> {
@@ -569,6 +580,13 @@ ast_node!(
     /// `.name`
     FieldSelector, FIELD_SELECTOR
 );
+
+impl Selector {
+    /// Whether the selector has a `?` after it: `a.b?.c` (`SPEC.md` 5.1).
+    pub fn is_optional(&self) -> bool {
+        before_question(self.syntax())
+    }
+}
 
 impl FieldSelector {
     /// The field's name.
