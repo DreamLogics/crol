@@ -156,6 +156,13 @@ impl Parser<'_> {
         self.pos < self.tokens.len() && !self.tokens[self.pos].kind.is_trivia()
     }
 
+    /// Whether the `n`-th token from `pos` directly follows the one before it.
+    fn nth_is_adjacent(&self, n: usize) -> bool {
+        self.tokens
+            .get(self.pos + n)
+            .is_some_and(|token| !token.kind.is_trivia())
+    }
+
     /// Whether the `n`-th token from `pos` is the first on its line.
     fn nth_starts_line(&self, n: usize) -> bool {
         self.starts_line
@@ -424,6 +431,7 @@ impl Parser<'_> {
         loop {
             match self.nth(n) {
                 DOT if matches!(self.nth(n + 1), IDENT | INT) => n += 2,
+                QUESTION if matches!(self.nth(n + 1), DOT | L_BRACK | COLON) => n += 1,
                 L_BRACK => {
                     if !skip_balanced(&mut n, L_BRACK, R_BRACK) {
                         return false;
@@ -710,6 +718,11 @@ impl Parser<'_> {
                 DOT if !self.nth_starts_line(n + 1) && matches!(self.nth(n + 1), IDENT | INT) => {
                     Some(n + 2)
                 }
+                QUESTION
+                    if !self.nth_starts_line(n + 1) && matches!(self.nth(n + 1), DOT | L_BRACK) =>
+                {
+                    Some(n + 1)
+                }
                 L_BRACK => self.after_accessor(n),
                 L_ANGLE => self.after_variant(n),
                 _ => None,
@@ -790,7 +803,8 @@ impl Parser<'_> {
                 self.bump();
                 self.start(TARGET);
                 self.key();
-                self.selectors(true);
+                self.optional_step(false);
+                self.selectors(true, true);
                 self.finish();
                 self.finish();
             }
@@ -878,7 +892,8 @@ impl Parser<'_> {
     fn target(&mut self) {
         self.start(TARGET);
         self.key();
-        self.selectors(false);
+        self.optional_step(false);
+        self.selectors(false, true);
         self.finish();
     }
 
@@ -902,18 +917,47 @@ impl Parser<'_> {
     /// Selectors after a key or an expression (`SPEC.md` 5.1). A key before
     /// its `:` takes any selectors; after a value or in a remove,
     /// `stop_at_entry` leaves the next entry alone (`SPEC.md` 5.3).
-    fn selectors(&mut self, stop_at_entry: bool) {
+    fn selectors(&mut self, stop_at_entry: bool, target: bool) {
         loop {
             if stop_at_entry && self.at_next_entry() {
                 break;
             }
-            match self.current() {
-                DOT => self.dot_selector(),
-                L_BRACK => self.accessor(),
-                L_ANGLE => self.variant(),
+            let variant = match self.current() {
+                DOT => {
+                    self.dot_selector();
+                    false
+                }
+                L_BRACK => {
+                    self.accessor();
+                    false
+                }
+                L_ANGLE => {
+                    self.variant();
+                    true
+                }
                 _ => break,
+            };
+            if target {
+                self.optional_step(variant);
             }
         }
+    }
+
+    /// `?` directly after a step of a target, with the next step directly
+    /// after it (`SPEC.md` 5.1). Apart, it is the `?` of the next entry.
+    fn optional_step(&mut self, after_variant: bool) {
+        if !self.current_is_adjacent() || !self.at(QUESTION) {
+            return;
+        }
+        if after_variant {
+            self.error("a `?` in a path follows a key or a field, not a condition");
+        } else if !self.nth_is_adjacent(1) || !matches!(self.nth(1), DOT | L_BRACK) {
+            self.error(
+                "a `?` in a path goes before the next step: `a?.b`; to set a value only if \
+                 it is not set, write `?a`",
+            );
+        }
+        self.bump();
     }
 
     fn dot_selector(&mut self) {
@@ -1122,7 +1166,7 @@ impl Parser<'_> {
         self.primary();
         if matches!(self.current(), DOT | L_BRACK | L_ANGLE) && !self.at_next_entry() {
             self.start_at(checkpoint, PATH_EXPR);
-            self.selectors(true);
+            self.selectors(true, false);
             self.finish();
         }
     }

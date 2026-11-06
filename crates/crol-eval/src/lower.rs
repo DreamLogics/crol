@@ -300,12 +300,21 @@ fn field_names(path: &[Selector]) -> Vec<Arc<str>> {
         .collect()
 }
 
+/// Whether a target has a `?` after its key (`SPEC.md` 5.1).
+fn key_is_optional(target: &ast::Target) -> bool {
+    target.key().is_some_and(|key| key.is_optional())
+}
+
 fn key_selector(key: &Key, span: Span) -> Selector {
     let kind = match key {
         Key::Str(s) => SelectorKind::Field(s.clone()),
         Key::Int(i) => SelectorKind::Accessor(*i),
     };
-    Selector { kind, span }
+    Selector {
+        kind,
+        span,
+        optional: false,
+    }
 }
 
 /// How many conditional operations one entry may stand for, through `+`
@@ -522,6 +531,7 @@ impl Lowerer {
         let Some((key, path)) = self.target_with_conditions(&target, &mut lists) else {
             return;
         };
+        let target_optional = key_is_optional(&target);
         let key: Arc<str> = match key {
             Key::Str(key) => key,
             Key::Int(i) => {
@@ -577,6 +587,7 @@ impl Lowerer {
                 key: key.clone(),
                 op,
                 replace,
+                key_optional: target_optional,
                 path: path.clone(),
                 value,
                 span,
@@ -655,7 +666,10 @@ impl Lowerer {
             alternatives = more;
         }
         let mut full_path = fixed.path.clone();
-        full_path.push(key_selector(&key, span));
+        full_path.push(Selector {
+            optional: key_is_optional(&target),
+            ..key_selector(&key, span)
+        });
         full_path.extend(path.iter().cloned());
         let mut blocks = vec![fixed.path.clone()];
         blocks.extend(fixed.outer.iter().cloned());
@@ -679,6 +693,7 @@ impl Lowerer {
                 key: fixed.key.clone(),
                 op,
                 replace,
+                key_optional: false,
                 path: full_path.clone(),
                 value,
                 span,
@@ -1012,6 +1027,7 @@ impl Lowerer {
                         op: Some(set_op(op)),
                         replace: op == ast::EntryOp::Replace,
                         key,
+                        key_optional: key_is_optional(&target),
                         path,
                         value,
                         span: target_span,
@@ -1026,6 +1042,7 @@ impl Lowerer {
                             op: None,
                             replace: false,
                             key,
+                            key_optional: key_is_optional(&target),
                             path,
                             value: None,
                             span: self.span(target.syntax()),
@@ -1188,7 +1205,11 @@ impl Lowerer {
                 // The parser has reported it.
                 ast::Selector::Parent(_) => return None,
             };
-            out.push(Selector { kind, span });
+            out.push(Selector {
+                kind,
+                span,
+                optional: selector.is_optional(),
+            });
         }
         Some(out)
     }
@@ -1485,6 +1506,7 @@ impl Lowerer {
                                     Key::Int(i) => SelectorKind::Accessor(*i),
                                 },
                                 span,
+                                optional: false,
                             }];
                             path.extend(target.iter().cloned());
                             Some((

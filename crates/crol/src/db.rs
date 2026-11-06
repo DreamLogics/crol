@@ -52,7 +52,7 @@ pub(crate) struct Log {
 /// Whether target `a` is `b`, or below it.
 fn at_or_below(a: &str, b: &str) -> bool {
     a.strip_prefix(b)
-        .is_some_and(|rest| rest.is_empty() || rest.starts_with(['.', '[']))
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(['.', '[', '?']))
 }
 
 impl Log {
@@ -592,36 +592,13 @@ impl<V: VariantName> State<'_, V> {
         data.evaluate(self.variants.iter().cloned())
     }
 
-    /// The steps as a target. A value can be held as `Some(x)` or as a plain
-    /// `x`, and a target goes through the first with `.0`, so this looks at
-    /// the data (`SPEC.md` 10.14). A write to what an `Option` holds replaces
-    /// the `Option`, and needs no selector.
-    fn target(&self, steps: &[Step]) -> Option<String> {
-        let data = self.data();
-        let context = data
-            .context(self.variants.iter().cloned())
-            .unwrap_or_else(|_| CrolContext::base());
-        let mut resolved = Vec::with_capacity(steps.len());
-        for (i, step) in steps.iter().enumerate() {
-            if *step != Step::Some {
-                resolved.push(step.clone());
-            } else if i + 1 < steps.len()
-                && found(data, &steps[..i], &context).is_some_and(path::is_some)
-            {
-                resolved.push(Step::Element(0));
-            }
-        }
-        path::target(&resolved)
-    }
-
     fn write(
         &mut self,
         steps: Vec<Step>,
         kind: OperationKind,
         written: Written,
     ) -> Result<(), Error> {
-        let target = self
-            .target(&steps)
+        let target = path::target(&steps)
             .ok_or_else(|| Error::new("a write needs a path to a root key or below it"))?;
         let removing = matches!(kind, OperationKind::Remove { .. });
         let kind = match kind {

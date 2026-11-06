@@ -131,6 +131,7 @@ impl Writer<'_> {
     }
 
     fn selector(&mut self, selector: &Selector) {
+        self.flag(selector.optional);
         match &selector.kind {
             SelectorKind::Field(name) => {
                 self.out.push(0);
@@ -299,6 +300,7 @@ impl Writer<'_> {
         self.set_op(entry.op);
         self.flag(entry.replace);
         self.key(&entry.key);
+        self.flag(entry.key_optional);
         self.selectors(&entry.path);
         self.option(entry.value.as_ref(), |w, id| w.id(*id));
         self.span(entry.span);
@@ -339,6 +341,7 @@ impl Writer<'_> {
         self.string(&op.key);
         self.set_op(op.op);
         self.flag(op.replace);
+        self.flag(op.key_optional);
         self.selectors(&op.path);
         self.option(op.value.as_ref(), |w, id| w.id(*id));
         self.span(op.span);
@@ -631,6 +634,7 @@ impl Reader<'_> {
     }
 
     fn selector(&mut self) -> Read<Selector> {
+        let optional = self.flag()?;
         let kind = match self.byte()? {
             0 => SelectorKind::Field(self.string()?),
             1 => SelectorKind::Element(self.id()?),
@@ -639,6 +643,7 @@ impl Reader<'_> {
             _ => return Err(Corrupt),
         };
         Ok(Selector {
+            optional,
             kind,
             span: self.span()?,
         })
@@ -756,6 +761,7 @@ impl Reader<'_> {
         let op = self.set_op()?;
         let replace = self.flag()?;
         let key = self.key()?;
+        let key_optional = self.flag()?;
         let path = self.selectors()?;
         let value = self.option(Self::expr_id)?;
         if op.is_some() != value.is_some() {
@@ -765,6 +771,7 @@ impl Reader<'_> {
             op,
             replace,
             key,
+            key_optional,
             path,
             value,
             span: self.span()?,
@@ -804,6 +811,7 @@ impl Reader<'_> {
         let key = self.string()?;
         let op = self.set_op()?;
         let replace = self.flag()?;
+        let key_optional = self.flag()?;
         let path = self.selectors()?;
         let value = self.option(Self::expr_id)?;
         if op.is_some() != value.is_some() {
@@ -813,6 +821,7 @@ impl Reader<'_> {
             key,
             op,
             replace,
+            key_optional,
             path,
             value,
             span: self.span()?,

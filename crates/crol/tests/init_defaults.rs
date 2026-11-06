@@ -145,3 +145,77 @@ fn a_field_with_no_default_stays_an_error() {
     .unwrap_err();
     assert!(error.to_string().contains("is not set"), "{error}");
 }
+
+#[test]
+fn a_question_mark_starts_from_the_default_without_the_option() {
+    let units = load(
+        false,
+        r#"
+        +x: Unit { hp: 1, .. }
+        x.behaviour?.traits?.level: & + 2
+        "#,
+    )
+    .unwrap();
+    let Definition::Unit(unit) = &units["x"];
+    assert_eq!(unit.behaviour.traits.level, 2);
+    assert!(!unit.behaviour.traits.stealth);
+}
+
+#[test]
+fn a_question_mark_goes_through_none_and_some() {
+    let units = load(
+        false,
+        r#"
+        +x: Unit { hp: 1, behaviour: Behaviour { optional: None, .. }, .. }
+        +y: Unit { hp: 1, behaviour: Behaviour { optional: Some(Traits { level: 1, .. }), .. }, .. }
+        x.behaviour.optional?.level: 3
+        y.behaviour.optional?.level: & + 1
+        "#,
+    )
+    .unwrap();
+    let level = |key: &str| {
+        let Definition::Unit(unit) = &units[key];
+        unit.behaviour.optional.as_ref().map(|t| t.level)
+    };
+    assert_eq!(level("x"), Some(3));
+    assert_eq!(level("y"), Some(2));
+}
+
+#[derive(Debug, Default, PartialEq, Deserialize, Serialize, Schema)]
+#[crol(defaults)]
+pub struct Plain {
+    #[serde(default)]
+    pub level: u32,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Schema)]
+#[crol(defaults)]
+pub struct Holder {
+    #[serde(default)]
+    pub plain: Option<Plain>,
+}
+
+fn holder(init: bool, text: &str) -> Result<BTreeMap<String, Holder>, crol::Error> {
+    CrolComposer::with_cfg(CrolConfig::<String> {
+        init_defaults: init,
+        ..Default::default()
+    })
+    .schema(schema::build::<BTreeMap<String, Holder>>())
+    .load_layer(CrolLayer::from_sources("base", [("a.crod", text)]))
+    .compose()
+}
+
+#[test]
+fn none_with_no_default_for_what_it_holds_is_not_set() {
+    let error = holder(true, "+x: Holder { plain: None }\nx.plain.level: 2").unwrap_err();
+    assert!(
+        error.to_string().contains("`x.plain` is not set"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_question_mark_starts_from_nothing_where_there_is_no_default() {
+    let held = holder(false, "+x: Holder { plain: None }\nx.plain?.level: 2").unwrap();
+    assert_eq!(held["x"].plain, Some(Plain { level: 2 }));
+}

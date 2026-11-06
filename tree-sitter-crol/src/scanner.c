@@ -255,6 +255,11 @@ static bool at_selectors_and_colon(TSLexer *lexer) {
       case '<':
         if (!skip_variant(lexer)) return false;
         break;
+      case '?':
+        // An optional step: the next step directly follows.
+        advance(lexer);
+        if (lexer->lookahead != '.' && lexer->lookahead != '[') return false;
+        break;
       default:
         return false;
     }

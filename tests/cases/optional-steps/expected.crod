@@ -1,0 +1,30 @@
+a: {
+    none: { x: 2, .. },
+    some: Some({ x: 2, y: 7 }),
+    plain: { x: 2, y: 1 },
+    list: [{ x: 4 }],
+    deep: Some({ inner: { z: 5, .. } }),
+    named: Point { x: 6, y: 1 },
+    missing: { b: { c: 3, .. }, .. },
+    removed: { gone: (), -gone, .. },
+}
+rootnone: { x: 1, .. }
+rootsome: Some({ x: 2 })
+rootplain: { x: 3 }
+block: { q: { r: 1, .. }, new: { r: 2, .. } }
+reads: { from: 2 }
+rootmissing: { x: 4, .. }
+
+<prod & !dev> {
+    a: {
+        none: { x: 2, .. },
+        some: Some({ x: 2, y: 7 }),
+        plain: { x: 2, y: 1 },
+        list: [{ x: 4 }],
+        deep: Some({ inner: { z: 5, .. } }),
+        named: Point { x: 6, y: 1 },
+        missing: { b: { c: 3, .. }, .. },
+        removed: { gone: (), -gone, .. },
+        variant: { x: 8, .. },
+    },
+}

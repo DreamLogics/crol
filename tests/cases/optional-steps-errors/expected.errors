@@ -1,0 +1,5 @@
+0-base/a.crod:5:11: list.items[5].x: `list.items[5]` is not set, so it cannot be patched
+0-base/a.crod:6:10: .x: cannot select in an integer
+0-base/a.crod:7:18: &: there is no value below here
+0-base/a.crod:8:17: &: there is no value below here
+0-base/a.crod:9:13: &: there is no value below here

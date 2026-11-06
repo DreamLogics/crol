@@ -128,7 +128,34 @@ module.exports = grammar({
     spread: $ => seq('..', field('operand', $._postfix)),
     defaults: _ => '..',
 
-    target: $ => seq(field('key', $.key), repeat($._selector)),
+    // A `?` directly follows a step that is no condition, and directly
+    // precedes the next step (SPEC.md 5.1).
+    target: $ => seq(field('key', $.key), optional($._after_step)),
+    _after_step: $ => choice(
+      seq($._optional_step, optional($._after_step)),
+      seq($._step, optional($._after_step)),
+      seq($.variant, optional($._after_condition)),
+    ),
+    _after_condition: $ => choice(
+      seq($._step, optional($._after_step)),
+      seq($.variant, optional($._after_condition)),
+    ),
+    _step: $ => choice($.field_selector, $.index_selector, $.accessor),
+    _optional_step: $ => seq(token.immediate('?'), choice(
+      alias($._adjacent_field, $.field_selector),
+      alias($._adjacent_index, $.index_selector),
+      alias($._adjacent_accessor, $.accessor),
+    )),
+    _adjacent_field: $ => seq(token.immediate('.'), field('name', $.identifier)),
+    _adjacent_index: $ => seq(
+      token.immediate('.'),
+      field('index', alias(token.immediate(/[0-9]+/), $.tuple_index)),
+    ),
+    _adjacent_accessor: $ => seq(
+      token.immediate('['),
+      choice($.string, $.raw_string, seq(optional('-'), $.integer)),
+      ']',
+    ),
     key: $ => choice($.identifier, $.string, $.raw_string, $.integer, $.accessor),
 
     _selector: $ => choice(

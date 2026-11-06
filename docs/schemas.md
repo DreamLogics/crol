@@ -479,6 +479,9 @@ the path works, `&` in it reads the default, and a block merged into the field
 starts from the default as well. An `Option` that is `None` starts from the default
 of what it holds. A step with no default stays an error.
 
+To do this for one step, in any data, write a `?` after it: `web.limits?.cpu: 2.0`.
+See [paths](language.md).
+
 **Limits.** `&default` works in layered data only. In a value-mode document it is
 an error, with `crol::from_str`, `crol::from_str_with_schema`, a `.crol` file given
 to `crol` and in the language server alike. There, and in data with no schema at

@@ -211,6 +211,9 @@ impl MacroKind {
 pub(crate) struct Selector {
     pub(crate) kind: SelectorKind,
     pub(crate) span: Span,
+    /// `a.b?.c`: the path goes through this step whatever it holds
+    /// (`SPEC.md` 5.1).
+    pub(crate) optional: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -262,6 +265,8 @@ pub(crate) struct Entry {
     /// `^target: expr`: a set that never merges (`SPEC.md` 5.2).
     pub(crate) replace: bool,
     pub(crate) key: Key,
+    /// `a?.b`: the path goes through the key whatever it holds.
+    pub(crate) key_optional: bool,
     pub(crate) path: Vec<Selector>,
     /// The value; `None` for a remove.
     pub(crate) value: Option<ExprId>,
@@ -283,6 +288,8 @@ pub(crate) struct RootOp {
     pub(crate) op: Option<SetOp>,
     /// `^target: expr`: a set that never merges (`SPEC.md` 5.2).
     pub(crate) replace: bool,
+    /// `a?.b`: the path goes through the key whatever it holds.
+    pub(crate) key_optional: bool,
     pub(crate) path: Vec<Selector>,
     pub(crate) value: Option<ExprId>,
     /// The target's span.
