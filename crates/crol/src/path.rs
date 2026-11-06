@@ -108,7 +108,9 @@ impl<B, T> IntoPath<B> for &Path<B, T> {
 }
 
 /// A type that paths can go into. `#[derive(Navigable)]` implements this for
-/// a struct with named fields, and for anything else as a type paths end at.
+/// a struct with named fields, and for anything else as a type paths end at,
+/// so a path does not go into an enum's variants. Lists, maps, tuples and
+/// `Option`s have their own steps, and a `Box` is walked through.
 pub trait Navigable: Sized {
     /// What a path that has reached this type offers next.
     type Nav<B>;
@@ -259,7 +261,8 @@ pub struct OptionPath<B, I>(Path<B, Option<I>>);
 path_type!(OptionPath<I> => Option<I>);
 
 impl<B, I: Navigable> OptionPath<B, I> {
-    /// What the `Option` holds. Where it is `None`, the path is not set.
+    /// What the `Option` holds. Where it is `None`, the path is not set for a
+    /// read, and a write goes through it, as `?` does (`SPEC.md` 5.1).
     pub fn some(self) -> I::Nav<B> {
         I::nav(self.0.then(Step::Some))
     }

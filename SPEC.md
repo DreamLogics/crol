@@ -2716,7 +2716,7 @@ let mut tx = db.transaction()
         .at(Options::path().limits().cpu()).set(2))?;
 
 let retries = tx.get(Config::path().retries())?;
-tx.at(&a).set(retries)?.commit()?;
+tx.at(Config::path().max_retries()).set(retries)?.commit()?;
 
 db.save()?;
 ```
@@ -2736,7 +2736,8 @@ target's selectors (section 5.1):
 | `.some()` | an `Option` | `?` on the step before it where the path goes on, else none |
 
 A step can be taken whatever the data holds. A path that is missing is an error
-where it is used, and that includes a field left out for its default. A field whose
+where it is used, and that includes a field left out for its default. A write
+through `.some()` goes through a `None`, as `?` does (section 5.1). A field whose
 type has no `Navigable` needs `#[crol(leaf)]`, and a path ends there. The derive
 makes any type but a struct with named fields, enums included, one that paths
 end at.

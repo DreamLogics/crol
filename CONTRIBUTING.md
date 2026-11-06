@@ -10,6 +10,12 @@ section (`SPEC.md` 6.1.2).
 The guide in [`docs/`](docs/README.md) is written for users, and describes what
 the code does today. A change that users can see updates the guide as well.
 
+`crates/crol/tests/guide.rs` builds and runs every Rust block of the guide and the
+READMEs, and compares what it prints with the `$ cargo run` block after it. So a block
+is a whole program, and the files it reads are in `// path` blocks above it. Write
+`rust,no_run` for one that cannot run there, and `rust,ignore` for one that cannot be
+built.
+
 ## Checks
 
 CI runs these on every pull request; run them before pushing:

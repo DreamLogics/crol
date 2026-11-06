@@ -36,7 +36,7 @@ fn main() -> Result<(), crol::Error> {
 
 Or stack files in layers with `CrolComposer`, lowest first:
 
-```rust
+```rust,no_run
 use std::path::Path;
 
 use crol::CrolComposer;
@@ -57,13 +57,17 @@ fn main() -> Result<(), crol::Error> {
 }
 ```
 
+To change layered data from your program and save it, `CrolComposer::compose_db`
+gives a `CrolDb`, with the `derive` feature: see
+[Changing data with a database](https://github.com/DreamLogics/crol/blob/main/docs/rust.md#changing-data-with-a-database).
+
 ## Features
 
 `crol` has no default features.
 
 | Feature                | Gives                                                        |
 | ---------------------- | ------------------------------------------------------------ |
-| `derive`               | `#[derive(crol::Schema)]` and `#[derive(crol::VariantName)]` |
+| `derive`               | `#[derive(crol::Schema)]`, `#[derive(crol::VariantName)]`, `#[derive(crol::View)]`, `#[derive(crol::Navigable)]` and `crol::croxp!` |
 | `remote-schemas`       | fetch schemas by URL or crate, with a blocking client        |
 | `remote-schemas-async` | the same, without blocking, using Tokio and reqwest          |
 

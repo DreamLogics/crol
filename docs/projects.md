@@ -127,7 +127,7 @@ is written as a string here: `"NoNewKeys"`.
 A `.crol` file gets nothing from the project on its own: not the schema, and not
 the root type. `files` opts it in, by giving it a type:
 
-```rust
+```crol
 Project {
     layers: List([{ name: "base", dir: "data::base", .. }]),
     schema: Some("crol::schema"),

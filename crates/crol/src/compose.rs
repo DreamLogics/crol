@@ -641,7 +641,7 @@ impl<T: VariantName> CrolComposer<T> {
     /// Adds the active layer of a [`CrolDb`](crate::CrolDb) (`SPEC.md` 10.14):
     /// a `.crod` file the database owns, as the last layer. A file that does
     /// not exist is an empty layer, so a program's first run needs nothing
-    /// else.
+    /// else. A `load` after it is an error.
     pub fn load_active(mut self, file: impl AsRef<Path>) -> Result<Self, Error> {
         let file = file.as_ref();
         if !self.config.file_loaders.file_system() {
@@ -897,7 +897,7 @@ impl<T: VariantName> CrolComposer<T> {
 
     /// Evaluates as [`compose_data`](Self::compose_data) does, and returns a
     /// database with `R` as its root (`SPEC.md` 10.14). Without an active
-    /// layer, transactions work and `save` is an error.
+    /// layer, transactions work, `save` is an error, and `save_as` starts one.
     pub fn compose_db<R: crate::Navigable>(mut self) -> Result<crate::CrolDb<R, T>, Error> {
         let active = match self.active.clone() {
             Some(active) => active,

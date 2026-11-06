@@ -47,11 +47,13 @@ pub enum Env {
 | `#[crol(schema = OtherType)]`      | a field      | describe it as a type with the same serialized shape  |
 | `#[crol(schema = any)]`            | a field      | accept anything here                                  |
 | `#[crol(rename = "...")]`          | an enum variant | the name data uses, for `VariantName`              |
+| `#[crol(leaf)]`                    | a field      | a path ends here, for a type without `Navigable`     |
 
 ## Documentation
 
 - [Schemas](https://github.com/DreamLogics/crol/blob/main/docs/schemas.md)
 - [Typed variants](https://github.com/DreamLogics/crol/blob/main/docs/variants.md#typed-variants)
+- [Changing data with a database](https://github.com/DreamLogics/crol/blob/main/docs/rust.md#changing-data-with-a-database)
 
 ## Licence
 

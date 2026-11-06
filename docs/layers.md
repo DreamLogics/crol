@@ -90,7 +90,6 @@ In Rust, each `load` adds a layer on top:
 
 ```rust
 // src/main.rs
-use std::collections::BTreeMap;
 use std::path::Path;
 
 use crol::CrolComposer;
@@ -102,18 +101,24 @@ struct Service {
     port: u16,
     tags: Vec<String>,
     image: String,
-    url: Option<String>,
+    url: String,
 }
 
 fn main() -> Result<(), crol::Error> {
-    let services: BTreeMap<String, Service> = CrolComposer::new()
+    let data = CrolComposer::new()
         .load(Path::new("data/base"))?
         .load(Path::new("data/extension"))?
         .load(Path::new("data/local"))?
-        .compose()?;
-    println!("{:?}", services["web"]);
+        .compose_data()?;
+    let web: Service = data.get("web")?;
+    println!("{web:?}");
     Ok(())
 }
+```
+
+```console
+$ cargo run
+Service { replicas: 2, port: 9090, tags: ["managed", "cached"], image: "web:1.4", url: "http://web:9090" }
 ```
 
 ## What a layer can be
@@ -127,6 +132,8 @@ fn main() -> Result<(), crol::Error> {
   `CrolLayer::from_sources("base", [("web.crod", text)])`. These are always data
   mode.
 - **A compiled layer**: a [`.crob` file](#compiled-layers).
+- **An active layer**: one `.crod` file on top of the others, which
+  [your program writes](rust.md#changing-data-with-a-database) through a `CrolDb`.
 - **Anything else**, through a [file loader](recipes.md#loading-documents-from-somewhere-else)
   of your own.
 
@@ -298,25 +305,45 @@ $ crol eval data/base.crob data/local
 In Rust, a path to one is a layer like any other, and `CrolLayer::to_binary` writes
 one:
 
-```rust
-let data: Data = CrolComposer::new()
-    .load(Path::new("data/base.crob"))?
-    .load(Path::new("data/local"))?
-    .compose()?;
+```rust,no_run
+// src/main.rs
+use std::path::Path;
+
+use crol::CrolComposer;
+
+fn main() -> Result<(), crol::Error> {
+    let data = CrolComposer::new()
+        .load(Path::new("data/base.crob"))?
+        .load(Path::new("data/local"))?
+        .compose_data()?;
+    println!("{} warnings", data.warnings().len());
+    Ok(())
+}
 ```
 
 For a layer whose text may change, `layer.compiled_in(&bytes)` says whether the file
 was made from just that text. Read the text, and compile again if it says no:
 
 ```rust
-let text = CrolLayer::from_path("base", Path::new("data/base"))?;
-let bytes = std::fs::read("data/base.crob").unwrap_or_default();
-let layer = if text.compiled_in(&bytes) {
-    CrolLayer::from_binary("base", &bytes)?
-} else {
-    std::fs::write("data/base.crob", text.to_binary()?)?;
-    text
-};
+// src/main.rs
+use std::error::Error;
+use std::path::Path;
+
+use crol::{CrolComposer, CrolLayer};
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let text = CrolLayer::from_path("base", Path::new("data/base"))?;
+    let bytes = std::fs::read("data/base.crob").unwrap_or_default();
+    let layer = if text.compiled_in(&bytes) {
+        CrolLayer::from_binary("base", &bytes)?
+    } else {
+        std::fs::write("data/base.crob", text.to_binary()?)?;
+        text
+    };
+    let data = CrolComposer::new().load_layer(layer).compose_data()?;
+    println!("{} warnings", data.warnings().len());
+    Ok(())
+}
 ```
 
 It evaluates exactly as its documents do, with the same fingerprint, and it keeps

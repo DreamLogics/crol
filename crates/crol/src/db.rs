@@ -390,7 +390,9 @@ impl<R, V: VariantName> CrolDb<R, V> {
     }
 
     /// Evaluates a context, if it is not yet, so that [`select`](Self::select)
-    /// can read it. A transaction does this for itself.
+    /// can read it. Every context is evaluated on loading, unless
+    /// `CrolConfig::contexts` or `each_variant` left it out. A transaction does
+    /// this for itself.
     pub fn evaluate<W: Into<V>>(
         &mut self,
         variants: impl IntoIterator<Item = W>,
@@ -484,7 +486,8 @@ impl<R, V: VariantName> Select<'_, R, V> {
         Ok(self)
     }
 
-    /// The value at a path.
+    /// The value at a path. It is an error if the path is not set in this
+    /// context.
     pub fn get<P: IntoPath<R>>(&self, path: P) -> Result<P::Target, Error>
     where
         P::Target: DeserializeOwned,
@@ -763,7 +766,9 @@ impl<'d, B, V: VariantName> Transaction<'d, B, V> {
 
     /// Applies the operations: it evaluates what is pending, with every check
     /// that evaluating runs, and checks that each write took effect. If it
-    /// fails, the data stays as it was.
+    /// fails, the data stays as it was. [`Reloaded::changed`] lists the root
+    /// keys that changed. This changes the data in memory:
+    /// [`CrolDb::save`] writes it.
     pub fn commit(mut self) -> Result<Reloaded, Error> {
         if self.state.writes.is_empty() {
             return Ok(Reloaded {
