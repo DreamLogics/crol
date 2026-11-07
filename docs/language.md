@@ -439,6 +439,31 @@ Templates are not data: they do not show up in the output, and your program
 never sees them. In layered data they are visible in every file of every
 layer, and can be defined only once.
 
+### Giving a template a type
+
+A template written as `Service { ... }` has a type your editor can check and
+complete. A map, a list, a tuple or a number has no name to write, so put
+`#[type(...)]` before the template instead. It takes a Rust type, or a path
+into one of your schema's types: `.field` for a field, `.0` for an element of a
+tuple, and `.[]` for an element of a list or a value of a map.
+
+```crol
+// example.crod
+#[type(Fleet.services)]                // the type of Fleet's field `services`
+base_services := { web: { replicas: 2 } }
+
+#[type(Fleet.services.[].ports.[])]   // one element of a service's ports
+http := { port: 80, protocol: "tcp" }
+
+#[type(HashMap<String, u16>)]
+ports := { http: 80, https: 443 }
+```
+
+A path follows your Rust types when they change, so prefer it for a template
+meant for one field. The attribute is only for tools: `crol check` and your
+editor check the template's fields and values against the type, and
+evaluation ignores it. See [Schemas](schemas.md#checking-templates).
+
 ## Leaving fields out
 
 When CROL loads a struct, **every field must be written**, `Option` fields
@@ -603,6 +628,9 @@ whole:
 | `#![extends(path)]`             | which files this one is written on top of    | [Layers](layers.md#declaring-what-a-file-builds-on) |
 | `#![use(path as Alias)]`        | which type a name means                      | [Schemas](schemas.md#types-with-the-same-name) |
 | `#![type(Name)]`                | the type of a whole value-mode document      | [Modes](modes.md)                              |
+
+One attribute goes on a value bind instead of a document: `#[type(...)]`, which
+gives a template its type (see [Giving a template a type](#giving-a-template-a-type)).
 
 ## What is not in the language
 

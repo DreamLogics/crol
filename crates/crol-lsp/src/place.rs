@@ -11,6 +11,7 @@
 
 use crol_eval::{Evaluation, FileId, PathStep, ValueKind};
 use crol_syntax::SyntaxKind::{self, *};
+use crol_syntax::ast::AstNode;
 use crol_syntax::{TextRange, TextSize};
 
 use crate::features;
@@ -383,6 +384,9 @@ struct Tok {
     range: TextRange,
     /// Whether a line ends between the token before it and this one.
     on_new_line: bool,
+    /// Whether a `#[...]` comes right before it: it names a value bind
+    /// with a type (`SPEC.md` 6.1.2).
+    after_entry_attr: bool,
 }
 
 /// The tokens that are not trivia, without the attributes.
@@ -391,6 +395,11 @@ fn significant_tokens(text: &str) -> Vec<Tok> {
     let mut start = TextSize::new(0);
     let mut on_new_line = false;
     let mut attribute = None::<usize>;
+    // Whether the attribute being skipped is `#[...]`, and whether one just
+    // ended.
+    let mut entry_attr = false;
+    let mut after_entry_attr = false;
+    let mut last = None::<SyntaxKind>;
     for token in crol_syntax::tokenize(text).0 {
         let range = TextRange::at(start, token.len);
         start += token.len;
@@ -398,10 +407,18 @@ fn significant_tokens(text: &str) -> Vec<Tok> {
             on_new_line |= text[range].contains('\n');
             continue;
         }
+        let previous = last.replace(token.kind);
         match (attribute, token.kind) {
             (None, POUND) => attribute = Some(0),
+            (Some(0), L_BRACK) => {
+                entry_attr = previous == Some(POUND);
+                attribute = Some(1);
+            }
             (Some(depth), L_BRACK) => attribute = Some(depth + 1),
-            (Some(1), R_BRACK) => attribute = None,
+            (Some(1), R_BRACK) => {
+                attribute = None;
+                after_entry_attr = std::mem::take(&mut entry_attr);
+            }
             (Some(depth), R_BRACK) => attribute = Some(depth - 1),
             (Some(_), _) => {}
             (None, kind) => {
@@ -409,6 +426,7 @@ fn significant_tokens(text: &str) -> Vec<Tok> {
                     kind,
                     range,
                     on_new_line,
+                    after_entry_attr: std::mem::take(&mut after_entry_attr),
                 });
                 on_new_line = false;
             }
@@ -573,8 +591,13 @@ impl<'a> Walker<'_, 'a> {
             // A document that is one value.
             L_BRACK | L_PAREN if root => self.start_value(i),
             IDENT if next == Some(COLON_EQ) => {
+                let current = if self.tokens[i].after_entry_attr {
+                    self.typed_bind(i)
+                } else {
+                    Place::default()
+                };
                 let top = self.top();
-                top.current = Place::default();
+                top.current = current;
                 top.progress = Progress::Value { started: false };
                 self.skip_to = i + 2;
             }
@@ -595,6 +618,34 @@ impl<'a> Walker<'_, 'a> {
                 self.start_target(current, name, range);
             }
             _ => {}
+        }
+    }
+
+    /// The place of the value of the bind named at token `i`, which has a
+    /// `#[type(...)]`: of the type that names, with no path, since a value
+    /// bind is no place in the data (`SPEC.md` 6.1.2).
+    fn typed_bind(&self, i: usize) -> Place<'a> {
+        let Some(schema) = self.scope.schema.as_ref() else {
+            return Place::default();
+        };
+        let start = self.tokens[i].range.start();
+        let document = crol_syntax::parse(self.text).document();
+        let bind = document
+            .syntax()
+            .descendants()
+            .filter_map(crol_syntax::ast::ValueBind::cast)
+            .find(|b| b.name().is_some_and(|n| n.text_range().start() == start));
+        let Some(type_ref) = bind.and_then(|b| b.attr()).and_then(|a| a.type_ref()) else {
+            return Place::default();
+        };
+        let uses = crol::typed::TypeUses::of(&document, schema.file);
+        match crol::typed::resolve(schema.file, &uses, &type_ref) {
+            Ok((ty, doc)) => Place {
+                shape: Some(Shape::Type(ty)),
+                path: None,
+                doc,
+            },
+            Err(_) => Place::default(),
         }
     }
 

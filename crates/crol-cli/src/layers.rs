@@ -378,5 +378,9 @@ pub(crate) fn evaluate(inputs: &Inputs) -> Evaluation {
         let found = crol::check_view(view, schema, inputs.root.as_deref(), &inputs.check);
         evaluation.diagnostics.extend(found);
     }
+    if let Some(schema) = &inputs.schema {
+        let found = crate::value::typed_binds(&inputs.sources, schema, &inputs.check);
+        evaluation.diagnostics.extend(found);
+    }
     evaluation
 }

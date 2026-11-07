@@ -791,7 +791,7 @@ fn is_integer(ty: &TypeExpr) -> bool {
     )
 }
 
-fn describe(ty: &TypeExpr) -> String {
+pub(crate) fn describe(ty: &TypeExpr) -> String {
     match ty {
         TypeExpr::Bool => "a boolean".into(),
         TypeExpr::Char => "a char".into(),

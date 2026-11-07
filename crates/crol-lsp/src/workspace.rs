@@ -1020,6 +1020,10 @@ pub(crate) fn evaluate(
                         }
                     }
                 }
+                // The document's `#[type(...)]` binds (`SPEC.md` 6.1.2).
+                let document = crol_syntax::parse(text).document();
+                let found = crol::typed::check_document(file, &document, &schema, &check);
+                snapshot.extra.extend(found);
                 let own = OwnSchema {
                     file: schema,
                     root,

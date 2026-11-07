@@ -84,6 +84,10 @@ pub(crate) fn read(path: &Path, args: &InputArgs, reporter: &mut Reporter) -> Op
         Err(message) => return fail(message),
     };
     let root = checked(&mut evaluation, &expected);
+    if let Some(schema) = &expected.schema {
+        let found = typed_binds(&sources, schema, &expected.options);
+        evaluation.diagnostics.extend(found);
+    }
     Some(Document {
         sources,
         evaluation,
@@ -103,6 +107,23 @@ fn checked(evaluation: &mut Evaluation, expected: &Expected) -> Option<String> {
         evaluation.diagnostics.extend(found);
     }
     root
+}
+
+/// What the schema finds wrong with the `#[type(...)]` binds of every
+/// document in `sources` (`SPEC.md` 6.1.2).
+pub(crate) fn typed_binds(
+    sources: &crol::Sources,
+    schema: &crol::schema::SchemaFile,
+    options: &crol::CheckOptions,
+) -> Vec<crol_eval::Diagnostic> {
+    let mut found = Vec::new();
+    for (file, source) in sources.files() {
+        let document = crol_syntax::parse(source.text()).document();
+        found.extend(crol::typed::check_document(
+            file, &document, schema, options,
+        ));
+    }
+    found
 }
 
 /// What a document is checked against: `--schema`, for a project or schema
