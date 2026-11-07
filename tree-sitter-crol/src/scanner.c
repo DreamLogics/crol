@@ -298,6 +298,10 @@ static bool at_entry_shape(TSLexer *lexer) {
       return lexer->lookahead == '"' || (is_identifier_char(lexer->lookahead) && !is_digit(lexer->lookahead));
     case '<':
       return skip_variant(lexer) && skip_inline_trivia(lexer) && lexer->lookahead == '{';
+    case '#':
+      // `#[type(...)]` before a value bind.
+      advance(lexer);
+      return skip_inline_trivia(lexer) && lexer->lookahead == '[';
     default:
       break;
   }

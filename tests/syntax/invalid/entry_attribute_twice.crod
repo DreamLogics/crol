@@ -1,0 +1,2 @@
+#[type(Vec<u8>)] #[type(u8)]
+x := 1

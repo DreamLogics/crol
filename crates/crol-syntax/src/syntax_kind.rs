@@ -49,6 +49,7 @@ pub enum SyntaxKind {
     R_ANGLE,
     COMMA,
     COLON,
+    SEMI,
     COLON2,
     COLON_EQ,
     DOT,
@@ -93,10 +94,15 @@ pub enum SyntaxKind {
     USE_ALIAS,
     /// `<A, B>` in a use path or type expression.
     TYPE_ARG_LIST,
-    /// A type expression: `u32`, `List(String)`, `app::Pair<A, B>`.
+    /// A type expression: `u32`, `app::Pair<A, B>`, `[T; 3]`, `(A, B)`
+    /// (`SPEC.md` 6.1.2).
     TYPE_EXPR,
-    /// `(A, B)` after a type expression's name.
-    TYPE_PAREN_LIST,
+    /// `#[type(...)]` before a value bind.
+    ENTRY_ATTR,
+    /// A type expression and the steps into it: `Foo.bar.[]`.
+    TYPE_REF,
+    /// `.field`, `.0` or `.[]` in a type reference.
+    TYPE_STEP,
 
     /// `target: expr`, `+target: expr` or `?target: expr`, optionally bound.
     ENTRY,
@@ -260,6 +266,7 @@ const KINDS: [SyntaxKind; __LAST as usize] = [
     R_ANGLE,
     COMMA,
     COLON,
+    SEMI,
     COLON2,
     COLON_EQ,
     DOT,
@@ -291,7 +298,9 @@ const KINDS: [SyntaxKind; __LAST as usize] = [
     USE_ALIAS,
     TYPE_ARG_LIST,
     TYPE_EXPR,
-    TYPE_PAREN_LIST,
+    ENTRY_ATTR,
+    TYPE_REF,
+    TYPE_STEP,
     ENTRY,
     REMOVE_ENTRY,
     VALUE_BIND,

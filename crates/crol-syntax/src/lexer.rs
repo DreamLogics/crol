@@ -177,6 +177,7 @@ impl Lexer<'_> {
             '?' => QUESTION,
             '=' => EQ,
             '#' => POUND,
+            ';' => SEMI,
             '!' => BANG,
             c => {
                 self.error(

@@ -248,9 +248,9 @@ fn variant_blocks() {
 #[test]
 fn attributes() {
     check(
-        "#![use(a::B,c::D<u32,List(String)>as E)]\n#![schema( \"crate:app\" )]\n\nx:1",
+        "#![use(a::B,c::D<u32,Vec<String>>as E)]\n#![schema( \"crate:app\" )]\n\nx:1",
         expect![[r##"
-            #![use(a::B, c::D<u32, List(String)> as E)]
+            #![use(a::B, c::D<u32, Vec<String>> as E)]
             #![schema("crate:app")]
 
             x: 1
@@ -685,11 +685,11 @@ fn a_comment_beside_a_sole_argument_keeps_it_on_its_own_line() {
 fn long_use_attributes_break_one_path_per_line() {
     check_with(
         &FormatConfig::default().with_max_width(30),
-        "#![use(a::B, c::D<u32, List(String)> as E, f::G)]\n#![use(a::B,)]\n#![use(\n a::B,\n c::D,\n)]\n#![schema(\"crate:some_long_name_here@0.1\")]\n\nx: 1",
+        "#![use(a::B, c::D<u32, Vec<String>> as E, f::G)]\n#![use(a::B,)]\n#![use(\n a::B,\n c::D,\n)]\n#![schema(\"crate:some_long_name_here@0.1\")]\n\nx: 1",
         expect![[r##"
             #![use(
                 a::B,
-                c::D<u32, List(String)> as E,
+                c::D<u32, Vec<String>> as E,
                 f::G,
             )]
             #![use(a::B)]
@@ -712,5 +712,25 @@ fn crlf_and_block_comments_separate_too() {
             y */
             d: 4
         "#]],
+    );
+}
+
+#[test]
+fn entry_attributes() {
+    check(
+        "#[type( Foo . c . [ ] . 0 )] item := { a: 1 }\n\
+         #[type(HashMap<String,[i32;3]>)]\nm := {}\n\
+         web: { #[type((u8,String))] t := (1, \"a\"), x: &t }",
+        expect![[r##"
+            #[type(Foo.c.[].0)]
+            item := { a: 1 }
+            #[type(HashMap<String, [i32; 3]>)]
+            m := {}
+            web: {
+                #[type((u8, String))]
+                t := (1, "a"),
+                x: &t,
+            }
+        "##]],
     );
 }

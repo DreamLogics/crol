@@ -3,7 +3,7 @@
 
 ; Operators and punctuation.
 ["+" "-" "*" "/" "%" "~" "~^" "|" "^" "&" "!" "?" ":=" "=" ".."] @operator
-[":" "," "." "::"] @punctuation.delimiter
+[":" ";" "," "." "::"] @punctuation.delimiter
 ["{" "}" "[" "]" "(" ")"] @punctuation.bracket
 ["use" "schema" "type" "extends" "as" "super"] @keyword
 
@@ -26,6 +26,8 @@
 (key (string) @variable.other.member)
 (field_selector name: (identifier) @variable.other.member)
 (index_selector index: (tuple_index) @variable.other.member)
+(type_step name: (identifier) @variable.other.member)
+(type_step index: (tuple_index) @variable.other.member)
 
 ; Type names, variants and constructors.
 (block type: (identifier) @type)
@@ -49,3 +51,4 @@
 
 ; Attributes.
 (attribute ["#" "!"] @punctuation.special)
+(entry_attr "#" @punctuation.special)
