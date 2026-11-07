@@ -25,7 +25,7 @@ use crate::value::Key;
 const MAGIC: &[u8; 4] = b"CROB";
 
 /// The version of the format: files of another are refused, and made again.
-pub const FORMAT: u32 = 3;
+pub const FORMAT: u32 = 4;
 
 /// The magic, the format, the hash of the rest of the file, the hash of the
 /// documents and the size of what is compressed.
@@ -376,6 +376,11 @@ pub(crate) fn write_lowered(lowered: &LoweredData, files: &[FileId]) -> Vec<u8> 
         w.option(defaults.condition.as_ref(), Writer::condition);
         w.span(defaults.span);
     });
+    w.list(&lowered.declared, |w, declared| {
+        w.string(&declared.group);
+        w.string(&declared.name);
+        w.span(declared.span);
+    });
     let body = std::mem::take(&mut w.out);
     let strings: Vec<Arc<str>> = w.strings.iter().cloned().collect();
     w.list(&strings, |w, s| {
@@ -509,6 +514,7 @@ pub(crate) struct Part {
     pub(crate) ops: Vec<RootOp>,
     pub(crate) templates: Vec<BindId>,
     pub(crate) root_defaults: Vec<RootDefaults>,
+    pub(crate) declared: Vec<DeclaredVariant>,
 }
 
 struct Reader<'a> {
@@ -877,6 +883,12 @@ fn read_part(r: &mut Reader<'_>, ir: &mut Ir) -> Read<Part> {
         let span = r.span()?;
         Ok(RootDefaults { condition, span })
     })?;
+    let declared = r.list(|r| {
+        let group = r.string()?;
+        let name = r.string()?;
+        let span = r.span()?;
+        Ok(DeclaredVariant { group, name, span })
+    })?;
     if r.at != r.data.len() {
         return Err(Corrupt);
     }
@@ -896,6 +908,7 @@ fn read_part(r: &mut Reader<'_>, ir: &mut Ir) -> Read<Part> {
         ops,
         templates,
         root_defaults,
+        declared,
     })
 }
 

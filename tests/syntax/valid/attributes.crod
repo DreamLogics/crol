@@ -2,5 +2,6 @@
 #![schema("crate:app@2.1")]
 #![extends(super::super::defaults::services)]
 #![type(Config)]
+#![variant(civ: empire)]
 
 port := 8080,

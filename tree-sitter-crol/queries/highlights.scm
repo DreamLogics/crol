@@ -36,7 +36,7 @@
 
 ; Attributes.
 (attribute ["#" "!"] @punctuation.special)
-["use" "schema" "type" "extends" "as" "super"] @keyword
+["use" "schema" "type" "extends" "variant" "as" "super"] @keyword
 
 ; Operators and punctuation.
 ["+" "-" "*" "/" "%" "~" "~^" "|" "^" "&" "!" "?" ":=" "=" ".."] @operator

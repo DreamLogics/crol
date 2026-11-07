@@ -62,7 +62,7 @@ pub(crate) fn no_contexts(path: &Path, flag: &str, reporter: &mut Reporter) -> b
 /// error.
 pub(crate) fn read(path: &Path, args: &InputArgs, reporter: &mut Reporter) -> Option<Document> {
     if args.declares_variants() {
-        no_contexts(path, "--discrete, --group, --parent", reporter);
+        no_contexts(path, "--discrete, --group, --open, --parent", reporter);
         return None;
     }
     let mut fail = |message: String| {

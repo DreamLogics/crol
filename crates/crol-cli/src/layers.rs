@@ -22,6 +22,11 @@ pub(crate) struct InputArgs {
     #[arg(long, value_name = "NAMES")]
     group: Vec<String>,
 
+    /// Open a group that data adds to with `#![variant(group: name)]`:
+    /// `--open civ`. Repeatable.
+    #[arg(long, value_name = "GROUP")]
+    open: Vec<String>,
+
     /// Give a variant a parent: `--parent prod_eu=prod`. Repeatable.
     #[arg(long, value_name = "CHILD=PARENT")]
     parent: Vec<String>,
@@ -58,13 +63,19 @@ impl InputArgs {
     }
 
     pub(crate) fn declares_variants(&self) -> bool {
-        !self.discrete.is_empty() || !self.group.is_empty() || !self.parent.is_empty()
+        !self.discrete.is_empty()
+            || !self.group.is_empty()
+            || !self.open.is_empty()
+            || !self.parent.is_empty()
     }
 
     fn variants(&self) -> Result<Variants, String> {
         let mut variants = Variants::new();
         for group in &self.group {
             variants.add_grouped(group.split(','))?;
+        }
+        for group in &self.open {
+            variants.add_open_group(group)?;
         }
         for name in &self.discrete {
             variants.add_discrete(name)?;
@@ -243,7 +254,6 @@ pub(crate) fn inputs(
     if let Some(project) = &project {
         let project_options = &project.options;
         options = options
-            .with_warn_cross_file_patches(project_options.warn_cross_file_patches)
             .with_init_defaults(project_options.init_defaults)
             .with_each_variant(project_options.each_variant)
             .with_max_contexts(project_options.max_contexts)

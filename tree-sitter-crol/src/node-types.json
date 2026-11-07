@@ -108,6 +108,10 @@
         {
           "type": "use_attr",
           "named": true
+        },
+        {
+          "type": "variant_attr",
+          "named": true
         }
       ]
     }
@@ -1536,6 +1540,32 @@
     }
   },
   {
+    "type": "variant_attr",
+    "named": true,
+    "fields": {
+      "group": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "variant_block",
     "named": true,
     "fields": {
@@ -1765,6 +1795,10 @@
   },
   {
     "type": "use",
+    "named": false
+  },
+  {
+    "type": "variant",
     "named": false
   },
   {

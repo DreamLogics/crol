@@ -70,7 +70,7 @@ module.exports = grammar({
 
     attribute: $ => seq(
       '#', token.immediate('!'), '[',
-      choice($.use_attr, $.schema_attr, $.type_attr, $.extends_attr),
+      choice($.use_attr, $.schema_attr, $.type_attr, $.extends_attr, $.variant_attr),
       ']',
     ),
 
@@ -91,6 +91,9 @@ module.exports = grammar({
     schema_attr: $ => seq('schema', '(', choice($.string, $.raw_string, $.module_path), ')'),
     type_attr: $ => seq('type', '(', field('name', $.identifier), ')'),
     extends_attr: $ => seq('extends', '(', $.module_path, ')'),
+    variant_attr: $ => seq(
+      'variant', '(', field('group', $.identifier), ':', field('name', $.identifier), ')',
+    ),
 
     module_path: $ => seq(
       choice('::', repeat(seq('super', '::'))),

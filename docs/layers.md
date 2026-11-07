@@ -137,8 +137,8 @@ Service { replicas: 2, port: 9090, tags: ["managed", "cached"], image: "web:1.4"
 - **Anything else**, through a [file loader](recipes.md#loading-documents-from-somewhere-else)
   of your own.
 
-Within a layer, documents are read in order of their path, compared byte by
-byte, so the order is the same on every platform.
+Within a layer, documents are read [folder by folder](#the-order-of-files-in-a-layer),
+so the order is the same on every platform.
 
 `CrolComposer::load` takes either kind of path:
 
@@ -157,8 +157,9 @@ Every entry at the top level is one of two things:
   like `-web`, or a set that uses `&`, like `web: & ~ { ... }`.
 
 For each root key, CROL builds a chain of these operations. Within a layer,
-the definition comes first, and then the patches, in file order. Layers follow
-each other in load order. Then the chain runs from the bottom up.
+the definition comes first, and then the patches, in
+[file order](#the-order-of-files-in-a-layer). Layers follow each other in load
+order. Then the chain runs from the bottom up.
 
 Two rules follow from that:
 
@@ -190,13 +191,77 @@ error: `web` is defined twice in the layer `twice`; a layer may define a key onc
   │  --- the other definition
 ```
 
-**Patches from different files of one layer get a warning.** They are allowed,
-but their order depends on file names, and renaming a file would change the
-result. Move them into one file, or into separate layers. If you know what you
-are doing, turn the warning off with `CrolConfig::warn_cross_file_patches`.
-Patches that are never in doubt do not warn: `<rebel>` in one file and `<empire>`
-in another, when those variants are in one group, or a base patch in one file and
-a conditional one in another, which always comes after it.
+**Patches from different files of one layer need an order.** If only the file
+names would decide which applies first, it is an error, since renaming a file
+would change the result. The next section shows how to give them one.
+
+## The order of files in a layer
+
+Within a layer, the files of a folder come before the files of its subfolders.
+A file deeper down can patch what the files above it set:
+
+```text
+units/bomber.crod            the bomber, for everyone
+units/empire/bomber.crod     the empire's changes to it
+units/rebels/bomber.crod     the rebels' changes to it
+```
+
+`units/empire/bomber.crod` and `units/rebels/bomber.crod` are side by side, so
+nothing but their names orders them. They may both patch `bomber` as long as
+their patches never meet: under `<empire>` and `<rebel>`, with those variants
+[in one group](variants.md#declaring-variants), they never apply together. A base patch and a
+conditional one never meet either, because the conditional one always comes
+after.
+
+When two patches of one key do meet, and only the names of their files order
+them, it is an error:
+
+```crol
+// shop/web.crod
++web: { port: 80, workers: 2 }
+```
+
+```crol
+// shop/tuning.crod
+web.workers: & * 2
+```
+
+```crol
+// shop/local.crod
+web.workers: & + 1
+```
+
+```console
+$ crol check shop
+error: `web` is patched from `local.crod` and `tuning.crod` of the layer `shop`, and only their names put the patches in order; put one in a folder below the other's, or name the other in its `#![extends(...)]`
+  ┌─ /path/to/project/shop/tuning.crod:1:1
+  │
+1 │ web.workers: & * 2
+  │ ^^^^^^^^^^^
+  │
+  ┌─ /path/to/project/shop/local.crod:1:1
+  │
+1 │ web.workers: & + 1
+  │ ----------- the other patch
+```
+
+There are two ways to fix it. Move `local.crod` into a folder, as
+`shop/local/workers.crod`, so it comes after the files above it. Or keep it where
+it is, and say what it builds on:
+
+```crol
+// shop/local.crod
+#![extends(tuning)]
+
+web.workers: & + 1
+```
+
+Either way `tuning.crod` comes first, and `workers` is 5. An `extends` that
+names a file or folder of the same layer orders the layer, and loads nothing:
+at the deepest folder that holds both files, the one it names comes first, with
+everything below it. A folder still comes after the files beside it, so an
+`extends` cannot put a folder first, and `extends` that go round in a circle are
+an error.
 
 ## Early and late references
 
@@ -278,7 +343,8 @@ web: { replicas: 4 }
 ```
 
 The path is a [module path](projects.md#module-paths), and the file or
-directory it names is loaded as a layer below this one.
+directory it names is loaded as a layer below this one. One in the same layer
+[orders that layer](#the-order-of-files-in-a-layer) instead.
 
 `extends` only adds layers below. It is not an import, and it makes nothing
 visible that layering would not. `crol` commands and the language server always

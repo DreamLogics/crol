@@ -30,6 +30,9 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   the same to both. `View` leaves other `crol` attributes to their derives.
 - `ExplainStep::uses_below`, and `crol_eval::uses_value_below`, say whether an
   operation uses the value below it.
+- Open groups: `CrolVariants::add_open_group("civ")` (`Open("civ")` in a project file,
+  `--open civ` on the command line) opens a group of alternatives that data declares,
+  each with `#![variant(civ: empire)]`, for variants that only the data knows.
 
 ### Fixed
 
@@ -41,7 +44,19 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Changed
 
-- `.crob` files are format 3, for `!`; compile layers again.
+- `.crob` files are format 4, for `!`, the order of documents and the `variant`
+  attribute; compile layers again.
+- The documents of a layer are in folder order: a folder's own documents come before
+  those of its subfolders, and an `#![extends(...)]` that names a document or folder of
+  the same layer puts it first; otherwise they go by name. Root keys can come in another
+  order, which changes fingerprints.
+- Patches to one key from two documents of a layer are an error, not a warning, when
+  only the documents' names order them and the patches can apply together. That is
+  checked for every valid context, not only those evaluated, so declare variants that
+  exclude each other as one group, or let the data declare them in an open group.
+- `Variant` has a third case, `Open`, so a `match` on it needs another arm.
+- With `load_extends`, an `extends` that names documents of its own layer orders them,
+  and no longer loads them again as a layer below.
 - `reload`, and a read after a write in a transaction, take about half the time from
   the second one on: a text layer that did not change is lowered once and not parsed
   again, as a `.crob` layer is. `CrolConfig::keep_lowered: false` turns this off.
@@ -57,6 +72,11 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   what differs from the base, on threads, and a directory is read without looking at each
   file in it. Documents are not parsed to find attributes they do not have.
 
+
+### Removed
+
+- `CrolConfig::warn_cross_file_patches`, `DataOptions::warn_cross_file_patches` and the
+  project option `warn_cross_file_patches`: what they turned off is an error now.
 ## [0.1.0] - 2026-11-05
 
 The first release, with the format as `SPEC.md` describes it:

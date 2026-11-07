@@ -905,8 +905,8 @@ fn attribute_errors() {
               R_PAREN@37..38 ")"
             R_BRACK@38..39 "]"
         error 1..1: expected `!` after `#`: attributes are written `#![...]`
-        error 2..8: unknown attribute `derive`; the attributes are `use`, `schema`, `type` and `extends`
-        error 16..20: unknown attribute `nope`; the attributes are `use`, `schema`, `type` and `extends`
+        error 2..8: unknown attribute `derive`; the attributes are `use`, `schema`, `type`, `extends` and `variant`
+        error 16..20: unknown attribute `nope`; the attributes are `use`, `schema`, `type`, `extends` and `variant`
         error 28..29: attributes must come before the first entry
     "##]],
     );

@@ -365,7 +365,6 @@ that out when you do not set `variants`.
 | `implicit_some`           | `true`             | accept `x` for an `Option`, as `Some(x)`                     |
 | `allow_unknown_fields`    | `false`            | ignore fields a struct does not have                         |
 | `require_complete`        | `true`             | require every field of a struct without `..`, unless the [type decides](#types-that-decide-for-themselves) |
-| `warn_cross_file_patches` | `true`             | warn about [patches from several files](layers.md#definitions-and-patches) of a layer |
 | `keep_lowered`            | `true`             | keep what layers lower to, so that `reload` need not parse them; off takes less memory |
 | `init_defaults`           | `false`            | let a path go through a field left out, from its default; needs a [schema](schemas.md#using-default) |
 

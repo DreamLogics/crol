@@ -1,0 +1,4 @@
+#![variant(civ: rebels)]
+
+bomber<rebels>.hp: & * 2,
+bomber<rebels & hard>.hp: & * 2,

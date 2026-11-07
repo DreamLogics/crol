@@ -149,9 +149,7 @@ fn main() {
 
     let mut variants = Variants::new();
     variants.add_grouped(CIVS).unwrap();
-    let options = DataOptions::default()
-        .with_variants(variants)
-        .with_warn_cross_file_patches(false);
+    let options = DataOptions::default().with_variants(variants);
     let start = Instant::now();
     let evaluation = evaluate_compiled(&compiled, &options);
     println!(

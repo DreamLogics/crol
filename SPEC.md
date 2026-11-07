@@ -385,10 +385,10 @@ listener: Config { port: 8080 },
 database: DbConfig { url: "postgres://db" },
 ```
 
-There are four attributes, `use`, `schema`, `type` and `extends`; any
-other is an error, so that others can be added later. Several `use` and
-`extends` attributes, and several paths in one `use`, are allowed; the
-others appear at most once. Attributes apply in both data and
+There are five attributes, `use`, `schema`, `type`, `extends` and
+`variant`; any other is an error, so that others can be added later.
+Several `use`, `extends` and `variant` attributes, and several paths in
+one `use`, are allowed; the others appear at most once. Attributes apply in both data and
 value mode, to the whole document.
 
 **`use(path)`** says which schema type a type name in this document
@@ -543,6 +543,11 @@ web.replicas: 4,
   once, and a directory that holds documents loaded before it leaves them
   out. A layer the application or the command line names itself is not
   loaded for an `extends`, and stays whole. A cycle is an error.
+- **Within a layer**, an `extends` whose module path, read from the
+  document's directory without leaving the layer, names documents of the
+  same layer orders them: they come first (section 7.1). This holds
+  whatever the loader does with `extends`, and loads nothing; a path from
+  the root directory (`::`) is always a layer below.
 - **Tools** always follow it: they evaluate the document on top of those
   layers, so the editor shows the values below, the merged results, and
   the templates and keys the document can use. Diagnostics in extended
@@ -557,12 +562,27 @@ web.replicas: 4,
   layering does not.
 - It is an error in value mode, which has no layers.
 - In a project, the project file's layers take precedence; tools warn
-  when an `extends` names something that is not a lower layer.
+  when an `extends` names something that is neither a lower layer nor in
+  the document's own layer.
+
+**`variant(group: name)`** declares a variant of the data: it adds `name`
+to the group `group`, which the application has opened (section 8.1):
+
+```rust
+#![variant(civ: empire)]
+
+bomber<empire>.hp: & + 2,
+```
+
+Variants are declared before anything is evaluated, from every document
+of every layer, so a document can use a variant that a layer above it
+declares. It is an error in value mode, which has no variants.
 
 Errors: two `use`s that give one name to different types; an alias that
 is a reserved word; more than one `schema` or `type`; `type` in data
-mode, on a document that has a type name, or on an expression; `extends` in value mode; a
-cycle of `extends`; an attribute after the first entry or expression.
+mode, on a document that has a type name, or on an expression; `extends`
+or `variant` in value mode; a cycle of `extends`; an attribute after the
+first entry or expression.
 
 ### 4.2 Module paths
 
@@ -1269,9 +1289,29 @@ after what it was given (`::data::base`, `data/local`). With
 (section 4.1) are loaded before it, as layers of their own, in document
 order.
 
-Documents in a layer are ordered by relative path, comparing the UTF-8
-bytes, and the first in this order with a wrong extension is the one
-reported. Two documents with the same path in one layer are an error.
+Documents in a layer are in **folder order**:
+
+- A folder's own documents come before those of its subfolders, at any
+  depth.
+- Among the documents of one folder, and among its subfolders, an
+  `#![extends(...)]` that names documents of the same layer (section 4.1)
+  puts them first: at the deepest folder that holds both, the document or
+  subfolder that holds what is named comes before the one that holds the
+  document with the `extends`.
+- Otherwise documents, and subfolders, go by name, comparing the UTF-8
+  bytes.
+
+So `units/bomber.crod` comes before `units/empire/bomber.crod` and
+`units/rebels/bomber.crod`, and those two by name, unless one extends the
+other. Two documents are **in order** when one is in a folder that holds
+the other's, or `extends` puts one before the other, directly or through
+others; the order of names alone does not count (section 7.2).
+
+Errors: `extends` that put documents or subfolders of one folder in a
+cycle; an `extends` that names the folder holding its document, or puts a
+subfolder before a document of the folder; two documents with the same path
+in one layer. Of several paths with a wrong extension, the first by name is
+the one reported.
 
 ### 7.2 Chains
 
@@ -1298,13 +1338,15 @@ Within one layer, a chain's operations are ordered:
 
 Layers then follow each other in load order. A layer may hold at most
 one definition per chain: two, in one file or in two, are an error
-naming both. The loader warns (a *warning*, not an error) when patches
-to one root key from more than one document of one layer meet in a context
-that is evaluated, as base operations or with conditions of one specificity
-(section 8.3), since their order then depends on file names. Patches under
-conditions that never hold together in those contexts, or that specificity
-puts in order, do not warn. `CrolConfig::warn_cross_file_patches` turns this
-off.
+naming both. Patches to one root key from two documents of one layer
+that are not in order (section 7.1) are an error, naming both, when they
+meet: both are base operations, or conditional ones of one specificity
+(section 8.3), and their conditions can hold together in a valid context
+(where the variants make more than 65,536, in an evaluated one). Their
+order would depend on the names of the files. Put one in a folder below the
+other's, have one `extends` the other, or give them conditions that never
+hold together: declare the variants that exclude each other as one group
+(section 8.1), as `Discrete` variants can all hold at once.
 
 These rules order the base operations, and the conditional operations
 within one specificity (section 8.3). For definitions, conditional
@@ -1509,12 +1551,14 @@ that are active.
 
 ### 8.1 Declaring variants
 
-Only the application declares variants; data cannot add or change them.
+The application declares variants. Data can only add alternatives to a
+group the application opens for it.
 
 ```rust
 pub enum Variant<T = String> {
     Discrete(T),       // a flag: on or off, independent of the rest
     Grouped(Vec<T>),   // alternatives: at most one of them is active
+    Open(String),      // a group, named, whose alternatives data declares
 }
 ```
 
@@ -1537,8 +1581,16 @@ let variants = CrolVariants::new()
   `Discrete`, or be in the same group; in a group, an active variant's
   ancestors do not count against "at most one". A cycle among parents is
   an error.
-- If no variants are declared, every name the data uses in a selector
-  (and that `T` accepts) is a `Discrete` with no parent.
+- **Open groups.** `add_open_group("civ")` opens a group, at first
+  empty, for alternatives that only the data knows, such as the factions
+  of a game that mods add to. A document adds to it with
+  `#![variant(civ: empire)]` (section 4.1). Declaring a variant again in
+  the same group does nothing; it is an error to name a group that is not
+  open, or a variant the application or another group already has. Open
+  groups are for variants named by strings, `CrolVariants<String>`.
+- If no variants are declared and no group is open, every name the data
+  uses in a selector (and that `T` accepts) is a `Discrete` with no
+  parent. A `variant` attribute is then an error.
 
 **Typed variants.** `T` is `String` by default. An application may use
 its own type instead, so that the variants it passes are checked by the
@@ -2209,9 +2261,8 @@ let config: Config = CrolComposer::new()
   Its name is held to section 4 as a file's is, whichever loader gave it:
   one ending in `.crol` cannot be a layer's document, and one ending in
   `.crod` cannot be read as a value document. A name with no recognised extension follows the API that loaded it.
-- Documents of a `Directory` are ordered by relative path, whatever order
-  the loader lists them in (section 7.1), so its order cannot change
-  the result. Relative paths use `/`; one with an empty, `.` or `..`
+- Documents of a `Directory` are put in the order of section 7.1, whatever
+  order the loader lists them in, so its order cannot change the result. Relative paths use `/`; one with an empty, `.` or `..`
   component is an error, and so is listing a directory as a document.
   What a directory holds is up to the loader: section 7.1's rules are
   `FsLoader`'s, except that what it lists is held to section 4.
@@ -2252,7 +2303,6 @@ are fetched to a cache and read from there.
 | `implicit_some: bool` | `true` | 10.1 |
 | `allow_unknown_fields: bool` | `false` | 10.2 |
 | `require_complete: bool` | `true` | 10.2 |
-| `warn_cross_file_patches: bool` | `true` | 7.2 |
 | `keep_lowered: bool` | `true` | 7.8 |
 | `init_defaults: bool` | `false` | 5.1 |
 
@@ -2877,7 +2927,7 @@ has to load it.
 | `crol --init`, `crol init` | set up the Cargo project around the working directory for CROL (below) |
 | `crol lsp` | run the language server on standard input and output (section 12.5) |
 
-Common flags: `--discrete a,b`, `--group a,b,c` (repeatable), `--parent child=parent`, `--color auto|always|never`,
+Common flags: `--discrete a,b`, `--group a,b,c` (repeatable), `--open civ` (repeatable), `--parent child=parent`, `--color auto|always|never`,
 `--message-format human|json`, `--project <file>`, `--schema <file>`,
 `--offline` (section 4.1).
 Without layer arguments, every command that needs layers reads them, with
@@ -3391,11 +3441,16 @@ these (section 4).
 entry, or more than one `schema` or `type`; `type` in data mode, with a
 top-level type name, or on an expression; an alias that is a reserved
 word; a spread at the data-mode root, or a data-mode document
-that is not entries; `extends` in value mode; a `schema` string that
+that is not entries; `extends` or `variant` in value mode; a `schema` string that
 is not a URL or crate; a module path that names nothing, both a file and
 a directory, or goes above the root directory; a file loader that fails,
 or lists a path that is not relative or a directory as a document (10.7);
-a cycle of `extends`; two `use`s giving one name to different types; two definitions of a key under one condition in one layer;
+a `variant` that names a group that is not open, or a variant
+declared already outside that group;
+a cycle of `extends`, or one that names the folder holding its document
+or puts a subfolder before a document of the folder (7.1); two `use`s giving one name to different types; two definitions of a key under one condition in one layer;
+patches to one key from two documents of a layer that are not in order and
+meet (7.2);
 a variant entry in a block without a fixed location; an unknown variant;
 a condition that can never hold; `|`, `^`, `+` or parentheses in a
 reference's variant selector; a `+` list inside a condition;
@@ -3416,8 +3471,9 @@ type names; `.0` on a keyed value; an
 integer key at the root; a spread of something that is not keyed; `&self`, `&parent` or a bind in a block
 without a location; `&parent` above the top level; a cycle.
 
-**Composer**: `with_variant` with an undeclared variant or a second
-choice in a group; more contexts than `max_contexts` without
+**Composer**: `with_variant` with an undeclared variant (when no group
+is open; with one, a variant the data does not declare either is an error
+when composing) or a second choice in a group; more contexts than `max_contexts` without
 `contexts`; an invalid or unevaluated context in `contexts` or
 `CrolData::context`; variants declared twice; a parent cycle, or a parent
 of another kind or group.
@@ -3429,9 +3485,9 @@ out of range; a plain string where `crol::Id` is required; variant key
 rules (8.5). And the application's own checks, such as ids naming
 nothing.
 
-**Warnings**: patches to one key from several documents of one layer.
-In tools also: a document whose `schema` differs from the project's,
-and an `extends` naming something that is not a lower layer.
+**Warnings**, in tools: a document whose `schema` differs from the
+project's, and an `extends` naming something that is neither a lower layer
+nor in the document's own layer.
 
 ---
 
