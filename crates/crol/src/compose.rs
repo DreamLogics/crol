@@ -174,9 +174,6 @@ pub struct CrolConfig<T = String> {
     /// [`CrolComposer::schema`], comes first (`SPEC.md` 10.3).
     /// Default: `true`.
     pub require_complete: bool,
-    /// Warn when one key is patched from several documents of one layer.
-    /// Default: `true`.
-    pub warn_cross_file_patches: bool,
     /// Let a path go through a field left out, from its default. Needs a
     /// [schema](CrolComposer::schema) (`SPEC.md` 5.1).
     pub init_defaults: bool,
@@ -203,7 +200,6 @@ impl<T> Default for CrolConfig<T> {
             implicit_some: true,
             allow_unknown_fields: false,
             require_complete: true,
-            warn_cross_file_patches: true,
             init_defaults: false,
             keep_lowered: true,
         }
@@ -706,6 +702,10 @@ impl<T: VariantName> CrolComposer<T> {
             documents.sort_by(|a, b| a.relative.cmp(&b.relative));
             for document in documents {
                 for (path, range) in extends_attributes(&document.text) {
+                    // What is in the layer is put in order there, not loaded.
+                    if names_in_layer(&layer, document, &path) {
+                        continue;
+                    }
                     let start = self.layers.len();
                     // The document with this `extends` alone, so that `add`
                     // follows it as it follows any other, and its failure
@@ -809,6 +809,11 @@ impl<T: VariantName> CrolComposer<T> {
                     continue;
                 }
                 for module_path in extends_of(&document.text) {
+                    // What is in the layer is put in order there (`SPEC.md`
+                    // 7.1), not loaded below it.
+                    if names_in_layer(&layer, document, &module_path) {
+                        continue;
+                    }
                     let resolved = self.config.file_loaders.resolve_from(
                         &module_path,
                         &self.config.root_path,
@@ -968,7 +973,6 @@ impl<T: VariantName> CrolComposer<T> {
             }
         };
         let options = DataOptions::default()
-            .with_warn_cross_file_patches(self.config.warn_cross_file_patches)
             .with_init_defaults(self.config.init_defaults)
             .with_variants(variants)
             .with_contexts(contexts)
@@ -1041,6 +1045,13 @@ fn compile_lowered(
 ) -> (Option<Compiled>, Vec<Diagnostic>) {
     let bytes: Vec<Option<&[u8]>> = lowered.iter().map(|l| l.as_deref()).collect();
     crol_eval::compile_binary(sources, layers, &bytes)
+}
+
+/// Whether an `extends` in `document` names documents of its own `layer`,
+/// which it then puts in order rather than loads (`SPEC.md` 4.1).
+fn names_in_layer(layer: &CrolLayer, document: &Document, module_path: &str) -> bool {
+    let paths = layer.documents.iter().map(|d| d.relative.as_str());
+    crol_eval::layer_target(paths, &document.relative, module_path).is_some()
 }
 
 /// The module paths a document's `#![extends(...)]` attributes name.
@@ -1289,11 +1300,7 @@ impl<T: VariantName> CrolData<T> {
             .into_iter()
             .map(str::to_owned)
             .collect();
-        let options = self
-            .data_options
-            .clone()
-            .with_contexts(Some(vec![names]))
-            .with_warn_cross_file_patches(false);
+        let options = self.data_options.clone().with_contexts(Some(vec![names]));
         let evaluation = evaluate_contexts(&self.compiled, &options, &self.base);
         if evaluation.has_errors() {
             return Err(Error::from_diagnostics(

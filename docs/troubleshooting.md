@@ -40,6 +40,27 @@ possibly in two files. Keep one, or make the second a
 [patch](layers.md#definitions-and-patches): `web.port: 81`, or
 `web: & ~ { port: 81 }`.
 
+**`` `web` is patched from `local.crod` and `tuning.crod` of the layer `base`, and only their names put the patches in order ``**
+
+Both files patch `web`, the patches can apply together, and nothing but the
+file names says which comes first, so renaming a file would change the result.
+Move one file into a folder below the other's, or name the other in its
+`#![extends(...)]`: see [the order of files in a layer](layers.md#the-order-of-files-in-a-layer).
+If the patches have conditions that should never hold together, such as
+`<empire>` and `<rebel>`, declare those variants as [one group](variants.md#declaring-variants):
+undeclared variants are discrete, and can all be active at once.
+
+**`` these `extends` put documents of one folder in a cycle ``**
+
+`a.crod` extends `b`, and `b.crod` extends `a`, directly or through other files,
+so neither can come first. Remove one of the `extends`.
+
+**`` `extends` cannot put `sub/` before `c.crod`: a folder's documents come before its subfolders' ``**
+
+A folder's own files always come before its subfolders, so an `extends` cannot
+reverse that. Move `c.crod` into a subfolder of its own, or the files of `sub/`
+up a level.
+
 **`` expected `,` or a line break between entries ``**
 
 Two entries on one line need a comma between them, or put each on its own line.
@@ -287,17 +308,6 @@ or `#![schema(...)]`. A value-mode document never has defaults. See
 fetching, a crate has to be in your own Cargo workspace, among its dependencies,
 or in Cargo's registry cache.
 
-## Warnings
-
-**`` `web` is patched from 2 documents of the layer `base`, so the order of the patches depends on the file names ``**
-
-The result would change if a file were renamed. Move the patches into one file,
-or into separate layers. `CrolConfig::warn_cross_file_patches` turns the warning
-off in your program, and `warn_cross_file_patches: false` in the project file's
-`options` does so for tools.
-
-`compose` drops warnings. Use `compose_data` and `warnings()` if you want to log
-them.
 
 ## In your editor
 

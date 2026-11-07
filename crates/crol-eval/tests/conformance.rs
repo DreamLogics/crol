@@ -8,7 +8,7 @@
 //! - `options.crol` (optional): options, as a value-mode document:
 //!   `variants: [Grouped(["dev", "prod"]), Discrete("cache")]`, `parents: {
 //!   prod_eu: "prod" }`, `contexts: [["prod", "cache"]]`, `variant_keys:
-//!   NoNewKeys`, `max_contexts: 16`, `warn_cross_file_patches: false`, and
+//!   NoNewKeys`, `max_contexts: 16`, and
 //!   `schema: "services"` for `crol`'s test of the schema checks;
 //! - `expected.crod`: the evaluated data as `crol eval --all-contexts`
 //!   prints it, if evaluation succeeds;
@@ -87,7 +87,6 @@ fn options(case: &Path) -> DataOptions {
             panic!("integer key in options.crol")
         };
         match (&*key, &value.kind) {
-            ("warn_cross_file_patches", ValueKind::Bool(b)) => options.warn_cross_file_patches = *b,
             ("max_contexts", ValueKind::Int(i)) => options.max_contexts = *i as usize,
             ("variant_keys", ValueKind::UnitName(rule)) => {
                 options.variant_keys = match &**rule {

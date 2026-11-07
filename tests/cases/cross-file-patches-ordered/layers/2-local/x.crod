@@ -1,0 +1,4 @@
+#![extends(y)]
+
+// `extends` puts `y.crod` first.
+db.b: & * 10,

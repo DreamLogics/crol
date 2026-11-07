@@ -543,6 +543,11 @@ web.replicas: 4,
   once, and a directory that holds documents loaded before it leaves them
   out. A layer the application or the command line names itself is not
   loaded for an `extends`, and stays whole. A cycle is an error.
+- **Within a layer**, an `extends` whose module path, read from the
+  document's directory without leaving the layer, names documents of the
+  same layer orders them: they come first (section 7.1). This holds
+  whatever the loader does with `extends`, and loads nothing; a path from
+  the root directory (`::`) is always a layer below.
 - **Tools** always follow it: they evaluate the document on top of those
   layers, so the editor shows the values below, the merged results, and
   the templates and keys the document can use. Diagnostics in extended
@@ -557,7 +562,8 @@ web.replicas: 4,
   layering does not.
 - It is an error in value mode, which has no layers.
 - In a project, the project file's layers take precedence; tools warn
-  when an `extends` names something that is not a lower layer.
+  when an `extends` names something that is neither a lower layer nor in
+  the document's own layer.
 
 Errors: two `use`s that give one name to different types; an alias that
 is a reserved word; more than one `schema` or `type`; `type` in data
@@ -1269,9 +1275,29 @@ after what it was given (`::data::base`, `data/local`). With
 (section 4.1) are loaded before it, as layers of their own, in document
 order.
 
-Documents in a layer are ordered by relative path, comparing the UTF-8
-bytes, and the first in this order with a wrong extension is the one
-reported. Two documents with the same path in one layer are an error.
+Documents in a layer are in **folder order**:
+
+- A folder's own documents come before those of its subfolders, at any
+  depth.
+- Among the documents of one folder, and among its subfolders, an
+  `#![extends(...)]` that names documents of the same layer (section 4.1)
+  puts them first: at the deepest folder that holds both, the document or
+  subfolder that holds what is named comes before the one that holds the
+  document with the `extends`.
+- Otherwise documents, and subfolders, go by name, comparing the UTF-8
+  bytes.
+
+So `units/bomber.crod` comes before `units/empire/bomber.crod` and
+`units/rebels/bomber.crod`, and those two by name, unless one extends the
+other. Two documents are **in order** when one is in a folder that holds
+the other's, or `extends` puts one before the other, directly or through
+others; the order of names alone does not count (section 7.2).
+
+Errors: `extends` that put documents or subfolders of one folder in a
+cycle; an `extends` that names the folder holding its document, or puts a
+subfolder before a document of the folder; two documents with the same path
+in one layer. Of several paths with a wrong extension, the first by name is
+the one reported.
 
 ### 7.2 Chains
 
@@ -1298,13 +1324,15 @@ Within one layer, a chain's operations are ordered:
 
 Layers then follow each other in load order. A layer may hold at most
 one definition per chain: two, in one file or in two, are an error
-naming both. The loader warns (a *warning*, not an error) when patches
-to one root key from more than one document of one layer meet in a context
-that is evaluated, as base operations or with conditions of one specificity
-(section 8.3), since their order then depends on file names. Patches under
-conditions that never hold together in those contexts, or that specificity
-puts in order, do not warn. `CrolConfig::warn_cross_file_patches` turns this
-off.
+naming both. Patches to one root key from two documents of one layer
+that are not in order (section 7.1) are an error, naming both, when they
+meet: both are base operations, or conditional ones of one specificity
+(section 8.3), and their conditions can hold together in a valid context
+(where the variants make more than 65,536, in an evaluated one). Their
+order would depend on the names of the files. Put one in a folder below the
+other's, have one `extends` the other, or give them conditions that never
+hold together: declare the variants that exclude each other as one group
+(section 8.1), as `Discrete` variants can all hold at once.
 
 These rules order the base operations, and the conditional operations
 within one specificity (section 8.3). For definitions, conditional
@@ -2209,9 +2237,8 @@ let config: Config = CrolComposer::new()
   Its name is held to section 4 as a file's is, whichever loader gave it:
   one ending in `.crol` cannot be a layer's document, and one ending in
   `.crod` cannot be read as a value document. A name with no recognised extension follows the API that loaded it.
-- Documents of a `Directory` are ordered by relative path, whatever order
-  the loader lists them in (section 7.1), so its order cannot change
-  the result. Relative paths use `/`; one with an empty, `.` or `..`
+- Documents of a `Directory` are put in the order of section 7.1, whatever
+  order the loader lists them in, so its order cannot change the result. Relative paths use `/`; one with an empty, `.` or `..`
   component is an error, and so is listing a directory as a document.
   What a directory holds is up to the loader: section 7.1's rules are
   `FsLoader`'s, except that what it lists is held to section 4.
@@ -2252,7 +2279,6 @@ are fetched to a cache and read from there.
 | `implicit_some: bool` | `true` | 10.1 |
 | `allow_unknown_fields: bool` | `false` | 10.2 |
 | `require_complete: bool` | `true` | 10.2 |
-| `warn_cross_file_patches: bool` | `true` | 7.2 |
 | `keep_lowered: bool` | `true` | 7.8 |
 | `init_defaults: bool` | `false` | 5.1 |
 
@@ -3395,7 +3421,10 @@ that is not entries; `extends` in value mode; a `schema` string that
 is not a URL or crate; a module path that names nothing, both a file and
 a directory, or goes above the root directory; a file loader that fails,
 or lists a path that is not relative or a directory as a document (10.7);
-a cycle of `extends`; two `use`s giving one name to different types; two definitions of a key under one condition in one layer;
+a cycle of `extends`, or one that names the folder holding its document
+or puts a subfolder before a document of the folder (7.1); two `use`s giving one name to different types; two definitions of a key under one condition in one layer;
+patches to one key from two documents of a layer that are not in order and
+meet (7.2);
 a variant entry in a block without a fixed location; an unknown variant;
 a condition that can never hold; `|`, `^`, `+` or parentheses in a
 reference's variant selector; a `+` list inside a condition;
@@ -3429,9 +3458,9 @@ out of range; a plain string where `crol::Id` is required; variant key
 rules (8.5). And the application's own checks, such as ids naming
 nothing.
 
-**Warnings**: patches to one key from several documents of one layer.
-In tools also: a document whose `schema` differs from the project's,
-and an `extends` naming something that is not a lower layer.
+**Warnings**, in tools: a document whose `schema` differs from the
+project's, and an `extends` naming something that is neither a lower layer
+nor in the document's own layer.
 
 ---
 

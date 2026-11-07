@@ -1120,7 +1120,6 @@ fn load_project(
         .to_path_buf();
     let mut options = DataOptions::default()
         .with_variants(project.variants().map_err(|e| e.to_string())?)
-        .with_warn_cross_file_patches(project.options.warn_cross_file_patches)
         .with_init_defaults(project.options.init_defaults)
         .with_each_variant(project.options.each_variant)
         .with_max_contexts(project.options.max_contexts)

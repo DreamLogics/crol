@@ -1,0 +1,3 @@
+// A folder's own documents come before its subfolders': this one applies
+// before `later/a.crod`, whatever the names.
+web.a: & * 10,

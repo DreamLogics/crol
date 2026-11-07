@@ -119,7 +119,7 @@ vendored data: the layer is loaded, but your editor does not report problems in
 it.
 
 `options` takes `implicit_some`, `allow_unknown_fields`, `require_complete`,
-`warn_cross_file_patches`, `init_defaults`, `each_variant`, `max_contexts`, `contexts`, and `variant_keys`, which
+`init_defaults`, `each_variant`, `max_contexts`, `contexts`, and `variant_keys`, which
 is written as a string here: `"NoNewKeys"`.
 
 ### Value documents in a project
@@ -348,8 +348,8 @@ A few things to keep in mind:
   part of it, and a `.crol` file there is an error, so keep `crol/schema.crol`
   out of the layers. A directory that is not listed in the project is not loaded.
 - **Split a layer by subject.** Each key can be defined only once per layer, so
-  put a key's definition and its patches in the same file, and avoid the
-  [warning about patches across files](layers.md#definitions-and-patches).
+  put a key's definition in one file, and what changes it in the same file or
+  [in a folder below it](layers.md#the-order-of-files-in-a-layer).
 - **Keep templates in the lowest layer.** Templates are visible everywhere, but
   each one can be defined only once.
 - **A layer has to exist.** `crol` stops with an error if a directory in the

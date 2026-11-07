@@ -78,8 +78,6 @@ pub struct ProjectOptions {
     pub allow_unknown_fields: bool,
     /// Every field must be written unless the value has `..`.
     pub require_complete: bool,
-    /// Warn about patches to a key from several documents of one layer.
-    pub warn_cross_file_patches: bool,
     /// Let a path go through a field left out, from its default.
     pub init_defaults: bool,
     /// Evaluate the base and one context for each variant, not every
@@ -99,7 +97,6 @@ impl Default for ProjectOptions {
             implicit_some: true,
             allow_unknown_fields: false,
             require_complete: true,
-            warn_cross_file_patches: true,
             init_defaults: false,
             each_variant: false,
             max_contexts: 4096,
@@ -465,14 +462,6 @@ impl Schema for ProjectOptions {
                             TypeExpr::Bool,
                             "Every field must be written unless the value has `..`.",
                             recorded_default(&d.require_complete),
-                        ),
-                    ),
-                    (
-                        "warn_cross_file_patches",
-                        field(
-                            TypeExpr::Bool,
-                            "Warn about patches to a key from several documents of one layer.",
-                            recorded_default(&d.warn_cross_file_patches),
                         ),
                     ),
                     (

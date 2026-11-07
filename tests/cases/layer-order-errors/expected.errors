@@ -1,0 +1,3 @@
+1-base/c.crod:1:12: `extends` cannot put `sub/` before `c.crod`: a folder's documents come before its subfolders'
+1-base/sub/d.crod:1:12: `extends` names the folder `sub/`, which holds this document
+1-base/a.crod:1:12: these `extends` put documents of one folder in a cycle

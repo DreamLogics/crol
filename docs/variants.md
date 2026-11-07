@@ -96,7 +96,10 @@ in a group.
 
 If you declare no variants at all, every name the data uses counts as a
 discrete variant. That is handy for trying things out, but declaring them is
-what catches typos.
+what catches typos, and says which variants exclude each other: patches under
+`<empire>` and `<rebel>` in two files of a layer
+[need an order](layers.md#the-order-of-files-in-a-layer) unless the two are in
+one group.
 
 For the command line, the same declaration is `--group`, `--discrete` and
 `--parent`, or the [project file](projects.md#the-project-file).
