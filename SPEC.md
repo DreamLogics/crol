@@ -641,7 +641,7 @@ optional path into its value.
 | `target: expr` | set | replace the target, or create it | |
 | `?target: expr` | ensure | set the target if it is not set; otherwise nothing | |
 | `^target: expr` | replace | as set, but the value never merges with what is there (section 5.2) | |
-| `-target` | remove | remove the target | it is not set |
+| `-target` | remove | remove the target, if it is set | |
 | `<c> { entries }` | variant block | the entries apply under condition `c` (section 8.2) | |
 | `..operand` | spread | copy the keyed value's entries in | it is not a keyed value |
 | `..` | defaults | fields left out take their defaults (section 10.3) | |
@@ -680,7 +680,8 @@ key `3`.
 reach them. An integer key at the root is an error.
 
 **Path entries.** For a target with selectors, every step but the last
-must exist; a missing step is an error naming it. The operation then
+must exist; a missing step is an error naming it, except in a remove,
+which then has nothing to remove and does nothing. The operation then
 applies at the last step:
 
 - set, replace, declare and ensure work on keys. On list indices and
@@ -689,6 +690,9 @@ applies at the last step:
   later. A set to a block merges, as in section 5.2, unless the path is
   in the entries of a `~^`.
 - remove works on keys, and on list indices (later elements move down).
+  Removing a key that is not set, or one below a step that is not set,
+  does nothing to the data, so a remove still holds when what it removed
+  is gone; a list index must exist.
   Removing a tuple element is an error.
 
 A path entry is always a patch: `web.replicas: 4` needs `web` to exist.
@@ -751,7 +755,8 @@ So explicit entries always win over spreads; `+field` fails if a spread
 supplied `field`; `?field` keeps a value that a spread supplied.
 
 `-key` removes the entry and adds the key to the defaulted fields, so a
-struct field takes its default. Setting the key again (`+key`, `?key`,
+struct field takes its default. A key that is not set is no error: it is
+added to the defaulted fields all the same. Setting the key again (`+key`, `?key`,
 `key`) takes it out of the defaulted fields.
 
 Entries inside a block may have paths (`limits.cpu: 2.0`), which
@@ -1476,8 +1481,9 @@ Let `v` be *missing*. Apply each operation in order:
 | declare `+k: e` | error if `v` exists; else `e` evaluated (`&` missing) |
 | set `k: e`, replace `^k: e` | `e`, evaluated with `&` = `v` |
 | ensure `?k: e` | `v` if it exists; else `e` (`&` missing) |
-| remove `-k` | error if `v` is missing; else missing |
+| remove `-k` | missing |
 | path entry `k.p…: e` | error if `v` is missing; else `v` with the path entry applied (section 5.1) |
+| path remove `-k.p…` | missing if `v` is missing; else `v` with the remove applied (section 5.1) |
 
 The key's final value is `v` after the last operation. If it is missing,
 the key does not exist.

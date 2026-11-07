@@ -507,11 +507,11 @@ fn describe_target(entry: &Entry) -> String {
 
 /// The error for a step of a path entry that is not set, as for a key that
 /// is not set: `web.nope.x: `web.nope` is not set, so it cannot be patched`. `here` is where the step would be, and `rest` the steps after
-/// it; `op` is `None` for a removal.
+/// it. A removal through such a step is no error.
 fn missing_step(
     selector: &Selector,
     rest: &[Selector],
-    op: Option<SetOp>,
+    op: SetOp,
     here: Option<&Location>,
 ) -> String {
     let missing = here.map_or_else(
@@ -522,9 +522,6 @@ fn missing_step(
         },
         Location::describe,
     );
-    let Some(op) = op else {
-        return format!("-: `{missing}` is not set");
-    };
     let prefix = match op {
         SetOp::Set => "",
         SetOp::Declare | SetOp::Ensure => op.symbol(),
@@ -2826,6 +2823,10 @@ impl Evaluator<'_> {
                     None
                 };
                 let Some((created, base)) = value.clone().or(filled) else {
+                    // A remove below a key that is not set has nothing to remove.
+                    if op.op.is_none() {
+                        continue;
+                    }
                     let mut target = match op.op {
                         None => format!("-{key}"),
                         Some(SetOp::Set) => key.to_string(),
@@ -2877,11 +2878,7 @@ impl Evaluator<'_> {
                 continue;
             }
             match op.op {
-                None => {
-                    if value.take().is_none() {
-                        let _ = self.fail(op.span, format!("-: `{key}` is not set"));
-                    }
-                }
+                None => value = None,
                 Some(set) => {
                     if let Some((created, _)) = &value {
                         match set {
@@ -4148,6 +4145,10 @@ impl Evaluator<'_> {
                 recipe: Recipe::Fixed,
             });
             let Some(slot) = existing.or(filled) else {
+                // A remove below a key that is not set has nothing to remove.
+                if entry.op.is_none() {
+                    return;
+                }
                 let target = describe_target(entry);
                 let _ = self.fail(
                     entry.span,
@@ -4184,10 +4185,6 @@ impl Evaluator<'_> {
         }
         match entry.op {
             None => {
-                if existing.is_none() {
-                    let _ = self.fail(entry.span, format!("-: `{key}` is not set"));
-                    return;
-                }
                 keyed.slots.shift_remove(key);
                 keyed.defaulted.insert(key.clone());
             }
@@ -4315,7 +4312,11 @@ impl Evaluator<'_> {
                 // Only a keyed value can take a key it does not have.
                 let optional = selector.optional && matches!(value.shape, Shape::Keyed(_));
                 let Some(child) = self.start_of(&below, selector.span, optional) else {
-                    let message = missing_step(selector, rest, recipe.op, here.as_ref());
+                    // A remove below a step that is not set has nothing to remove.
+                    let Some(op) = recipe.op else {
+                        return Ok(value.clone());
+                    };
+                    let message = missing_step(selector, rest, op, here.as_ref());
                     return Err(self.fail(selector.span, message));
                 };
                 child
@@ -4395,9 +4396,6 @@ impl Evaluator<'_> {
                 let mut keyed = keyed.clone();
                 let exists = keyed.slots.contains_key(&key);
                 match recipe.op {
-                    None if !exists => {
-                        return Err(self.fail(span, format!("-: `{key}` is not set")));
-                    }
                     None => {
                         keyed.slots.shift_remove(&key);
                         keyed.defaulted.insert(key);

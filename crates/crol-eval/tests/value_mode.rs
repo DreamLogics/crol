@@ -209,7 +209,6 @@ fn entry_errors() {
         expect![[r#"
             1:13: +: `x` is already set (while evaluating a)
               1:9: its value
-            1:27: -: `y` is not set (while evaluating b)
             1:37: y.z: `y` is not set, so it cannot be patched (while evaluating c)
             1:65: -: tuple elements cannot be removed (while evaluating d.t)
             1:86: +: a list element can only be set, with `:` (while evaluating e.l)
