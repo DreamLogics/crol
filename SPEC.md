@@ -1908,13 +1908,14 @@ base), or `SameKeys` (every context has exactly the base's keys).
 
 ```ebnf
 document     ::= attribute* ( entries | block | expr )   (* section 4 *)
-attribute    ::= "#" "!" "[" ( use_attr | schema_attr | type_attr | extends_attr ) "]"
+attribute    ::= "#" "!" "[" ( use_attr | schema_attr | type_attr | extends_attr | variant_attr ) "]"
 use_attr     ::= "use" "(" use_path ( "," use_path )* ","? ")"
 schema_attr  ::= "schema" "(" ( module_path | string ) ")"
 type_attr    ::= "type" "(" identifier ")"
 entry_attr   ::= "#" "[" "type" "(" type_ref ")" "]"   (* section 6.1.2 *)
 type_ref     ::= type_expr ( "." ( identifier | tuple_index | "[" "]" ) )*
 extends_attr ::= "extends" "(" module_path ")"
+variant_attr ::= "variant" "(" identifier ":" identifier ")"   (* section 4.1 *)
 module_path  ::= ( "::" | ( "super" "::" )* ) identifier ( "::" identifier )*   (* section 4.2 *)
 use_path     ::= identifier ( "::" identifier )* type_args? ( "as" identifier )?
 type_args    ::= "<" type_expr ( "," type_expr )* ","? ">"
