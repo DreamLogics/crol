@@ -1161,6 +1161,10 @@ pub struct DocumentChange<'a> {
 pub struct Reloaded {
     /// The root keys that differ now, in byte order.
     pub changed: Vec<KeyChange>,
+    /// How many root keys were evaluated again, where only those whose
+    /// operations changed and those that read them were (`SPEC.md` 7.9);
+    /// `None` where everything was, and for a transaction's commit.
+    pub evaluated: Option<usize>,
 }
 
 /// A context: a set of active variants (`SPEC.md` 8.1), from
@@ -1541,6 +1545,49 @@ impl<T: VariantName> CrolData<T> {
             })
             .collect();
         let evaluated = options.clone().with_contexts(Some(names));
+        // Where only some keys can change, only those are evaluated again,
+        // unless the schema, which `evaluate_changed` does not see, changed.
+        let schema_changed = self.schema.is_some()
+            && changes
+                .iter()
+                .any(|change| change.path == crol_eval::SCHEMA_DOCUMENT);
+        let update = (!schema_changed)
+            .then(|| {
+                crol_eval::evaluate_changed(
+                    &self.compiled,
+                    &compiled,
+                    &evaluated,
+                    &self.variants,
+                    &self.contexts,
+                )
+            })
+            .flatten();
+        if let Some(update) = update {
+            let keys: Vec<String> = update.keys().map(str::to_owned).collect();
+            let evaluated = Some(keys.len());
+            let names = || keys.iter().map(String::as_str);
+            let fingerprints = |data: &Self| {
+                crol_eval::fingerprint::key_fingerprints_of(
+                    &data.base,
+                    &data.contexts,
+                    &data.variants,
+                    names(),
+                )
+            };
+            let before = fingerprints(self);
+            update.apply(&mut self.base, &mut self.contexts);
+            self.sources = sources;
+            self.layers = layers;
+            self.lowered = lowered;
+            self.lower_tried = lower_tried;
+            self.compiled = Arc::new(compiled);
+            self.data_options = options;
+            self.diagnostics = diagnostics;
+            return Ok(Reloaded {
+                changed: changed_keys(&before, &fingerprints(self)),
+                evaluated,
+            });
+        }
         let mut evaluation = evaluate_compiled(&compiled, &evaluated);
         diagnostics.append(&mut evaluation.diagnostics);
         let Some(base) = evaluation.value else {
@@ -1568,6 +1615,7 @@ impl<T: VariantName> CrolData<T> {
         self.diagnostics = diagnostics;
         Ok(Reloaded {
             changed: changed_keys(&before, &self.key_fingerprints()),
+            evaluated: None,
         })
     }
 

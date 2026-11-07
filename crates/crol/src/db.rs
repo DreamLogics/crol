@@ -829,6 +829,7 @@ impl<'d, B, V: VariantName> Transaction<'d, B, V> {
         if self.state.writes.is_empty() {
             return Ok(Reloaded {
                 changed: Vec::new(),
+                evaluated: None,
             });
         }
         let context = self.state.evaluate()?;
@@ -838,7 +839,10 @@ impl<'d, B, V: VariantName> Transaction<'d, B, V> {
         let changed = crate::changed_keys(&db.data.key_fingerprints(), &work.key_fingerprints());
         *db.data = work;
         db.active.log = log;
-        Ok(Reloaded { changed })
+        Ok(Reloaded {
+            changed,
+            evaluated: None,
+        })
     }
 }
 

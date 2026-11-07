@@ -471,11 +471,16 @@ $ cargo run
 true
 ```
 
-Keep `CrolContext`s from before a reload only if your variants are declared. Everything
-is evaluated again, so the first reload takes about as long as loading. It also keeps
-what each layer that did not change lowers to, so later reloads do not parse those
-layers, which takes about half the time. A layer that uses a template of another layer
-is parsed every time, and `keep_lowered: false` turns this off.
+Keep `CrolContext`s from before a reload only if your variants are declared. Only the
+keys that a change can reach are evaluated again: those the changed documents touch, and
+those that read them. `reloaded.evaluated` says how many, or `None` where everything
+was, as when a template changed. The result is always what loading everything again
+would give.
+
+A reload also keeps what each layer that did not change lowers to, so later reloads do
+not parse those layers. The first reload parses them, and so takes longer. A layer that
+uses a template of another layer is parsed every time, and `keep_lowered: false` turns
+this off.
 
 ## Views and queries
 

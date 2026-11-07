@@ -243,6 +243,8 @@ pub struct Compiled {
     /// For each layer, which of its documents are in order other than by
     /// name (`SPEC.md` 7.1).
     orders: Vec<order::LayerOrder>,
+    /// For each layer, its documents in order.
+    documents: Vec<Vec<FileId>>,
 }
 
 /// Evaluates layers of data-mode documents (`SPEC.md` 7): later layers
@@ -400,10 +402,12 @@ fn compile_documents(
     let mut parts = Vec::new();
     let mut last_file = None;
     let mut orders = Vec::with_capacity(layers.len());
+    let mut in_order = Vec::with_capacity(layers.len());
     for (layer_index, layer) in layers.iter().enumerate() {
         let (documents, order, mut errors) = order::order_layer(sources, layer, schema);
         diagnostics.append(&mut errors);
         orders.push(order);
+        in_order.push(documents.iter().map(|(_, file)| *file).collect());
         last_file = documents.last().map(|(_, file)| *file).or(last_file);
         if let Some(Some(bytes)) = lowered.get(layer_index) {
             let all = documents_of(sources, layer, true);
@@ -479,6 +483,7 @@ fn compile_documents(
             lowered,
             layer_names,
             orders,
+            documents: in_order,
         }),
         diagnostics,
     )
@@ -488,6 +493,156 @@ fn compile_documents(
 /// a context is evaluated later, without reading the layers again.
 pub fn evaluate_compiled(compiled: &Compiled, options: &DataOptions) -> Evaluation {
     evaluate_lowered(compiled, options, None)
+}
+
+/// What changes in evaluated data when its layers change, worked out from
+/// the evaluation before: see [`evaluate_changed`].
+pub struct Update {
+    again: eval::Again,
+    /// Where what is wrong with the root as a whole is reported.
+    root_span: Span,
+}
+
+impl Update {
+    /// The root keys evaluated again; no other key's value changed. Some of
+    /// them may no longer exist, or not have existed before.
+    pub fn keys(&self) -> impl Iterator<Item = &str> {
+        self.again.affected.iter().map(|key| &**key)
+    }
+
+    /// Applies the update to the data it was worked out from: the base root
+    /// and the contexts after it, as [`evaluate_changed`] was given them.
+    pub fn apply(self, base: &mut Value, contexts: &mut [ContextData]) {
+        let eval::Again {
+            root,
+            mut values,
+            defaults,
+            defaulted,
+            contexts: fresh,
+            affected,
+        } = self.again;
+        base.span = self.root_span;
+        let is_affected = |key: &Key| match key {
+            Key::Str(name) => affected.contains(name),
+            Key::Int(_) => false,
+        };
+        if let ValueKind::Keyed(keyed) = &mut base.kind {
+            let mut old = std::mem::take(&mut keyed.entries);
+            keyed.entries = root
+                .into_iter()
+                .filter_map(|key| {
+                    let value = values.remove(&key).or_else(|| old.swap_remove(&key))?;
+                    Some((key, value))
+                })
+                .collect();
+            keyed.defaults = defaults;
+            keyed.defaulted.clone_from(&defaulted);
+        }
+        for (data, fresh) in contexts.iter_mut().zip(fresh) {
+            match fresh {
+                Some(fresh) => *data = fresh,
+                None => {
+                    // The keys evaluated again do not differ here from the base.
+                    data.changes.retain(|key, _| !is_affected(key));
+                    data.defaulted.retain(|key| !is_affected(key));
+                    data.defaulted
+                        .extend(defaulted.iter().filter(|key| is_affected(key)).cloned());
+                }
+            }
+        }
+    }
+}
+
+/// Works out what evaluating `after` gives from the evaluation of `before`,
+/// whose base root is `base` and whose contexts after it are `contexts`,
+/// with `variants`, in the same contexts: only the keys whose operations
+/// changed, and those that read them, are evaluated again, and only in the
+/// contexts in which they can differ from the base. `options` must be those
+/// of the evaluation before, with [`DataOptions::contexts`] naming those
+/// contexts.
+///
+/// `None` where that cannot be done and everything is to be evaluated again
+/// (`SPEC.md` 7.9): a template, a `..` at a root or a variant declaration
+/// changed, documents changed their order, a reference reads another
+/// context, the schema has constraints or sealed fields, or there is
+/// anything to report.
+pub fn evaluate_changed(
+    before: &Compiled,
+    after: &Compiled,
+    options: &DataOptions,
+    variants: &Variants,
+    contexts: &[ContextData],
+) -> Option<Update> {
+    if let Some(defaults) = &options.defaults
+        && (defaults.0.has_constraints() || defaults.0.has_sealed())
+    {
+        return None;
+    }
+    if options.variant_keys != VariantKeys::Any || before.layer_names != after.layer_names {
+        return None;
+    }
+    // The documents in both are in the same order, and those in one of them
+    // only are the ones that changed.
+    let mut changed = std::collections::HashSet::new();
+    for (layer, (old, new)) in before.documents.iter().zip(&after.documents).enumerate() {
+        let in_old: std::collections::HashSet<FileId> = old.iter().copied().collect();
+        let in_new: std::collections::HashSet<FileId> = new.iter().copied().collect();
+        let kept_old = old.iter().filter(|file| in_new.contains(file));
+        if !kept_old.eq(new.iter().filter(|file| in_old.contains(file)))
+            || !before.orders[layer].same_edges(&after.orders[layer])
+        {
+            return None;
+        }
+        changed.extend(in_old.symmetric_difference(&in_new).copied());
+    }
+    let in_changed = |span: Span| changed.contains(&span.file);
+    for compiled in [before, after] {
+        let lowered = &compiled.lowered;
+        let ir = &lowered.ir;
+        let templates = lowered.templates.iter();
+        if templates
+            .map(|&id| ir.exprs[ir.value_binds[id].expr].span)
+            .chain(lowered.root_defaults.iter().map(|d| d.span))
+            .chain(lowered.declared.iter().map(|d| d.span))
+            .any(in_changed)
+        {
+            return None;
+        }
+    }
+    let dirty: std::collections::HashSet<Arc<str>> = before
+        .lowered
+        .ops
+        .iter()
+        .chain(&after.lowered.ops)
+        .filter(|op| in_changed(op.span))
+        .map(|op| op.key.clone())
+        .collect();
+    let lowered = &after.lowered;
+    let input = eval::DataInput {
+        ops: &lowered.ops,
+        templates: &lowered.templates,
+        root_defaults: &lowered.root_defaults,
+        declared: &lowered.declared,
+        root_span: lowered.root_span,
+        layer_names: &after.layer_names,
+        orders: &after.orders,
+        variants: &options.variants,
+        contexts: options.contexts.as_deref(),
+        each_variant: options.each_variant,
+        max_contexts: options.max_contexts,
+        variant_keys: options.variant_keys,
+        evaluate_every_key: options.evaluate_every_key,
+        defaults: options.defaults.as_ref().map(|d| &*d.0),
+        init_defaults: options.init_defaults,
+        merge_root: options.merge_root,
+        known_base: None,
+        only: None,
+    };
+    let again = eval::evaluate_again(&lowered.ir, &input, &dirty, variants, contexts)?;
+    Some(Update {
+        again,
+        root_span: lowered.root_span,
+    })
 }
 
 /// Evaluates [`DataOptions::contexts`] given the base root as it was evaluated
