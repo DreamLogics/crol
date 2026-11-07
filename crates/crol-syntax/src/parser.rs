@@ -366,7 +366,7 @@ impl Parser<'_> {
     fn document(&mut self) {
         // Not `start`: leading trivia belongs inside the root.
         self.builder.start_node(DOCUMENT.into());
-        while self.at(POUND) {
+        while self.at(POUND) && !self.at_entry_attr() {
             self.attribute();
         }
         if self.document_is_entries() {
@@ -390,7 +390,7 @@ impl Parser<'_> {
     /// (`SPEC.md` section 4).
     fn document_is_entries(&self) -> bool {
         match self.current() {
-            EOF | PLUS | QUESTION | CARET | DOT2 | L_ANGLE => true,
+            EOF | PLUS | QUESTION | CARET | DOT2 | L_ANGLE | POUND => true,
             IDENT if matches!(self.nth(1), EQ | COLON_EQ) => true,
             MINUS => matches!(self.nth(1), IDENT | STRING | RAW_STRING | L_BRACK),
             _ => self.at_target_then_colon(),
@@ -560,24 +560,120 @@ impl Parser<'_> {
         self.leave();
     }
 
+    /// `u32`, `app::Pair<A, B>`, `[T; 3]`, `(A, B)` (`SPEC.md` 6.1.2).
     fn type_expr_inner(&mut self) {
         self.start(TYPE_EXPR);
-        self.path_segments();
-        if self.at(L_ANGLE) {
-            self.type_args();
-        } else if self.at(L_PAREN) {
-            self.start(TYPE_PAREN_LIST);
-            self.bump();
-            while !self.at(R_PAREN) && !self.at(EOF) && self.at(IDENT) {
+        match self.current() {
+            L_BRACK => {
+                self.bump();
                 self.type_expr();
-                if !self.eat(COMMA) {
-                    break;
+                if self.at(SEMI) {
+                    self.bump();
+                    self.expect(INT, "an array length");
+                } else if self.at(R_BRACK) {
+                    self.error_missing("expected `; n`: `[T; n]` is an array; a list is `Vec<T>`");
+                } else {
+                    self.expect(SEMI, "`;`");
+                }
+                self.expect(R_BRACK, "`]`");
+            }
+            L_PAREN => {
+                self.bump();
+                while matches!(self.current(), IDENT | L_BRACK | L_PAREN) {
+                    self.type_expr();
+                    if !self.eat(COMMA) {
+                        break;
+                    }
+                }
+                self.expect(R_PAREN, "`)`");
+            }
+            _ => {
+                self.path_segments();
+                if self.at(L_ANGLE) {
+                    self.type_args();
                 }
             }
-            self.expect(R_PAREN, "`)`");
+        }
+        self.finish();
+    }
+
+    // ---- Entry attributes (`SPEC.md` 6.1.2) ----
+
+    /// Whether the current token starts `#[type(...)]`, an entry attribute.
+    /// Any other `#[...]` before the first entry is taken for a document
+    /// attribute without its `!`.
+    fn at_entry_attr(&self) -> bool {
+        self.at(POUND)
+            && self.nth(1) == L_BRACK
+            && self.nth(2) == IDENT
+            && self.nth_text(2) == "type"
+    }
+
+    /// `#[type(...)]`.
+    fn entry_attr(&mut self) {
+        self.start(ENTRY_ATTR);
+        self.bump(); // `#`
+        self.bump(); // `[`
+        if self.at(IDENT) && self.nth_text(0) == "type" {
+            self.bump_as(TYPE_KW);
+            if self.expect(L_PAREN, "`(`") {
+                self.type_ref();
+                self.recover_until(&[R_PAREN, R_BRACK]);
+                self.expect(R_PAREN, "`)`");
+            }
+        } else if self.at(IDENT) {
+            self.error(format!(
+                "unknown entry attribute `{}`; the only one is `type`, before a value bind",
+                self.nth_text(0)
+            ));
+        } else {
+            self.error("expected an attribute name");
+        }
+        self.recover_until(&[R_BRACK]);
+        self.expect(R_BRACK, "`]`");
+        self.finish();
+    }
+
+    /// A type expression and the steps into it: `Foo.bar.[].0`.
+    fn type_ref(&mut self) {
+        self.start(TYPE_REF);
+        self.type_expr();
+        while self.at(DOT) {
+            self.start(TYPE_STEP);
+            self.bump();
+            match self.current() {
+                IDENT | INT => self.bump(),
+                L_BRACK => {
+                    self.bump();
+                    self.expect(R_BRACK, "`]`: `.[]` is an element or a map's value");
+                }
+                _ => self.error_missing("expected a field, an index or `[]` after `.`"),
+            }
             self.finish();
         }
         self.finish();
+    }
+
+    /// A value bind with its attributes before it, from `#`.
+    fn attributed_entry(&mut self) {
+        let checkpoint = self.checkpoint();
+        self.entry_attr();
+        while self.at(POUND) && self.nth(1) == L_BRACK {
+            self.error("a value bind takes one `#[type(...)]`");
+            self.entry_attr();
+        }
+        if self.at(IDENT) && self.nth(1) == COLON_EQ {
+            self.start_at(checkpoint, VALUE_BIND);
+            self.bump();
+            self.bump();
+            self.expr();
+            self.finish();
+        } else {
+            self.error_missing("expected a value bind after `#[type(...)]`: `name := value`");
+            if !matches!(self.current(), COMMA | R_BRACE | EOF) {
+                self.entry();
+            }
+        }
     }
 
     /// A module path (`SPEC.md` 4.2): `::a::b`, `super::super::a`, `a::b`.
@@ -686,6 +782,7 @@ impl Parser<'_> {
         let same_line = |n: usize| !self.nth_starts_line(n);
         match self.nth(n) {
             QUESTION | CARET | DOT2 => true,
+            POUND => same_line(n + 1) && self.nth(n + 1) == L_BRACK,
             PLUS => same_line(n + 1) && self.has_target_and_colon(n + 1),
             // Not `-12` or `-[key]`: those read as subtracting an integer or
             // a list too, while subtracting a name or a string is an error.
@@ -765,6 +862,7 @@ impl Parser<'_> {
 
     fn entry(&mut self) {
         match self.current() {
+            POUND if self.nth(1) == L_BRACK => self.attributed_entry(),
             IDENT if self.nth(1) == COLON_EQ => {
                 self.start(VALUE_BIND);
                 self.bump();

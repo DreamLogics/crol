@@ -11,6 +11,14 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Added
 
+- `#[type(...)]` before a value bind gives a template a type, so that a map, list,
+  tuple or number template can be checked and completed: a Rust type
+  (`HashMap<String, u16>`, `[u8; 3]`) or a path into a schema type
+  (`Fleet.services.[].ports`). `crol check --schema` and the language server report
+  unknown fields and values of the wrong kind in it, and the editor completes and
+  hovers both the type and the value. Evaluation ignores it.
+  Where a typed template is spread, merged or set at a place of another type,
+  they warn.
 - Support for Helix, in `editors/helix`: a configuration, and queries for
   highlighting, indentation, text objects and rainbow brackets.
 - `!x` inverts a boolean, so `flag: !&` flips a value in a layer above it. It is an
@@ -41,6 +49,9 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Changed
 
+- Type arguments in `#![use(...)]` are written as Rust types, as in `#[type(...)]`:
+  `app::Pair<u32, Vec<String>>`. The schema file's form, `List(String)`, is no longer
+  read there.
 - `.crob` files are format 3, for `!`; compile layers again.
 - `reload`, and a read after a write in a transaction, take about half the time from
   the second one on: a text layer that did not change is lowered once and not parsed

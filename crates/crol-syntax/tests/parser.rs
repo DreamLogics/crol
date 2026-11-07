@@ -535,18 +535,18 @@ fn accessors_and_negative_keys() {
 #[test]
 fn attributes() {
     check(
-        "#![use(app::net::Config, app::Pair<u32, List(String)> as P)]\n\
+        "#![use(app::net::Config, app::Pair<u32, Vec<String>> as P)]\n\
          #![schema(\"crate:app@2.1\")]\n\
          #![extends(super::super::defaults::services)]\n\
          #![type(Config)]\n\
          port := 8080,",
         expect![[r##"
-            DOCUMENT@0..165
-              ATTRIBUTE@0..60
+            DOCUMENT@0..164
+              ATTRIBUTE@0..59
                 POUND@0..1 "#"
                 BANG@1..2 "!"
                 L_BRACK@2..3 "["
-                USE_ATTR@3..59
+                USE_ATTR@3..58
                   USE_KW@3..6 "use"
                   L_PAREN@6..7 "("
                   USE_PATH@7..23
@@ -557,80 +557,80 @@ fn attributes() {
                     IDENT@17..23 "Config"
                   COMMA@23..24 ","
                   WHITESPACE@24..25 " "
-                  USE_PATH@25..58
+                  USE_PATH@25..57
                     IDENT@25..28 "app"
                     COLON2@28..30 "::"
                     IDENT@30..34 "Pair"
-                    TYPE_ARG_LIST@34..53
+                    TYPE_ARG_LIST@34..52
                       L_ANGLE@34..35 "<"
                       TYPE_EXPR@35..38
                         IDENT@35..38 "u32"
                       COMMA@38..39 ","
                       WHITESPACE@39..40 " "
-                      TYPE_EXPR@40..52
-                        IDENT@40..44 "List"
-                        TYPE_PAREN_LIST@44..52
-                          L_PAREN@44..45 "("
-                          TYPE_EXPR@45..51
-                            IDENT@45..51 "String"
-                          R_PAREN@51..52 ")"
-                      R_ANGLE@52..53 ">"
-                    WHITESPACE@53..54 " "
-                    USE_ALIAS@54..58
-                      AS_KW@54..56 "as"
-                      WHITESPACE@56..57 " "
-                      IDENT@57..58 "P"
-                  R_PAREN@58..59 ")"
-                R_BRACK@59..60 "]"
-              WHITESPACE@60..61 "\n"
-              ATTRIBUTE@61..88
-                POUND@61..62 "#"
-                BANG@62..63 "!"
-                L_BRACK@63..64 "["
-                SCHEMA_ATTR@64..87
-                  SCHEMA_KW@64..70 "schema"
-                  L_PAREN@70..71 "("
-                  STRING@71..86 "\"crate:app@2.1\""
-                  R_PAREN@86..87 ")"
-                R_BRACK@87..88 "]"
-              WHITESPACE@88..89 "\n"
-              ATTRIBUTE@89..134
-                POUND@89..90 "#"
-                BANG@90..91 "!"
-                L_BRACK@91..92 "["
-                EXTENDS_ATTR@92..133
-                  EXTENDS_KW@92..99 "extends"
-                  L_PAREN@99..100 "("
-                  MODULE_PATH@100..132
-                    SUPER_KW@100..105 "super"
-                    COLON2@105..107 "::"
-                    SUPER_KW@107..112 "super"
-                    COLON2@112..114 "::"
-                    IDENT@114..122 "defaults"
-                    COLON2@122..124 "::"
-                    IDENT@124..132 "services"
-                  R_PAREN@132..133 ")"
-                R_BRACK@133..134 "]"
-              WHITESPACE@134..135 "\n"
-              ATTRIBUTE@135..151
-                POUND@135..136 "#"
-                BANG@136..137 "!"
-                L_BRACK@137..138 "["
-                TYPE_ATTR@138..150
-                  TYPE_KW@138..142 "type"
-                  L_PAREN@142..143 "("
-                  IDENT@143..149 "Config"
-                  R_PAREN@149..150 ")"
-                R_BRACK@150..151 "]"
-              WHITESPACE@151..152 "\n"
-              VALUE_BIND@152..164
-                IDENT@152..156 "port"
-                WHITESPACE@156..157 " "
-                COLON_EQ@157..159 ":="
-                WHITESPACE@159..160 " "
-                LITERAL@160..164
-                  INT@160..164 "8080"
-              COMMA@164..165 ","
+                      TYPE_EXPR@40..51
+                        IDENT@40..43 "Vec"
+                        TYPE_ARG_LIST@43..51
+                          L_ANGLE@43..44 "<"
+                          TYPE_EXPR@44..50
+                            IDENT@44..50 "String"
+                          R_ANGLE@50..51 ">"
+                      R_ANGLE@51..52 ">"
+                    WHITESPACE@52..53 " "
+                    USE_ALIAS@53..57
+                      AS_KW@53..55 "as"
+                      WHITESPACE@55..56 " "
+                      IDENT@56..57 "P"
+                  R_PAREN@57..58 ")"
+                R_BRACK@58..59 "]"
+              WHITESPACE@59..60 "\n"
+              ATTRIBUTE@60..87
+                POUND@60..61 "#"
+                BANG@61..62 "!"
+                L_BRACK@62..63 "["
+                SCHEMA_ATTR@63..86
+                  SCHEMA_KW@63..69 "schema"
+                  L_PAREN@69..70 "("
+                  STRING@70..85 "\"crate:app@2.1\""
+                  R_PAREN@85..86 ")"
+                R_BRACK@86..87 "]"
+              WHITESPACE@87..88 "\n"
+              ATTRIBUTE@88..133
+                POUND@88..89 "#"
+                BANG@89..90 "!"
+                L_BRACK@90..91 "["
+                EXTENDS_ATTR@91..132
+                  EXTENDS_KW@91..98 "extends"
+                  L_PAREN@98..99 "("
+                  MODULE_PATH@99..131
+                    SUPER_KW@99..104 "super"
+                    COLON2@104..106 "::"
+                    SUPER_KW@106..111 "super"
+                    COLON2@111..113 "::"
+                    IDENT@113..121 "defaults"
+                    COLON2@121..123 "::"
+                    IDENT@123..131 "services"
+                  R_PAREN@131..132 ")"
+                R_BRACK@132..133 "]"
+              WHITESPACE@133..134 "\n"
+              ATTRIBUTE@134..150
+                POUND@134..135 "#"
+                BANG@135..136 "!"
+                L_BRACK@136..137 "["
+                TYPE_ATTR@137..149
+                  TYPE_KW@137..141 "type"
+                  L_PAREN@141..142 "("
+                  IDENT@142..148 "Config"
+                  R_PAREN@148..149 ")"
+                R_BRACK@149..150 "]"
+              WHITESPACE@150..151 "\n"
+              VALUE_BIND@151..163
+                IDENT@151..155 "port"
+                WHITESPACE@155..156 " "
+                COLON_EQ@156..158 ":="
+                WHITESPACE@158..159 " "
+                LITERAL@159..163
+                  INT@159..163 "8080"
+              COMMA@163..164 ","
         "##]],
     );
 }
@@ -943,4 +943,168 @@ fn doc_comments_belong_to_the_entry_below_them() {
     assert_eq!(doc("d"), None);
     assert_eq!(doc("e"), None);
     assert_eq!(doc("g"), Some("Inner."));
+}
+
+#[test]
+fn entry_attributes() {
+    check(
+        "#[type(Foo.c.[].0)]\nx := 1\ny: { #[type([u8; 2])] z := [1, 2] }",
+        expect![[r##"
+            DOCUMENT@0..62
+              VALUE_BIND@0..26
+                ENTRY_ATTR@0..19
+                  POUND@0..1 "#"
+                  L_BRACK@1..2 "["
+                  TYPE_KW@2..6 "type"
+                  L_PAREN@6..7 "("
+                  TYPE_REF@7..17
+                    TYPE_EXPR@7..10
+                      IDENT@7..10 "Foo"
+                    TYPE_STEP@10..12
+                      DOT@10..11 "."
+                      IDENT@11..12 "c"
+                    TYPE_STEP@12..15
+                      DOT@12..13 "."
+                      L_BRACK@13..14 "["
+                      R_BRACK@14..15 "]"
+                    TYPE_STEP@15..17
+                      DOT@15..16 "."
+                      INT@16..17 "0"
+                  R_PAREN@17..18 ")"
+                  R_BRACK@18..19 "]"
+                WHITESPACE@19..20 "\n"
+                IDENT@20..21 "x"
+                WHITESPACE@21..22 " "
+                COLON_EQ@22..24 ":="
+                WHITESPACE@24..25 " "
+                LITERAL@25..26
+                  INT@25..26 "1"
+              WHITESPACE@26..27 "\n"
+              ENTRY@27..62
+                TARGET@27..28
+                  KEY@27..28
+                    IDENT@27..28 "y"
+                COLON@28..29 ":"
+                WHITESPACE@29..30 " "
+                BLOCK@30..62
+                  L_BRACE@30..31 "{"
+                  WHITESPACE@31..32 " "
+                  VALUE_BIND@32..60
+                    ENTRY_ATTR@32..48
+                      POUND@32..33 "#"
+                      L_BRACK@33..34 "["
+                      TYPE_KW@34..38 "type"
+                      L_PAREN@38..39 "("
+                      TYPE_REF@39..46
+                        TYPE_EXPR@39..46
+                          L_BRACK@39..40 "["
+                          TYPE_EXPR@40..42
+                            IDENT@40..42 "u8"
+                          SEMI@42..43 ";"
+                          WHITESPACE@43..44 " "
+                          INT@44..45 "2"
+                          R_BRACK@45..46 "]"
+                      R_PAREN@46..47 ")"
+                      R_BRACK@47..48 "]"
+                    WHITESPACE@48..49 " "
+                    IDENT@49..50 "z"
+                    WHITESPACE@50..51 " "
+                    COLON_EQ@51..53 ":="
+                    WHITESPACE@53..54 " "
+                    LIST_EXPR@54..60
+                      L_BRACK@54..55 "["
+                      LITERAL@55..56
+                        INT@55..56 "1"
+                      COMMA@56..57 ","
+                      WHITESPACE@57..58 " "
+                      LITERAL@58..59
+                        INT@58..59 "2"
+                      R_BRACK@59..60 "]"
+                  WHITESPACE@60..61 " "
+                  R_BRACE@61..62 "}"
+        "##]],
+    );
+}
+
+#[test]
+fn entry_attribute_errors() {
+    check(
+        "#[type(u8)]\na: 1\n#[type(Foo.)] #[type(u8)] b := 1\n#[serde(x)] c := 1",
+        expect![[r##"
+            DOCUMENT@0..68
+              ENTRY_ATTR@0..11
+                POUND@0..1 "#"
+                L_BRACK@1..2 "["
+                TYPE_KW@2..6 "type"
+                L_PAREN@6..7 "("
+                TYPE_REF@7..9
+                  TYPE_EXPR@7..9
+                    IDENT@7..9 "u8"
+                R_PAREN@9..10 ")"
+                R_BRACK@10..11 "]"
+              WHITESPACE@11..12 "\n"
+              ENTRY@12..16
+                TARGET@12..13
+                  KEY@12..13
+                    IDENT@12..13 "a"
+                COLON@13..14 ":"
+                WHITESPACE@14..15 " "
+                LITERAL@15..16
+                  INT@15..16 "1"
+              WHITESPACE@16..17 "\n"
+              VALUE_BIND@17..49
+                ENTRY_ATTR@17..30
+                  POUND@17..18 "#"
+                  L_BRACK@18..19 "["
+                  TYPE_KW@19..23 "type"
+                  L_PAREN@23..24 "("
+                  TYPE_REF@24..28
+                    TYPE_EXPR@24..27
+                      IDENT@24..27 "Foo"
+                    TYPE_STEP@27..28
+                      DOT@27..28 "."
+                  R_PAREN@28..29 ")"
+                  R_BRACK@29..30 "]"
+                WHITESPACE@30..31 " "
+                ENTRY_ATTR@31..42
+                  POUND@31..32 "#"
+                  L_BRACK@32..33 "["
+                  TYPE_KW@33..37 "type"
+                  L_PAREN@37..38 "("
+                  TYPE_REF@38..40
+                    TYPE_EXPR@38..40
+                      IDENT@38..40 "u8"
+                  R_PAREN@40..41 ")"
+                  R_BRACK@41..42 "]"
+                WHITESPACE@42..43 " "
+                IDENT@43..44 "b"
+                WHITESPACE@44..45 " "
+                COLON_EQ@45..47 ":="
+                WHITESPACE@47..48 " "
+                LITERAL@48..49
+                  INT@48..49 "1"
+              WHITESPACE@49..50 "\n"
+              VALUE_BIND@50..68
+                ENTRY_ATTR@50..61
+                  POUND@50..51 "#"
+                  L_BRACK@51..52 "["
+                  ERROR@52..60
+                    IDENT@52..57 "serde"
+                    L_PAREN@57..58 "("
+                    IDENT@58..59 "x"
+                    R_PAREN@59..60 ")"
+                  R_BRACK@60..61 "]"
+                WHITESPACE@61..62 " "
+                IDENT@62..63 "c"
+                WHITESPACE@63..64 " "
+                COLON_EQ@64..66 ":="
+                WHITESPACE@66..67 " "
+                LITERAL@67..68
+                  INT@67..68 "1"
+            error 11..11: expected a value bind after `#[type(...)]`: `name := value`
+            error 28..28: expected a field, an index or `[]` after `.`
+            error 31..32: a value bind takes one `#[type(...)]`
+            error 52..57: unknown entry attribute `serde`; the only one is `type`, before a value bind
+        "##]],
+    );
 }

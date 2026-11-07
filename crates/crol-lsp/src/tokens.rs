@@ -133,6 +133,23 @@ fn classify(node: &SyntaxNode, found: &mut Vec<(TextRange, u32, u32)>) {
             TYPE,
             0,
         ),
+        // `#[type(Foo.bar)]` (`SPEC.md` 6.1.2): type names, and the fields
+        // stepped into.
+        SyntaxKind::TYPE_EXPR => {
+            for token in ast::TypeExpr::cast(node.clone())
+                .into_iter()
+                .flat_map(|t| t.segments())
+            {
+                push(Some(token), TYPE, 0);
+            }
+        }
+        SyntaxKind::TYPE_STEP => {
+            let token = node
+                .children_with_tokens()
+                .filter_map(|it| it.into_token())
+                .find(|t| matches!(t.kind(), SyntaxKind::IDENT | SyntaxKind::INT));
+            push(token, KEY, 0);
+        }
         SyntaxKind::NAMED_TUPLE => push(
             ast::NamedTuple::cast(node.clone()).and_then(|t| t.name()),
             VARIANT,

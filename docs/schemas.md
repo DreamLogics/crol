@@ -364,6 +364,28 @@ A schema makes tools apply the same rules as your program:
 
 Templates are not root values, so they are not checked as data.
 
+### Checking templates
+
+A template with `#[type(...)]` before it is checked against that type, for unknown
+fields and values of the wrong kind, but not for missing fields: templates are
+usually partial. The type is a Rust type, with the names `crol` describes types
+by (`u16`, `String`, `Option<T>`, `Vec<T>`, `HashMap<K, V>`, `[T; 3]`, tuples,
+`crol::Id`), or a path into a schema type:
+
+```crol
+#[type(Fleet.services.[])]    // a value of the map `services`: a Service
+web_defaults := { replicas: 2, ports: [80] }
+```
+
+`HashMap` and `BTreeMap` (and `Vec` and `VecDeque`) are the same type to the
+check, since the schema does not say which one a field uses. What is computed,
+like `& + 1` or `&other`, is not checked there, as its value is only known where
+the template lands: it is checked as part of the value it lands in.
+
+Where a template with a type is spread, merged or set at a place of another
+type, `crol check` and your editor warn, as `#[type(Limits)]` on a template set as
+`replicas` most likely means one of them is wrong.
+
 ### Which type a document has
 
 In layered data, the kind of the root type says what it describes:

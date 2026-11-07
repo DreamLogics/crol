@@ -398,40 +398,7 @@ pub(crate) fn named_def<'a>(schema: &'a SchemaFile, ty: &TypeExpr) -> Option<&'a
 
 /// A type as Rust writes it, with serde names: `u32`, `Option<Limits>`.
 pub(crate) fn rust_type(schema: &SchemaFile, ty: &TypeExpr) -> String {
-    let inner = |t: &TypeExpr| rust_type(schema, t);
-    match ty {
-        TypeExpr::Bool => "bool".to_owned(),
-        TypeExpr::Char => "char".to_owned(),
-        TypeExpr::String => "String".to_owned(),
-        TypeExpr::Unit => "()".to_owned(),
-        TypeExpr::Any => "any value".to_owned(),
-        TypeExpr::Bytes => "bytes".to_owned(),
-        TypeExpr::Id(_) => "Id".to_owned(),
-        TypeExpr::Option(t) => format!("Option<{}>", inner(t)),
-        TypeExpr::List(t) => format!("Vec<{}>", inner(t)),
-        TypeExpr::Set(t) => format!("Set<{}>", inner(t)),
-        TypeExpr::Array(t, n) => format!("[{}; {n}]", inner(t)),
-        TypeExpr::Map(k, v) => format!("Map<{}, {}>", inner(k), inner(v)),
-        TypeExpr::Tuple(items) => {
-            let items: Vec<String> = items.iter().map(inner).collect();
-            format!("({})", items.join(", "))
-        }
-        TypeExpr::Named(path) => match schema.get(path) {
-            // What `schema::build` names, for a root type with no name.
-            Some(TypeDef::Transparent {
-                name,
-                inner: wrapped,
-                ..
-            }) if name.is_empty() => inner(wrapped),
-            // A type that data writes with no name.
-            Some(def) if def.name().is_empty() => {
-                path.rsplit("::").next().unwrap_or(path).to_owned()
-            }
-            Some(def) => def.name().to_owned(),
-            None => path.clone(),
-        },
-        other => format!("{other:?}").to_lowercase(),
-    }
+    crol::typed::rust_type(schema, ty)
 }
 
 /// The named type with the serde name `name`, if exactly one has it.

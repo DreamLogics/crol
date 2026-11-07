@@ -1,4 +1,4 @@
-#![use(app::net::Config, app::Pair<u32, List(String)> as P)]
+#![use(app::net::Config, app::Pair<u32, Vec<String>> as P)]
 #![schema("crate:app@2.1")]
 #![extends(super::super::defaults::services)]
 #![type(Config)]

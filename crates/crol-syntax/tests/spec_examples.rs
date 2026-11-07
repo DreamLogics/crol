@@ -12,6 +12,10 @@ use crol_syntax::format::{FormatConfig, format};
 /// Code blocks in the specification that are Rust, not CROL.
 fn is_rust(block: &str) -> bool {
     let first = block.trim_start();
+    // `#[type(...)]` is CROL (`SPEC.md` 6.1.2); any other `#[` is Rust.
+    if first.starts_with("#[type(") {
+        return false;
+    }
     ["#[", "pub ", "let ", "fn ", "use ", "enum "]
         .iter()
         .any(|start| first.starts_with(start))

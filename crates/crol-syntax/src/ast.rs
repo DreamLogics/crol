@@ -255,14 +255,115 @@ impl TypeArgList {
 }
 
 ast_node!(
-    /// A type expression: `u32`, `List(String)`, `app::Pair<A, B>`.
+    /// A type expression: `u32`, `app::Pair<A, B>`, `[T; 3]`, `(A, B)`
+    /// (`SPEC.md` 6.1.2).
     TypeExpr, TYPE_EXPR
 );
 
+/// The form of a type expression.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TypeForm {
+    /// `a::B<...>`: a name, with type arguments if it has them.
+    Path,
+    /// `[T; n]`
+    Array,
+    /// `(A, B)`, `()`, or `(A)`, which is `A`.
+    Tuple,
+}
+
 impl TypeExpr {
-    /// The segments of the type's path.
+    /// Which form the expression has.
+    pub fn form(&self) -> TypeForm {
+        match self.0.first_token().map(|t| t.kind()) {
+            Some(L_BRACK) => TypeForm::Array,
+            Some(L_PAREN) => TypeForm::Tuple,
+            _ => TypeForm::Path,
+        }
+    }
+
+    /// The segments of the type's path, for a path.
     pub fn segments(&self) -> impl Iterator<Item = SyntaxToken> + use<> {
         tokens(&self.0, IDENT)
+    }
+
+    /// The type arguments of a path.
+    pub fn type_args(&self) -> Option<TypeArgList> {
+        child(&self.0)
+    }
+
+    /// The element type of an array, or the elements of a tuple.
+    pub fn elements(&self) -> impl Iterator<Item = TypeExpr> + use<> {
+        children(&self.0)
+    }
+
+    /// Whether a tuple has a `,`: `(A,)` is a tuple, `(A)` is `A`.
+    pub fn has_comma(&self) -> bool {
+        token(&self.0, COMMA).is_some()
+    }
+
+    /// The length of an array.
+    pub fn length(&self) -> Option<SyntaxToken> {
+        token(&self.0, INT)
+    }
+}
+
+ast_node!(
+    /// `#[type(...)]` before a value bind (`SPEC.md` 6.1.2).
+    EntryAttr, ENTRY_ATTR
+);
+
+impl EntryAttr {
+    /// The type, for `#[type(...)]`.
+    pub fn type_ref(&self) -> Option<TypeRef> {
+        token(&self.0, TYPE_KW)?;
+        child(&self.0)
+    }
+}
+
+ast_node!(
+    /// A type expression and the steps into it: `Foo.bar.[]`.
+    TypeRef, TYPE_REF
+);
+
+impl TypeRef {
+    /// The type the steps start from.
+    pub fn ty(&self) -> Option<TypeExpr> {
+        child(&self.0)
+    }
+
+    /// The steps, in order.
+    pub fn steps(&self) -> impl Iterator<Item = TypeStep> + use<> {
+        children(&self.0)
+    }
+}
+
+ast_node!(
+    /// `.field`, `.0` or `.[]` in a type reference.
+    TypeStep, TYPE_STEP
+);
+
+/// What a [`TypeStep`] steps into.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TypeStepKind {
+    /// `.field`
+    Field(SyntaxToken),
+    /// `.0`
+    Index(SyntaxToken),
+    /// `.[]`
+    Element,
+}
+
+impl TypeStep {
+    /// What the step steps into; `None` if it is incomplete.
+    pub fn kind(&self) -> Option<TypeStepKind> {
+        if let Some(name) = token(&self.0, IDENT) {
+            Some(TypeStepKind::Field(name))
+        } else if let Some(index) = token(&self.0, INT) {
+            Some(TypeStepKind::Index(index))
+        } else {
+            (token(&self.0, L_BRACK).is_some() && token(&self.0, R_BRACK).is_some())
+                .then_some(TypeStepKind::Element)
+        }
     }
 }
 
@@ -454,6 +555,11 @@ ast_node!(
 );
 
 impl ValueBind {
+    /// The `#[type(...)]` before the bind; the first, if there are more.
+    pub fn attr(&self) -> Option<EntryAttr> {
+        child(&self.0)
+    }
+
     /// The bound name.
     pub fn name(&self) -> Option<SyntaxToken> {
         token(&self.0, IDENT)

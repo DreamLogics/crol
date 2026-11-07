@@ -326,6 +326,23 @@ fn segment_path(token: &SyntaxToken) -> Option<(String, Vec<PathStep>, TextSize)
     Some((key, steps, end))
 }
 
+/// For a segment of a target in the value of a `#[type(...)]` bind, the end
+/// of the target up to it (`SPEC.md` 6.1.2).
+fn typed_segment_end(token: &SyntaxToken) -> Option<TextSize> {
+    let target = token.parent_ancestors().find_map(ast::Target::cast)?;
+    let bind = target.syntax().ancestors().find_map(ast::ValueBind::cast)?;
+    bind.attr()?;
+    let mut end = target.key()?.syntax().text_range().end();
+    if let Some(last) = target
+        .selectors()
+        .take_while(|s| s.syntax().text_range().start() <= token.text_range().start())
+        .last()
+    {
+        end = last.syntax().text_range().end();
+    }
+    Some(end)
+}
+
 /// The root key and path of an element of a list, tuple or `Name(...)`.
 pub(crate) fn element_path(node: &SyntaxNode) -> Option<(String, Vec<PathStep>)> {
     from_root(place_path(node)?)
@@ -516,7 +533,13 @@ fn code(text: &str) -> String {
 /// goes with these: it is in the entry, and past the key.
 fn in_value(token: &SyntaxToken) -> bool {
     use SyntaxKind::*;
-    let outside = |kind| matches!(kind, ATTRIBUTE | VALUE_BIND | BIND | COND_NAME | VARIANT);
+    // A value bind is no place in the data, unless `#[type(...)]` gives it
+    // a type (`SPEC.md` 6.1.2).
+    let outside = |n: &SyntaxNode| match n.kind() {
+        ATTRIBUTE | ENTRY_ATTR | BIND | COND_NAME | VARIANT => true,
+        VALUE_BIND => !n.children().any(|c| c.kind() == ENTRY_ATTR),
+        _ => false,
+    };
     matches!(
         token.kind(),
         IDENT
@@ -536,7 +559,7 @@ fn in_value(token: &SyntaxToken) -> bool {
             | PARENT_KW
             | ROOT_KW
             | DEFAULT_KW
-    ) && !token.parent_ancestors().any(|n| outside(n.kind()))
+    ) && !token.parent_ancestors().any(|n| outside(&n))
 }
 
 /// The path of a place, as a root key and the path in its value.
@@ -562,6 +585,9 @@ pub(crate) fn hover(
     }
     let path = convert::uri_to_path(uri)?;
     let file = snapshot.file_of(&path)?;
+    if let Some(type_ref) = token.parent_ancestors().find_map(ast::TypeRef::cast) {
+        return type_hover(snapshot, file, &type_ref, &token, text, encoding);
+    }
     let scope = Scope::new(snapshot, Some(file));
     let schema = snapshot.schema_for(Some(file));
     let target = token.parent_ancestors().find_map(ast::Target::cast);
@@ -576,6 +602,13 @@ pub(crate) fn hover(
                 .zip(cursor.current())
                 .and_then(|(schema, place)| crate::schema::about(schema, place));
             entry_path = Some((key, steps));
+        } else if let Some(end) = typed_segment_end(&token) {
+            // In the value of a `#[type(...)]` bind, which has no path.
+            let cursor = place::locate(&scope, text, end);
+            about = schema
+                .as_ref()
+                .zip(cursor.current())
+                .and_then(|(schema, place)| crate::schema::about(schema, place));
         }
     } else if in_value(&token) {
         let cursor = place::locate(&scope, text, token.text_range().start());
@@ -625,6 +658,61 @@ pub(crate) fn hover(
             value: markdown,
         }),
         range: Some(convert::range(text, &index, token.text_range(), encoding)),
+    })
+}
+
+/// In a `#[type(...)]`: the type at the segment or step under the cursor,
+/// and its doc (`SPEC.md` 12.5).
+fn type_hover(
+    snapshot: &Snapshot,
+    file: crol_eval::FileId,
+    type_ref: &ast::TypeRef,
+    token: &SyntaxToken,
+    text: &str,
+    encoding: Encoding,
+) -> Option<Hover> {
+    use crol::typed::TypeAt;
+    let schema = snapshot.schema_for(Some(file))?.file;
+    let step = token.parent_ancestors().find_map(ast::TypeStep::cast);
+    let (steps, range) = match &step {
+        Some(step) => {
+            let index = type_ref.steps().position(|s| s == *step)?;
+            (index + 1, step.syntax().text_range())
+        }
+        None => (0, type_ref.ty()?.syntax().text_range()),
+    };
+    let document = crol_syntax::parse(text).document();
+    let uses = crol::typed::TypeUses::of(&document, schema);
+    let at = crol::typed::resolve_steps(schema, &uses, type_ref, steps).ok()?;
+    let (doc, ty) = match &at {
+        TypeAt::Type { ty, doc } => {
+            let own = crate::schema::named_def(schema, ty).map(|d| d.doc().trim().to_owned());
+            let doc = doc.clone().or(own).unwrap_or_default();
+            (doc, crate::schema::rust_type(schema, ty))
+        }
+        TypeAt::Variant { path, name } => {
+            let doc = match schema.get(path) {
+                Some(crol::schema::TypeDef::Enum { variants, .. }) => {
+                    variants.get(name).map(|v| v.doc.trim().to_owned())
+                }
+                _ => None,
+            };
+            let own = schema.get(path).map_or(path.as_str(), |d| d.name());
+            (doc.unwrap_or_default(), format!("{own}::{name}"))
+        }
+    };
+    let mut parts = Vec::new();
+    if !doc.is_empty() {
+        parts.push(doc);
+    }
+    parts.push(code(&ty));
+    let index = LineIndex::new(text);
+    Some(Hover {
+        contents: HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: parts.join("\n\n"),
+        }),
+        range: Some(convert::range(text, &index, range, encoding)),
     })
 }
 

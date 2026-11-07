@@ -13,6 +13,8 @@
 (key (string) @property)
 (field_selector name: (identifier) @property)
 (index_selector index: (tuple_index) @property)
+(type_step name: (identifier) @property)
+(type_step index: (tuple_index) @property)
 
 ; Type names, variants and constructors.
 (block type: (identifier) @type)
@@ -36,9 +38,10 @@
 
 ; Attributes.
 (attribute ["#" "!"] @punctuation.special)
+(entry_attr "#" @punctuation.special)
 ["use" "schema" "type" "extends" "as" "super"] @keyword
 
 ; Operators and punctuation.
 ["+" "-" "*" "/" "%" "~" "~^" "|" "^" "&" "!" "?" ":=" "=" ".."] @operator
-[":" "," "." "::"] @punctuation.delimiter
+[":" ";" "," "." "::"] @punctuation.delimiter
 ["{" "}" "[" "]" "(" ")"] @punctuation.bracket

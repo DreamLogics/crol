@@ -82,9 +82,11 @@ module.exports = grammar({
     ),
     use_alias: $ => seq('as', field('name', $.identifier)),
     type_arg_list: $ => seq('<', commaSep1($.type_expr), '>'),
-    type_expr: $ => seq(
-      $._path_segments,
-      optional(choice($.type_arg_list, seq('(', commaSep($.type_expr), ')'))),
+    // SPEC.md 6.1.2: `u32`, `app::Pair<A, B>`, `[T; 3]`, `(A, B)`.
+    type_expr: $ => choice(
+      seq($._path_segments, optional($.type_arg_list)),
+      seq('[', $.type_expr, ';', field('length', $.integer), ']'),
+      seq('(', commaSep($.type_expr), ')'),
     ),
     _path_segments: $ => seq($.identifier, repeat(seq('::', $.identifier))),
 
@@ -123,7 +125,21 @@ module.exports = grammar({
     ),
     bind: $ => seq(field('name', $.identifier), '='),
     remove_entry: $ => seq('-', field('target', $.target)),
-    value_bind: $ => seq(field('name', $.identifier), ':=', field('value', $._expression)),
+    value_bind: $ => seq(
+      optional(field('attr', $.entry_attr)),
+      field('name', $.identifier),
+      ':=',
+      field('value', $._expression),
+    ),
+
+    // `#[type(...)]` (SPEC.md 6.1.2).
+    entry_attr: $ => seq('#', '[', 'type', '(', $.type_ref, ')', ']'),
+    type_ref: $ => seq($.type_expr, repeat($.type_step)),
+    type_step: $ => seq('.', choice(
+      field('name', $.identifier),
+      field('index', alias(token.immediate(/[0-9]+/), $.tuple_index)),
+      seq('[', ']'),
+    )),
     variant_block: $ => seq(field('variant', $.variant), $._block_body),
     spread: $ => seq('..', field('operand', $._postfix)),
     defaults: _ => '..',

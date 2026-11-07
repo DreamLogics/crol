@@ -1020,6 +1020,42 @@ pub(crate) fn evaluate(
                         }
                     }
                 }
+                // The document's `#[type(...)]` binds (`SPEC.md` 6.1.2).
+                let document = crol_syntax::parse(text).document();
+                let found = crol::typed::check_document(file, &document, &schema, &check);
+                snapshot.extra.extend(found);
+                // Where typed templates are used: of every layer below and
+                // at this document, in data.
+                let others: Vec<(FileId, crol_syntax::ast::Document)> = chain
+                    .iter()
+                    .flatten()
+                    .flat_map(|layer| layer.documents.iter().map(|(_, f)| *f))
+                    .filter(|f| *f != file)
+                    .filter_map(|f| {
+                        let source = snapshot.sources.get(f)?;
+                        Some((f, crol_syntax::parse(source.text()).document()))
+                    })
+                    .collect();
+                let templates = crol::typed::typed_templates(
+                    others
+                        .iter()
+                        .map(|(f, d)| (*f, d))
+                        .chain([(file, &document)]),
+                    &schema,
+                );
+                let type_root = match mode {
+                    Mode::Value => {
+                        crol::typed::TypeRoot::Value(root.as_deref().unwrap_or(&schema.root))
+                    }
+                    Mode::Data => crol::typed::TypeRoot::Data {
+                        root: root.as_deref(),
+                        value: evaluation.value.as_ref(),
+                    },
+                };
+                let found = crol::typed::check_template_uses(
+                    file, &document, &schema, &templates, type_root,
+                );
+                snapshot.extra.extend(found);
                 let own = OwnSchema {
                     file: schema,
                     root,

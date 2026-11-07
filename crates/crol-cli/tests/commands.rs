@@ -518,3 +518,43 @@ fn explain_needs_a_key() {
         assert!(stderr(&output).contains("no key"), "{argument}: {output:?}");
     }
 }
+
+#[test]
+fn check_reports_what_does_not_fit_a_type_attribute() {
+    let dir = tree(
+        "typed-binds",
+        &[
+            ("schema.crol", SERVICE_SCHEMA),
+            (
+                "good.crod",
+                "#[type(Service)]\nbase := { replicas: 2 }\n+web: Service { ..&base }\n",
+            ),
+            (
+                "bad.crod",
+                "#[type(Service)]\nbase := { replicsa: 2 }\n+web: Service { replicas: 1 }\n",
+            ),
+            (
+                "bad.crol",
+                "#![type(Service)]\n#[type(Service.nope)]\nx := 1\nreplicas: 2\n",
+            ),
+        ],
+    );
+    let output = crol(&dir, &["check", "good.crod", "--schema", "schema.crol"]);
+    assert!(output.status.success(), "{output:?}");
+    let output = crol(&dir, &["check", "bad.crod", "--schema", "schema.crol"]);
+    assert!(failed(&output), "{output:?}");
+    assert!(
+        stderr(&output).contains("`Service` has no field `replicsa`"),
+        "{output:?}"
+    );
+    let output = crol(&dir, &["check", "bad.crol", "--schema", "schema.crol"]);
+    assert!(failed(&output), "{output:?}");
+    assert!(
+        stderr(&output).contains("`Service` has no field `nope`"),
+        "{output:?}"
+    );
+    assert_eq!(stderr(&output).matches("error").count(), 1, "{output:?}");
+    // Without a schema, the attribute changes nothing.
+    let output = crol(&dir, &["check", "bad.crod"]);
+    assert!(output.status.success(), "{output:?}");
+}

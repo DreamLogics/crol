@@ -146,3 +146,54 @@ e: f
         (identifier))
       (field_selector
         (identifier)))))
+
+================================================================================
+Typed value binds
+================================================================================
+
+#[type(Foo.collections.[].0)]
+item := { name: "a" }
+web: {
+  #[type(HashMap<String, [i32; 3]>)] m := {}
+}
+
+---
+
+(document
+  (value_bind
+    (entry_attr
+      (type_ref
+        (type_expr
+          (identifier))
+        (type_step
+          (identifier))
+        (type_step)
+        (type_step
+          (tuple_index))))
+    (identifier)
+    (block
+      (entry
+        (target
+          (key
+            (identifier)))
+        (literal
+          (string)))))
+  (entry
+    (target
+      (key
+        (identifier)))
+    (block
+      (value_bind
+        (entry_attr
+          (type_ref
+            (type_expr
+              (identifier)
+              (type_arg_list
+                (type_expr
+                  (identifier))
+                (type_expr
+                  (type_expr
+                    (identifier))
+                  (integer))))))
+        (identifier)
+        (block)))))

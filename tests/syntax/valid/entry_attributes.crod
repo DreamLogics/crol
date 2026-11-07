@@ -1,0 +1,20 @@
+#[type(Foo.bar)]
+some_bar := { bla: 2 }
+#[type(Foo.baz.[])] some_baz := 2
+#[type(Foo.collections.[].[])]
+some_item := { name: "item3", value: 30 }
+#[type(Foo.tuple.2)]
+some_str := "hello"
+#[type(HashMap<String, [i32; 3]>)]
+m := {}
+#[type((u8, String))]
+t := (1, "a")
+#[type(())]
+unit := ()
+#[type(Shape::Circle.radius)]
+r := 1.5
+web: {
+    #[type(u16)]
+    port := 8080,
+    url: "http://localhost:" + &port,
+}

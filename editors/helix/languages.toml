@@ -18,4 +18,4 @@ args = ["lsp"]
 
 [[grammar]]
 name = "crol"
-source = { git = "https://github.com/DreamLogics/crol", rev = "ef119be13ad4871f81ee8d47957a7e3ee6ad63c5", subpath = "tree-sitter-crol" }
+source = { git = "https://github.com/DreamLogics/crol", rev = "4a52a29da304bc5b67ba058564369287a433bd06", subpath = "tree-sitter-crol" }

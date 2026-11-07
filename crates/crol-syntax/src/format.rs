@@ -515,12 +515,16 @@ impl Formatter {
                 self.broken(node, indent)
             }
             ENTRY | VALUE_BIND | SPREAD => {
+                // `#[type(...)]` goes on its own line (`SPEC.md` 12.2).
+                let attr = child_node(node, |k| k == ENTRY_ATTR).map_or_else(String::new, |attr| {
+                    format!("{}\n{}", self.spaced_tokens(&attr), INDENT.repeat(indent))
+                });
                 let prefix = self.entry_prefix(node);
                 let value = child_node(node, is_expr);
                 let value = value.map_or_else(String::new, |value| {
                     self.render(&value, indent, col + width(&prefix), trailing)
                 });
-                prefix + &value
+                attr + &prefix + &value
             }
             BINARY_EXPR => {
                 if let Some(flat) = self.flat(node)
@@ -638,6 +642,8 @@ impl Formatter {
                 let rhs = self.flat(&operands.next()?)?;
                 format!("{lhs} {} {rhs}", self.binary_op(node))
             }
+            // An attribute has a line of its own, so it is never flat.
+            VALUE_BIND if child_node(node, |k| k == ENTRY_ATTR).is_some() => return None,
             ENTRY | VALUE_BIND | SPREAD => {
                 self.entry_prefix(node) + &self.flat(&child_node(node, is_expr)?)?
             }
@@ -801,6 +807,7 @@ impl Formatter {
         significant_tokens(node)
             .map(|t| match t.kind() {
                 COMMA => ", ".to_owned(),
+                SEMI => "; ".to_owned(),
                 AS_KW => " as ".to_owned(),
                 _ => t.to_string(),
             })

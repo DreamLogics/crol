@@ -4191,3 +4191,134 @@ fn references_find_a_key_written_in_quotes() {
     assert_eq!(found.as_array().unwrap().len(), 2, "{found}");
     client.stop();
 }
+
+// ---- `#[type(...)]` on value binds (`SPEC.md` 6.1.2) ----
+
+#[test]
+fn completion_in_and_after_type_attributes() {
+    let (mut client, mut buffer) = nested_document("lsp-typed-binds-completion");
+    let tail = "\nname: \"x\"";
+    let cases: &[Case<'_>] = &[
+        (
+            "#[type(Server.|)]\nt := {}",
+            &["tls", "listeners"],
+            &["cert"],
+        ),
+        ("#[type(Config.services.|)]\nt := {}", &["[]"], &["name"]),
+        (
+            "#[type(Config.services.[].|)]\nt := {}",
+            &["name", "server", "depends_on"],
+            &[],
+        ),
+        ("#[type(Config.pair.|)]\nt := {}", &["0", "1"], &[]),
+        (
+            "#[type(Backend::Remote.|)]\nt := {}",
+            &["host", "retry"],
+            &[],
+        ),
+        (
+            "#[type(|)]\nt := {}",
+            &["Server", "Vec", "u32", "HashMap"],
+            &["tls"],
+        ),
+        (
+            "#[type(Vec<|>)]\nt := {}",
+            &["Server", "String"],
+            &["Strict"],
+        ),
+        // In the value, the fields of the type.
+        (
+            "#[type(Server.tls)]\nt := { cert: { | } }",
+            &["path", "mode"],
+            &["tls"],
+        ),
+        (
+            "#[type(Config.services.[])]\nt := { | }",
+            &["name", "server"],
+            &["tls"],
+        ),
+        ("#[type(Config.modes)]\nt := [|]", &["Strict", "Lax"], &[]),
+    ];
+    let cases: Vec<(String, &[&str], &[&str])> = cases
+        .iter()
+        .map(|(marked, wanted, unwanted)| (format!("{marked}{tail}"), *wanted, *unwanted))
+        .collect();
+    let cases: Vec<Case<'_>> = cases.iter().map(|(m, w, u)| (m.as_str(), *w, *u)).collect();
+    check_completions(&mut client, &mut buffer, HEADER, &cases);
+    client.stop();
+}
+
+#[test]
+fn hover_in_and_after_type_attributes() {
+    let (mut client, mut buffer) = nested_document("lsp-typed-binds-hover");
+    let cases = [
+        ("#[type(Server.t|ls)]\nt := {}", "How to encrypt.\n\n`Tls`"),
+        ("#[type(Ser|ver.tls)]\nt := {}", "`Server`"),
+        ("#[type(Config.services.[|])]\nt := {}", "`Service`"),
+        (
+            "#[type(Backend::Re|mote.host)]\nt := {}",
+            "`Backend::Remote`",
+        ),
+        (
+            "#[type(Server.tls)]\nt := { cert: { pa|th: \"x\" } }",
+            "Where the certificate is.\n\n`String`",
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (marked, wanted) in cases {
+        let markdown = buffer.hover(&mut client, &format!("{HEADER}{marked}\nname: \"x\""));
+        if markdown != wanted {
+            failures.push(format!("{marked:?}: wanted {wanted:?}, got {markdown:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    client.stop();
+}
+
+#[test]
+fn type_attributes_are_checked() {
+    let (client, mut buffer) = nested_document("lsp-typed-binds-diagnostics");
+    let text = format!(
+        "{HEADER}#[type(Server.tls)]\nt := {{ enabeld: true }}\n\
+         #[type(Server.nope)]\nu := 1\n\
+         #[type(Config.services.[])]\nv := {{ name: 1 }}\nname: \"x\""
+    );
+    buffer.change(&client, &text);
+    let diagnostics = client.diagnostics_for(&buffer.uri, |d| says(d, "enabeld"));
+    assert!(
+        says(&diagnostics, "`Tls` has no field `enabeld`"),
+        "{diagnostics:?}"
+    );
+    assert!(
+        says(&diagnostics, "`Server` has no field `nope`"),
+        "{diagnostics:?}"
+    );
+    assert!(
+        says(&diagnostics, "expected a string, found 1"),
+        "{diagnostics:?}"
+    );
+    client.stop();
+}
+
+#[test]
+fn templates_used_where_another_type_goes_get_a_warning() {
+    let (client, mut buffer) = nested_document("lsp-typed-template-uses");
+    let text = format!(
+        "{HEADER}#[type(Server)]\ns := {{}}\nname: \"x\"\nserver: &s\nfallback: &s\nbackend: &s\n"
+    );
+    buffer.change(&client, &text);
+    let diagnostics = client.diagnostics_for(&buffer.uri, |d| says(d, "the template `s`"));
+    let warnings: Vec<&Value> = diagnostics
+        .iter()
+        .filter(|d| d["message"].as_str().unwrap().contains("the template `s`"))
+        .collect();
+    assert_eq!(warnings.len(), 1, "{diagnostics:?}");
+    assert!(
+        says(&diagnostics, "used where `Backend` goes"),
+        "{diagnostics:?}"
+    );
+    // A warning, on `&s` of `backend`.
+    assert_eq!(warnings[0]["severity"], 2, "{diagnostics:?}");
+    assert_eq!(warnings[0]["range"]["start"]["line"], 7, "{diagnostics:?}");
+    client.stop();
+}

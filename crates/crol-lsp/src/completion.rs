@@ -268,6 +268,10 @@ fn items_at(
         before_colon: after.starts_with(':') && !after.starts_with("::"),
     };
 
+    if let Some(items) = completer.in_type(text, word_start) {
+        return items;
+    }
+
     if let Some((reference, segments)) = reference_prefix(lead) {
         let spread = lead[..lead.len() - reference.len()]
             .trim_end()
@@ -344,6 +348,93 @@ fn accessor_step(accessor: &str) -> Option<PathStep> {
         Err(_) => inner
             .starts_with('"')
             .then(|| PathStep::Field(features::string_text(inner))),
+    }
+}
+
+/// The Rust names a type can be written with (`SPEC.md` 6.1.2).
+const RUST_TYPE_NAMES: &[&str] = &[
+    "bool",
+    "char",
+    "i8",
+    "i16",
+    "i32",
+    "i64",
+    "i128",
+    "isize",
+    "u8",
+    "u16",
+    "u32",
+    "u64",
+    "u128",
+    "usize",
+    "f32",
+    "f64",
+    "String",
+    "PathBuf",
+    "Option",
+    "Vec",
+    "VecDeque",
+    "HashSet",
+    "BTreeSet",
+    "HashMap",
+    "BTreeMap",
+    "IndexMap",
+    "Box",
+    "crol::Id",
+    "crol::Value",
+];
+
+impl Completer<'_> {
+    /// In the `( ... )` of a `#[type(...)]`: after a `.`, the steps the type
+    /// there has; else type names. `None` outside one.
+    fn in_type(&self, text: &str, word_start: usize) -> Option<Vec<CompletionItem>> {
+        let token = self.root.token_at_offset(self.offset).left_biased()?;
+        let attr = token
+            .parent_ancestors()
+            .find(|n| n.kind() == SyntaxKind::ENTRY_ATTR)?;
+        let open = attr
+            .children_with_tokens()
+            .filter_map(|t| t.into_token())
+            .find(|t| t.kind() == SyntaxKind::L_PAREN)?;
+        let start = usize::from(open.text_range().end());
+        if word_start < start {
+            return Some(Vec::new());
+        }
+        let schema = self.snapshot.schema_for(self.file)?.file;
+        let written = text[start..word_start].trim_end();
+        let Some(base) = written.strip_suffix('.') else {
+            let mut items: Vec<CompletionItem> = RUST_TYPE_NAMES
+                .iter()
+                .map(|name| item((*name).to_owned(), CompletionItemKind::KEYWORD, None))
+                .collect();
+            let mut names: Vec<&str> = schema.types.values().map(TypeDef::name).collect();
+            names.sort_unstable();
+            names.dedup();
+            items.extend(
+                names
+                    .into_iter()
+                    .filter(|n| !n.is_empty())
+                    .map(|n| item(n.to_owned(), CompletionItemKind::STRUCT, None)),
+            );
+            return Some(items);
+        };
+        // What is written before the `.`, as a type reference of its own.
+        let document = crol_syntax::parse(&format!("#[type({base})] x := ()")).document();
+        let type_ref = document
+            .syntax()
+            .descendants()
+            .find_map(ast::TypeRef::cast)?;
+        let uses = crol::typed::TypeUses::of(&ast::Document::cast(self.root.clone())?, schema);
+        let at = crol::typed::resolve_steps(schema, &uses, &type_ref, usize::MAX).ok()?;
+        let items = crol::typed::next_steps(schema, &at)
+            .into_iter()
+            .map(|offer| {
+                let detail = Some(schema::rust_type(schema, &offer.ty));
+                let item = item(offer.label, CompletionItemKind::FIELD, detail);
+                documented(item, offer.doc.as_deref().unwrap_or_default())
+            })
+            .collect();
+        Some(items)
     }
 }
 

@@ -330,6 +330,7 @@ mod raw;
 mod remote;
 pub mod schema;
 mod ser;
+pub mod typed;
 mod view;
 mod writer;
 
