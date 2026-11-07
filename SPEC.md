@@ -201,7 +201,7 @@ result counts as a literal.
 ### 2.5 Punctuation and adjacency
 
 ```
-{ } [ ] ( ) < > , : :: := . .. + - * / % ~ ~^ | & ^ @ ? = # !
+{ } [ ] ( ) < > , : ; :: := . .. + - * / % ~ ~^ | & ^ @ ? = # !
 ```
 
 Three adjacency rules, all to keep one-token lookahead:
@@ -398,8 +398,9 @@ path is a Rust module path followed by the type's name *as data writes it*
 `as` changes nothing; tools use it to resolve the name, and report a
 path that names no schema type.
 
-A generic type is written with its arguments, as in the schema file
-(section 10.10): `#![use(app::Pair<u32, String>)]`.
+A generic type is written with its arguments, as type expressions
+(section 6.1.2): `#![use(app::Pair<u32, String>)]`. The schema file writes
+the same instantiation as `"app::Pair<U32, String>"` (section 10.10).
 
 **`use(path as Alias)`** also lets the document write `Alias` for that
 type. The loader replaces `Alias` by the path's last segment wherever a
@@ -1055,9 +1056,103 @@ service_defaults := Service {
 - **Not data.** Templates are not root keys: they are never
   deserialized, never checked against the root type, and not part of
   the fingerprint; only their effect on root values is. Tools check a
-  template with a type name for unknown fields and wrong kinds, but not
-  for completeness, since templates are usually partial.
+  template that has a type, from a type name or `#[type(...)]` (below),
+  for unknown fields and wrong kinds, but not for completeness, since
+  templates are usually partial.
 - **Names** share the namespace of binds (section 6.1.1).
+
+**Typing a value bind.** A type name types a block or a named tuple, but
+a map, list, tuple or scalar has no name to write. `#[type(...)]` before
+a value bind gives the bind a type, either written out or as a path into a
+schema type:
+
+```rust
+pub struct Item { name: String, value: i32 }
+
+pub struct Foo {
+    bar: HashMap<String, i32>,
+    baz: Vec<i16>,
+    collections: HashMap<String, Vec<Item>>,
+    tuple: (i32, String, String, bool),
+}
+```
+
+```rust
+#[type(Foo.bar)]                  // HashMap<String, i32>
+some_bar := { bla: 2 },
+
+#[type(Foo.baz.[])]               // i16
+some_baz := 2,
+
+#[type(Foo.collections.[])]       // Vec<Item>
+some_col := [{ name: "item1", value: 10 }, { name: "item2", value: 20 }],
+
+#[type(Foo.collections.[].[])]    // Item
+some_item := { name: "item3", value: 30 },
+
+#[type(Foo.tuple.2)]              // String
+some_str := "hello",
+
+#[type(BTreeMap<String, Vec<Item>>)]  // the same type as Foo.collections
+more_cols := { a: [], b: [] },
+```
+
+- **Type expressions** use the Rust names of the types `crol` implements
+  `Schema` for (section 10.9), so a type says what the Rust type is:
+
+  | Written | Schema (section 10.10) |
+  |---|---|
+  | `bool`, `char`, `()`, `i8` … `i128`, `isize`, `u8` … `u128`, `usize`, `f32`, `f64` | `Bool`, `Char`, `Unit`, `I8` … `F64` |
+  | `String`, `str`, `PathBuf`, `Path` | `String` |
+  | `Option<T>` | `Option(T)` |
+  | `Vec<T>`, `VecDeque<T>` | `List(T)` |
+  | `HashSet<T>`, `BTreeSet<T>` | `Set(T)` |
+  | `HashMap<K, V>`, `BTreeMap<K, V>`, `IndexMap<K, V>` | `Map(K, V)` |
+  | `[T; n]` | `Array(T, n)` |
+  | `(A, B)`, `(A,)`; `(A)` is `A` | `Tuple([A, B])` |
+  | `Box<T>`, `Rc<T>`, `Arc<T>`, `Cow<T>` | what `T` is |
+  | `crol::Id`, `crol::Value` | `Id([])`, `Any` |
+  | `Item`, `app::Item`, `Pair<u32, String>` | `Named(...)`: a schema type, its instantiation for a generic one |
+
+  The names that give the same schema type are the same type to tools:
+  `BTreeMap<String, i32>` is checked as `HashMap<String, i32>` is, so which
+  one a type names is for the reader. Every other name is a schema type,
+  resolved like a type name (`use` applies, section 4.1). A name in the
+  table wins over a schema type of that name (one called `Vec`, or a serde
+  rename to `String`); `use(path as Alias)` reaches that type. `crol::Id`
+  and `crol::Value` are written with their path, so that a schema type
+  called `Id` or `Value` keeps its name. The same type expressions are what
+  a `use` writes as type arguments.
+- **Steps** go into a type, to the type a value at that step has:
+  - `.field`: a field of a struct or struct variant, by its serde name.
+  - `.0`, `.1`, …: an element of a tuple, tuple struct or tuple variant.
+  - `.[]`: an element of a list, set or array, or a value of a map. A map's
+    keys have no step; write their type out.
+  Every step looks through what serde makes transparent (`Box` and the
+  like, `#[serde(transparent)]`), newtypes and `Option`, so
+  `Foo.limits.cpu` works for a `limits: Option<Limits>`. A path whose last
+  segment is a variant of the enum the rest names (`Shape::Circle`) is that
+  variant, and must be followed by a step: `Shape::Circle.radius`,
+  `Shape::Rect.0`. Where the whole path also names a type, it is that
+  type. A path always starts at a type, never at a root key or
+  a field of the data, so it says the same in every layer.
+- **Path or type.** A path follows the Rust type when it changes; a type
+  written out stays as written, and a template checked against an old type
+  goes on passing where it is defined. A path fits a template meant for a
+  place in the schema, a written type one that stands on its own.
+- **Where.** On any value bind: a template, or a value bind in a block or
+  a value-mode document. One `#[type(...)]` per bind, on its own line or
+  before the name on the same line. On anything else it is an error, as
+  is any other entry attribute.
+- **For tools only.** The loader and the evaluator ignore it, as they
+  ignore a `use` without `as`: it changes no value and nothing that is
+  deserialized, compiled (section 7.8) or fingerprinted. Tools check the
+  bind's value as a value of that type, by the rules for templates
+  (above), and use the type for completion and hover in the value. A
+  type name in the value that does not fit the bind's type, such as
+  `#[type(Foo.bar)] t := Service { ... }`, is reported. A type that names
+  nothing, or a step the type has not, is reported too, and the bind is
+  then checked as if it had no type.
 
 #### 6.1.3 Defaults
 
@@ -1756,17 +1851,22 @@ attribute    ::= "#" "!" "[" ( use_attr | schema_attr | type_attr | extends_attr
 use_attr     ::= "use" "(" use_path ( "," use_path )* ","? ")"
 schema_attr  ::= "schema" "(" ( module_path | string ) ")"
 type_attr    ::= "type" "(" identifier ")"
+entry_attr   ::= "#" "[" "type" "(" type_ref ")" "]"   (* section 6.1.2 *)
+type_ref     ::= type_expr ( "." ( identifier | tuple_index | "[" "]" ) )*
 extends_attr ::= "extends" "(" module_path ")"
 module_path  ::= ( "::" | ( "super" "::" )* ) identifier ( "::" identifier )*   (* section 4.2 *)
 use_path     ::= identifier ( "::" identifier )* type_args? ( "as" identifier )?
-type_args    ::= "<" type_expr ( "," type_expr )* ">"   (* section 10.10's type expressions *)
+type_args    ::= "<" type_expr ( "," type_expr )* ","? ">"
+type_expr    ::= identifier ( "::" identifier )* type_args?    (* section 6.1.2 *)
+               | "[" type_expr ";" integer "]"
+               | "(" ( type_expr ( "," type_expr )* ","? )? ")"
 
 block        ::= identifier? "{" entries "}"
 entries      ::= ( entry ( separator entry )* ","? )?
 separator    ::= "," | line_break                    (* section 5.3 *)
 entry        ::= "-" target
                | bind? ( "+" | "?" | "^" )? target ":" expr
-               | identifier ":=" expr                (* value bind, 6.1.2 *)
+               | entry_attr? identifier ":=" expr    (* value bind, 6.1.2 *)
                | variant "{" entries "}"
                | ".." postfix?
 target       ::= key "?"? step*
@@ -1828,6 +1928,8 @@ Notes:
 - In `key`, an `integer` has no sign; a negative key needs the
   `accessor` form (section 5.1).
 - A `[` at the start of an entry is an accessor key, never a list.
+- An `entry_attr` and the bind after it are one entry: a line break
+  between them ends nothing.
 - `line_break` is no token: it stands where section 5.3 says a line
   break ends an entry. That rule also decides, where `expr` or `target`
   could go on, whether they stop there.
@@ -2984,6 +3086,9 @@ tree.
   the argument is empty or a comment stands beside it;
 - a `#![use(...)]` goes on one line if it fits, else one path per line with
   a trailing comma;
+- a `#[type(...)]` goes on its own line above its value bind, written with
+  no spaces in its steps and a space after each `,` and `;` of a type
+  (`#[type(HashMap<String, [i32; 3]>)]`, `#[type(Foo.collections.[].[])]`);
 - spaces around binary operators and after `:` and `,`; none inside
   `&name`, `@id`, selectors or `..&x`; binds have a space before and
   after `=` and `:=`;
@@ -3215,7 +3320,10 @@ definition's, and a reference shows the docs of what it names.
   4.1), a root entry is a field like any other.
 - A field with no doc shows its type alone. Where the schema knows nothing, as
   without one or in what `Any` holds, and on what is no key or value, as a bind's
-  name or an attribute, there is no hover.
+  name or a document attribute, there is no hover.
+- On a `#[type(...)]`, for the segment or step under the cursor: the type there,
+  as Rust writes it, and its doc. On a value bind's name and on `&name`, with a
+  type: the type, as for a value.
 - On a reference or id, after those: what it names, and its value if that fits
   on a line, since that cannot be read off the document as a written value can.
 - In data, on a key or value that more than one operation has touched, in the
@@ -3264,6 +3372,9 @@ trigger completion, as do `.`, `&`, `<` and `@`.
   evaluated value at that path. After `&` (and `..&`): bind and
   template names, `self`, `parent`, `root`, `default`.
 - In `<...>`: variant names, and in conditions `!`.
+- In `#[type(...)]` (section 6.1.2): the Rust names and schema type names;
+  after a `.`, the steps the type there has: its fields, tuple indices and
+  `[]`.
 - After `..&root.`: root keys whose value is keyed.
 - Hover on a template use shows the template and where it is defined;
   go to definition jumps there.
@@ -3402,7 +3513,8 @@ reference's variant selector; a `+` list inside a condition;
 two documents with one path in a layer; `&name` with no visible bind;
 two visible binds with one name, or a bind named like a template or
 `self`, `parent`, `root` or `default`; a template defined twice; a value bind
-inside a variant block; an entry bind at the top level of a data-mode
+inside a variant block; `#[type(...)]` on anything but a value bind,
+twice on one, or another entry attribute; an entry bind at the top level of a data-mode
 document; a bind on a remove, variant block,
 spread, `..`, variant entry or inside a variant block; a variant
 selector on `&` or `&default`.
