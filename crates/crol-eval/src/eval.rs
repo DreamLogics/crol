@@ -843,9 +843,13 @@ pub(crate) struct DataInput<'a> {
     pub(crate) ops: &'a [RootOp],
     pub(crate) templates: &'a [BindId],
     pub(crate) root_defaults: &'a [RootDefaults],
+    /// Every `#![variant(group: name)]` of the data.
+    pub(crate) declared: &'a [DeclaredVariant],
     pub(crate) root_span: Span,
     pub(crate) layer_names: &'a [String],
-    pub(crate) warn_cross_file_patches: bool,
+    /// For each layer, which of its documents are in order other than by
+    /// name; empty where that is not checked.
+    pub(crate) orders: &'a [crate::order::LayerOrder],
     pub(crate) variants: &'a Variants,
     /// The contexts to evaluate, by chosen variant names; `None` for every
     /// valid context.
@@ -1762,8 +1766,9 @@ fn explain_key(
 }
 
 impl<'a> DataPlan<'a> {
-    /// Resolves conditions against the variants, declaring the names the
-    /// data uses if the application declared none (`SPEC.md` 8.1), and
+    /// Resolves conditions against the variants, adding those the data
+    /// declares to open groups, or declaring the names the data uses if the
+    /// application declared none (`SPEC.md` 8.1), and
     /// groups operations by key.
     fn new(ir: &Ir, input: &DataInput<'a>, diagnostics: &mut Vec<Diagnostic>) -> Option<Self> {
         let mut names = Vec::new();
@@ -1787,6 +1792,11 @@ impl<'a> DataPlan<'a> {
             }
         }
         let mut variants = input.variants.clone();
+        for declared in input.declared {
+            if let Err(message) = variants.add_to_open_group(&declared.group, &declared.name) {
+                diagnostics.push(Diagnostic::error(declared.span, message));
+            }
+        }
         if variants.is_empty() {
             for (name, _) in &names {
                 if variants.id(name).is_none() {
@@ -2013,37 +2023,49 @@ impl<'a> DataPlan<'a> {
         Ok(contexts)
     }
 
-    /// The first of a layer's `patches` to one key, in a context of
-    /// `contexts`, that only the names of their documents put in order, with
-    /// how many documents they come from (`SPEC.md` 7.2): those that hold
-    /// together and are of one rank, as base operations or by specificity.
-    fn unordered(&self, patches: &[usize], contexts: &[Context]) -> Option<(Vec<usize>, usize)> {
-        let document_count = |patches: &[usize]| {
-            let mut documents: Vec<usize> = patches.iter().map(|&i| self.ops[i].document).collect();
-            documents.sort_unstable();
-            documents.dedup();
-            documents.len()
-        };
-        if document_count(patches) < 2 {
-            return None;
-        }
-        for context in contexts {
-            let mut ranks: Vec<(Option<usize>, Vec<usize>)> = Vec::new();
-            for &i in patches {
-                let rank = match &self.conditions[i] {
-                    None => None,
-                    Some(c) if c.holds(context) => Some(c.specificity(&self.variants)),
-                    Some(_) => continue,
-                };
-                match ranks.iter_mut().find(|(r, _)| *r == rank) {
-                    Some((_, same)) => same.push(i),
-                    None => ranks.push((rank, vec![i])),
+    /// Two of a layer's `patches` to one key whose order only the names of
+    /// their documents give (`SPEC.md` 7.2): from documents that nothing else
+    /// puts in order (7.1), of one rank, as base operations or by
+    /// specificity, and with conditions that hold together in a context of
+    /// `contexts`. `meets` keeps what is known of pairs of conditions.
+    fn unordered(
+        &self,
+        patches: &[usize],
+        order: Option<&crate::order::LayerOrder>,
+        contexts: &mut dyn FnMut() -> std::rc::Rc<Vec<Context>>,
+        meets: &mut std::collections::HashMap<(String, String), bool>,
+    ) -> Option<(usize, usize)> {
+        for (n, &first) in patches.iter().enumerate() {
+            for &second in &patches[n + 1..] {
+                let (a, b) = (&self.ops[first], &self.ops[second]);
+                if a.span.file == b.span.file
+                    || order.is_some_and(|order| order.ordered(a.span.file, b.span.file))
+                {
+                    continue;
                 }
-            }
-            for (_, same) in ranks {
-                let documents = document_count(&same);
-                if documents > 1 {
-                    return Some((same, documents));
+                let (ca, cb) = (&self.conditions[first], &self.conditions[second]);
+                let rank = |c: &Option<Resolved>| c.as_ref().map(|c| c.specificity(&self.variants));
+                if rank(ca) != rank(cb) {
+                    continue;
+                }
+                let name =
+                    |c: &Option<Resolved>| c.as_ref().map(Resolved::normalized).unwrap_or_default();
+                let pair = (name(ca), name(cb));
+                let met = match meets.get(&pair) {
+                    Some(&met) => met,
+                    None => {
+                        let holds = |c: &Option<Resolved>, context: &Context| {
+                            c.as_ref().is_none_or(|c| c.holds(context))
+                        };
+                        let met = contexts()
+                            .iter()
+                            .any(|context| holds(ca, context) && holds(cb, context));
+                        meets.insert(pair, met);
+                        met
+                    }
+                };
+                if met {
+                    return Some((first, second));
                 }
             }
         }
@@ -2148,6 +2170,21 @@ impl Evaluator<'_> {
     fn check_chains(&mut self, input: &DataInput<'_>, contexts: &[Context]) {
         let plan = self.plan.expect("data mode");
         let ops = plan.ops;
+        // Patches meet if their conditions hold together in any context, or
+        // where the contexts are too many to try, in an evaluated one.
+        let mut known: Option<std::rc::Rc<Vec<Context>>> = None;
+        let mut every_context = || {
+            known
+                .get_or_insert_with(|| {
+                    std::rc::Rc::new(if plan.variants.context_count() <= 1 << 16 {
+                        plan.variants.all_contexts()
+                    } else {
+                        contexts.to_vec()
+                    })
+                })
+                .clone()
+        };
+        let mut meets = std::collections::HashMap::new();
         for (key, key_plan) in &plan.keys {
             let all = &key_plan.all;
             let mut layers: Vec<usize> = all.iter().map(|&i| ops[i].layer).collect();
@@ -2183,24 +2220,30 @@ impl Evaluator<'_> {
                         }
                     }
                 }
-                if input.warn_cross_file_patches {
-                    let patches: Vec<usize> = in_layer
-                        .iter()
-                        .copied()
-                        .filter(|&i| !ops[i].is_definition())
-                        .collect();
-                    if let Some((patches, documents)) = plan.unordered(&patches, contexts) {
-                        let mut diagnostic = Diagnostic::warning(
-                            ops[patches[0]].span,
-                            format!(
-                                "`{key}` is patched from {documents} documents of the layer `{layer_name}`, so the order of the patches depends on the file names",
-                            ),
-                        );
-                        for &i in &patches[1..] {
-                            diagnostic = diagnostic.with_related(ops[i].span, "another patch");
-                        }
-                        self.report(diagnostic);
-                    }
+                let patches: Vec<usize> = in_layer
+                    .iter()
+                    .copied()
+                    .filter(|&i| !ops[i].is_definition())
+                    .collect();
+                let order = input.orders.get(layer);
+                if let Some((first, second)) =
+                    plan.unordered(&patches, order, &mut every_context, &mut meets)
+                {
+                    let name = |i: usize| {
+                        order
+                            .and_then(|order| order.path(ops[i].span.file))
+                            .unwrap_or_default()
+                    };
+                    let diagnostic = Diagnostic::error(
+                        ops[second].span,
+                        format!(
+                            "`{key}` is patched from `{}` and `{}` of the layer `{layer_name}`, and only their names put the patches in order; put one in a folder below the other's, or name the other in its `#![extends(...)]`",
+                            name(first),
+                            name(second),
+                        ),
+                    )
+                    .with_related(ops[first].span, "the other patch");
+                    self.report(diagnostic);
                 }
             }
         }

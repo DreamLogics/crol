@@ -1,0 +1,6 @@
+#![variant(faction: jedi)]
+#![variant(civ: hard)]
+#![variant(civ: empire)]
+
++bomber: { hp: 10 },
+bomber<sith>.hp: 1,

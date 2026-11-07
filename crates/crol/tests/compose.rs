@@ -172,15 +172,41 @@ fn a_document_of_a_directory_is_not_loaded_again_with_it() {
     );
 
     let composer = CrolComposer::with_cfg(config).load("::w").unwrap();
+    // `sibling/a.crod` extends a document of its own layer, which puts that
+    // one first there (`SPEC.md` 7.1) instead of loading it below.
     assert_eq!(
         documents(&composer),
-        [vec!["b.crod"], vec!["a.crod"], vec!["w.crod"]]
+        [vec!["a.crod", "b.crod"], vec!["w.crod"]]
     );
     assert_eq!(composer.compose_data().unwrap().get::<u8>("b").unwrap(), 3);
 }
 
 #[test]
 fn a_layer_that_is_named_stays_whole() {
+    let root = tree(
+        "compose-named-layer-whole",
+        &[
+            ("shared/a.crod", "?a: 1,\na: & + 10,"),
+            ("x.crod", "#![extends(shared)]\n\na: & + 1,"),
+        ],
+    );
+    let config = CrolConfig {
+        load_extends: true,
+        ..config(&root)
+    };
+    let composer = CrolComposer::with_cfg(config)
+        .load("::x")
+        .unwrap()
+        .load("::shared")
+        .unwrap();
+    assert_eq!(
+        documents(&composer),
+        [vec!["a.crod"], vec!["x.crod"], vec!["a.crod"]]
+    );
+}
+
+#[test]
+fn an_extends_within_a_layer_orders_it() {
     let root = tree(
         "compose-named-layer",
         &[
@@ -193,10 +219,9 @@ fn a_layer_that_is_named_stays_whole() {
         ..config(&root)
     };
     let composer = CrolComposer::with_cfg(config).load("::named").unwrap();
-    assert_eq!(
-        documents(&composer),
-        [vec!["b.crod"], vec!["a.crod", "b.crod"]]
-    );
+    assert_eq!(documents(&composer), [vec!["a.crod", "b.crod"]]);
+    // `b.crod` applies first, once.
+    assert_eq!(composer.compose_data().unwrap().get::<u8>("b").unwrap(), 12);
 }
 
 #[test]
@@ -273,22 +298,16 @@ fn extends_loads_the_layers_below() {
 }
 
 #[test]
-fn data_gives_values_warnings_and_ids() {
+fn data_gives_values_and_ids() {
     let data = CrolComposer::new()
         .load_layer(CrolLayer::from_sources("base", [("a.crod", "+web: Service { image: \"w\", port: 1, depends_on: [@db] },\n+db: Service { image: \"d\", port: 2, depends_on: [] },")]))
-        .load_layer(CrolLayer::from_sources("local", [("x.crod", "web.port: 10,"), ("y.crod", "web.image: \"w2\",")]))
+        .load_layer(CrolLayer::from_sources("local", [("x.crod", "web.port: 10,"), ("y/z.crod", "web.image: \"w2\",")]))
         .compose_data()
         .unwrap();
     assert_eq!(data.keys(), ["web", "db"]);
     assert!(data.contains("db"));
     assert_eq!(data.type_name("web"), Some("Service"));
-    let warnings = data.warnings();
-    assert_eq!(warnings.len(), 1);
-    assert!(
-        warnings[0].starts_with("warning: local/x.crod:1:1: `web` is patched from 2 documents"),
-        "{}",
-        warnings[0]
-    );
+    assert_eq!(data.warnings(), Vec::<String>::new());
     let (web, ids): (Service, _) = data.get_with_ids("web").unwrap();
     assert_eq!((web.port, web.image.as_str()), (10, "w2"));
     assert_eq!(ids[0].rust_path, "web.depends_on[0]");
@@ -380,6 +399,75 @@ fn variants_and_contexts() {
         .with_variant("prod")
         .unwrap_err();
     assert!(error.to_string().contains("at most one"), "{error}");
+}
+
+#[test]
+fn open_groups_take_variants_from_data() {
+    let config = CrolConfig {
+        variants: crol::CrolVariants::new().add_open_group("civ"),
+        ..Default::default()
+    };
+    let base = || {
+        CrolLayer::from_sources(
+            "base",
+            [
+                ("units.crod", "+bomber: 10,"),
+                (
+                    "empire.crod",
+                    "#![variant(civ: empire)]\nbomber<empire>: & + 2,",
+                ),
+                (
+                    "rebels.crod",
+                    "#![variant(civ: rebels)]\nbomber<rebels>: & * 2,",
+                ),
+            ],
+        )
+    };
+    let modded = || {
+        CrolLayer::from_sources(
+            "mod",
+            [("hutts.crod", "#![variant(civ: hutts)]\nbomber<hutts>: 7,")],
+        )
+    };
+
+    // A variant the data declares can be chosen before it is loaded.
+    let units: BTreeMap<String, u32> = CrolComposer::with_cfg(config.clone())
+        .with_variant("hutts")
+        .unwrap()
+        .load_layer(base())
+        .load_layer(modded())
+        .compose()
+        .unwrap();
+    assert_eq!(units["bomber"], 7);
+
+    let data = CrolComposer::with_cfg(config.clone())
+        .load_layer(base())
+        .load_layer(modded())
+        .compose_data()
+        .unwrap();
+    // The base and one context for each member of the group.
+    assert_eq!(data.contexts().count(), 4);
+    let rebels = data.context(["rebels"]).unwrap();
+    assert_eq!(data.get_in::<u32>("bomber", &rebels).unwrap(), 20);
+    assert!(data.context(["empire", "rebels"]).is_err());
+
+    // What a `.crob` layer declares survives.
+    let binary = base().to_binary().unwrap();
+    let data = CrolComposer::with_cfg(config.clone())
+        .load_layer(CrolLayer::from_binary("base", &binary).unwrap())
+        .compose_data()
+        .unwrap();
+    let empire = data.context(["empire"]).unwrap();
+    assert_eq!(data.get_in::<u32>("bomber", &empire).unwrap(), 12);
+
+    // A variant the data does not declare is still an error, when composing.
+    let error = CrolComposer::with_cfg(config)
+        .with_variant("sith")
+        .unwrap()
+        .load_layer(base())
+        .compose_data()
+        .unwrap_err();
+    assert!(error.to_string().contains("no variant `sith`"), "{error}");
 }
 
 #[test]

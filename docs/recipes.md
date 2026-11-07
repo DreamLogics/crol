@@ -264,7 +264,7 @@ The source's name appears in messages, so start it with something of your own,
 like `memory:` here. Its extension [counts as a file's
 does](modes.md#text-has-no-extension): a layer called `memory:base.crol` is an
 error, and one called `memory:base` follows the call that loaded it. To hold a directory of documents, return `Loaded::Directory`
-with the relative path and source of each: CROL orders them by path itself.
+with the relative path and source of each: CROL [orders them](layers.md#the-order-of-files-in-a-layer) itself.
 `crol::Error::source_id()` tells you which source an error from loading is about.
 
 Loaders are chained by order: those you register, first one first, and then the

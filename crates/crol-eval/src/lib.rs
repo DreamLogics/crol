@@ -31,12 +31,14 @@ pub mod fingerprint;
 mod ir;
 mod literal;
 mod lower;
+mod order;
 pub mod print;
 mod source;
 mod value;
 mod variants;
 
 pub use diagnostic::{Diagnostic, Related, Severity};
+pub use order::{LayerTarget, layer_target};
 pub use source::{FileId, Location, SourceFile, Sources, Span};
 pub use value::{Key, Keyed, Value, ValueKind, format_float, is_identifier, quote, quote_char};
 pub use variants::{Context, VariantId, Variants};
@@ -91,7 +93,8 @@ pub struct Layer {
     /// The layer's name, for messages: `base`, `::data::local`.
     pub name: String,
     /// The documents, each with its path relative to the layer (`/`
-    /// separators). They are evaluated in the order of their paths.
+    /// separators). They are evaluated folder by folder (`SPEC.md` 7.1),
+    /// whatever order they are given in.
     pub documents: Vec<(String, FileId)>,
 }
 
@@ -99,9 +102,6 @@ pub struct Layer {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct DataOptions {
-    /// Warn when patches to one key come from several documents of one
-    /// layer, since their order then depends on file names (`SPEC.md` 7.2).
-    pub warn_cross_file_patches: bool,
     /// The variants (`SPEC.md` 8.1). If none are declared, every name the
     /// data uses is a `Discrete` variant.
     pub variants: Variants,
@@ -152,7 +152,6 @@ impl Eq for Defaults {}
 impl Default for DataOptions {
     fn default() -> Self {
         Self {
-            warn_cross_file_patches: true,
             variants: Variants::new(),
             contexts: None,
             each_variant: false,
@@ -200,12 +199,6 @@ impl DataOptions {
         self
     }
 
-    /// Sets [`DataOptions::warn_cross_file_patches`].
-    pub fn with_warn_cross_file_patches(mut self, warn: bool) -> Self {
-        self.warn_cross_file_patches = warn;
-        self
-    }
-
     /// Sets [`DataOptions::variants`].
     pub fn with_variants(mut self, variants: Variants) -> Self {
         self.variants = variants;
@@ -247,6 +240,9 @@ pub const SCHEMA_DOCUMENT: &str = "schema.crod";
 pub struct Compiled {
     lowered: lower::LoweredData,
     layer_names: Vec<String>,
+    /// For each layer, which of its documents are in order other than by
+    /// name (`SPEC.md` 7.1).
+    orders: Vec<order::LayerOrder>,
 }
 
 /// Evaluates layers of data-mode documents (`SPEC.md` 7): later layers
@@ -291,7 +287,7 @@ pub fn encode_layer(sources: &Sources, layer: &Layer) -> Result<Vec<u8>, Vec<Dia
     let Some(compiled) = compiled else {
         return Err(diagnostics);
     };
-    let all = documents_of(layer, true);
+    let all = documents_of(sources, layer, true);
     let files: Vec<FileId> = all.iter().map(|(_, file)| *file).collect();
     let documents: Vec<binary::BinaryDocument> = all
         .iter()
@@ -313,7 +309,7 @@ pub fn encode_layer(sources: &Sources, layer: &Layer) -> Result<Vec<u8>, Vec<Dia
 pub fn lower_layer(sources: &Sources, layer: &Layer) -> Option<Vec<u8>> {
     let (compiled, diagnostics) = compile(sources, std::slice::from_ref(layer));
     let compiled = compiled.filter(|_| diagnostics.is_empty())?;
-    let all = documents_of(layer, true);
+    let all = documents_of(sources, layer, true);
     let files: Vec<FileId> = all.iter().map(|(_, file)| *file).collect();
     Some(binary::write_lowered(&compiled.lowered, &files))
 }
@@ -326,16 +322,14 @@ pub fn compile_schema_documents(
     compile_documents(sources, layers, true, &[])
 }
 
-/// A layer's documents in the order they apply, without its `schema.crod`
-/// unless `schema` says.
-fn documents_of(layer: &Layer, schema: bool) -> Vec<&(String, FileId)> {
-    let mut documents: Vec<&(String, FileId)> = layer
-        .documents
-        .iter()
-        .filter(|(path, _)| schema || path != SCHEMA_DOCUMENT)
-        .collect();
-    documents.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
-    documents
+/// A layer's documents in the order they apply (`SPEC.md` 7.1), without
+/// its `schema.crod` unless `schema` says.
+fn documents_of<'l>(
+    sources: &Sources,
+    layer: &'l Layer,
+    schema: bool,
+) -> Vec<&'l (String, FileId)> {
+    order::order_layer(sources, layer, schema).0
 }
 
 /// How much text is worth a thread.
@@ -405,11 +399,14 @@ fn compile_documents(
     let mut ir = ir::Ir::default();
     let mut parts = Vec::new();
     let mut last_file = None;
+    let mut orders = Vec::with_capacity(layers.len());
     for (layer_index, layer) in layers.iter().enumerate() {
-        let documents = documents_of(layer, schema);
+        let (documents, order, mut errors) = order::order_layer(sources, layer, schema);
+        diagnostics.append(&mut errors);
+        orders.push(order);
         last_file = documents.last().map(|(_, file)| *file).or(last_file);
         if let Some(Some(bytes)) = lowered.get(layer_index) {
-            let all = documents_of(layer, true);
+            let all = documents_of(sources, layer, true);
             let files: Vec<FileId> = all.iter().map(|(_, file)| *file).collect();
             match binary::read_lowered(bytes, &files, sources, layer_index, &mut ir) {
                 Ok(part) => parts.push(part),
@@ -481,6 +478,7 @@ fn compile_documents(
         Some(Compiled {
             lowered,
             layer_names,
+            orders,
         }),
         diagnostics,
     )
@@ -510,9 +508,10 @@ fn evaluate_lowered(
         ops: &lowered.ops,
         templates: &lowered.templates,
         root_defaults: &lowered.root_defaults,
+        declared: &lowered.declared,
         root_span: lowered.root_span,
         layer_names: &compiled.layer_names,
-        warn_cross_file_patches: options.warn_cross_file_patches,
+        orders: &compiled.orders,
         variants: &options.variants,
         contexts: options.contexts.as_deref(),
         each_variant: options.each_variant,
@@ -724,7 +723,7 @@ fn explain_paths(
     }
     let mut parses = Vec::new();
     for (layer_index, layer) in layers.iter().enumerate() {
-        let documents = documents_of(layer, false);
+        let documents = documents_of(sources, layer, false);
         for (index, (_, file)) in documents.into_iter().enumerate() {
             parses.push((
                 *file,
@@ -817,9 +816,10 @@ fn explain_input<'a>(
         ops: &lowered.ops,
         templates: &lowered.templates,
         root_defaults: &lowered.root_defaults,
+        declared: &lowered.declared,
         root_span: lowered.root_span,
         layer_names,
-        warn_cross_file_patches: false,
+        orders: &[],
         variants,
         contexts: options.contexts.as_deref(),
         each_variant: options.each_variant,
@@ -882,7 +882,7 @@ fn check_sealed(
             ops: &ops[..end],
             variants: &result.variants,
             contexts: Some(&contexts),
-            warn_cross_file_patches: false,
+            orders: &[],
             known_base: None,
             ..*input
         };

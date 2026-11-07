@@ -441,8 +441,7 @@ impl SchemaFile {
         let compiled = compiled?;
         let options = DataOptions::default()
             .with_contexts(Some(Vec::new()))
-            .with_merge_root(true)
-            .with_warn_cross_file_patches(false);
+            .with_merge_root(true);
         let mut evaluation = evaluate_compiled(&compiled, &options);
         diagnostics.append(&mut evaluation.diagnostics);
         let root = evaluation.value?;

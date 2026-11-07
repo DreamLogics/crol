@@ -1,0 +1,4 @@
+// The application only opens the group `civ`; the data names its members.
++bomber: { hp: 10, cost: 5 },
+// A variant that a layer above declares.
+bomber<hutts>.cost: 1,

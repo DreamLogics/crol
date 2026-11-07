@@ -1,1 +1,1 @@
-warning: 1-base/a.crod:9:1: `together` is patched from 2 documents of the layer `base`, so the order of the patches depends on the file names
+1-base/b.crod:3:1: `together` is patched from `a.crod` and `b.crod` of the layer `base`, and only their names put the patches in order; put one in a folder below the other's, or name the other in its `#![extends(...)]`

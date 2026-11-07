@@ -100,7 +100,7 @@ required, and `..` at the end leaves out the rest. Once you have a
 | Field      | Holds                                                                                        |
 | ---------- | -------------------------------------------------------------------------------------------- |
 | `layers`   | the layers, lowest first: `List([...])`, or a [command](#layers-from-a-command)                |
-| `variants` | `Grouped([...])` and `Discrete("...")` entries, as you declare in [Rust](variants.md#declaring-variants) |
+| `variants` | `Grouped([...])`, `Discrete("...")` and `Open("...")` entries, as you declare in [Rust](variants.md#declaring-variants) |
 | `parents`  | variant parents, from child to parent                                                        |
 | `schema`   | the [schema](schemas.md#in-a-project-file): a module path as a string, a URL, or a crate     |
 | `root`     | the [root type](schemas.md#which-type-a-document-has), if it is not the schema's own         |
@@ -119,7 +119,7 @@ vendored data: the layer is loaded, but your editor does not report problems in
 it.
 
 `options` takes `implicit_some`, `allow_unknown_fields`, `require_complete`,
-`warn_cross_file_patches`, `init_defaults`, `each_variant`, `max_contexts`, `contexts`, and `variant_keys`, which
+`init_defaults`, `each_variant`, `max_contexts`, `contexts`, and `variant_keys`, which
 is written as a string here: `"NoNewKeys"`.
 
 ### Value documents in a project
@@ -242,6 +242,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         variants = match variant {
             Variant::Discrete(name) => variants.add_discrete(name),
             Variant::Grouped(names) => variants.add_grouped(names),
+            Variant::Open(group) => variants.add_open_group(group),
         };
     }
     for (child, parent) in project.parents.clone() {
@@ -348,8 +349,8 @@ A few things to keep in mind:
   part of it, and a `.crol` file there is an error, so keep `crol/schema.crol`
   out of the layers. A directory that is not listed in the project is not loaded.
 - **Split a layer by subject.** Each key can be defined only once per layer, so
-  put a key's definition and its patches in the same file, and avoid the
-  [warning about patches across files](layers.md#definitions-and-patches).
+  put a key's definition in one file, and what changes it in the same file or
+  [in a folder below it](layers.md#the-order-of-files-in-a-layer).
 - **Keep templates in the lowest layer.** Templates are visible everywhere, but
   each one can be defined only once.
 - **A layer has to exist.** `crol` stops with an error if a directory in the

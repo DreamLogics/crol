@@ -33,6 +33,8 @@ pub(crate) struct LoweredData {
     pub(crate) templates: Vec<BindId>,
     /// Every `..` at a root.
     pub(crate) root_defaults: Vec<RootDefaults>,
+    /// Every `#![variant(group: name)]`.
+    pub(crate) declared: Vec<DeclaredVariant>,
     /// Where what is wrong with the root as a whole is reported: the start
     /// of the top document (`SPEC.md` 4.1).
     pub(crate) root_span: Span,
@@ -93,6 +95,7 @@ pub(crate) fn lower_data_over(
         default_target: DefaultTarget::default(),
         block_target: DefaultTarget::default(),
         root_defaults: Vec::new(),
+        declared: Vec::new(),
     };
 
     // Templates are visible in every document of every layer, so they are
@@ -101,6 +104,7 @@ pub(crate) fn lower_data_over(
     let mut templates = Vec::new();
     let mut ops = Vec::new();
     let mut root_defaults = Vec::new();
+    let mut declared = Vec::new();
     for part in parts {
         for id in part.templates {
             let bind = &lowerer.ir.value_binds[id];
@@ -117,8 +121,10 @@ pub(crate) fn lower_data_over(
         }
         ops.extend(part.ops);
         root_defaults.extend(part.root_defaults);
+        declared.extend(part.declared);
     }
     lowerer.root_defaults = root_defaults;
+    lowerer.declared = declared;
     let mut entries_of = Vec::with_capacity(documents.len());
     for document in documents {
         lowerer.file = document.file;
@@ -176,6 +182,7 @@ pub(crate) fn lower_data_over(
         ir,
         mut diagnostics,
         root_defaults,
+        declared,
         ..
     } = lowerer;
     diagnostics.sort_by_key(|d| (d.span.file, d.span.range.start()));
@@ -187,6 +194,7 @@ pub(crate) fn lower_data_over(
             ops,
             templates,
             root_defaults,
+            declared,
             root_span,
         },
         diagnostics,
@@ -237,6 +245,8 @@ struct Lowerer {
     position: (usize, usize),
     /// Every `..` at a root so far.
     root_defaults: Vec<RootDefaults>,
+    /// Every `#![variant(group: name)]` so far.
+    declared: Vec<DeclaredVariant>,
     /// Whose default a `&default` here is.
     default_target: DefaultTarget,
     /// The `&default` target of the block being lowered, for its value binds
@@ -406,6 +416,7 @@ pub(crate) fn lower_value_document(
         default_target: DefaultTarget::default(),
         block_target: DefaultTarget::default(),
         root_defaults: Vec::new(),
+        declared: Vec::new(),
     };
     let type_name = lowerer.attributes(document);
     let root = match document.expr() {
@@ -867,6 +878,18 @@ impl Lowerer {
                     );
                 }
                 Some(ast::AttributeKind::Extends(_)) => {}
+                Some(ast::AttributeKind::Variant(_)) if !self.data_mode => {
+                    self.error(
+                        span,
+                        "`variant` declares a variant of data, and a value-mode document has no variants",
+                    );
+                }
+                Some(ast::AttributeKind::Variant(attr)) => {
+                    if let (Some(group), Some(name)) = (attr.group(), attr.name()) {
+                        let (group, name) = (self.name(group.text()), self.name(name.text()));
+                        self.declared.push(DeclaredVariant { group, name, span });
+                    }
+                }
                 None => {}
             }
         }

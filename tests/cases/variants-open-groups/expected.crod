@@ -1,0 +1,25 @@
+bomber: { hp: 10, cost: 5 }
+
+<!hard & empire & !rebels & !hutts> {
+    bomber: { hp: 12, cost: 5 },
+}
+
+<hard & empire & !rebels & !hutts> {
+    bomber: { hp: 12, cost: 5 },
+}
+
+<!hard & !empire & rebels & !hutts> {
+    bomber: { hp: 20, cost: 5 },
+}
+
+<hard & !empire & rebels & !hutts> {
+    bomber: { hp: 40, cost: 5 },
+}
+
+<!hard & !empire & !rebels & hutts> {
+    bomber: { hp: 7, cost: 1 },
+}
+
+<hard & !empire & !rebels & hutts> {
+    bomber: { hp: 7, cost: 1 },
+}

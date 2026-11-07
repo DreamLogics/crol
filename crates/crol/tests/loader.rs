@@ -175,19 +175,17 @@ fn extends_goes_through_the_loader() {
     let names: Vec<_> = composed.layers().iter().map(CrolLayer::name).collect();
     assert_eq!(
         names,
-        ["super::base::defaults", "sibling", "::data::top"],
-        "extends come below, in document order"
+        ["super::base::defaults", "::data::top"],
+        "extends come below; one within the layer orders it"
     );
-    // `super` and relative paths arrive applied to the document's directory.
+    // `super` arrives applied to the document's directory.
     let asked = asked.lock().unwrap();
     assert_eq!(asked[1].0, ["data", "base", "defaults"]);
     assert_eq!(asked[1].1, "super::base::defaults");
-    assert_eq!(asked[2].0, ["data", "top", "nested", "sibling"]);
     drop(asked);
-    // `sibling` is a layer of its own and, being below `data/top`, a document
-    // of the top layer too, as it would be on disk.
+    // `sibling` is in the layer, and comes before `nested/b.crod` there.
     let data = composed.compose_data().unwrap();
-    assert_eq!(data.get::<u16>("port").unwrap(), 291);
+    assert_eq!(data.get::<u16>("port").unwrap(), 191);
 }
 
 #[test]

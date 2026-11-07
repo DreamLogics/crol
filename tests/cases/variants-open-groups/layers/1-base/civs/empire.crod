@@ -1,0 +1,5 @@
+#![variant(civ: empire)]
+
+// `empire` and `rebels` patch `bomber` from files that only their names put
+// in order, which is fine: they are never active together.
+bomber<empire>.hp: & + 2,

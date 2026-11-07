@@ -337,9 +337,12 @@ fn schema_tree(name: &str) -> PathBuf {
             ("bad.crod", "+web: Service { replicas: -2 }\n"),
             ("good.crol", "Service { replicas: 2 }\n"),
             ("bad.crol", "Service { replicas: -2 }\n"),
-            ("warned/a.crod", "+web: { port: 1, tag: \"a\" }\n"),
-            ("warned/b.crod", "web.port: 2\n"),
-            ("warned/c.crod", "web.tag: \"c\"\nweb.port: 3\n"),
+            ("other.crol", SERVICE_SCHEMA),
+            (
+                "warned/a.crod",
+                "#![schema(super::other)]\n\n+web: Service { replicas: 1 }\n",
+            ),
+            ("warned/b.crod", "web.replicas: 3\n"),
         ],
     )
 }
@@ -391,13 +394,14 @@ fn every_command_passes_data_the_schema_accepts() {
 #[test]
 fn warnings_do_not_fail_a_command() {
     let dir = schema_tree("warnings");
+    let args = |command| [command, "./warned", "--schema", "schema.crol"];
     for command in ["check", "eval", "fingerprint"] {
-        let output = crol(&dir, &[command, "./warned"]);
+        let output = crol(&dir, &args(command));
         assert!(output.status.success(), "{command}: {output:?}");
-        assert!(stderr(&output).contains("patched from"), "{output:?}");
+        assert!(stderr(&output).contains("another schema"), "{output:?}");
     }
-    let output = crol(&dir, &["eval", "./warned"]);
-    assert!(stdout(&output).contains("port: 3"), "{output:?}");
+    let output = crol(&dir, &args("eval"));
+    assert!(stdout(&output).contains("replicas: 3"), "{output:?}");
 }
 
 // ---- Layers and keys (`SPEC.md` 11) ----

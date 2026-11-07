@@ -465,6 +465,7 @@ impl Parser<'_> {
                 "schema" => Some((SCHEMA_KW, SCHEMA_ATTR)),
                 "type" => Some((TYPE_KW, TYPE_ATTR)),
                 "extends" => Some((EXTENDS_KW, EXTENDS_ATTR)),
+                "variant" => Some((VARIANT_KW, VARIANT_ATTR)),
                 _ => None,
             };
             match kind {
@@ -484,6 +485,12 @@ impl Parser<'_> {
                             TYPE_ATTR => {
                                 self.expect(IDENT, "a type name");
                             }
+                            VARIANT_ATTR => {
+                                if self.expect(IDENT, "a group name") {
+                                    self.expect(COLON, "`:` after the group name");
+                                    self.expect(IDENT, "a variant name");
+                                }
+                            }
                             _ => self.module_path(),
                         }
                         self.recover_until(&[R_PAREN, R_BRACK]);
@@ -493,7 +500,7 @@ impl Parser<'_> {
                 }
                 None if self.at(IDENT) => {
                     self.error(format!(
-                        "unknown attribute `{}`; the attributes are `use`, `schema`, `type` and `extends`",
+                        "unknown attribute `{}`; the attributes are `use`, `schema`, `type`, `extends` and `variant`",
                         self.nth_text(0)
                     ));
                 }

@@ -193,6 +193,7 @@ ast_enum!(
         Schema(SchemaAttr),
         Type(TypeAttr),
         Extends(ExtendsAttr),
+        Variant(VariantAttr),
     }
 );
 
@@ -405,6 +406,23 @@ impl ExtendsAttr {
     /// The module path of the extended documents.
     pub fn module_path(&self) -> Option<ModulePath> {
         child(&self.0)
+    }
+}
+
+ast_node!(
+    /// `variant(civ: empire)`
+    VariantAttr, VARIANT_ATTR
+);
+
+impl VariantAttr {
+    /// The open group the variant joins.
+    pub fn group(&self) -> Option<SyntaxToken> {
+        tokens(&self.0, IDENT).next()
+    }
+
+    /// The variant's name.
+    pub fn name(&self) -> Option<SyntaxToken> {
+        tokens(&self.0, IDENT).nth(1)
     }
 }
 

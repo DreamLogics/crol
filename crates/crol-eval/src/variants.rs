@@ -15,6 +15,8 @@ pub struct Variants {
     group_of: Vec<Option<usize>>,
     groups: Vec<Vec<VariantId>>,
     parent: Vec<Option<VariantId>>,
+    /// The groups data may add to, by name, with their index in `groups`.
+    open: Vec<(String, usize)>,
 }
 
 impl Variants {
@@ -23,9 +25,9 @@ impl Variants {
         Self::default()
     }
 
-    /// Whether no variant is declared.
+    /// Whether no variant is declared and no group is open.
     pub fn is_empty(&self) -> bool {
-        self.names.is_empty()
+        self.names.is_empty() && self.open.is_empty()
     }
 
     fn add(&mut self, name: &str, group: Option<usize>) -> Result<VariantId, String> {
@@ -59,6 +61,61 @@ impl Variants {
             members.push(self.add(name.as_ref(), Some(group))?);
         }
         self.groups.push(members);
+        Ok(())
+    }
+
+    /// Opens a group of alternatives that data adds to, with
+    /// `#![variant(group: name)]` (`SPEC.md` 8.1). It starts empty.
+    pub fn add_open_group(&mut self, group: &str) -> Result<(), String> {
+        if !crate::value::is_identifier(group) {
+            return Err(format!(
+                "`{group}` is not an identifier, so it cannot name a group"
+            ));
+        }
+        if self.open.iter().any(|(name, _)| name == group) {
+            return Err(format!("the group `{group}` is opened twice"));
+        }
+        self.open.push((group.to_owned(), self.groups.len()));
+        self.groups.push(Vec::new());
+        Ok(())
+    }
+
+    /// The names of the open groups.
+    pub fn open_groups(&self) -> impl Iterator<Item = &str> {
+        self.open.iter().map(|(name, _)| name.as_str())
+    }
+
+    /// Adds `name` to the open group `group`, for data that declares it.
+    /// Declaring a variant again in the same group does nothing.
+    pub fn add_to_open_group(&mut self, group: &str, name: &str) -> Result<(), String> {
+        let Some(&(_, index)) = self.open.iter().find(|(open, _)| open == group) else {
+            return Err(if self.open.is_empty() {
+                format!(
+                    "no group is open, so data cannot declare the variant `{name}`; the application opens one"
+                )
+            } else {
+                let names: Vec<String> = self.open.iter().map(|(n, _)| format!("`{n}`")).collect();
+                let are = if names.len() == 1 {
+                    "group is"
+                } else {
+                    "groups are"
+                };
+                format!(
+                    "`{group}` is not an open group; the open {are} {}",
+                    names.join(", ")
+                )
+            });
+        };
+        if let Some(id) = self.id(name) {
+            if self.group_of[id] == Some(index) {
+                return Ok(());
+            }
+            return Err(format!(
+                "the variant `{name}` is already declared outside the group `{group}`"
+            ));
+        }
+        let id = self.add(name, Some(index))?;
+        self.groups[index].push(id);
         Ok(())
     }
 

@@ -36,6 +36,7 @@ pub enum SyntaxKind {
     SCHEMA_KW,
     TYPE_KW,
     EXTENDS_KW,
+    VARIANT_KW,
     SUPER_KW,
 
     // Punctuation (`SPEC.md` 2.5).
@@ -86,6 +87,8 @@ pub enum SyntaxKind {
     TYPE_ATTR,
     /// `extends(...)`
     EXTENDS_ATTR,
+    /// `variant(group: name)`
+    VARIANT_ATTR,
     /// `::a::b`, `super::a`, `a::b`
     MODULE_PATH,
     /// `app::net::Config<u32> as Alias`
@@ -255,6 +258,7 @@ const KINDS: [SyntaxKind; __LAST as usize] = [
     SCHEMA_KW,
     TYPE_KW,
     EXTENDS_KW,
+    VARIANT_KW,
     SUPER_KW,
     L_BRACE,
     R_BRACE,
@@ -293,6 +297,7 @@ const KINDS: [SyntaxKind; __LAST as usize] = [
     SCHEMA_ATTR,
     TYPE_ATTR,
     EXTENDS_ATTR,
+    VARIANT_ATTR,
     MODULE_PATH,
     USE_PATH,
     USE_ALIAS,

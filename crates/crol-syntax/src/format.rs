@@ -808,6 +808,7 @@ impl Formatter {
             .map(|t| match t.kind() {
                 COMMA => ", ".to_owned(),
                 SEMI => "; ".to_owned(),
+                COLON => ": ".to_owned(),
                 AS_KW => " as ".to_owned(),
                 _ => t.to_string(),
             })

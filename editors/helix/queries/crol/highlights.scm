@@ -5,7 +5,7 @@
 ["+" "-" "*" "/" "%" "~" "~^" "|" "^" "&" "!" "?" ":=" "=" ".."] @operator
 [":" ";" "," "." "::"] @punctuation.delimiter
 ["{" "}" "[" "]" "(" ")"] @punctuation.bracket
-["use" "schema" "type" "extends" "as" "super"] @keyword
+["use" "schema" "type" "extends" "variant" "as" "super"] @keyword
 
 ; Comments.
 (line_comment) @comment.line

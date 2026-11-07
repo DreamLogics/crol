@@ -78,8 +78,6 @@ pub struct ProjectOptions {
     pub allow_unknown_fields: bool,
     /// Every field must be written unless the value has `..`.
     pub require_complete: bool,
-    /// Warn about patches to a key from several documents of one layer.
-    pub warn_cross_file_patches: bool,
     /// Let a path go through a field left out, from its default.
     pub init_defaults: bool,
     /// Evaluate the base and one context for each variant, not every
@@ -99,7 +97,6 @@ impl Default for ProjectOptions {
             implicit_some: true,
             allow_unknown_fields: false,
             require_complete: true,
-            warn_cross_file_patches: true,
             init_defaults: false,
             each_variant: false,
             max_contexts: 4096,
@@ -328,6 +325,7 @@ impl Project {
             match variant {
                 Variant::Discrete(name) => variants.add_discrete(name).map_err(project)?,
                 Variant::Grouped(names) => variants.add_grouped(names).map_err(project)?,
+                Variant::Open(group) => variants.add_open_group(group).map_err(project)?,
             }
         }
         for (child, parent) in &self.parents {
@@ -468,14 +466,6 @@ impl Schema for ProjectOptions {
                         ),
                     ),
                     (
-                        "warn_cross_file_patches",
-                        field(
-                            TypeExpr::Bool,
-                            "Warn about patches to a key from several documents of one layer.",
-                            recorded_default(&d.warn_cross_file_patches),
-                        ),
-                    ),
-                    (
                         "init_defaults",
                         field(
                             TypeExpr::Bool,
@@ -581,6 +571,13 @@ impl<T: Schema> Schema for Variant<T> {
                         variant(
                             VariantShape::Newtype(TypeExpr::List(Box::new(arg.clone()))),
                             "Alternatives: at most one of them is active.",
+                        ),
+                    ),
+                    (
+                        "Open".to_owned(),
+                        variant(
+                            VariantShape::Newtype(TypeExpr::String),
+                            "A group of alternatives that data declares, with `#![variant(group: name)]`.",
                         ),
                     ),
                 ]
