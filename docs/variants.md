@@ -39,8 +39,9 @@ web: { replicas: 8, log_level: "info" }
 
 ## Declaring variants
 
-Only your program declares variants. Data can use them, but not add or change
-them, so a typo in a file is an error rather than a new variant. There are two
+Your program declares variants. Data can use them, but not add or change
+them, so a typo in a file is an error rather than a new variant (except in a
+group you [open to the data](#variants-the-data-declares)). There are two
 kinds:
 
 - **Discrete**: a flag, on or off, independent of everything else.
@@ -103,6 +104,72 @@ one group.
 
 For the command line, the same declaration is `--group`, `--discrete` and
 `--parent`, or the [project file](projects.md#the-project-file).
+
+### Variants the data declares
+
+Sometimes only the data knows the alternatives: the factions of a game, which
+mods add to. Your program can then **open a group**, and each file adds to it
+with a `variant` attribute:
+
+```crol
+// game/units.crod
++bomber: { hp: 10 },
+```
+
+```crol
+// game/civs/empire.crod
+#![variant(civ: empire)]
+
+bomber<empire>.hp: & + 2,
+```
+
+```crol
+// game/civs/rebels.crod
+#![variant(civ: rebels)]
+
+bomber<rebels>.hp: & * 2,
+```
+
+```rust
+// src/main.rs
+use crol::{CrolComposer, CrolConfig, CrolLayer, CrolVariants};
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct Unit {
+    hp: u32,
+}
+
+fn main() -> Result<(), crol::Error> {
+    let data = CrolComposer::with_cfg(CrolConfig {
+        variants: CrolVariants::new().add_open_group("civ"),
+        ..Default::default()
+    })
+    .load_layer(CrolLayer::from_path("game", std::path::Path::new("game"))?)
+    .compose_data()?;
+
+    for context in data.contexts() {
+        let bomber: Unit = data.get_in("bomber", &context)?;
+        println!("{:?}: {} hp", data.context_names(&context), bomber.hp);
+    }
+    Ok(())
+}
+```
+
+```console
+$ cargo run
+[]: 10 hp
+["empire"]: 12 hp
+["rebels"]: 20 hp
+```
+
+The members of an open group exclude each other, as in any group, so the two
+files above need no order. A file can use a variant that a layer above
+declares, and two files may declare the same one. A `variant` that names a
+group your program did not open is an error, as is a name used in a condition
+that nobody declares. Open groups need variants named by strings, so not the
+typed variants below. On the command line, open a group with `--open civ`, and
+in the project file with `Open("civ")`.
 
 ### Typed variants
 

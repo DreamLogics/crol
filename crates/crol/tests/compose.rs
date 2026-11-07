@@ -402,6 +402,75 @@ fn variants_and_contexts() {
 }
 
 #[test]
+fn open_groups_take_variants_from_data() {
+    let config = CrolConfig {
+        variants: crol::CrolVariants::new().add_open_group("civ"),
+        ..Default::default()
+    };
+    let base = || {
+        CrolLayer::from_sources(
+            "base",
+            [
+                ("units.crod", "+bomber: 10,"),
+                (
+                    "empire.crod",
+                    "#![variant(civ: empire)]\nbomber<empire>: & + 2,",
+                ),
+                (
+                    "rebels.crod",
+                    "#![variant(civ: rebels)]\nbomber<rebels>: & * 2,",
+                ),
+            ],
+        )
+    };
+    let modded = || {
+        CrolLayer::from_sources(
+            "mod",
+            [("hutts.crod", "#![variant(civ: hutts)]\nbomber<hutts>: 7,")],
+        )
+    };
+
+    // A variant the data declares can be chosen before it is loaded.
+    let units: BTreeMap<String, u32> = CrolComposer::with_cfg(config.clone())
+        .with_variant("hutts")
+        .unwrap()
+        .load_layer(base())
+        .load_layer(modded())
+        .compose()
+        .unwrap();
+    assert_eq!(units["bomber"], 7);
+
+    let data = CrolComposer::with_cfg(config.clone())
+        .load_layer(base())
+        .load_layer(modded())
+        .compose_data()
+        .unwrap();
+    // The base and one context for each member of the group.
+    assert_eq!(data.contexts().count(), 4);
+    let rebels = data.context(["rebels"]).unwrap();
+    assert_eq!(data.get_in::<u32>("bomber", &rebels).unwrap(), 20);
+    assert!(data.context(["empire", "rebels"]).is_err());
+
+    // What a `.crob` layer declares survives.
+    let binary = base().to_binary().unwrap();
+    let data = CrolComposer::with_cfg(config.clone())
+        .load_layer(CrolLayer::from_binary("base", &binary).unwrap())
+        .compose_data()
+        .unwrap();
+    let empire = data.context(["empire"]).unwrap();
+    assert_eq!(data.get_in::<u32>("bomber", &empire).unwrap(), 12);
+
+    // A variant the data does not declare is still an error, when composing.
+    let error = CrolComposer::with_cfg(config)
+        .with_variant("sith")
+        .unwrap()
+        .load_layer(base())
+        .compose_data()
+        .unwrap_err();
+    assert!(error.to_string().contains("no variant `sith`"), "{error}");
+}
+
+#[test]
 fn typed_variants() {
     #[derive(Debug, Clone, PartialEq, Eq)]
     enum Env {

@@ -30,6 +30,9 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   the same to both. `View` leaves other `crol` attributes to their derives.
 - `ExplainStep::uses_below`, and `crol_eval::uses_value_below`, say whether an
   operation uses the value below it.
+- Open groups: `CrolVariants::add_open_group("civ")` (`Open("civ")` in a project file,
+  `--open civ` on the command line) opens a group of alternatives that data declares,
+  each with `#![variant(civ: empire)]`, for variants that only the data knows.
 
 ### Fixed
 
@@ -41,7 +44,8 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Changed
 
-- `.crob` files are format 4, for `!` and the order of documents; compile layers again.
+- `.crob` files are format 4, for `!`, the order of documents and the `variant`
+  attribute; compile layers again.
 - The documents of a layer are in folder order: a folder's own documents come before
   those of its subfolders, and an `#![extends(...)]` that names a document or folder of
   the same layer puts it first; otherwise they go by name. Root keys can come in another
@@ -49,7 +53,8 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 - Patches to one key from two documents of a layer are an error, not a warning, when
   only the documents' names order them and the patches can apply together. That is
   checked for every valid context, not only those evaluated, so declare variants that
-  exclude each other as one group.
+  exclude each other as one group, or let the data declare them in an open group.
+- `Variant` has a third case, `Open`, so a `match` on it needs another arm.
 - With `load_extends`, an `extends` that names documents of its own layer orders them,
   and no longer loads them again as a layer below.
 - `reload`, and a read after a write in a transaction, take about half the time from

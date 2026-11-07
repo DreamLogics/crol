@@ -100,7 +100,7 @@ required, and `..` at the end leaves out the rest. Once you have a
 | Field      | Holds                                                                                        |
 | ---------- | -------------------------------------------------------------------------------------------- |
 | `layers`   | the layers, lowest first: `List([...])`, or a [command](#layers-from-a-command)                |
-| `variants` | `Grouped([...])` and `Discrete("...")` entries, as you declare in [Rust](variants.md#declaring-variants) |
+| `variants` | `Grouped([...])`, `Discrete("...")` and `Open("...")` entries, as you declare in [Rust](variants.md#declaring-variants) |
 | `parents`  | variant parents, from child to parent                                                        |
 | `schema`   | the [schema](schemas.md#in-a-project-file): a module path as a string, a URL, or a crate     |
 | `root`     | the [root type](schemas.md#which-type-a-document-has), if it is not the schema's own         |
@@ -242,6 +242,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         variants = match variant {
             Variant::Discrete(name) => variants.add_discrete(name),
             Variant::Grouped(names) => variants.add_grouped(names),
+            Variant::Open(group) => variants.add_open_group(group),
         };
     }
     for (child, parent) in project.parents.clone() {

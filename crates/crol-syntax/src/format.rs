@@ -801,6 +801,7 @@ impl Formatter {
         significant_tokens(node)
             .map(|t| match t.kind() {
                 COMMA => ", ".to_owned(),
+                COLON => ": ".to_owned(),
                 AS_KW => " as ".to_owned(),
                 _ => t.to_string(),
             })

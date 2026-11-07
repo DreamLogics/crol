@@ -315,6 +315,15 @@ pub(crate) struct RootDefaults {
     pub(crate) span: Span,
 }
 
+/// `#![variant(group: name)]`: a data-mode document adds a variant to an
+/// open group (`SPEC.md` 8.1).
+#[derive(Debug, Clone)]
+pub(crate) struct DeclaredVariant {
+    pub(crate) group: Arc<str>,
+    pub(crate) name: Arc<str>,
+    pub(crate) span: Span,
+}
+
 impl RootOp {
     /// Whether this is a definition (`SPEC.md` 7.2): a root entry without a
     /// path that declares, ensures, or sets without using the value below.

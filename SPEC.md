@@ -385,10 +385,10 @@ listener: Config { port: 8080 },
 database: DbConfig { url: "postgres://db" },
 ```
 
-There are four attributes, `use`, `schema`, `type` and `extends`; any
-other is an error, so that others can be added later. Several `use` and
-`extends` attributes, and several paths in one `use`, are allowed; the
-others appear at most once. Attributes apply in both data and
+There are five attributes, `use`, `schema`, `type`, `extends` and
+`variant`; any other is an error, so that others can be added later.
+Several `use`, `extends` and `variant` attributes, and several paths in
+one `use`, are allowed; the others appear at most once. Attributes apply in both data and
 value mode, to the whole document.
 
 **`use(path)`** says which schema type a type name in this document
@@ -565,10 +565,24 @@ web.replicas: 4,
   when an `extends` names something that is neither a lower layer nor in
   the document's own layer.
 
+**`variant(group: name)`** declares a variant of the data: it adds `name`
+to the group `group`, which the application has opened (section 8.1):
+
+```rust
+#![variant(civ: empire)]
+
+bomber<empire>.hp: & + 2,
+```
+
+Variants are declared before anything is evaluated, from every document
+of every layer, so a document can use a variant that a layer above it
+declares. It is an error in value mode, which has no variants.
+
 Errors: two `use`s that give one name to different types; an alias that
 is a reserved word; more than one `schema` or `type`; `type` in data
-mode, on a document that has a type name, or on an expression; `extends` in value mode; a
-cycle of `extends`; an attribute after the first entry or expression.
+mode, on a document that has a type name, or on an expression; `extends`
+or `variant` in value mode; a cycle of `extends`; an attribute after the
+first entry or expression.
 
 ### 4.2 Module paths
 
@@ -1537,12 +1551,14 @@ that are active.
 
 ### 8.1 Declaring variants
 
-Only the application declares variants; data cannot add or change them.
+The application declares variants. Data can only add alternatives to a
+group the application opens for it.
 
 ```rust
 pub enum Variant<T = String> {
     Discrete(T),       // a flag: on or off, independent of the rest
     Grouped(Vec<T>),   // alternatives: at most one of them is active
+    Open(String),      // a group, named, whose alternatives data declares
 }
 ```
 
@@ -1565,8 +1581,16 @@ let variants = CrolVariants::new()
   `Discrete`, or be in the same group; in a group, an active variant's
   ancestors do not count against "at most one". A cycle among parents is
   an error.
-- If no variants are declared, every name the data uses in a selector
-  (and that `T` accepts) is a `Discrete` with no parent.
+- **Open groups.** `add_open_group("civ")` opens a group, at first
+  empty, for alternatives that only the data knows, such as the factions
+  of a game that mods add to. A document adds to it with
+  `#![variant(civ: empire)]` (section 4.1). Declaring a variant again in
+  the same group does nothing; it is an error to name a group that is not
+  open, or a variant the application or another group already has. Open
+  groups are for variants named by strings, `CrolVariants<String>`.
+- If no variants are declared and no group is open, every name the data
+  uses in a selector (and that `T` accepts) is a `Discrete` with no
+  parent. A `variant` attribute is then an error.
 
 **Typed variants.** `T` is `String` by default. An application may use
 its own type instead, so that the variants it passes are checked by the
@@ -2903,7 +2927,7 @@ has to load it.
 | `crol --init`, `crol init` | set up the Cargo project around the working directory for CROL (below) |
 | `crol lsp` | run the language server on standard input and output (section 12.5) |
 
-Common flags: `--discrete a,b`, `--group a,b,c` (repeatable), `--parent child=parent`, `--color auto|always|never`,
+Common flags: `--discrete a,b`, `--group a,b,c` (repeatable), `--open civ` (repeatable), `--parent child=parent`, `--color auto|always|never`,
 `--message-format human|json`, `--project <file>`, `--schema <file>`,
 `--offline` (section 4.1).
 Without layer arguments, every command that needs layers reads them, with
@@ -3417,10 +3441,12 @@ these (section 4).
 entry, or more than one `schema` or `type`; `type` in data mode, with a
 top-level type name, or on an expression; an alias that is a reserved
 word; a spread at the data-mode root, or a data-mode document
-that is not entries; `extends` in value mode; a `schema` string that
+that is not entries; `extends` or `variant` in value mode; a `schema` string that
 is not a URL or crate; a module path that names nothing, both a file and
 a directory, or goes above the root directory; a file loader that fails,
 or lists a path that is not relative or a directory as a document (10.7);
+a `variant` that names a group that is not open, or a variant
+declared already outside that group;
 a cycle of `extends`, or one that names the folder holding its document
 or puts a subfolder before a document of the folder (7.1); two `use`s giving one name to different types; two definitions of a key under one condition in one layer;
 patches to one key from two documents of a layer that are not in order and
@@ -3445,8 +3471,9 @@ type names; `.0` on a keyed value; an
 integer key at the root; a spread of something that is not keyed; `&self`, `&parent` or a bind in a block
 without a location; `&parent` above the top level; a cycle.
 
-**Composer**: `with_variant` with an undeclared variant or a second
-choice in a group; more contexts than `max_contexts` without
+**Composer**: `with_variant` with an undeclared variant (when no group
+is open; with one, a variant the data does not declare either is an error
+when composing) or a second choice in a group; more contexts than `max_contexts` without
 `contexts`; an invalid or unevaluated context in `contexts` or
 `CrolData::context`; variants declared twice; a parent cycle, or a parent
 of another kind or group.

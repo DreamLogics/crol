@@ -1,0 +1,4 @@
+#![variant(civ: empire)]
+
++bomber: { hp: 10 },
+bomber<empire>.hp: 12,

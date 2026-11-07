@@ -325,6 +325,7 @@ impl Project {
             match variant {
                 Variant::Discrete(name) => variants.add_discrete(name).map_err(project)?,
                 Variant::Grouped(names) => variants.add_grouped(names).map_err(project)?,
+                Variant::Open(group) => variants.add_open_group(group).map_err(project)?,
             }
         }
         for (child, parent) in &self.parents {
@@ -570,6 +571,13 @@ impl<T: Schema> Schema for Variant<T> {
                         variant(
                             VariantShape::Newtype(TypeExpr::List(Box::new(arg.clone()))),
                             "Alternatives: at most one of them is active.",
+                        ),
+                    ),
+                    (
+                        "Open".to_owned(),
+                        variant(
+                            VariantShape::Newtype(TypeExpr::String),
+                            "A group of alternatives that data declares, with `#![variant(group: name)]`.",
                         ),
                     ),
                 ]

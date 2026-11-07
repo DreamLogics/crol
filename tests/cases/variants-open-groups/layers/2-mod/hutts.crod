@@ -1,0 +1,5 @@
+// Declaring a variant again in the same group is fine.
+#![variant(civ: empire)]
+#![variant(civ: hutts)]
+
+bomber<hutts>.hp: 7,

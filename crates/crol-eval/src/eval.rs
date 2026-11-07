@@ -843,6 +843,8 @@ pub(crate) struct DataInput<'a> {
     pub(crate) ops: &'a [RootOp],
     pub(crate) templates: &'a [BindId],
     pub(crate) root_defaults: &'a [RootDefaults],
+    /// Every `#![variant(group: name)]` of the data.
+    pub(crate) declared: &'a [DeclaredVariant],
     pub(crate) root_span: Span,
     pub(crate) layer_names: &'a [String],
     /// For each layer, which of its documents are in order other than by
@@ -1764,8 +1766,9 @@ fn explain_key(
 }
 
 impl<'a> DataPlan<'a> {
-    /// Resolves conditions against the variants, declaring the names the
-    /// data uses if the application declared none (`SPEC.md` 8.1), and
+    /// Resolves conditions against the variants, adding those the data
+    /// declares to open groups, or declaring the names the data uses if the
+    /// application declared none (`SPEC.md` 8.1), and
     /// groups operations by key.
     fn new(ir: &Ir, input: &DataInput<'a>, diagnostics: &mut Vec<Diagnostic>) -> Option<Self> {
         let mut names = Vec::new();
@@ -1789,6 +1792,11 @@ impl<'a> DataPlan<'a> {
             }
         }
         let mut variants = input.variants.clone();
+        for declared in input.declared {
+            if let Err(message) = variants.add_to_open_group(&declared.group, &declared.name) {
+                diagnostics.push(Diagnostic::error(declared.span, message));
+            }
+        }
         if variants.is_empty() {
             for (name, _) in &names {
                 if variants.id(name).is_none() {

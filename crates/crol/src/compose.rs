@@ -49,10 +49,13 @@ pub enum Variant<T = String> {
     Discrete(T),
     /// Alternatives: at most one of them is active.
     Grouped(Vec<T>),
+    /// Alternatives that data declares, with `#![variant(group: name)]`:
+    /// the group's name. Only for variants named by strings.
+    Open(String),
 }
 
-/// The variants an application declares (`SPEC.md` 8.1). Data cannot add
-/// or change them.
+/// The variants an application declares (`SPEC.md` 8.1). Data adds
+/// variants only to the groups the application opens.
 ///
 /// ```
 /// let variants = crol::CrolVariants::new()
@@ -83,6 +86,14 @@ impl CrolVariants<String> {
     /// No variants, named by strings.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Opens a group of alternatives, at first empty, to which data adds
+    /// with `#![variant(group: name)]`: for alternatives that only the data
+    /// knows, such as the factions of a game that mods add to.
+    pub fn add_open_group(mut self, group: impl Into<String>) -> Self {
+        self.declarations.push(Variant::Open(group.into()));
+        self
     }
 }
 
@@ -122,6 +133,7 @@ impl<T: VariantName> CrolVariants<T> {
                 Variant::Grouped(vs) => variants
                     .add_grouped(vs.iter().map(VariantName::name))
                     .map_err(composer)?,
+                Variant::Open(group) => variants.add_open_group(group).map_err(composer)?,
             }
         }
         for (child, parent) in &self.parents {
@@ -760,13 +772,15 @@ impl<T: VariantName> CrolComposer<T> {
 
     /// Makes a variant active in the context to compose (`SPEC.md` 8.1).
     /// Fails for a variant that is not declared (when variants are
-    /// declared), or a second choice in a group that is not an ancestor or
-    /// descendant of the first.
+    /// declared and no group is open), or a second choice in a group that is
+    /// not an ancestor or descendant of the first.
     pub fn with_variant(mut self, variant: impl Into<T>) -> Result<Self, Error> {
         let variant = variant.into();
         let declared = self.config.variants.build()?;
         if !self.config.variants.is_empty() {
-            if declared.id(variant.name()).is_none() {
+            // A variant the data may declare in an open group is checked when
+            // composing.
+            if declared.id(variant.name()).is_none() && declared.open_groups().next().is_none() {
                 return Err(Error::new(format!(
                     "composer: `{}` is not a declared variant",
                     variant.name()

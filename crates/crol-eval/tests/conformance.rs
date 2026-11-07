@@ -108,7 +108,15 @@ fn options(case: &Path) -> DataOptions {
                             };
                             variants.add_discrete(name).unwrap();
                         }
-                        _ => panic!("variants are `Grouped([...])` or `Discrete(\"...\")`"),
+                        ValueKind::NamedTuple(kind, args) if &**kind == "Open" => {
+                            let ValueKind::String(name) = &args[0].kind else {
+                                panic!()
+                            };
+                            variants.add_open_group(name).unwrap();
+                        }
+                        _ => panic!(
+                            "variants are `Grouped([...])`, `Discrete(\"...\")` or `Open(\"...\")`"
+                        ),
                     }
                 }
             }
