@@ -330,3 +330,93 @@ fn steps_are_offered_for_completion() {
         .collect();
     assert_eq!(labels, ["0", "1"]);
 }
+
+// ---- Where typed templates are used ----
+
+/// The warnings about where the templates of `text` are used, with `root`
+/// as the place everything is found from.
+fn use_warnings(schema: &SchemaFile, text: &str, root: typed::TypeRoot<'_>) -> Vec<String> {
+    let parse = crol_syntax::parse(text);
+    assert!(parse.errors().is_empty(), "{:?}", parse.errors());
+    let mut sources = crol_eval::Sources::new();
+    let file = sources.add("a.crod", text);
+    let document = parse.document();
+    let templates = typed::typed_templates([(file, &document)], schema);
+    typed::check_template_uses(file, &document, schema, &templates, root)
+        .into_iter()
+        .map(|d| d.message)
+        .collect()
+}
+
+#[test]
+fn templates_used_where_another_type_goes_are_warned_about() {
+    let schema = schema();
+    let text = r#"
+#[type(Limits)]
+l := { cpu: 1.0 }
+#[type(Item)]
+item := { name: "a" }
+#[type(String)]
+s := "s"
+#[type(f64)]
+r := 1.0
+
+limits: &l
+bar: &l
+collections: { a: [&item, &l] }
+tuple: (1, &s, "b", true)
+shape: Circle { radius: &r }
+pair: { ..&l, first: 1 }
+baz: [&s + 1]
+
+#[type(Foo)]
+f := { limits: & ~ &l, bar: &l }
+"#;
+    let root = typed::TypeRoot::Data {
+        root: None,
+        value: None,
+    };
+    expect_test::expect![[r#"
+        [
+            "the template `l` has the type `Limits`, but it is used where `Map<String, i32>` goes",
+            "the template `l` has the type `Limits`, but it is used where `Item` goes",
+            "the template `l` has the type `Limits`, but it is used where `Pair` goes",
+            "the template `l` has the type `Limits`, but it is used where `Map<String, i32>` goes",
+        ]
+    "#]]
+    .assert_debug_eq(&use_warnings(&schema, text, root));
+}
+
+#[derive(Deserialize, Serialize, Schema)]
+pub enum Definition {
+    Item(Item),
+    Limits(Limits),
+}
+
+#[test]
+fn the_variant_of_a_root_value_comes_from_its_evaluated_value() {
+    let schema = schema::build::<Definition>();
+    let text = "#[type(Limits)]\nl := { cpu: 1.0 }\n\n+a: Item { name: \"a\", value: 1 }\n+b: Limits { cpu: 2.0 }\na: & ~ &l\nb: & ~ &l\n";
+    let mut sources = crol_eval::Sources::new();
+    let file = sources.add("a.crod", text);
+    let layers = [crol_eval::Layer {
+        name: "base".to_owned(),
+        documents: vec![("a.crod".to_owned(), file)],
+    }];
+    let evaluation = crol_eval::evaluate_data(&sources, &layers, &Default::default());
+    let value = evaluation.value.as_ref().expect("it evaluates");
+    let root = typed::TypeRoot::Data {
+        root: None,
+        value: Some(value),
+    };
+    assert_eq!(
+        use_warnings(&schema, text, root),
+        ["the template `l` has the type `Limits`, but it is used where `Item` goes"]
+    );
+    // Without the evaluation, the variant is not known, and nothing is said.
+    let root = typed::TypeRoot::Data {
+        root: None,
+        value: None,
+    };
+    assert_eq!(use_warnings(&schema, text, root), Vec::<String>::new());
+}

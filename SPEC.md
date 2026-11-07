@@ -1153,6 +1153,15 @@ more_cols := { a: [], b: [] },
   `#[type(Foo.bar)] t := Service { ... }`, is reported. A type that names
   nothing, or a step the type has not, is reported too, and the bind is
   then checked as if it had no type.
+- **Where it is used.** What a template computes is checked where it
+  lands, as part of the root value it lands in (section 10.9), against the
+  type of that place. Tools also warn where a template with a type is used
+  as a whole value at a place of another type: as the operand of a spread,
+  of `~`, `~^` or `|`, or as the value of an entry, an element or a
+  payload. Types are the same through `Option`, newtypes and
+  `#[serde(transparent)]`. A place whose type is not known, such as an
+  operand of arithmetic or a root value of an enum type whose variant the
+  data does not say, is left alone.
 
 #### 6.1.3 Defaults
 

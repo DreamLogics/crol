@@ -4299,3 +4299,26 @@ fn type_attributes_are_checked() {
     );
     client.stop();
 }
+
+#[test]
+fn templates_used_where_another_type_goes_get_a_warning() {
+    let (client, mut buffer) = nested_document("lsp-typed-template-uses");
+    let text = format!(
+        "{HEADER}#[type(Server)]\ns := {{}}\nname: \"x\"\nserver: &s\nfallback: &s\nbackend: &s\n"
+    );
+    buffer.change(&client, &text);
+    let diagnostics = client.diagnostics_for(&buffer.uri, |d| says(d, "the template `s`"));
+    let warnings: Vec<&Value> = diagnostics
+        .iter()
+        .filter(|d| d["message"].as_str().unwrap().contains("the template `s`"))
+        .collect();
+    assert_eq!(warnings.len(), 1, "{diagnostics:?}");
+    assert!(
+        says(&diagnostics, "used where `Backend` goes"),
+        "{diagnostics:?}"
+    );
+    // A warning, on `&s` of `backend`.
+    assert_eq!(warnings[0]["severity"], 2, "{diagnostics:?}");
+    assert_eq!(warnings[0]["range"]["start"]["line"], 7, "{diagnostics:?}");
+    client.stop();
+}

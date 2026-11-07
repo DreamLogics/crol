@@ -17,6 +17,8 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   (`Fleet.services.[].ports`). `crol check --schema` and the language server report
   unknown fields and values of the wrong kind in it, and the editor completes and
   hovers both the type and the value. Evaluation ignores it.
+  Where a typed template is spread, merged or set at a place of another type,
+  they warn.
 - Support for Helix, in `editors/helix`: a configuration, and queries for
   highlighting, indentation, text objects and rainbow brackets.
 - `!x` inverts a boolean, so `flag: !&` flips a value in a layer above it. It is an

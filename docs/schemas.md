@@ -379,8 +379,12 @@ web_defaults := { replicas: 2, ports: [80] }
 
 `HashMap` and `BTreeMap` (and `Vec` and `VecDeque`) are the same type to the
 check, since the schema does not say which one a field uses. What is computed,
-like `& + 1` or `&other`, is not checked, as its value is only known where the
-template lands.
+like `& + 1` or `&other`, is not checked there, as its value is only known where
+the template lands: it is checked as part of the value it lands in.
+
+Where a template with a type is spread, merged or set at a place of another
+type, `crol check` and your editor warn, as `#[type(Limits)]` on a template set as
+`replicas` most likely means one of them is wrong.
 
 ### Which type a document has
 

@@ -1061,3 +1061,468 @@ impl ValueChecker<'_> {
         }
     }
 }
+
+// ---- Where typed templates are used ----
+
+/// A template with a `#[type(...)]`: its type, and where the attribute is.
+#[derive(Debug, Clone)]
+pub struct TypedTemplate {
+    /// The type the attribute names.
+    pub ty: TypeExpr,
+    /// The attribute, for messages.
+    pub span: Span,
+}
+
+/// The templates with a type among the top-level value binds of
+/// `documents`, by name. A type that names nothing gives no entry.
+pub fn typed_templates<'d>(
+    documents: impl IntoIterator<Item = (FileId, &'d ast::Document)>,
+    schema: &SchemaFile,
+) -> HashMap<String, TypedTemplate> {
+    let mut found = HashMap::new();
+    for (file, document) in documents {
+        let uses = TypeUses::of(document, schema);
+        for entry in document.entries() {
+            let ast::AnyEntry::ValueBind(bind) = entry else {
+                continue;
+            };
+            let (Some(name), Some(attr)) = (bind.name(), bind.attr()) else {
+                continue;
+            };
+            let Some(Ok((ty, _))) = attr.type_ref().map(|t| resolve(schema, &uses, &t)) else {
+                continue;
+            };
+            let span = Span::new(file, attr.syntax().text_range());
+            found.insert(name.text().to_owned(), TypedTemplate { ty, span });
+        }
+    }
+    found
+}
+
+/// What the places of a document are found from.
+#[derive(Debug, Clone, Copy)]
+pub enum TypeRoot<'v> {
+    /// A value-mode document, of the type with this path.
+    Value(&'v str),
+    /// Data, with its root type (`None`: the schema's), and the evaluated
+    /// root, which says the variant of each root value where the root type
+    /// is an enum (`SPEC.md` 4.1).
+    Data {
+        /// The root type's path, if not the schema's.
+        root: Option<&'v str>,
+        /// The evaluated root, in the base context.
+        value: Option<&'v crol_eval::Value>,
+    },
+}
+
+/// Warns where `document` uses a template of `templates` as a whole value at
+/// a place of another type: spread into a block, merged, or set as a value
+/// (`SPEC.md` 6.1.2). Places the schema does not know the type of are left
+/// alone.
+pub fn check_template_uses(
+    file: FileId,
+    document: &ast::Document,
+    schema: &SchemaFile,
+    templates: &HashMap<String, TypedTemplate>,
+    root: TypeRoot<'_>,
+) -> Vec<Diagnostic> {
+    if templates.is_empty() {
+        return Vec::new();
+    }
+    let uses = TypeUses::of(document, schema);
+    let places = Places {
+        schema,
+        uses: &uses,
+        root,
+    };
+    let mut out = Vec::new();
+    for reference in document
+        .syntax()
+        .descendants()
+        .filter_map(ast::Reference::cast)
+    {
+        let ast::ReferenceKind::Bind(name) = reference.kind() else {
+            continue;
+        };
+        let Some(template) = templates.get(name.text()) else {
+            continue;
+        };
+        let Some(Pos::Type(place)) = places.of(reference.syntax()) else {
+            continue;
+        };
+        if same_type(schema, &template.ty, &place) {
+            continue;
+        }
+        let message = format!(
+            "the template `{}` has the type `{}`, but it is used where `{}` goes",
+            name.text(),
+            rust_type(schema, &template.ty),
+            rust_type(schema, &place),
+        );
+        let span = Span::new(file, reference.syntax().text_range());
+        out.push(Diagnostic::warning(span, message).with_related(template.span, "its type"));
+    }
+    out
+}
+
+/// What a place in a document holds.
+#[derive(Debug, Clone)]
+enum Pos<'s> {
+    /// The root keys of data whose root type is that of each root value.
+    Keys,
+    /// A value of a type.
+    Type(TypeExpr),
+    /// The fields of a struct variant.
+    Fields(&'s IndexMap<String, Field>),
+}
+
+/// A step into a value, as data writes it.
+enum DataStep {
+    /// `.name`, a key, or `["name"]`.
+    Field(String),
+    /// `.0`
+    Index(usize),
+    /// An element of a list, or an integer key.
+    Element,
+}
+
+struct Places<'s> {
+    schema: &'s SchemaFile,
+    uses: &'s TypeUses,
+    root: TypeRoot<'s>,
+}
+
+impl<'s> Places<'s> {
+    /// The place of the value `node` is, from the document down.
+    fn of(&self, node: &crol_syntax::SyntaxNode) -> Option<Pos<'s>> {
+        let chain: Vec<crol_syntax::SyntaxNode> = node.ancestors().collect();
+        let mut pos = None;
+        // From the document down: each node, and its child on the way.
+        for pair in chain.windows(2).rev() {
+            let (child, parent) = (&pair[0], &pair[1]);
+            pos = Some(self.child_place(pos, parent, child)?);
+        }
+        pos
+    }
+
+    fn child_place(
+        &self,
+        pos: Option<Pos<'s>>,
+        parent: &crol_syntax::SyntaxNode,
+        child: &crol_syntax::SyntaxNode,
+    ) -> Option<Pos<'s>> {
+        use crol_syntax::SyntaxKind as K;
+        match parent.kind() {
+            K::DOCUMENT => Some(match self.root {
+                TypeRoot::Value(path) => Pos::Type(TypeExpr::Named(path.to_owned())),
+                TypeRoot::Data { root, .. } => match self.schema.data_root(root) {
+                    crate::schema::DataRoot::Document => Pos::Type(TypeExpr::Named(
+                        root.unwrap_or(&self.schema.root).to_owned(),
+                    )),
+                    crate::schema::DataRoot::EachValue => Pos::Keys,
+                },
+            }),
+            K::ENTRY => {
+                if child.kind() == K::TARGET {
+                    return None;
+                }
+                let target = ast::Entry::cast(parent.clone())?.target()?;
+                let mut pos = pos?;
+                let key = target.key()?;
+                let first = key_step(&key)?;
+                if let Pos::Keys = pos {
+                    let DataStep::Field(name) = first else {
+                        return None;
+                    };
+                    pos = self.root_value(&name)?;
+                } else {
+                    pos = self.step(pos, &first)?;
+                }
+                for selector in target.selectors() {
+                    if let Some(step) = selector_step(&selector) {
+                        pos = self.step(pos, &step)?;
+                    }
+                }
+                Some(pos)
+            }
+            K::BLOCK => {
+                let pos = pos?;
+                match ast::Block::cast(parent.clone())?.type_name() {
+                    Some(name) => self.named(pos, name.text()),
+                    None => Some(pos),
+                }
+            }
+            K::VARIANT_BLOCK | K::PAREN_EXPR => pos,
+            // The operand of a spread is at the place of the block.
+            K::SPREAD => pos,
+            K::BINARY_EXPR => match ast::BinaryExpr::cast(parent.clone())?.op()? {
+                ast::BinaryOp::Merge | ast::BinaryOp::MergeShallow | ast::BinaryOp::Fallback => pos,
+                _ => None,
+            },
+            K::LIST_EXPR => self.step(pos?, &DataStep::Element),
+            K::TUPLE_EXPR => {
+                let index = parent
+                    .children()
+                    .filter(|c| ast::Expr::can_cast(c.kind()))
+                    .position(|c| c == *child)?;
+                self.step(pos?, &DataStep::Index(index))
+            }
+            K::NAMED_TUPLE => pos,
+            K::ARG_LIST => {
+                let tuple = ast::NamedTuple::cast(parent.parent()?)?;
+                let name = tuple.name()?;
+                let index = parent
+                    .children()
+                    .filter(|c| ast::Expr::can_cast(c.kind()))
+                    .position(|c| c == *child)?;
+                let Pos::Type(ty) = pos? else { return None };
+                payload(self.schema, &ty, name.text(), index, 0).map(Pos::Type)
+            }
+            // Inside a template: its own type, if it has one.
+            K::VALUE_BIND => {
+                let bind = ast::ValueBind::cast(parent.clone())?;
+                if child.kind() == K::ENTRY_ATTR {
+                    return None;
+                }
+                let type_ref = bind.attr()?.type_ref()?;
+                let (ty, _) = resolve(self.schema, self.uses, &type_ref).ok()?;
+                Some(Pos::Type(ty))
+            }
+            _ => None,
+        }
+    }
+
+    /// The type of the root value `key`: the root type, or for an enum, the
+    /// variant its evaluated value names.
+    fn root_value(&self, key: &str) -> Option<Pos<'s>> {
+        let TypeRoot::Data { root, value } = self.root else {
+            return None;
+        };
+        let path = root.unwrap_or(&self.schema.root);
+        let ty = TypeExpr::Named(path.to_owned());
+        match self.schema.get(path)? {
+            TypeDef::Enum { .. } => {
+                let value = value?;
+                let found =
+                    crol_eval::value_at_path(value, &[crol_eval::PathStep::Field(key.to_owned())])?;
+                let name = match &found.kind {
+                    crol_eval::ValueKind::Keyed(keyed) => keyed.name.as_deref()?,
+                    crol_eval::ValueKind::NamedTuple(name, _)
+                    | crol_eval::ValueKind::UnitName(name) => name,
+                    _ => return None,
+                };
+                self.named(Pos::Type(ty), name)
+            }
+            _ => Some(Pos::Type(ty)),
+        }
+    }
+
+    /// `Name { ... }` at a place: the variant of that name, or the type.
+    fn named(&self, pos: Pos<'s>, name: &str) -> Option<Pos<'s>> {
+        let Pos::Type(ty) = pos else {
+            return self
+                .schema
+                .type_path(name)
+                .map(|p| Pos::Type(TypeExpr::Named(p.to_owned())));
+        };
+        named_in(self.schema, &ty, name, 0).or_else(|| {
+            self.schema
+                .type_path(name)
+                .map(|p| Pos::Type(TypeExpr::Named(p.to_owned())))
+        })
+    }
+
+    fn step(&self, pos: Pos<'s>, step: &DataStep) -> Option<Pos<'s>> {
+        match pos {
+            Pos::Keys => None,
+            Pos::Fields(fields) => match step {
+                DataStep::Field(name) => data_fields(self.schema, fields, name, 0).map(Pos::Type),
+                _ => None,
+            },
+            Pos::Type(ty) => data_step(self.schema, &ty, step, 0).map(Pos::Type),
+        }
+    }
+}
+
+fn key_step(key: &ast::Key) -> Option<DataStep> {
+    if let Some(accessor) = key.accessor() {
+        return accessor_step(&accessor);
+    }
+    let token = key.token()?;
+    Some(match token.kind() {
+        IDENT => DataStep::Field(token.text().to_owned()),
+        STRING if !token.text().contains('\\') => {
+            DataStep::Field(token.text().trim_matches('"').to_owned())
+        }
+        INT => DataStep::Element,
+        _ => return None,
+    })
+}
+
+fn accessor_step(accessor: &ast::Accessor) -> Option<DataStep> {
+    let key = accessor.key()?;
+    Some(match key.kind() {
+        INT => DataStep::Element,
+        STRING if !key.text().contains('\\') => {
+            DataStep::Field(key.text().trim_matches('"').to_owned())
+        }
+        _ => return None,
+    })
+}
+
+/// A selector's step; `None` for a variant, which stays at the place.
+fn selector_step(selector: &ast::Selector) -> Option<DataStep> {
+    match selector {
+        ast::Selector::Field(field) => Some(DataStep::Field(field.name()?.text().to_owned())),
+        ast::Selector::Index(index) => Some(DataStep::Index(index.index()?.text().parse().ok()?)),
+        ast::Selector::Accessor(accessor) => accessor_step(accessor),
+        _ => None,
+    }
+}
+
+/// The type one step into a value of `ty`, as data writes the step.
+fn data_step(
+    schema: &SchemaFile,
+    ty: &TypeExpr,
+    step: &DataStep,
+    depth: usize,
+) -> Option<TypeExpr> {
+    if depth > MAX_DEPTH {
+        return None;
+    }
+    match (ty, step) {
+        (TypeExpr::Option(inner), _) => data_step(schema, inner, step, depth + 1),
+        (TypeExpr::Named(path), _) => match schema.get(path)? {
+            TypeDef::Struct { fields, .. } => match step {
+                DataStep::Field(name) => data_fields(schema, fields, name, depth),
+                _ => None,
+            },
+            TypeDef::TupleStruct { fields, .. } => match step {
+                DataStep::Index(i) => fields.get(*i).cloned(),
+                _ => None,
+            },
+            TypeDef::Newtype { inner, .. } | TypeDef::Transparent { inner, .. } => {
+                data_step(schema, inner, step, depth + 1)
+            }
+            _ => None,
+        },
+        (TypeExpr::Map(_, value), DataStep::Field(_) | DataStep::Element) => {
+            Some((**value).clone())
+        }
+        (
+            TypeExpr::List(item) | TypeExpr::Set(item) | TypeExpr::Array(item, _),
+            DataStep::Element,
+        ) => Some((**item).clone()),
+        (TypeExpr::Tuple(items), DataStep::Index(i)) => items.get(*i).cloned(),
+        _ => None,
+    }
+}
+
+fn data_fields(
+    schema: &SchemaFile,
+    fields: &IndexMap<String, Field>,
+    name: &str,
+    depth: usize,
+) -> Option<TypeExpr> {
+    if let Some(found) = field(fields, name).filter(|f| !f.flatten) {
+        return Some(found.ty.clone());
+    }
+    fields
+        .values()
+        .filter(|f| f.flatten)
+        .find_map(|f| data_step(schema, &f.ty, &DataStep::Field(name.to_owned()), depth + 1))
+}
+
+/// `Name { ... }` in a place of the type `ty`: its variant, or the type
+/// itself.
+fn named_in<'s>(
+    schema: &'s SchemaFile,
+    ty: &TypeExpr,
+    name: &str,
+    depth: usize,
+) -> Option<Pos<'s>> {
+    if depth > MAX_DEPTH {
+        return None;
+    }
+    match ty {
+        TypeExpr::Option(inner) => named_in(schema, inner, name, depth + 1),
+        TypeExpr::Named(path) => match schema.get(path)? {
+            TypeDef::Enum { variants, .. } => {
+                let variant = variants.get(name).or_else(|| {
+                    variants
+                        .values()
+                        .find(|v| v.aliases.iter().any(|a| a == name))
+                })?;
+                match &variant.shape {
+                    VariantShape::Struct(fields) => Some(Pos::Fields(fields)),
+                    VariantShape::Newtype(inner) => Some(Pos::Type(inner.clone())),
+                    _ => None,
+                }
+            }
+            def if def.name() == name => Some(Pos::Type(ty.clone())),
+            TypeDef::Newtype { inner, .. } | TypeDef::Transparent { inner, .. } => {
+                named_in(schema, inner, name, depth + 1)
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The type of argument `index` of `Name(...)` in a place of the type `ty`.
+fn payload(
+    schema: &SchemaFile,
+    ty: &TypeExpr,
+    name: &str,
+    index: usize,
+    depth: usize,
+) -> Option<TypeExpr> {
+    if depth > MAX_DEPTH {
+        return None;
+    }
+    match ty {
+        TypeExpr::Option(inner) if name == "Some" => (index == 0).then(|| (**inner).clone()),
+        TypeExpr::Option(inner) => payload(schema, inner, name, index, depth + 1),
+        TypeExpr::Named(path) => match schema.get(path)? {
+            TypeDef::Enum { variants, .. } => match &variants.get(name)?.shape {
+                VariantShape::Newtype(inner) if index == 0 => Some(inner.clone()),
+                VariantShape::Tuple(items) => items.get(index).cloned(),
+                _ => None,
+            },
+            TypeDef::Newtype {
+                name: own, inner, ..
+            } if own == name => (index == 0).then(|| inner.clone()),
+            TypeDef::TupleStruct {
+                name: own, fields, ..
+            } if own == name => fields.get(index).cloned(),
+            TypeDef::Newtype { inner, .. } | TypeDef::Transparent { inner, .. } => {
+                payload(schema, inner, name, index, depth + 1)
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Whether a template of type `template` fits a place of type `place`: the
+/// same type, through options and what data writes the same way as what it
+/// wraps.
+fn same_type(schema: &SchemaFile, template: &TypeExpr, place: &TypeExpr) -> bool {
+    let (template, place) = (plain(schema, template), plain(schema, place));
+    template == place || *template == TypeExpr::Any || *place == TypeExpr::Any
+}
+
+/// A type without the options and wrappers around it.
+fn plain<'a>(schema: &'a SchemaFile, mut ty: &'a TypeExpr) -> &'a TypeExpr {
+    for _ in 0..MAX_DEPTH {
+        ty = match ty {
+            TypeExpr::Option(inner) => inner,
+            TypeExpr::Named(path) => match schema.get(path) {
+                Some(TypeDef::Newtype { inner, .. } | TypeDef::Transparent { inner, .. }) => inner,
+                _ => break,
+            },
+            _ => break,
+        };
+    }
+    ty
+}

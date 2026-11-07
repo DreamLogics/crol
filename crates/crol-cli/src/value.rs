@@ -85,7 +85,9 @@ pub(crate) fn read(path: &Path, args: &InputArgs, reporter: &mut Reporter) -> Op
     };
     let root = checked(&mut evaluation, &expected);
     if let Some(schema) = &expected.schema {
-        let found = typed_binds(&sources, schema, &expected.options);
+        let root = root.as_deref().unwrap_or(&schema.root);
+        let root = crol::typed::TypeRoot::Value(root);
+        let found = typed_binds(&sources, schema, &expected.options, root);
         evaluation.diagnostics.extend(found);
     }
     Some(Document {
@@ -110,18 +112,28 @@ fn checked(evaluation: &mut Evaluation, expected: &Expected) -> Option<String> {
 }
 
 /// What the schema finds wrong with the `#[type(...)]` binds of every
-/// document in `sources` (`SPEC.md` 6.1.2).
+/// document in `sources`, and with where their templates are used (`SPEC.md`
+/// 6.1.2).
 pub(crate) fn typed_binds(
     sources: &crol::Sources,
     schema: &crol::schema::SchemaFile,
     options: &crol::CheckOptions,
+    root: crol::typed::TypeRoot<'_>,
 ) -> Vec<crol_eval::Diagnostic> {
+    let documents: Vec<_> = sources
+        .files()
+        .map(|(file, source)| (file, crol_syntax::parse(source.text()).document()))
+        .collect();
     let mut found = Vec::new();
-    for (file, source) in sources.files() {
-        let document = crol_syntax::parse(source.text()).document();
+    for (file, document) in &documents {
         found.extend(crol::typed::check_document(
-            file, &document, schema, options,
+            *file, document, schema, options,
         ));
+    }
+    let templates = crol::typed::typed_templates(documents.iter().map(|(f, d)| (*f, d)), schema);
+    for (file, document) in &documents {
+        let uses = crol::typed::check_template_uses(*file, document, schema, &templates, root);
+        found.extend(uses);
     }
     found
 }
