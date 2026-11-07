@@ -1540,6 +1540,34 @@ is an error, like a `.crol` file there (section 4).
 The format is not stable before 1.0. A file says its version, `binary::FORMAT`, and
 is compiled again when that changes.
 
+### 7.9 Evaluating again
+
+`CrolData::reload` (section 10.7) evaluates again only what a change can
+reach. It gives exactly what evaluating everything again gives, order and
+fingerprint included; only the time differs.
+
+- **The keys evaluated again** are those with an operation in a document
+  that changed, came or went, and the keys that read them, directly or
+  not: through `&root.key`, or a reference such as `&self.key` at the top
+  level. If any key is, so are those that read the whole root, and those
+  that copy entries that may read any key, with a spread or a merge.
+- **Every other key keeps its value.** A key evaluated again reads them as
+  ever, and computes what it reads of them. A context is evaluated again
+  only if a key evaluated again can differ in it from the base: if it has
+  an operation whose condition holds there, or reads such a key. Elsewhere
+  the context keeps its differences from the base, except for those keys.
+- **Everything is evaluated again** when a changed document has a
+  template, a `..` at its root or a `variant` attribute; when documents
+  that did not change come in another order (section 7.1); when a
+  reference reads another context (section 8.4); when the layer's
+  `schema.crod` changed, or the schema has constraints or sealed fields;
+  with a `variant_keys` rule (section 8.5); and when there is anything to
+  report, so that errors are found as they always are.
+
+`Reloaded::evaluated` says how many root keys were evaluated again, or
+`None` where everything was. `crol_eval::evaluate_changed` is the same for
+compiled layers.
+
 ---
 
 ## 8. Variants
@@ -2324,7 +2352,8 @@ plain data that reads back to the same value.
 `DocumentChange` gives a layer, a path and the document's new text (`None`
 removes it, and a new path adds it). The layers are evaluated again in the
 contexts evaluated so far, without reading unchanged documents, and a
-`schema.crod` among them counts. `Reloaded::changed` lists the root keys
+`schema.crod` among them counts. Only the keys a change can reach are
+evaluated again (section 7.9). `Reloaded::changed` lists the root keys
 that were added, changed or removed. If the result does not load, the
 error is returned and the data stays as it was.
 

@@ -83,6 +83,12 @@ pub(crate) struct LayerOrder {
 }
 
 impl LayerOrder {
+    /// Whether the `extends` of a layer order its documents as `other`'s
+    /// do.
+    pub(crate) fn same_edges(&self, other: &LayerOrder) -> bool {
+        self.edges == other.edges
+    }
+
     /// A document's path in the layer.
     pub(crate) fn path(&self, file: FileId) -> Option<String> {
         self.paths.get(&file).map(|parts| parts.join("/"))

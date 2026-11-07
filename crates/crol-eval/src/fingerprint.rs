@@ -37,6 +37,45 @@ pub fn key_fingerprints(
     for (_, data) in &others {
         keys.extend(data.changes.keys());
     }
+    fingerprints_of(base, &others, keys)
+}
+
+/// [`key_fingerprints`] of the root keys named `names` only, of those that
+/// are in the data.
+pub fn key_fingerprints_of<'n>(
+    base: &Value,
+    contexts: &[ContextData],
+    variants: &Variants,
+    names: impl IntoIterator<Item = &'n str>,
+) -> BTreeMap<String, [u8; 32]> {
+    let mut others: Vec<(Vec<&str>, &ContextData)> = contexts
+        .iter()
+        .filter(|data| !data.context.is_base())
+        .map(|data| (variants.chosen_names(&data.context), data))
+        .collect();
+    others.sort_by(|a, b| a.0.cmp(&b.0));
+    let keys: Vec<Key> = names
+        .into_iter()
+        .map(|name| Key::Str(std::sync::Arc::from(name)))
+        .filter(|key| {
+            let in_base = match &base.kind {
+                ValueKind::Keyed(keyed) => keyed.entries.contains_key(key),
+                _ => false,
+            };
+            in_base
+                || others
+                    .iter()
+                    .any(|(_, data)| data.changes.contains_key(key))
+        })
+        .collect();
+    fingerprints_of(base, &others, keys.iter().collect())
+}
+
+fn fingerprints_of(
+    base: &Value,
+    others: &[(Vec<&str>, &ContextData)],
+    keys: BTreeSet<&Key>,
+) -> BTreeMap<String, [u8; 32]> {
     let mut found = BTreeMap::new();
     let mut out = Vec::new();
     for key in keys {
@@ -46,7 +85,7 @@ pub fn key_fingerprints(
             ValueKind::Keyed(keyed) => encode_entry(&mut out, keyed.entries.get(key)),
             _ => encode_entry(&mut out, None),
         }
-        for (names, data) in &others {
+        for (names, data) in others {
             // A context only counts where it differs from the base.
             if let Some(change) = data.changes.get(key) {
                 leb128(&mut out, names.len() as u128);

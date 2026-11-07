@@ -145,6 +145,19 @@ MB with threads, and `reload` parses the layer instead.
 `reload` of one new document over a `.crob` base took 451 ms and raised the peak to 514
 MB, as the old data stays in place until the new data has loaded.
 
+`reload` evaluates again only the keys a change reaches (`SPEC.md` 7.9). On the Ryzen
+3900X, with the real data set and its civilisations declared in an open group, changing
+one document, from the second reload on, as the mean of ten:
+
+|                                     | Keys evaluated again | Before   | Now    |
+| ----------------------------------- | -------------------- | -------- | ------ |
+| A unit's document in the top layer  | 2                    | 920 ms   | 192 ms |
+| A unit's document in the base layer | 2                    | 1,361 ms | 605 ms |
+| `sounds.crod` in the base layer     | 1,430                | 1,379 ms | 666 ms |
+
+Most of what is left is reading the layers again: the base layer's lowered form is read
+back on every reload, and a change in the base layer lowers that whole layer again.
+
 ### The target of `SPEC.md`
 
 10,000 root keys and 16 contexts, with a target of under 200 ms:

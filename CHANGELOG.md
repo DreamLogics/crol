@@ -30,6 +30,9 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   the same to both. `View` leaves other `crol` attributes to their derives.
 - `ExplainStep::uses_below`, and `crol_eval::uses_value_below`, say whether an
   operation uses the value below it.
+- `Reloaded::evaluated` says how many root keys a reload evaluated again.
+  `crol_eval::evaluate_changed` evaluates compiled layers again from an evaluation
+  before, and `fingerprint::key_fingerprints_of` fingerprints some keys only.
 - Open groups: `CrolVariants::add_open_group("civ")` (`Open("civ")` in a project file,
   `--open civ` on the command line) opens a group of alternatives that data declares,
   each with `#![variant(civ: empire)]`, for variants that only the data knows.
@@ -44,6 +47,11 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Changed
 
+- `reload` evaluates again only the keys a change can reach, and only in the contexts
+  in which they can differ: a changed document's keys and those that read them. On a
+  data set of 14,000 keys, reloading a document of the top layer takes 192 ms instead of
+  920 ms. A change to a template, a `..` at a root or a variant declaration still
+  evaluates everything.
 - `.crob` files are format 4, for `!`, the order of documents and the `variant`
   attribute; compile layers again.
 - The documents of a layer are in folder order: a folder's own documents come before

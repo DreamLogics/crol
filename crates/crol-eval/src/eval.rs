@@ -580,6 +580,9 @@ pub(crate) struct Evaluator<'ir> {
     window: u32,
     /// The cell of that root key.
     window_cell: *const Cell,
+    /// The root keys of the base whose chains are applied only when they are
+    /// read, as their values are known from before (`evaluate_again`).
+    lazy_base: Option<&'ir std::collections::HashSet<Arc<str>>>,
     /// Whether an older cell was computed meanwhile: what it holds outlives
     /// the key, and may hold cells made meanwhile.
     window_escaped: bool,
@@ -790,6 +793,7 @@ pub(crate) fn evaluate(ir: &Ir, root: ExprId) -> (Option<Value>, Vec<Diagnostic>
         window: 0,
         window_cell: std::ptr::null(),
         window_escaped: false,
+        lazy_base: None,
     };
     let root_cell = Rc::new(Cell {
         state: RefCell::new(State::Running),
@@ -1391,9 +1395,10 @@ fn evaluate_raw(
         window: 0,
         window_cell: std::ptr::null(),
         window_escaped: false,
+        lazy_base: None,
     };
     // Errors in the static structure of the chains are reported once.
-    evaluator.check_chains(input, &planned);
+    evaluator.check_chains(input, &planned, None);
     diagnostics.append(&mut evaluator.diagnostics);
     if diagnostics.iter().any(Diagnostic::is_error) {
         diagnostics.sort_by_key(|d| (d.span.file, d.span.range.start()));
@@ -1538,6 +1543,195 @@ fn evaluate_raw(
         }),
         diagnostics,
     )
+}
+
+/// What evaluating again gives, where only some keys can have changed
+/// since the evaluation before.
+pub(crate) struct Again {
+    /// The base root's keys, in root order.
+    pub(crate) root: Vec<Key>,
+    /// The base values of the keys evaluated again, of those that exist.
+    pub(crate) values: std::collections::HashMap<Key, Value>,
+    /// Whether the base root has `..`, and the keys its chains remove.
+    pub(crate) defaults: bool,
+    pub(crate) defaulted: BTreeSet<Key>,
+    /// For each context of the evaluation before, in order, its data where
+    /// a key evaluated again can differ in it from the base; for the others,
+    /// their data before holds, without the keys evaluated again.
+    pub(crate) contexts: Vec<Option<ContextData>>,
+    /// The keys evaluated again.
+    pub(crate) affected: std::collections::HashSet<Arc<str>>,
+}
+
+/// Evaluates again where only the keys of `dirty` have operations that
+/// changed since an evaluation in which `before` are the contexts after the
+/// base and `variants` the variants. The keys that cannot change keep their
+/// values: those of the base are computed only where an evaluated key reads
+/// them, and a context is evaluated only if an evaluated key can differ in
+/// it. `None` where this cannot be done, or anything is to be reported:
+/// then the whole evaluation is done again.
+pub(crate) fn evaluate_again(
+    ir: &Ir,
+    input: &DataInput<'_>,
+    dirty: &std::collections::HashSet<Arc<str>>,
+    variants: &Variants,
+    before: &[ContextData],
+) -> Option<Again> {
+    if input.evaluate_every_key || input.known_base.is_some() || input.only.is_some() {
+        return None;
+    }
+    let mut diagnostics = Vec::new();
+    let plan = DataPlan::new(ir, input, &mut diagnostics)?;
+    // A reference to another context makes contexts depend on each other.
+    if !diagnostics.is_empty()
+        || plan.variants != *variants
+        || plan.keys.values().any(|key| key.reads.switch)
+    {
+        return None;
+    }
+    let planned = plan.evaluated_contexts(input).ok()?;
+    if planned.len() != before.len() + 1
+        || planned[1..]
+            .iter()
+            .zip(before)
+            .any(|(context, data)| *context != data.context)
+    {
+        return None;
+    }
+    let affected = plan.affected(dirty);
+    let lazy: std::collections::HashSet<Arc<str>> = plan
+        .keys
+        .keys()
+        .filter(|key| !affected.contains(*key))
+        .cloned()
+        .collect();
+    let mut evaluator = Evaluator {
+        ir,
+        diagnostics: Vec::new(),
+        stack: Vec::new(),
+        steps: 0,
+        contexts: Vec::new(),
+        plan: Some(&plan),
+        share: true,
+        base_created: Vec::new(),
+        defaults: input.defaults,
+        init_defaults: input.init_defaults,
+        merge_root: input.merge_root,
+        cells: RefCell::new(Vec::new()),
+        evict: false,
+        window: 0,
+        window_cell: std::ptr::null(),
+        window_escaped: false,
+        lazy_base: Some(&lazy),
+    };
+    // The chains of the other keys are as they were, and had no errors.
+    evaluator.check_chains(input, &planned, Some(dirty));
+    if !evaluator.diagnostics.is_empty() {
+        return None;
+    }
+
+    let base_id = evaluator.context_state(&planned[0]);
+    let base_cell = evaluator.contexts[base_id].root_cell.clone();
+    let base_shaped = done_shape(&base_cell);
+    let base = keyed_shape(&base_shaped)?;
+    let mut visiting = vec![(Rc::as_ptr(&base_cell), None)];
+    let mut values = std::collections::HashMap::new();
+    for (key, slot) in &base.slots {
+        let Key::Str(name) = key else { continue };
+        if affected.contains(name) {
+            let value = evaluator
+                .full_value(&slot.value, Span::detached(), &mut visiting)
+                .ok()?;
+            values.insert(key.clone(), value);
+        }
+    }
+    if !evaluator.diagnostics.is_empty() {
+        return None;
+    }
+    let root: Vec<Key> = base.slots.keys().cloned().collect();
+    let position: std::collections::HashMap<&Key, usize> =
+        root.iter().enumerate().map(|(i, key)| (key, i)).collect();
+
+    let mut contexts = Vec::with_capacity(before.len());
+    for data in before {
+        let varying = plan.varying(&data.context);
+        let mut needed: Vec<&Arc<str>> = affected
+            .iter()
+            .filter(|key| varying.contains(*key))
+            .collect();
+        if needed.is_empty() {
+            contexts.push(None);
+            continue;
+        }
+        needed.sort();
+        evaluator.steps = 0;
+        let cells_before = evaluator.cells.borrow().len();
+        let contexts_before = evaluator.contexts.len();
+        let id = evaluator.context_state(&data.context);
+        let root_cell = evaluator.contexts[id].root_cell.clone();
+        let shaped = done_shape(&root_cell);
+        let slots = keyed_shape(&shaped)?;
+        let mut visiting = vec![(Rc::as_ptr(&root_cell), None)];
+        let mut fresh = Vec::new();
+        for name in needed {
+            let key = Key::Str(name.clone());
+            let in_base = values.get(&key);
+            match slots.slots.get(&KeyRef::Str(name)) {
+                Some(slot) => {
+                    let value = evaluator
+                        .full_value(&slot.value, Span::detached(), &mut visiting)
+                        .ok()?;
+                    if in_base.is_none_or(|base| !base.identical(&value)) {
+                        fresh.push((key, Some(value)));
+                    }
+                }
+                None if in_base.is_some() => fresh.push((key, None)),
+                None => {}
+            }
+        }
+        if !evaluator.diagnostics.is_empty() {
+            return None;
+        }
+        // Keys in root order, and the context's own keys after them, in its
+        // order, as `evaluate_raw` has them.
+        let kept = data.changes.iter().filter(|(key, _)| match key {
+            Key::Str(name) => !affected.contains(name),
+            Key::Int(_) => true,
+        });
+        let mut in_base = Vec::new();
+        let mut own = Vec::new();
+        for (key, change) in kept.map(|(k, c)| (k.clone(), c.clone())).chain(fresh) {
+            match position.get(&key) {
+                Some(&at) => in_base.push((at, key, change)),
+                None => {
+                    let at = slots.slots.get_index_of(&key).unwrap_or(usize::MAX);
+                    own.push((at, key, change));
+                }
+            }
+        }
+        in_base.sort_unstable_by_key(|(at, ..)| *at);
+        own.sort_by_key(|(at, ..)| *at);
+        let changes = in_base
+            .into_iter()
+            .chain(own)
+            .map(|(_, key, change)| (key, change))
+            .collect();
+        contexts.push(Some(ContextData {
+            context: data.context.clone(),
+            changes,
+            defaults: slots.defaults,
+            defaulted: slots.defaulted.clone(),
+        }));
+        evaluator.forget(cells_before, contexts_before, id);
+    }
+    Some(Again {
+        root,
+        values,
+        defaults: base.defaults,
+        defaulted: base.defaulted.clone(),
+        contexts,
+        affected,
+    })
 }
 
 /// One operation in the history of a value (`SPEC.md` 12.3).
@@ -1689,6 +1883,7 @@ pub(crate) fn explain_planned(
         window: 0,
         window_cell: std::ptr::null(),
         window_escaped: false,
+        lazy_base: None,
     };
     let id = evaluator.context_state(&context);
     Ok(requests
@@ -1975,6 +2170,33 @@ impl<'a> DataPlan<'a> {
         varying
     }
 
+    /// The keys whose values can change when those of `dirty` have operations
+    /// that changed: those, the keys that read them, directly or not, and
+    /// if any can change, those that read the whole root or copy references,
+    /// as [`DataPlan::varying`] has it.
+    fn affected(
+        &self,
+        dirty: &std::collections::HashSet<Arc<str>>,
+    ) -> std::collections::HashSet<Arc<str>> {
+        let mut affected = dirty.clone();
+        let mut queue: Vec<Arc<str>> = dirty.iter().cloned().collect();
+        if !dirty.is_empty() {
+            for (key, plan) in &self.keys {
+                if (plan.reads.whole || plan.moves_references) && affected.insert(key.clone()) {
+                    queue.push(key.clone());
+                }
+            }
+        }
+        while let Some(key) = queue.pop() {
+            for dependent in self.dependents.get(&key).into_iter().flatten() {
+                if affected.insert(dependent.clone()) {
+                    queue.push(dependent.clone());
+                }
+            }
+        }
+        affected
+    }
+
     /// The contexts to evaluate: the base, then the requested ones or every
     /// valid one (`SPEC.md` 8.1).
     fn evaluated_contexts(&self, input: &DataInput<'_>) -> Result<Vec<Context>, String> {
@@ -2093,6 +2315,28 @@ impl<'a> DataPlan<'a> {
     }
 }
 
+/// What applying a chain of operations without errors gives, worked out
+/// without applying it: the operation that creates the key, and the
+/// expression its last value is written as, if it is one; `None` if the
+/// chain leaves the key unset. It follows `Evaluator::apply_chain`.
+fn chain_outcome(ops: &[RootOp], order: &[usize]) -> Option<(usize, Option<ExprId>)> {
+    let mut value: Option<(usize, Option<ExprId>)> = None;
+    for &i in order {
+        let op = &ops[i];
+        let created = value.map_or(i, |(created, _)| created);
+        if !op.path.is_empty() {
+            value = Some((created, None));
+            continue;
+        }
+        match op.op {
+            None => value = None,
+            Some(SetOp::Declare | SetOp::Ensure) if value.is_some() => {}
+            Some(_) => value = Some((created, op.value)),
+        }
+    }
+    value
+}
+
 impl Evaluator<'_> {
     /// Drops the cells of `context` and the contexts made since these
     /// counts, breaking what cycles they hold, as dropping the evaluator
@@ -2167,7 +2411,12 @@ impl Evaluator<'_> {
     /// Reports the errors in the chains that do not depend on the context:
     /// two definitions under one condition in one layer, and patches from
     /// several documents of one layer (`SPEC.md` 7.2, 8.3).
-    fn check_chains(&mut self, input: &DataInput<'_>, contexts: &[Context]) {
+    fn check_chains(
+        &mut self,
+        input: &DataInput<'_>,
+        contexts: &[Context],
+        only: Option<&std::collections::HashSet<Arc<str>>>,
+    ) {
         let plan = self.plan.expect("data mode");
         let ops = plan.ops;
         // Patches meet if their conditions hold together in any context, or
@@ -2186,6 +2435,9 @@ impl Evaluator<'_> {
         };
         let mut meets = std::collections::HashMap::new();
         for (key, key_plan) in &plan.keys {
+            if only.is_some_and(|only| !only.contains(key)) {
+                continue;
+            }
             let all = &key_plan.all;
             let mut layers: Vec<usize> = all.iter().map(|&i| ops[i].layer).collect();
             layers.sort_unstable();
@@ -2348,6 +2600,25 @@ impl Evaluator<'_> {
                 continue;
             }
             let order = plan.chain(key_plan, context);
+            if id == 0
+                && let Some(lazy) = self.lazy_base
+                && lazy.contains(key)
+            {
+                match chain_outcome(plan.ops, &order) {
+                    Some((created, expr)) => {
+                        let slot = Slot {
+                            value: self.lazy_key(key, expr, &root),
+                            recipe: Recipe::Fixed,
+                        };
+                        slots.push((created, Key::Str(key.clone()), slot));
+                    }
+                    None if !order.is_empty() => {
+                        defaulted.insert(Key::Str(key.clone()));
+                    }
+                    None => {}
+                }
+                continue;
+            }
             let cells_before = self.cells.borrow().len();
             let diagnostics_before = self.diagnostics.len();
             if let Some((created, mut slot)) =
@@ -2383,6 +2654,20 @@ impl Evaluator<'_> {
         })));
         self.contexts[id].varying = shared.map(|(varying, _)| varying);
         id
+    }
+
+    /// A cell that applies the chain of a root key of the base when it is
+    /// read, whose last value is `expr`'s if it is an expression's.
+    fn lazy_key(&mut self, key: &Arc<str>, expr: Option<ExprId>, root: &Location) -> Lazy {
+        let cell = Rc::new(Cell {
+            state: RefCell::new(State::Pending(Box::new(Job::Key(key.clone())))),
+            expr,
+            location: Some(root.child(Step::Key(Key::Str(key.clone())))),
+            born: 0,
+            context: 0,
+        });
+        self.cells.get_mut().push(cell.clone());
+        cell
     }
 
     /// A cell that applies the chain of a root key of the base when it is
