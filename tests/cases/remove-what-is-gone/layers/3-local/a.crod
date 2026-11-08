@@ -1,8 +1,0 @@
-// Removing what is not set does nothing: a key, a key in a block,
-// and a key below a step that is not set.
--gone,
--never,
--never.x,
-web: & ~ { -proxy, -tls.cert },
--web.cache.ttl,
--web.limits.cpu,

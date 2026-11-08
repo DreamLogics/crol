@@ -21,9 +21,7 @@ port: 8080 // set: create `port`, or replace it
 ?replicas: 2 // ensure: set `replicas` unless it is already set
 ```
 
-The fourth removes a key. If the key is not set, or a step of its path is not
-(`-web.limits.cpu` without `web.limits`), it does nothing, so a remove keeps
-working when a file below stops setting the key:
+The fourth removes a key, and is an error if the key is not set:
 
 ```crol
 -replicas

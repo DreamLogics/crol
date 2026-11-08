@@ -55,10 +55,6 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Changed
 
-- Removing a key that is not set (`-key`, `-web.limits.cpu` without `web.limits`) is
-  no longer an error. It does nothing to the data, and a struct field still takes its
-  default, so a remove keeps working when the layers below stop setting the key. A
-  list index must still exist.
 - Type arguments in `#![use(...)]` are written as Rust types, as in `#[type(...)]`:
   `app::Pair<u32, Vec<String>>`. The schema file's form, `List(String)`, is no longer
   read there.

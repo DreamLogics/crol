@@ -451,12 +451,9 @@ fn removing_what_only_this_layer_set_leaves_nothing() {
     tx.commit().unwrap();
     db.save().unwrap();
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "");
-    // A plain remove of what nothing set is no error. It is written, so it
-    // still holds if a layer below sets the key later.
+    // A plain remove of what nothing set stays an error.
     let tx = db.transaction().at(c()).remove().unwrap();
-    tx.commit().unwrap();
-    db.save().unwrap();
-    assert_eq!(std::fs::read_to_string(&file).unwrap(), "-named.c\n");
+    assert!(tx.commit().is_err());
 }
 
 #[test]

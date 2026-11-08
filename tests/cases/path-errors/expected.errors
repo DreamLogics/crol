@@ -1,4 +1,5 @@
 1-base/a.crod:2:4: web.nope.x: `web.nope` is not set, so it cannot be patched
 1-base/b.crod:2:11: app.limits.gone.a.b: `app.limits.gone` is not set, so it cannot be patched
+1-base/b.crod:4:9: -: `removed.gone` is not set
 1-base/b.crod:6:9: ?ensured.gone.a: `ensured.gone` is not set, so it cannot be patched
 1-base/b.crod:7:42: other.limits.gone.a: `other.limits.gone` is not set, so it cannot be patched

@@ -28,6 +28,11 @@ does the same where there is a default.
 value, use `web: ...` or `web.port: ...`. To set it only if it is missing, use
 `?web: ...`.
 
+**`` -: `web` is not set ``**
+
+`-` removes a key, and the key is not set. Check the spelling and the order of
+your layers.
+
 **`` `web` is defined twice in the layer `base`; a layer may define a key once ``**
 
 Two entries in one layer give `web` a value without looking at what is below,
