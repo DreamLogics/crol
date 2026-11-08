@@ -41,7 +41,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-crol = "0.2"
+crol = "0.3"
 serde = { version = "1", features = ["derive"] }
 ```
 
@@ -262,7 +262,7 @@ Created /path/to/project/project.crol
 Created /path/to/project/data/base/main.crod
 
 Next:
-  - add `crol = "0.2"` to [dependencies] in Cargo.toml, if it is not there yet
+  - add `crol = "0.3"` to [dependencies] in Cargo.toml, if it is not there yet
   - write your data in data/base/main.crod
   - run `crol check`
 ```

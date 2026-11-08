@@ -31,7 +31,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! crol = "0.2"
+//! crol = "0.3"
 //! serde = { version = "1", features = ["derive"] }
 //! ```
 //!
