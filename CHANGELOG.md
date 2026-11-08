@@ -12,8 +12,12 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 ### Changed
 
 - `reload` keeps what the layers it does not change decode to, so it decodes a layer
-  loaded from bytes only when one of its documents changes. On a data set of 14,000
-  keys, reloading a document of the top layer takes 104 ms instead of 192 ms.
+  loaded from bytes only when one of its documents changes. It also keeps what each
+  document of a text layer lowers to, so it parses and lowers only the documents that
+  changed. On a data set of 14,000 keys, reloading a document of the top layer takes
+  62 ms instead of 192 ms, and one of the base layer 105 ms instead of 604 ms.
+- Documents are lowered on several threads, as they are parsed. Loading a data set of
+  14,000 keys from text takes 590 ms instead of 940 ms.
 
 ## [0.3.0] - 2026-11-08
 

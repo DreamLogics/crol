@@ -478,10 +478,11 @@ those that read them. `reloaded.evaluated` says how many, or `None` where everyt
 was, as when a template changed. The result is always what loading everything again
 would give.
 
-A reload also keeps what each layer that did not change lowers to, so later reloads do
-not parse those layers. The first reload parses them, and so takes longer. A layer that
-uses a template of another layer is parsed every time, and `keep_lowered: false` turns
-this off.
+A reload keeps what each document lowers to, so it parses and lowers only the documents
+that changed. It also keeps what each layer that did not change lowers to as a whole,
+which spares putting that layer's documents together again. The first reload works that
+out, and so takes longer. A layer that uses a template of another layer is not kept as a
+whole, and `keep_lowered: false` turns this off.
 
 ## Views and queries
 
