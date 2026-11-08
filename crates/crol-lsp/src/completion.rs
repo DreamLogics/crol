@@ -478,8 +478,10 @@ impl Completer<'_> {
         self.evaluation().value.as_ref()
     }
 
+    /// The keys of a value, through a named tuple of one element, which a
+    /// field selects in (`SPEC.md` 5.1).
     fn keys_of(value: &Value, only_keyed: bool) -> Vec<CompletionItem> {
-        let ValueKind::Keyed(keyed) = &value.kind else {
+        let ValueKind::Keyed(keyed) = &crol_eval::single_payload_value(value).kind else {
             return Vec::new();
         };
         keyed

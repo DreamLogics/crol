@@ -1804,10 +1804,14 @@ impl PathStep {
     }
 }
 
-/// The value at `path` in `value`.
+/// The value at `path` in `value`. As in a reference, a field or an accessor
+/// goes into a named tuple of one element (`SPEC.md` 5.1).
 pub fn value_at_path<'v>(value: &'v Value, path: &[PathStep]) -> Option<&'v Value> {
     let mut value = value;
     for step in path {
+        if matches!(step, PathStep::Field(_) | PathStep::Accessor(_)) {
+            value = single_payload_value(value);
+        }
         value = match (&value.kind, step) {
             (ValueKind::Keyed(keyed), PathStep::Field(name)) => {
                 keyed.entries.get(&KeyRef::Str(name))?
@@ -1825,6 +1829,19 @@ pub fn value_at_path<'v>(value: &'v Value, path: &[PathStep]) -> Option<&'v Valu
         };
     }
     Some(value)
+}
+
+/// What named tuples of one element hold, through any number of them:
+/// `Some(Trooper({ ... }))` is the block. Any other value is itself. A field
+/// or an accessor selects in this (`SPEC.md` 5.1).
+pub fn single_payload_value(value: &Value) -> &Value {
+    let mut value = value;
+    while let ValueKind::NamedTuple(_, items) = &value.kind
+        && let [item] = items.as_slice()
+    {
+        value = item;
+    }
+    value
 }
 
 /// For each `key` + `path` in `requests`, the operations that produced the
