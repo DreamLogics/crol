@@ -60,8 +60,8 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   read there.
 - `reload` evaluates again only the keys a change can reach, and only in the contexts
   in which they can differ: a changed document's keys and those that read them. On a
-  data set of 14,000 keys, reloading a document of the top layer takes 192 ms instead of
-  920 ms. A change to a template, a `..` at a root or a variant declaration still
+  data set of 14,000 keys, reloading a document of the top layer takes 104 ms instead of
+  920 ms, as what the other layers decode to is kept too. A change to a template, a `..` at a root or a variant declaration still
   evaluates everything.
 - `.crob` files are format 4, for `!`, the order of documents and the `variant`
   attribute; compile layers again.

@@ -1624,8 +1624,9 @@ is an error, like a `.crol` file there (section 4).
   it. A layer's `schema.crod` is kept and read as ever.
 - **`reload` keeps the same for a text layer.** With `CrolConfig::keep_lowered`, the
   first reload that a text layer is not part of keeps what it lowers to, if it could be
-  compiled, and later ones read that instead of parsing it, until it changes. This
-  changes nothing but the time: a layer that uses a template of another layer stays
+  compiled, and later ones read that instead of parsing it, until it changes. What
+  such layers decode to is kept as well, so a reload decodes them only when one of them
+  changes. This changes nothing but the time: a layer that uses a template of another layer stays
   text, since it is what a template reaches that decides what it means.
 - **It stands alone as far as templates go.** A layer can be compiled only if
   it uses no template of another layer. Layers above it see its templates, as

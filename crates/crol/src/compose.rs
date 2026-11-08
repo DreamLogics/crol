@@ -1532,7 +1532,10 @@ impl<T: VariantName> CrolData<T> {
             }
             options = options.with_defaults(Some(schema.defaults()));
         }
-        let (compiled, mut diagnostics) = compile_lowered(&sources, &layers, &lowered);
+        // What the layers from bytes decoded to is kept from before.
+        let bytes: Vec<Option<&[u8]>> = lowered.iter().map(|l| l.as_deref()).collect();
+        let (compiled, mut diagnostics) =
+            crol_eval::compile_binary_after(&sources, &layers, &bytes, &self.compiled);
         let Some(compiled) = compiled else {
             return Err(Error::from_diagnostics(&sources, &diagnostics));
         };

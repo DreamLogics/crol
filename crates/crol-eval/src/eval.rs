@@ -1977,7 +1977,7 @@ impl<'a> DataPlan<'a> {
                 condition.names(&mut names);
             }
         }
-        for expr in &ir.exprs {
+        for expr in ir.exprs.iter() {
             if let ExprKind::Path(_, selectors) = &expr.kind {
                 for selector in selectors {
                     if let SelectorKind::Context(changes) = &selector.kind {
