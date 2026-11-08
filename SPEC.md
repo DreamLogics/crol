@@ -668,6 +668,10 @@ A target is a key (section 3.1) followed by **selectors**:
   non-negative integer). Whether `[3]` is a key or an index depends on
   the value it is applied to. An identifier in brackets (`[port]`) is
   an error, since a bare identifier is never a lookup: write `.port`;
+- on a named tuple of one element (`Some(x)`, `Trooper({ ... })`), `.name`
+  and `[key]` go into that element: `w.damage` with `w: Some({ damage: 5 })`
+  is `5`, the same as `w.0.damage`. In a target, the result stays in the
+  named tuple. On a named tuple of any other length they are an error;
 - `<c>` — a variant condition (section 8.2). Several in one path combine
   with `&`.
 

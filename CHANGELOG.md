@@ -9,6 +9,16 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ## [Unreleased]
 
+### Changed
+
+- A `.field` or `[key]` selector on a named tuple of one element goes into the
+  element, in references and in targets: `&root.weapon.damage` reads
+  `weapon: Some({ damage: 5 })`, and `weapon.damage: 6` patches it to
+  `Some({ damage: 6 })`. It was the error "cannot select in a named tuple".
+  `crol_eval::value_at_path`, and so the path of `crol eval`, completion after
+  `&root.weapon.` and hover on a reference, follow the same rule;
+  `crol_eval::single_payload_value` gives what such a value holds.
+
 ## [0.2.0] - 2026-11-08
 
 This release changes the format in ways that break documents and programs written for

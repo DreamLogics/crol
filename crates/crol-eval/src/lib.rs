@@ -44,7 +44,8 @@ pub use value::{Key, Keyed, Value, ValueKind, format_float, is_identifier, quote
 pub use variants::{Context, VariantId, Variants};
 
 pub use eval::{
-    ContextData, DefaultsProvider, ExplainStep, PathStep, StepKind, VariantKeys, value_at_path,
+    ContextData, DefaultsProvider, ExplainStep, PathStep, StepKind, VariantKeys,
+    single_payload_value, value_at_path,
 };
 
 /// What a built-in macro's reader needs to know (`SPEC.md` 6.7).
