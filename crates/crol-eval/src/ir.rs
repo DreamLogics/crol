@@ -12,9 +12,9 @@ pub(crate) type BindId = usize;
 
 #[derive(Debug, Default)]
 pub(crate) struct Ir {
-    pub(crate) exprs: Vec<Expr>,
-    pub(crate) blocks: Vec<Block>,
-    pub(crate) value_binds: Vec<ValueBind>,
+    pub(crate) exprs: Arena<Expr>,
+    pub(crate) blocks: Arena<Block>,
+    pub(crate) value_binds: Arena<ValueBind>,
 }
 
 impl Ir {
@@ -26,12 +26,119 @@ impl Ir {
     /// Gives back what the vectors reserved while they grew, as they stay as
     /// they are from here on.
     pub(crate) fn shrink(&mut self) {
-        self.exprs.shrink_to_fit();
-        self.blocks.shrink_to_fit();
-        self.value_binds.shrink_to_fit();
-        for block in &mut self.blocks {
+        self.exprs.tail.shrink_to_fit();
+        self.blocks.tail.shrink_to_fit();
+        self.value_binds.tail.shrink_to_fit();
+        for block in &mut self.blocks.tail {
             block.entries.shrink_to_fit();
         }
+    }
+
+    /// Fixes what the IR holds so far, so that another IR can start from it
+    /// without a copy: what layers decoded from bytes give.
+    pub(crate) fn freeze(&mut self) {
+        self.exprs.freeze();
+        self.blocks.freeze();
+        self.value_binds.freeze();
+    }
+
+    /// An IR that holds what this one had when it was frozen.
+    pub(crate) fn frozen_part(&self) -> Ir {
+        Ir {
+            exprs: self.exprs.frozen_part(),
+            blocks: self.blocks.frozen_part(),
+            value_binds: self.value_binds.frozen_part(),
+        }
+    }
+}
+
+/// A vector whose first items, once frozen, are shared with the IRs made
+/// from it, and the items added since.
+#[derive(Debug)]
+pub(crate) struct Arena<T> {
+    head: Arc<Vec<T>>,
+    tail: Vec<T>,
+}
+
+impl<T> Default for Arena<T> {
+    fn default() -> Self {
+        Self {
+            head: Arc::new(Vec::new()),
+            tail: Vec::new(),
+        }
+    }
+}
+
+impl<T> Arena<T> {
+    pub(crate) fn len(&self) -> usize {
+        self.head.len() + self.tail.len()
+    }
+
+    pub(crate) fn push(&mut self, item: T) {
+        self.tail.push(item);
+    }
+
+    pub(crate) fn get(&self, index: usize) -> Option<&T> {
+        match index.checked_sub(self.head.len()) {
+            None => self.head.get(index),
+            Some(index) => self.tail.get(index),
+        }
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &T> {
+        self.head.iter().chain(&self.tail)
+    }
+
+    fn freeze(&mut self) {
+        if self.tail.is_empty() {
+            return;
+        }
+        let tail = std::mem::take(&mut self.tail);
+        if self.head.is_empty() {
+            self.head = Arc::new(tail);
+        } else {
+            Arc::get_mut(&mut self.head)
+                .expect("an arena that is shared is frozen once")
+                .extend(tail);
+        }
+    }
+
+    fn frozen_part(&self) -> Arena<T> {
+        Arena {
+            head: Arc::clone(&self.head),
+            tail: Vec::new(),
+        }
+    }
+}
+
+impl<T> Extend<T> for Arena<T> {
+    fn extend<I: IntoIterator<Item = T>>(&mut self, items: I) {
+        self.tail.extend(items);
+    }
+}
+
+impl<T> std::ops::Index<usize> for Arena<T> {
+    type Output = T;
+
+    #[inline]
+    fn index(&self, index: usize) -> &T {
+        let head = self.head.len();
+        if index < head {
+            &self.head[index]
+        } else {
+            &self.tail[index - head]
+        }
+    }
+}
+
+impl<T> std::ops::IndexMut<usize> for Arena<T> {
+    /// Only items added since the arena was frozen change.
+    fn index_mut(&mut self, index: usize) -> &mut T {
+        let head = self.head.len();
+        let index = index
+            .checked_sub(head)
+            .expect("only items added since the IR was frozen change");
+        &mut self.tail[index]
     }
 }
 
@@ -287,7 +394,7 @@ pub(crate) struct ValueBind {
 }
 
 /// An operation on a root key, from a data-mode document (`SPEC.md` 7.2).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct RootOp {
     pub(crate) key: Arc<str>,
     /// `None` for a remove.
@@ -317,7 +424,7 @@ pub(crate) struct RootOp {
 
 /// A `..` at the root of a data-mode document (`SPEC.md` 4), under a
 /// condition if it is in a variant block.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct RootDefaults {
     pub(crate) condition: Option<crate::cond::Cond>,
     pub(crate) span: Span,

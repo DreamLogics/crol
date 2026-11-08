@@ -9,6 +9,12 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ## [Unreleased]
 
+### Changed
+
+- `reload` keeps what the layers it does not change decode to, so it decodes a layer
+  loaded from bytes only when one of its documents changes. On a data set of 14,000
+  keys, reloading a document of the top layer takes 104 ms instead of 192 ms.
+
 ## [0.3.0] - 2026-11-08
 
 This release changes the format in ways that break documents and programs written for

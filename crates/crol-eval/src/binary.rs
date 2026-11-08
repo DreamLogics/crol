@@ -368,9 +368,12 @@ pub(crate) fn write_lowered(lowered: &LoweredData, files: &[FileId]) -> Vec<u8> 
         strings: IndexSet::new(),
         files: &index,
     };
-    w.list(&lowered.ir.exprs, Writer::expr);
-    w.list(&lowered.ir.blocks, Writer::block);
-    w.list(&lowered.ir.value_binds, |w, bind| {
+    let exprs: Vec<&Expr> = lowered.ir.exprs.iter().collect();
+    w.list(&exprs, |w, expr| w.expr(expr));
+    let blocks: Vec<&Block> = lowered.ir.blocks.iter().collect();
+    w.list(&blocks, |w, block| w.block(block));
+    let binds: Vec<&ValueBind> = lowered.ir.value_binds.iter().collect();
+    w.list(&binds, |w, bind| {
         w.string(&bind.name);
         w.id(bind.expr);
     });
@@ -514,6 +517,7 @@ pub fn read_layer(bytes: &[u8]) -> Result<BinaryLayer, String> {
 }
 
 /// What a layer lowered ahead of time adds to the IR.
+#[derive(Debug, Clone)]
 pub(crate) struct Part {
     pub(crate) ops: Vec<RootOp>,
     pub(crate) templates: Vec<BindId>,
@@ -991,7 +995,7 @@ fn check(ir: &Ir, first_expr: usize, first_block: usize, first_bind: usize) -> R
         }
         depths[id - first_expr] = depth;
     }
-    for bind in &ir.value_binds[first_bind..] {
+    for bind in ir.value_binds.iter().skip(first_bind) {
         if !(first_expr..ir.exprs.len()).contains(&bind.expr) {
             return Err(Corrupt);
         }

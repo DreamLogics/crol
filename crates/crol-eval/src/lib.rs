@@ -246,6 +246,18 @@ pub struct Compiled {
     orders: Vec<order::LayerOrder>,
     /// For each layer, its documents in order.
     documents: Vec<Vec<FileId>>,
+    /// What the layers decoded from bytes gave, which the IR holds frozen.
+    decoded: Option<Arc<Decoded>>,
+}
+
+/// What layers decoded from bytes gave, so that compiling again with the
+/// same bytes for the same documents need not decode them.
+#[derive(Debug)]
+struct Decoded {
+    /// Each such layer: its index, its documents, and where its bytes are
+    /// and how many.
+    from: Vec<(usize, Vec<FileId>, usize, usize)>,
+    parts: Vec<binary::Part>,
 }
 
 /// Evaluates layers of data-mode documents (`SPEC.md` 7): later layers
@@ -268,7 +280,7 @@ pub fn evaluate_data(sources: &Sources, layers: &[Layer], options: &DataOptions)
 /// Reads and lowers layers of data-mode documents, with every diagnostic
 /// found; `None` if there are errors.
 pub fn compile(sources: &Sources, layers: &[Layer]) -> (Option<Compiled>, Vec<Diagnostic>) {
-    compile_documents(sources, layers, false, &[])
+    compile_documents(sources, layers, false, &[], None)
 }
 
 /// [`compile`], where `lowered` holds, for each layer that has one, what its
@@ -279,7 +291,19 @@ pub fn compile_binary(
     layers: &[Layer],
     lowered: &[Option<&[u8]>],
 ) -> (Option<Compiled>, Vec<Diagnostic>) {
-    compile_documents(sources, layers, false, lowered)
+    compile_documents(sources, layers, false, lowered, None)
+}
+
+/// [`compile_binary`], after `before` was compiled: what it decoded from
+/// the same bytes, for the same documents, is not decoded again, and the
+/// two share it.
+pub fn compile_binary_after(
+    sources: &Sources,
+    layers: &[Layer],
+    lowered: &[Option<&[u8]>],
+    before: &Compiled,
+) -> (Option<Compiled>, Vec<Diagnostic>) {
+    compile_documents(sources, layers, false, lowered, Some(before))
 }
 
 /// The `.crob` file of a layer (`SPEC.md` 7.8). It must evaluate on its own
@@ -322,7 +346,7 @@ pub fn compile_schema_documents(
     sources: &Sources,
     layers: &[Layer],
 ) -> (Option<Compiled>, Vec<Diagnostic>) {
-    compile_documents(sources, layers, true, &[])
+    compile_documents(sources, layers, true, &[], None)
 }
 
 /// A layer's documents in the order they apply (`SPEC.md` 7.1), without
@@ -396,11 +420,30 @@ fn compile_documents(
     layers: &[Layer],
     schema: bool,
     lowered: &[Option<&[u8]>],
+    before: Option<&Compiled>,
 ) -> (Option<Compiled>, Vec<Diagnostic>) {
     let mut diagnostics = Vec::new();
     let mut parses = Vec::new();
     let mut ir = ir::Ir::default();
     let mut parts = Vec::new();
+    // The layers from bytes, and whether `before` decoded them already.
+    let from: Vec<(usize, Vec<FileId>, usize, usize)> = layers
+        .iter()
+        .enumerate()
+        .filter_map(|(index, layer)| {
+            let bytes = lowered.get(index).copied().flatten()?;
+            let files = documents_of(sources, layer, true);
+            let files = files.iter().map(|(_, file)| *file).collect();
+            Some((index, files, bytes.as_ptr() as usize, bytes.len()))
+        })
+        .collect();
+    let reused = before
+        .and_then(|before| Some((before, before.decoded.as_ref()?)))
+        .filter(|(_, decoded)| !from.is_empty() && decoded.from == from);
+    if let Some((before, decoded)) = reused {
+        ir = before.lowered.ir.frozen_part();
+        parts = decoded.parts.clone();
+    }
     let mut last_file = None;
     let mut orders = Vec::with_capacity(layers.len());
     let mut in_order = Vec::with_capacity(layers.len());
@@ -411,6 +454,9 @@ fn compile_documents(
         in_order.push(documents.iter().map(|(_, file)| *file).collect());
         last_file = documents.last().map(|(_, file)| *file).or(last_file);
         if let Some(Some(bytes)) = lowered.get(layer_index) {
+            if reused.is_some() {
+                continue;
+            }
             let all = documents_of(sources, layer, true);
             let files: Vec<FileId> = all.iter().map(|(_, file)| *file).collect();
             match binary::read_lowered(bytes, &files, sources, layer_index, &mut ir) {
@@ -457,6 +503,19 @@ fn compile_documents(
             parses.push((*file, parse.document(), layer_index, index));
         }
     }
+    // What was decoded is fixed from here on, for a compilation after this
+    // one to start from.
+    let decoded = match reused {
+        Some((_, decoded)) => Some(Arc::clone(decoded)),
+        None if !from.is_empty() => {
+            ir.freeze();
+            Some(Arc::new(Decoded {
+                from,
+                parts: parts.clone(),
+            }))
+        }
+        None => None,
+    };
     let documents: Vec<lower::DataDocument<'_>> = parses
         .iter()
         .map(|(file, document, layer, index)| lower::DataDocument {
@@ -485,6 +544,7 @@ fn compile_documents(
             layer_names,
             orders,
             documents: in_order,
+            decoded,
         }),
         diagnostics,
     )
