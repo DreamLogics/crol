@@ -175,11 +175,12 @@ A lone `_` is not an identifier. Identifiers are case-sensitive.
 - `true` and `false` are reserved everywhere.
 - `use`, `as`, `schema`, `type`, `extends` and `super` are keywords
   only inside a document attribute (sections 4.1, 4.2).
-- `self`, `parent`, `root` and `default` are keywords only directly
-  after `&` (`&self`, `&parent`, `&root`, `&default`). Everywhere else
-  they are ordinary identifiers, so a field may be called `parent` or
-  `root`. A
-  self-relative reference to such a field is written `&self.parent`.
+- `self`, `parent`, `super`, `top`, `root` and `default` are keywords
+  only directly after `&` (`&self`, `&parent`, `&super`, `&top`, `&root`,
+  `&default`). Everywhere else they are ordinary identifiers, so a field
+  may be called `parent`, `top` or `root`. A self-relative reference to
+  such a field is written `&self.parent`. (`super` is also a keyword in a
+  document attribute, as above.)
 
 Raw identifiers (`r#type`) are not supported. Rust keywords other than
 the above are ordinary CROL identifiers (`type: "x"` is a field named
@@ -908,6 +909,8 @@ a remove.
 | `&` | the value *below*: the current target's value before this entry applies | early |
 | `&self` | the keyed value this entry is in | late |
 | `&parent` | the keyed value around `&self`; `&parent.&parent` the one around that, and so on | late |
+| `&super` | the same as `&parent`: another spelling of it | late |
+| `&top` | the root entry the keyed value this entry is in belongs to: `web` anywhere inside `web` | late |
 | `&root` | the root | late |
 | `&default` | the Rust default of the current target (section 6.1.3) | fixed |
 | `&name` | a *bind* or *template* (sections 6.1.1, 6.1.2) | late |
@@ -922,7 +925,10 @@ enclosing scope". It names a bind or is an error, with a hint
 
 `.&parent` is allowed only directly after `&parent` or another
 `.&parent`: `&parent.&parent.port`. Elsewhere (`&self.&parent`,
-`&root.web.&parent`) it is an error.
+`&root.web.&parent`) it is an error. `&super` is `&parent` spelled the
+way a module path goes up (section 4.2), and the two may be mixed:
+`&super.&super`, `&parent.&super` and `&super.&parent` are all two blocks
+up. What this section says of `&parent` holds for `&super`.
 
 **`&` binding.** Every `&` belongs to the innermost entry containing it,
 and is that entry's value below:
@@ -975,9 +981,30 @@ is the root. `&parent` is the final value at the location of the next
 block out, `&parent.&parent` the one after that; going above the top
 level is an error.
 
+`&top` is the final value at the first step of that same location: the
+root entry the innermost block is in, however many blocks or steps
+down. It does not count blocks, so a target with several steps makes no
+difference: in `web.limits: { cpu: &top.cpu_budget }` and in
+`web: { limits: { cpu: &top.cpu_budget } }` alike, `&top` is `web`, where
+`&parent` is the root in the first and `web` in the second. For an entry
+at the document's top level there is no root entry around it, and
+`&top` is an error (write `&root` or `&self`). In a value bind's block,
+the location starts at the bind, so `&top` is the bind's entry the
+block is in, and an error in the bind's own block.
+
+```rust
++web: {
+    host: "web",
+    port: 8080,
+    limits: { cpu: 2, budget: &top.limits.cpu * 100 },  // web.limits.cpu
+    replicas: [{ name: &top.host + "-0" }],              // "web-0"
+},
++web.probe: { url: "http://" + &top.host + ":" + &top.port },
+```
+
 **Rebinding through spreads.** An entry that a spread copies in is
-evaluated at its *new* location. `&self`, `&parent` and binds in it,
-and in the blocks nested in it, refer to the value it was copied into,
+evaluated at its *new* location. `&self`, `&parent`, `&top` and binds
+in it, and in the blocks nested in it, refer to the value it was copied into,
 not to the one it was written in. `&` stays where the entry was written:
 in a copied entry it is still the value below there. But an entry with
 *nothing* below where it was written, as in a template (section 6.1.2),
@@ -1000,7 +1027,8 @@ service_defaults := {
 ```
 
 `web.url` is `"http://localhost:8080"`; the template's own `url` stays
-`"http://localhost:80"`. This is what makes templates work: a template
+`"http://localhost:80"`. In the same way, a template's `&top.host` is the
+`host` of the root entry it is spread into. This is what makes templates work: a template
 describes its fields in terms of each other, and every value that
 spreads it gets them computed from its own fields.
 
@@ -1045,8 +1073,8 @@ service_defaults := {
   in that document.
 - **Names.** A bind with the same name as another visible one (in the
   same block or an enclosing one), or as a template (section 6.1.2), is
-  an error; there is no shadowing. `self`, `parent`, `root` and
-  `default` cannot be bind names. A bind name and a key may be the same.
+  an error; there is no shadowing. `self`, `parent`, `super`, `top`,
+  `root` and `default` cannot be bind names. A bind name and a key may be the same.
 - **Relative.** Like `&parent`, a bind is "*n* blocks up, then this
   target", and follows its entries when a spread copies them
   elsewhere. A value bind (section 6.1.2) is not relative: a copied
@@ -1484,7 +1512,7 @@ operations count per condition.
 
 - `&` is **early**: it is the result of the chain's earlier operations
   (or, inside blocks, of the block's earlier steps).
-- Every other reference (`&self`, `&parent`, `&root`, binds) and every
+- Every other reference (`&self`, `&parent`, `&top`, `&root`, binds) and every
   spread of one is **late**: it reads the **final** value at that path,
   after all layers, in the current variant context (section 8).
 
@@ -2012,8 +2040,9 @@ primary      ::= literal
                | identifier "!" "(" exprs ")"      (* round!(x), section 6.7 *)
                | identifier                        (* None, Red *)
                | "(" expr ")"
-reference    ::= "&" ( identifier | "self" | "root" | "default" | parents )?
-parents      ::= "parent" ( "." "&" "parent" )*
+reference    ::= "&" ( identifier | "self" | "top" | "root" | "default" | parents )?
+parents      ::= up ( "." "&" up )*
+up           ::= "parent" | "super"
 bind         ::= identifier "="
 list         ::= "[" exprs "]"
 tuple        ::= "(" ")" | "(" expr "," exprs ")"
@@ -3487,9 +3516,10 @@ trigger completion, as do `.`, `&`, `<` and `@`.
   In a schema file (section 10.10), `root` and `Named(...)` offer the paths in
   its `types`, as a string or inside the quotes of one, the only place in a
   string where anything is offered.
-- After `&root.`, `&self.`, `&parent.` and binds: the keys of the
-  evaluated value at that path. After `&` (and `..&`): bind and
-  template names, `self`, `parent`, `root`, `default`.
+- After `&root.`, `&top.`, `&self.`, `&parent.`, `&super.` and binds:
+  the keys of the evaluated value at that path. After `&` (and `..&`):
+  bind and template names, `self`, `parent`, `super`, `top`, `root`,
+  `default`.
 - In `<...>`: variant names, and in conditions `!`.
 - In `#[type(...)]` (section 6.1.2): the Rust names and schema type names;
   after a `.`, the steps the type there has: its fields, tuple indices and
@@ -3609,7 +3639,8 @@ comma or line break between entries, a missing comma before `-12` or
 unbalanced brackets, a file that is not UTF-8, `...`, a space
 after `&` or `@`, `1u8`, `1.`, a
 type name on the outer braces of a data-mode document; an identifier in
-brackets (`[port]`); `.&parent` other than after `&parent`.
+brackets (`[port]`); `.&parent` or `.&super` other than after `&parent`
+or `&super`.
 
 **Files**: a `.crol` file given as a layer, or in a layer's directory
 other than the project file; a `.crod` file read as a value document (a
@@ -3636,7 +3667,7 @@ a condition that can never hold; `|`, `^`, `+` or parentheses in a
 reference's variant selector; a `+` list inside a condition;
 two documents with one path in a layer; `&name` with no visible bind;
 two visible binds with one name, or a bind named like a template or
-`self`, `parent`, `root` or `default`; a template defined twice; a value bind
+`self`, `parent`, `super`, `top`, `root` or `default`; a template defined twice; a value bind
 inside a variant block; `#[type(...)]` on anything but a value bind,
 twice on one, or another entry attribute; an entry bind at the top level of a data-mode
 document; a bind on a remove, variant block,
@@ -3649,8 +3680,9 @@ on a missing index, removing a tuple element; a missing value referenced
 outside `??`, or spread; `&default` without a schema; operators on the wrong kinds; integer overflow;
 division by zero; a non-finite float; `~` on lists, scalars, different
 type names; `.0` on a keyed value; an
-integer key at the root; a spread of something that is not keyed; `&self`, `&parent` or a bind in a block
-without a location; `&parent` above the top level; a cycle.
+integer key at the root; a spread of something that is not keyed; `&self`, `&parent`, `&top` or a bind in a block
+without a location; `&parent` above the top level; `&top` at the top level or
+in a value bind's own block; a cycle.
 
 **Composer**: `with_variant` with an undeclared variant (when no group
 is open; with one, a variant the data does not declare either is an error
@@ -3825,7 +3857,8 @@ where it is not obvious.
   is a layer quietly missing a document. Text has no extension, so
   `from_str` and the composer state the mode (section 4).
 - Chars, `0o`/`0b` literals, `.0` tuple selectors.
-- `self`, `parent`, `root` and `default` are keywords only after `&`.
+- `self`, `parent`, `super`, `top`, `root` and `default` are keywords
+  only after `&`.
 - A line break separates entries, but not by ending expressions, as in
   Go or JavaScript's automatic semicolons (5.3). CROL's lines may start
   with an operator, and every file written with commas had to keep its
@@ -3901,10 +3934,15 @@ where it is not obvious.
 - Decided: no operator for removing several keys; a patch does it
   (`& ~ { -a, -b }`).
 - Decided: no implicit `&name` lookup. `&self`, `&parent` (chained as
-  `&parent.&parent`), `&root` and binds (`name = key: ...` for an entry,
+  `&parent.&parent`), `&top`, `&root` and binds (`name = key: ...` for an entry,
   `name := expr` for a value; templates are top-level value binds)
   instead; entries copied by a spread are evaluated at their new
   location (6.1).
+- Decided: `&root` stays the whole document, and `&top` names the root
+  entry a block is in, rather than `&root` changing meaning, which would
+  have silently changed what existing documents read. `&super` is accepted
+  as another spelling of `&parent`, since module paths go up with `super`
+  (4.2) and both read naturally.
 
 ## Appendix B. Canonical encoding
 

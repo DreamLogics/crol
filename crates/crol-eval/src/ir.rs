@@ -81,8 +81,10 @@ pub(crate) enum RefKind {
     Below,
     /// `&self`
     SelfValue,
-    /// `&parent`, `&parent.&parent`: how many blocks up.
+    /// `&parent`, `&parent.&parent` (or `&super`): how many blocks up.
     Parent(usize),
+    /// `&top`: the root entry the innermost block is in.
+    Top,
     /// `&root`
     Root,
     /// `&default`, with the target whose default it is.

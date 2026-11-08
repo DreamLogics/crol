@@ -40,7 +40,10 @@ impl Gen {
             4 => format!("[{}, {}]", self.expr(depth + 1), self.expr(depth + 1)),
             5 => self.block(depth + 1),
             6 => {
-                format!("&{}", self.pick(&["self", "root", "parent", "t", ""])) + &self.selectors()
+                format!(
+                    "&{}",
+                    self.pick(&["self", "root", "parent", "super", "top", "t", ""])
+                ) + &self.selectors()
             }
             7 => format!("({}, {})", self.expr(depth + 1), self.expr(depth + 1)),
             8 => format!("Some({})", self.expr(depth + 1)),

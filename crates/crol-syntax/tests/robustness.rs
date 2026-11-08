@@ -40,6 +40,7 @@ const FRAGMENTS: &[&str] = &[
     "_",
     "self",
     "parent",
+    "top",
     "root",
     "default",
     "use",

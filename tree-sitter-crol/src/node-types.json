@@ -1134,6 +1134,10 @@
         {
           "type": "self",
           "named": true
+        },
+        {
+          "type": "top",
+          "named": true
         }
       ]
     }
@@ -1883,6 +1887,10 @@
   {
     "type": "super",
     "named": false
+  },
+  {
+    "type": "top",
+    "named": true
   },
   {
     "type": "true",

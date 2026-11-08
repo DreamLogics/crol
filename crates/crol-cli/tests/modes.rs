@@ -489,7 +489,7 @@ fn files_need_a_schema_and_a_type_it_has() {
 }
 
 /// A schema file as `SchemaFile::to_text` writes it, with every shape.
-const GENERATED_SCHEMA: &str = r#"#![schema("crate:crol@0.2")]
+const GENERATED_SCHEMA: &str = r#"#![schema("crate:crol@0.3")]
 
 Schema {
     format: 1,

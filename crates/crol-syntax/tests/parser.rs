@@ -232,6 +232,89 @@ fn references() {
 }
 
 #[test]
+fn top_and_super_references() {
+    check(
+        "a: &top.port + &super.&parent.x + &topic + &superb + &root.&super",
+        expect![[r#"
+            DOCUMENT@0..65
+              ENTRY@0..65
+                TARGET@0..1
+                  KEY@0..1
+                    IDENT@0..1 "a"
+                COLON@1..2 ":"
+                WHITESPACE@2..3 " "
+                BINARY_EXPR@3..65
+                  BINARY_EXPR@3..50
+                    BINARY_EXPR@3..40
+                      BINARY_EXPR@3..31
+                        PATH_EXPR@3..12
+                          REFERENCE@3..7
+                            AMP@3..4 "&"
+                            TOP_KW@4..7 "top"
+                          FIELD_SELECTOR@7..12
+                            DOT@7..8 "."
+                            IDENT@8..12 "port"
+                        WHITESPACE@12..13 " "
+                        PLUS@13..14 "+"
+                        WHITESPACE@14..15 " "
+                        PATH_EXPR@15..31
+                          REFERENCE@15..29
+                            AMP@15..16 "&"
+                            PARENT_KW@16..21 "super"
+                            DOT@21..22 "."
+                            AMP@22..23 "&"
+                            PARENT_KW@23..29 "parent"
+                          FIELD_SELECTOR@29..31
+                            DOT@29..30 "."
+                            IDENT@30..31 "x"
+                      WHITESPACE@31..32 " "
+                      PLUS@32..33 "+"
+                      WHITESPACE@33..34 " "
+                      REFERENCE@34..40
+                        AMP@34..35 "&"
+                        IDENT@35..40 "topic"
+                    WHITESPACE@40..41 " "
+                    PLUS@41..42 "+"
+                    WHITESPACE@42..43 " "
+                    REFERENCE@43..50
+                      AMP@43..44 "&"
+                      IDENT@44..50 "superb"
+                  WHITESPACE@50..51 " "
+                  PLUS@51..52 "+"
+                  WHITESPACE@52..53 " "
+                  PATH_EXPR@53..65
+                    REFERENCE@53..58
+                      AMP@53..54 "&"
+                      ROOT_KW@54..58 "root"
+                    PARENT_SELECTOR@58..65
+                      DOT@58..59 "."
+                      AMP@59..60 "&"
+                      PARENT_KW@60..65 "super"
+            error 58..59: `.&parent` and `.&super` are only allowed directly after `&parent` or `&super`
+        "#]],
+    );
+}
+
+#[test]
+fn reference_kinds() {
+    use crol_syntax::ast::{self, AstNode, ReferenceKind};
+    let parse = crol_syntax::parse("a: [&top, &super, &super.&parent.&super, &parent, &topic]");
+    let kinds: Vec<String> = parse
+        .syntax()
+        .descendants()
+        .filter_map(ast::Reference::cast)
+        .map(|r| match r.kind() {
+            ReferenceKind::Bind(name) => format!("Bind({})", name.text()),
+            kind => format!("{kind:?}"),
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        ["Top", "Parent(1)", "Parent(3)", "Parent(1)", "Bind(topic)"]
+    );
+}
+
+#[test]
 fn variants() {
     check(
         "<prod & !cache> { web.replicas<a + (b | c)>: 1 }, x: &root.db<dev & !cache>,",
@@ -809,7 +892,7 @@ fn misplaced_parent_and_plus_list() {
             LITERAL@30..31
               INT@30..31 "1"
           COMMA@31..32 ","
-        error 8..9: `.&parent` is only allowed directly after `&parent`
+        error 8..9: `.&parent` and `.&super` are only allowed directly after `&parent` or `&super`
         error 23..24: a `+` list is only allowed as the outermost operator of a condition
     "#]],
     );

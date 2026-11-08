@@ -421,6 +421,17 @@ impl Location {
         }
     }
 
+    /// The location of the first step only; `None` at the base itself.
+    fn top(&self) -> Option<Location> {
+        let step = self.step_refs().first().copied()?.clone();
+        Some(Location {
+            base: self.base.clone(),
+            anchor: self.anchor,
+            name: self.name.clone(),
+            path: Some(Rc::new(PathLink { step, parent: None })),
+        })
+    }
+
     /// The steps from the base, first to last, borrowed.
     fn step_refs(&self) -> Vec<&Step> {
         let mut steps = Vec::new();
@@ -1018,6 +1029,10 @@ fn collect_reads(
             RefKind::SelfValue if at_root(0) => out.whole = true,
             RefKind::Parent(n) if at_root(*n) => out.whole = true,
             RefKind::Root => out.whole = true,
+            // At the top level `&top` is an error; elsewhere it reads the
+            // root key it is in, which a copy elsewhere changes.
+            RefKind::Top if depth == 0 => out.whole = true,
+            RefKind::Top => out.climbs = true,
             RefKind::Bind { up, target } if at_root(*up) => match target.first().map(|s| &s.kind) {
                 Some(SelectorKind::Field(name)) => out.keys.push(name.clone()),
                 _ => out.whole = true,
@@ -3046,6 +3061,7 @@ impl Evaluator<'_> {
             ExprKind::Ref(RefKind::Parent(n)) => {
                 self.chain_location(&env.chain, *n, span, "&parent")
             }
+            ExprKind::Ref(RefKind::Top) => self.top_location(&env.chain, span),
             ExprKind::Ref(RefKind::Root) => Ok(self.contexts[env.context].root.clone()),
             ExprKind::Ref(RefKind::Bind { up, target }) => {
                 let mut location = self.chain_location(&env.chain, *up, span, "bind")?;
@@ -3553,6 +3569,10 @@ impl Evaluator<'_> {
                 let location = self.chain_location(&env.chain, *n, span, "&parent")?;
                 self.value_at(&location, span)
             }
+            RefKind::Top => {
+                let location = self.top_location(&env.chain, span)?;
+                self.value_at(&location, span)
+            }
             RefKind::Root => {
                 let root = self.contexts[env.context].root.clone();
                 self.value_at(&root, span)
@@ -3646,6 +3666,24 @@ impl Evaluator<'_> {
                 location: Some(location),
                 ..
             }) => Ok(location.clone()),
+        }
+    }
+
+    /// The location `&top` names: the first step of the innermost block's
+    /// location, the root entry it is in (or, in a value bind, the bind's
+    /// entry it is in).
+    fn top_location(&mut self, chain: &Chain, span: Span) -> Eval<Location> {
+        let location = self.chain_location(chain, 0, span, "&top")?;
+        match location.top() {
+            Some(top) => Ok(top),
+            None if location.anchor == Anchor::Root => Err(self.fail(
+                span,
+                "&top: at the top level there is no root entry around this; write `&root` or `&self`",
+            )),
+            None => Err(self.fail(
+                span,
+                "&top: at a value bind's top level there is no entry around this; write `&self`",
+            )),
         }
     }
 

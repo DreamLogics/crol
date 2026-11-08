@@ -1,7 +1,7 @@
 id = "crol"
 name = "CROL"
 description = "CROL, the Composable Rust Object Language: syntax highlighting and the crol language server."
-version = "0.2.0"
+version = "0.3.0"
 schema_version = 1
 authors = ["DreamLogics"]
 repository = "https://github.com/DreamLogics/crol"
@@ -9,7 +9,7 @@ languages = ["languages/crol"]
 
 [grammars.crol]
 repository = "https://github.com/DreamLogics/crol"
-rev = "d677c69d7a35b8ee3db8c2b165ba6f34ca02c3ff"
+rev = "fee133c467d9c19e015a9e0c3a2e5e337fcce3c5"
 path = "tree-sitter-crol"
 
 [language_servers.crol]

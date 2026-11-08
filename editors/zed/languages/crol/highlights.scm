@@ -26,7 +26,7 @@
 (type_expr (identifier) @type)
 
 ; References and binds.
-[(self) (root) (parent) (default)] @variable.special
+[(self) (top) (root) (parent) (default)] @variable.special
 (reference "&" @variable.special)
 (bind_name) @variable
 (bind name: (identifier) @variable)

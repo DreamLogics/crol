@@ -318,6 +318,8 @@ References read other values. They all start with `&`:
 | `&`          | the value below: this target before this entry applied  |
 | `&self`      | the block this entry is in                              |
 | `&parent`    | the block around that; `&parent.&parent` goes further   |
+| `&super`     | the same as `&parent`, spelled as module paths go up    |
+| `&top`       | the root entry this block is in, however deep           |
 | `&root`      | the top level of the data                               |
 | `&name`      | a bind or template, see below                           |
 | `&default`   | the Rust default of this field, see [below][defaults]   |
@@ -355,6 +357,36 @@ explains why that difference is the heart of CROL.
 
 There is no implicit lookup. `&port` never means "`port` from somewhere
 around here". It names a bind, or it is an error that suggests `&self.port`.
+
+### The root entry you are in
+
+`&root` is the whole document, so from inside `web` you would write
+`&root.web.port`. `&top` says the same without naming `web`: it is the root
+entry the block is in, however many blocks down, and also when the target has
+several steps:
+
+```crol
+// example.crod
++web: {
+    host: "web",
+    port: 8080,
+    limits: { cpu: 2, budget: &top.limits.cpu * 100 },
+}
+web.limits.probe: { url: "http://" + &top.host + ":" + &top.port }
+```
+
+```console
+$ crol eval example.crod
+web: {
+    host: "web",
+    port: 8080,
+    limits: { cpu: 2, budget: 200, probe: { url: "http://web:8080" } },
+}
+```
+
+There, `&parent` would be the root, since `web.limits.probe: { ... }` is one
+block. In a template, `&top` is the root entry the template is spread into. At
+the top level there is no root entry around, and `&top` is an error.
 
 ### Binds
 

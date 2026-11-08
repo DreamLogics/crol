@@ -389,7 +389,7 @@ pub(crate) fn block_path(block: &ast::Block) -> Option<(String, Vec<PathStep>)> 
     from_root(place_path(block.syntax())?)
 }
 
-/// The root key and path that `&self`, `&parent` or an entry bind at a
+/// The root key and path that `&self`, `&parent`, `&top` or an entry bind at a
 /// token names, with the selectors after it: `&self.port` in
 /// `+web: { url: &self.port }` names `web.port`.
 fn relative_reference_path(token: &SyntaxToken) -> Option<(String, Vec<PathStep>)> {
@@ -405,6 +405,7 @@ fn relative_reference_path(token: &SyntaxToken) -> Option<(String, Vec<PathStep>
     let (key, mut path) = match reference.kind() {
         ast::ReferenceKind::SelfValue => block_path(&blocks().next()?)?,
         ast::ReferenceKind::Parent(n) => block_path(&blocks().nth(n)?)?,
+        ast::ReferenceKind::Top => (block_path(&blocks().next()?)?.0, Vec::new()),
         ast::ReferenceKind::Bind(name) => {
             let declared = crate::navigate::local_declaration(&name)?;
             let entry = declared.parent()?.parent().and_then(ast::Entry::cast)?;
@@ -558,6 +559,7 @@ fn in_value(token: &SyntaxToken) -> bool {
             | AMP
             | SELF_KW
             | PARENT_KW
+            | TOP_KW
             | ROOT_KW
             | DEFAULT_KW
     ) && !token.parent_ancestors().any(|n| outside(&n))

@@ -1,0 +1,7 @@
+// At the top level there is no root entry around `&top`.
++a: &top,
+// A value bind's own block is not inside an entry either.
+t := { x: &top },
++c: { y: &t.x },
+// `&top` inside its own root entry's value is that value: a cycle, as `&self`.
++d: { e: &top },

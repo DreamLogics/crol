@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.99"
 authors = ["Sanne Ladage"]
@@ -13,11 +13,11 @@ homepage = "https://github.com/DreamLogics/crol"
 
 [workspace.dependencies]
 # Workspace crates. All crates share one version number (SPEC.md 14.4).
-crol = { path = "crates/crol", version = "0.2.0" }
-crol-derive = { path = "crates/crol-derive", version = "0.2.0" }
-crol-eval = { path = "crates/crol-eval", version = "0.2.0" }
-crol-lsp = { path = "crates/crol-lsp", version = "0.2.0", default-features = false }
-crol-syntax = { path = "crates/crol-syntax", version = "0.2.0" }
+crol = { path = "crates/crol", version = "0.3.0" }
+crol-derive = { path = "crates/crol-derive", version = "0.3.0" }
+crol-eval = { path = "crates/crol-eval", version = "0.3.0" }
+crol-lsp = { path = "crates/crol-lsp", version = "0.3.0", default-features = false }
+crol-syntax = { path = "crates/crol-syntax", version = "0.3.0" }
 
 # External dependencies are kept small (SPEC.md 14.1).
 rowan = "0.17"

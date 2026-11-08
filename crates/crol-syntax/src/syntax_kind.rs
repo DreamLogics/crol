@@ -30,6 +30,7 @@ pub enum SyntaxKind {
     SELF_KW,
     PARENT_KW,
     ROOT_KW,
+    TOP_KW,
     DEFAULT_KW,
     USE_KW,
     AS_KW,
@@ -204,8 +205,10 @@ impl SyntaxKind {
     pub(crate) fn reference_keyword(text: &str) -> Option<SyntaxKind> {
         Some(match text {
             "self" => SELF_KW,
-            "parent" => PARENT_KW,
+            // `&super` is another spelling of `&parent`.
+            "parent" | "super" => PARENT_KW,
             "root" => ROOT_KW,
+            "top" => TOP_KW,
             "default" => DEFAULT_KW,
             _ => return None,
         })
@@ -253,6 +256,7 @@ const KINDS: [SyntaxKind; __LAST as usize] = [
     SELF_KW,
     PARENT_KW,
     ROOT_KW,
+    TOP_KW,
     DEFAULT_KW,
     USE_KW,
     AS_KW,

@@ -1096,7 +1096,7 @@ impl Parser<'_> {
             }
             AMP => {
                 self.start(PARENT_SELECTOR);
-                self.error("`.&parent` is only allowed directly after `&parent`");
+                self.error("`.&parent` and `.&super` are only allowed directly after `&parent` or `&super`");
                 self.bump();
                 self.bump();
                 if self.current_is_adjacent() && self.at(IDENT) {
@@ -1452,8 +1452,8 @@ impl Parser<'_> {
         self.finish();
     }
 
-    /// `&`, `&name`, `&self`, `&root`, `&default`, `&parent.&parent`
-    /// (`SPEC.md` 6.1).
+    /// `&`, `&name`, `&self`, `&top`, `&root`, `&default`,
+    /// `&parent.&parent`, `&super.&super` (`SPEC.md` 6.1).
     fn reference(&mut self) {
         self.start(REFERENCE);
         self.bump(); // `&`
@@ -1477,14 +1477,17 @@ impl Parser<'_> {
         let keyword = SyntaxKind::reference_keyword(self.nth_text(0));
         self.bump_as(keyword.unwrap_or(IDENT));
         if keyword == Some(PARENT_KW) {
-            // `.&parent`, repeated.
+            // `.&parent` or `.&super`, repeated.
             while self.at(DOT) && self.nth(1) == AMP {
                 self.bump();
                 self.bump();
-                if self.current_is_adjacent() && self.at(IDENT) && self.nth_text(0) == "parent" {
+                if self.current_is_adjacent()
+                    && self.at(IDENT)
+                    && matches!(self.nth_text(0), "parent" | "super")
+                {
                     self.bump_as(PARENT_KW);
                 } else {
-                    self.error_missing("expected `parent` after `.&`");
+                    self.error_missing("expected `parent` or `super` after `.&`");
                     break;
                 }
             }

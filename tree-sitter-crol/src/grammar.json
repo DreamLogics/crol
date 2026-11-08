@@ -1926,6 +1926,15 @@
           "type": "ALIAS",
           "content": {
             "type": "STRING",
+            "value": "&top"
+          },
+          "named": true,
+          "value": "top"
+        },
+        {
+          "type": "ALIAS",
+          "content": {
+            "type": "STRING",
             "value": "&root"
           },
           "named": true,
@@ -1946,8 +1955,17 @@
             {
               "type": "ALIAS",
               "content": {
-                "type": "STRING",
-                "value": "&parent"
+                "type": "CHOICE",
+                "members": [
+                  {
+                    "type": "STRING",
+                    "value": "&parent"
+                  },
+                  {
+                    "type": "STRING",
+                    "value": "&super"
+                  }
+                ]
               },
               "named": true,
               "value": "parent"
@@ -1970,8 +1988,17 @@
                         "value": "\\s*"
                       },
                       {
-                        "type": "STRING",
-                        "value": "&parent"
+                        "type": "CHOICE",
+                        "members": [
+                          {
+                            "type": "STRING",
+                            "value": "&parent"
+                          },
+                          {
+                            "type": "STRING",
+                            "value": "&super"
+                          }
+                        ]
                       }
                     ]
                   }

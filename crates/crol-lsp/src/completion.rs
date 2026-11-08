@@ -528,7 +528,7 @@ impl Completer<'_> {
             .collect()
     }
 
-    /// After `&root.`, `&self.`, `&parent.` or `&bind.`, and further
+    /// After `&root.`, `&top.`, `&self.`, `&parent.` (or `&super.`) or `&bind.`, and further
     /// fields: the keys of the value there.
     fn reference_keys(&self, segments: &[&str], spread: bool) -> Vec<CompletionItem> {
         let steps = |names: &[&str]| -> Vec<PathStep> {
@@ -551,12 +551,19 @@ impl Completer<'_> {
                 }
                 Some((key, path)) => self.value_at(key, &steps(path)),
             },
-            "self" | "parent" => {
+            "self" | "parent" | "super" | "top" => {
                 let blocks = self.cursor.blocks();
-                let block = blocks.get(usize::from(base == "parent"));
+                let block = blocks.get(usize::from(matches!(base, "parent" | "super")));
                 let mut path = block.and_then(|b| b.path.clone()).unwrap_or_default();
                 if block.is_none_or(|b| b.path.is_none()) {
                     return Vec::new();
+                }
+                if base == "top" {
+                    // The root entry the block is in; nothing at the top level.
+                    if path.is_empty() {
+                        return Vec::new();
+                    }
+                    path.truncate(1);
                 }
                 path.extend(steps(rest));
                 match path.split_first() {
@@ -590,10 +597,10 @@ impl Completer<'_> {
         features::target_path(&entry.target()?.key()?.token()?)
     }
 
-    /// After `&`: `self`, `parent`, `root`, `default`, the binds visible at
+    /// After `&`: `self`, `parent`, `super`, `top`, `root`, `default`, the binds visible at
     /// the cursor and the templates.
     fn reference_starts(&self) -> Vec<CompletionItem> {
-        let mut items: Vec<CompletionItem> = ["self", "parent", "root", "default"]
+        let mut items: Vec<CompletionItem> = ["self", "parent", "super", "top", "root", "default"]
             .into_iter()
             .map(|k| item(k.to_owned(), CompletionItemKind::KEYWORD, None))
             .collect();

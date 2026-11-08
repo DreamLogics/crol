@@ -9,6 +9,28 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-08
+
+This release changes the format in ways that break documents and programs written for
+0.2.0:
+
+- `top` and `super` are keywords after `&`, so a bind can no longer be named either of
+  them, and `&top` or `&super` no longer names one.
+- `crol_syntax::SyntaxKind` has a new kind, `TOP_KW`, which renumbers the kinds after
+  it, and `crol_syntax::ast::ReferenceKind` a new case, `Top`.
+- `.crob` files have a new format: compile layers again.
+
+### Added
+
+- `&top` is the root entry a block is in, however deep and however many steps its
+  target has: `web.limits: { budget: &top.limits.cpu * 100 }` reads `web`, with no
+  need to write `&root.web`. A template's `&top` is the root entry it is spread into.
+  At the top level, or in a value bind's own block, it is an error.
+- `&super` is another spelling of `&parent`, as module paths go up with `super`. The
+  two may be mixed: `&super.&parent` is two blocks up.
+- The language server completes `top` and `super` after `&`, and the keys after
+  `&top.` and `&super.`; the editors highlight them.
+
 ### Changed
 
 - A `.field` or `[key]` selector on a named tuple of one element goes into the
@@ -546,6 +568,7 @@ What changed during development, before anything was published.
   cursor, keep an existing `:`, and are triggered where keys and values
   start; a document just opened is evaluated at once.
 
-[Unreleased]: https://github.com/DreamLogics/crol/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/DreamLogics/crol/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/DreamLogics/crol/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/DreamLogics/crol/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/DreamLogics/crol/releases/tag/v0.1.0

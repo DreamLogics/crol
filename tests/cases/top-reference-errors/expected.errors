@@ -1,0 +1,3 @@
+1-base/a.crod:2:5: &top: at the top level there is no root entry around this; write `&root` or `&self`
+1-base/a.crod:4:11: &top: at a value bind's top level there is no entry around this; write `&self`
+1-base/a.crod:7:5: cycle: this value contains itself

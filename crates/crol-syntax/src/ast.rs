@@ -909,7 +909,8 @@ impl IdExpr {
 }
 
 ast_node!(
-    /// `&`, `&name`, `&self`, `&parent`, `&root` or `&default` (`SPEC.md` 6.1)
+    /// `&`, `&name`, `&self`, `&parent` (or `&super`), `&top`, `&root` or
+    /// `&default` (`SPEC.md` 6.1)
     Reference, REFERENCE
 );
 
@@ -920,8 +921,11 @@ pub enum ReferenceKind {
     Below,
     /// `&self`
     SelfValue,
-    /// `&parent`, `&parent.&parent`, ...: the number of `parent`s.
+    /// `&parent`, `&parent.&parent`, ...: the number of `parent`s. `&super`
+    /// is another spelling of `&parent`.
     Parent(usize),
+    /// `&top`: the root entry the reference is in.
+    Top,
     /// `&root`
     Root,
     /// `&default`
@@ -941,11 +945,12 @@ impl Reference {
             .0
             .children_with_tokens()
             .filter_map(|it| it.into_token())
-            .find(|t| matches!(t.kind(), IDENT | SELF_KW | ROOT_KW | DEFAULT_KW));
+            .find(|t| matches!(t.kind(), IDENT | SELF_KW | TOP_KW | ROOT_KW | DEFAULT_KW));
         match name {
             None => ReferenceKind::Below,
             Some(t) => match t.kind() {
                 SELF_KW => ReferenceKind::SelfValue,
+                TOP_KW => ReferenceKind::Top,
                 ROOT_KW => ReferenceKind::Root,
                 DEFAULT_KW => ReferenceKind::Default,
                 _ => ReferenceKind::Bind(t),
