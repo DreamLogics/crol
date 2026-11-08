@@ -2450,6 +2450,34 @@ fn says(diagnostics: &[Value], text: &str) -> bool {
 }
 
 #[test]
+fn reference_keys_go_into_a_named_tuple_of_one_element() {
+    let base = "+w: Some({ damage: 5, range: 2 })\n+t: Trooper({ weapon: Some({ damage: 3 }) })\n";
+    let text = "#![extends(base)]\n\nx: 1\n";
+    let dir = workspace(
+        "lsp-single-payload",
+        &[("base.crod", base), ("local.crod", text)],
+    );
+    let mut client = Client::start(&dir);
+    let local = uri(&dir.join("local.crod"));
+    open_text(&client, &local, text);
+    client.diagnostics_for(&local, |d| d.is_empty());
+    let mut buffer = Buffer {
+        uri: local,
+        version: 1,
+    };
+    let items = buffer.complete(&mut client, "#![extends(base)]\n\nx: &root.w.|\n");
+    assert_eq!(labels(&items), ["damage", "range"], "{items:?}");
+    let items = buffer.complete(&mut client, "#![extends(base)]\n\nx: &root.t.weapon.|\n");
+    assert_eq!(labels(&items), ["damage"], "{items:?}");
+    let hover = buffer.hover(
+        &mut client,
+        "#![extends(base)]\n\nx: &root.t.weapon.dam|age\n",
+    );
+    assert!(hover.contains("`3`"), "{hover}");
+    client.stop();
+}
+
+#[test]
 fn a_document_on_its_own_is_evaluated_on_what_it_extends() {
     let dir = workspace(
         "lsp-extends",

@@ -228,6 +228,11 @@ web: {
 }
 ```
 
+A field or key goes into a named tuple of one element, such as `Some(...)` or a
+newtype variant: with `weapon: Some({ damage: 5 })`, `&root.weapon.damage` is `5`,
+and `weapon.damage: 6` gives `Some({ damage: 6 })`. Writing `.0.damage` means the
+same.
+
 A `?` after a step goes through it whatever it holds: `web.limits?.cpu: 2.0` works
 if `limits` is not set or is `None`, starting from its default, or `{ .. }` if it has
 none. If `limits` is `Some(...)`, the path goes into what it holds.
