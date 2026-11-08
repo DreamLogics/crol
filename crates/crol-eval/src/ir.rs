@@ -74,6 +74,10 @@ impl<T> Arena<T> {
         self.head.len() + self.tail.len()
     }
 
+    pub(crate) fn reserve(&mut self, more: usize) {
+        self.tail.reserve(more);
+    }
+
     pub(crate) fn push(&mut self, item: T) {
         self.tail.push(item);
     }

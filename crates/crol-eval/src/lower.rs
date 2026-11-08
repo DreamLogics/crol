@@ -68,19 +68,56 @@ fn root_entries(lowerer: &mut Lowerer, document: &ast::Document) -> Vec<ast::Any
 
 /// Lowers the documents of every layer (`SPEC.md` 4, 7.2).
 pub(crate) fn lower_data(documents: &[DataDocument<'_>]) -> (LoweredData, Vec<Diagnostic>) {
-    lower_data_over(documents, Ir::default(), Vec::new())
+    let lowered: Vec<LoweredDocument> = documents
+        .iter()
+        .map(|document| lower_document(document.file, document.document))
+        .collect();
+    let placed: Vec<Placed<'_>> = documents
+        .iter()
+        .zip(&lowered)
+        .map(|(document, lowered)| Placed {
+            lowered,
+            layer: document.layer,
+            index: document.index,
+        })
+        .collect();
+    link(&placed, Ir::default(), Vec::new())
 }
 
-/// [`lower_data`], with layers lowered ahead of time already in `ir`: their
-/// templates are visible to the documents (`SPEC.md` 7.8).
-pub(crate) fn lower_data_over(
-    documents: &[DataDocument<'_>],
+/// A data-mode document lowered on its own, before it is linked with the
+/// others (`SPEC.md` 7.2). Its ids count from 0, and what it reads of other
+/// documents, the templates, is by name.
+#[derive(Debug)]
+pub(crate) struct LoweredDocument {
+    file: FileId,
     ir: Ir,
-    parts: Vec<Part>,
-) -> (LoweredData, Vec<Diagnostic>) {
+    /// Its operations, with no layer or position yet.
+    ops: Vec<RootOp>,
+    root_defaults: Vec<RootDefaults>,
+    declared: Vec<DeclaredVariant>,
+    /// The templates it defines: name, bind and the span of the name.
+    templates: Vec<(Arc<str>, BindId, Span)>,
+    /// `&name` that is no bind of a block around it: the expression that is
+    /// the template `name`, if there is one.
+    uses: Vec<(ExprId, Arc<str>)>,
+    /// The names of its binds, none of which may be a template's.
+    binds: Vec<(Arc<str>, Span)>,
+    diagnostics: Vec<Diagnostic>,
+}
+
+/// A lowered document, where it is in the layers.
+pub(crate) struct Placed<'a> {
+    pub(crate) lowered: &'a LoweredDocument,
+    pub(crate) layer: usize,
+    /// The document's position in its layer.
+    pub(crate) index: usize,
+}
+
+/// Lowers a data-mode document on its own (`SPEC.md` 4).
+pub(crate) fn lower_document(file: FileId, document: &ast::Document) -> LoweredDocument {
     let mut lowerer = Lowerer {
-        file: documents.first().map_or(FileId::default(), |d| d.file),
-        ir,
+        file,
+        ir: Ir::default(),
         names: HashSet::new(),
         diagnostics: Vec::new(),
         scopes: Vec::new(),
@@ -96,95 +133,180 @@ pub(crate) fn lower_data_over(
         block_target: DefaultTarget::default(),
         root_defaults: Vec::new(),
         declared: Vec::new(),
+        templates: HashMap::new(),
+        uses: Vec::new(),
+        binds: Vec::new(),
     };
+    // Templates are visible in every document of every layer (`SPEC.md`
+    // 6.1.2): those of this one are collected first, and the others are
+    // found when the documents are linked.
+    let entries = root_entries(&mut lowerer, document);
+    let mut templates = Vec::new();
+    for entry in &entries {
+        let ast::AnyEntry::ValueBind(bind) = entry else {
+            continue;
+        };
+        let Some(name) = bind.name() else { continue };
+        let span = lowerer.token_span(&name);
+        if let Some((_, other)) = lowerer.templates.get(name.text()) {
+            let diagnostic = Diagnostic::error(
+                span,
+                format!("the template `{}` is defined twice", name.text()),
+            )
+            .with_related(*other, "the other definition");
+            lowerer.diagnostics.push(diagnostic);
+            continue;
+        }
+        if RESERVED_BIND_NAMES.contains(&name.text()) {
+            lowerer.error(span, format!("`{}` cannot be a template name", name.text()));
+            continue;
+        }
+        let id = lowerer.ir.value_binds.len();
+        let name: Arc<str> = Arc::from(name.text());
+        lowerer.ir.value_binds.push(ValueBind {
+            name: name.clone(),
+            expr: usize::MAX,
+        });
+        lowerer.templates.insert(name.to_string(), (id, span));
+        templates.push((name, id, span));
+    }
+    // The scope of the templates, which are looked up when linking.
+    lowerer.scopes.push(Scope::default());
+    if let Some((_, span)) = lowerer.attributes(document) {
+        lowerer.error(
+            span,
+            "`type` names the type of a value-mode document; a data-mode document's root has no type",
+        );
+    }
+    let mut ops = Vec::new();
+    for entry in &entries {
+        lowerer.root_entry(entry, &[None], &mut ops);
+    }
+    let Lowerer {
+        mut ir,
+        diagnostics,
+        root_defaults,
+        declared,
+        uses,
+        binds,
+        ..
+    } = lowerer;
+    ir.shrink();
+    ops.shrink_to_fit();
+    LoweredDocument {
+        file,
+        ir,
+        ops,
+        root_defaults,
+        declared,
+        templates,
+        uses,
+        binds,
+        diagnostics,
+    }
+}
 
-    // Templates are visible in every document of every layer, so they are
-    // all collected first (`SPEC.md` 6.1.2).
-    let mut scope = Scope::default();
+/// Links lowered documents, in layer order, into one IR, after the layers
+/// lowered ahead of time that `ir` and `parts` hold (`SPEC.md` 7.8): each
+/// document's ids move past those before it, and a template is found by
+/// its name.
+pub(crate) fn link(
+    documents: &[Placed<'_>],
+    mut ir: Ir,
+    parts: Vec<Part>,
+) -> (LoweredData, Vec<Diagnostic>) {
+    let mut diagnostics = Vec::new();
+    let mut scope: HashMap<&str, (BindId, Span)> = HashMap::new();
     let mut templates = Vec::new();
     let mut ops = Vec::new();
     let mut root_defaults = Vec::new();
     let mut declared = Vec::new();
+    let mut defined: Vec<(Arc<str>, BindId, Span)> = Vec::new();
     for part in parts {
         for id in part.templates {
-            let bind = &lowerer.ir.value_binds[id];
-            let (name, span) = (bind.name.clone(), lowerer.ir.exprs[bind.expr].span);
-            if let Some((_, other)) = scope.value_binds.get(&*name) {
-                let diagnostic =
-                    Diagnostic::error(span, format!("the template `{name}` is defined twice"))
-                        .with_related(*other, "the other definition");
-                lowerer.diagnostics.push(diagnostic);
-                continue;
-            }
-            scope.value_binds.insert(name.to_string(), (id, span));
-            templates.push(id);
+            let bind = &ir.value_binds[id];
+            defined.push((bind.name.clone(), id, ir.exprs[bind.expr].span));
         }
         ops.extend(part.ops);
         root_defaults.extend(part.root_defaults);
         declared.extend(part.declared);
     }
-    lowerer.root_defaults = root_defaults;
-    lowerer.declared = declared;
-    let mut entries_of = Vec::with_capacity(documents.len());
+    // Where each document's ids start.
+    let mut starts = Vec::with_capacity(documents.len());
+    let (mut exprs, mut blocks, mut binds) =
+        (ir.exprs.len(), ir.blocks.len(), ir.value_binds.len());
     for document in documents {
-        lowerer.file = document.file;
-        let entries = root_entries(&mut lowerer, document.document);
-        for entry in &entries {
-            let ast::AnyEntry::ValueBind(bind) = entry else {
-                continue;
-            };
-            let Some(name) = bind.name() else { continue };
-            let span = lowerer.token_span(&name);
-            if let Some((_, other)) = scope.value_binds.get(name.text()) {
-                let diagnostic = Diagnostic::error(
-                    span,
-                    format!("the template `{}` is defined twice", name.text()),
-                )
-                .with_related(*other, "the other definition");
-                lowerer.diagnostics.push(diagnostic);
-                continue;
-            }
-            if RESERVED_BIND_NAMES.contains(&name.text()) {
-                lowerer.error(span, format!("`{}` cannot be a template name", name.text()));
-                continue;
-            }
-            let id = lowerer.ir.value_binds.len();
-            lowerer.ir.value_binds.push(ValueBind {
-                name: Arc::from(name.text()),
-                expr: usize::MAX,
-            });
-            scope.value_binds.insert(name.text().to_owned(), (id, span));
-            templates.push(id);
-        }
-        entries_of.push(entries);
+        starts.push(Shift {
+            exprs,
+            blocks,
+            binds,
+        });
+        let lowered = document.lowered;
+        defined.extend(
+            lowered
+                .templates
+                .iter()
+                .map(|(name, id, span)| (name.clone(), binds + id, *span)),
+        );
+        exprs += lowered.ir.exprs.len();
+        blocks += lowered.ir.blocks.len();
+        binds += lowered.ir.value_binds.len();
     }
-    lowerer.scopes.push(scope);
+    for (name, id, span) in &defined {
+        if let Some((_, other)) = scope.get(&**name) {
+            let diagnostic =
+                Diagnostic::error(*span, format!("the template `{name}` is defined twice"))
+                    .with_related(*other, "the other definition");
+            diagnostics.push(diagnostic);
+            continue;
+        }
+        scope.insert(name, (*id, *span));
+        templates.push(*id);
+    }
+
+    let copied = exprs - ir.exprs.len();
+    ir.exprs.reserve(copied);
+    ir.blocks.reserve(blocks - ir.blocks.len());
+    ir.value_binds.reserve(binds - ir.value_binds.len());
+    for (exprs, blocks, binds) in copy_shifted(documents, &starts, copied) {
+        ir.exprs.extend(exprs);
+        ir.blocks.extend(blocks);
+        ir.value_binds.extend(binds);
+    }
+    for (document, shift) in documents.iter().zip(&starts) {
+        let lowered = document.lowered;
+        for (expr, name) in &lowered.uses {
+            let id = shift.exprs + expr;
+            match scope.get(&**name) {
+                Some(&(bind, _)) => ir.exprs[id].kind = ExprKind::Ref(RefKind::ValueBind(bind)),
+                None => diagnostics.push(Diagnostic::error(
+                    ir.exprs[id].span,
+                    format!("no bind `{name}` is visible; did you mean `&self.{name}`?"),
+                )),
+            }
+        }
+        for (name, span) in &lowered.binds {
+            if let Some(&(_, other)) = scope.get(&**name) {
+                diagnostics.push(
+                    Diagnostic::error(*span, format!("`{name}` is already bound"))
+                        .with_related(other, "the other bind"),
+                );
+            }
+        }
+        ops.extend(lowered.ops.iter().map(|op| RootOp {
+            value: op.value.map(|value| shift.exprs + value),
+            layer: document.layer,
+            document: document.index,
+            ..op.clone()
+        }));
+        root_defaults.extend(lowered.root_defaults.iter().cloned());
+        declared.extend(lowered.declared.iter().cloned());
+        diagnostics.extend(lowered.diagnostics.iter().cloned());
+    }
 
     let root_span = documents.last().map_or(Span::detached(), |document| {
-        Span::new(document.file, Default::default())
+        Span::new(document.lowered.file, Default::default())
     });
-    for (document, entries) in documents.iter().zip(&entries_of) {
-        lowerer.file = document.file;
-        lowerer.position = (document.layer, document.index);
-        lowerer.aliases.clear();
-        if let Some((_, span)) = lowerer.attributes(document.document) {
-            lowerer.error(
-                span,
-                "`type` names the type of a value-mode document; a data-mode document's root has no type",
-            );
-        }
-        for entry in entries {
-            lowerer.root_entry(entry, &[None], &mut ops);
-        }
-    }
-
-    let Lowerer {
-        ir,
-        mut diagnostics,
-        root_defaults,
-        declared,
-        ..
-    } = lowerer;
     diagnostics.sort_by_key(|d| (d.span.file, d.span.range.start()));
     // Layers lowered ahead of time come first; a chain is in layer order.
     ops.sort_by_key(|op| op.layer);
@@ -199,6 +321,148 @@ pub(crate) fn lower_data_over(
         },
         diagnostics,
     )
+}
+
+/// How many expressions are worth a thread when linking.
+pub(crate) const LINK_EXPRS_PER_THREAD: usize = 50_000;
+
+/// The most threads that linking uses.
+const MAX_LINK_THREADS: usize = 8;
+
+/// What the documents' IRs are with their ids moved, in runs of documents
+/// in order, copied on several threads if there are many expressions.
+fn copy_shifted(
+    documents: &[Placed<'_>],
+    starts: &[Shift],
+    exprs: usize,
+) -> Vec<(Vec<Expr>, Vec<Block>, Vec<ValueBind>)> {
+    let copy = |documents: &[Placed<'_>], starts: &[Shift]| {
+        let mut out = (Vec::new(), Vec::new(), Vec::new());
+        for (document, shift) in documents.iter().zip(starts) {
+            let ir = &document.lowered.ir;
+            out.0.extend(ir.exprs.iter().map(|expr| shift.expr(expr)));
+            out.1
+                .extend(ir.blocks.iter().map(|block| shift.block(block)));
+            out.2.extend(ir.value_binds.iter().map(|bind| ValueBind {
+                name: bind.name.clone(),
+                expr: shift.exprs + bind.expr,
+            }));
+        }
+        out
+    };
+    let threads = std::thread::available_parallelism()
+        .map_or(1, std::num::NonZero::get)
+        .min(MAX_LINK_THREADS)
+        .min(exprs / LINK_EXPRS_PER_THREAD);
+    if threads < 2 {
+        return vec![copy(documents, starts)];
+    }
+    // Runs of about the same number of expressions.
+    let mut runs = Vec::with_capacity(threads);
+    let (mut from, mut size) = (0, 0);
+    for (index, document) in documents.iter().enumerate() {
+        size += document.lowered.ir.exprs.len();
+        if size * threads >= exprs * (runs.len() + 1) || index + 1 == documents.len() {
+            runs.push(from..index + 1);
+            from = index + 1;
+        }
+    }
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = runs[1..]
+            .iter()
+            .map(|run| {
+                let run = run.clone();
+                let documents = &documents[run.clone()];
+                let starts = &starts[run];
+                std::thread::Builder::new()
+                    .spawn_scoped(scope, move || copy(documents, starts))
+                    .map_err(|_| (documents, starts))
+            })
+            .collect();
+        let mut copies = vec![copy(&documents[runs[0].clone()], &starts[runs[0].clone()])];
+        // A thread that cannot start leaves its run to this one.
+        for worker in workers {
+            copies.push(match worker {
+                Ok(worker) => match worker.join() {
+                    Ok(copied) => copied,
+                    Err(panic) => std::panic::resume_unwind(panic),
+                },
+                Err((documents, starts)) => copy(documents, starts),
+            });
+        }
+        copies
+    })
+}
+
+/// How far a document's ids move when it is linked.
+struct Shift {
+    exprs: usize,
+    blocks: usize,
+    binds: usize,
+}
+
+impl Shift {
+    fn exprs(&self, ids: &[ExprId]) -> Vec<ExprId> {
+        ids.iter().map(|id| self.exprs + id).collect()
+    }
+
+    fn expr(&self, expr: &Expr) -> Expr {
+        let kind = match &expr.kind {
+            ExprKind::Unit => ExprKind::Unit,
+            ExprKind::Bool(b) => ExprKind::Bool(*b),
+            ExprKind::Int(i) => ExprKind::Int(*i),
+            ExprKind::Float(f) => ExprKind::Float(*f),
+            ExprKind::Char(c) => ExprKind::Char(*c),
+            ExprKind::Str(s) => ExprKind::Str(s.clone()),
+            ExprKind::Id(s) => ExprKind::Id(s.clone()),
+            ExprKind::Ref(RefKind::ValueBind(bind)) => {
+                ExprKind::Ref(RefKind::ValueBind(self.binds + bind))
+            }
+            ExprKind::Ref(kind) => ExprKind::Ref(kind.clone()),
+            ExprKind::Block(block) => ExprKind::Block(self.blocks + block),
+            ExprKind::List(items) => ExprKind::List(self.exprs(items)),
+            ExprKind::Tuple(items) => ExprKind::Tuple(self.exprs(items)),
+            ExprKind::Named(named) => {
+                ExprKind::Named(Box::new((named.0.clone(), self.exprs(&named.1))))
+            }
+            ExprKind::UnitName(name) => ExprKind::UnitName(name.clone()),
+            ExprKind::Path(base, path) => ExprKind::Path(self.exprs + base, path.clone()),
+            ExprKind::Neg(child) => ExprKind::Neg(self.exprs + child),
+            ExprKind::Not(child) => ExprKind::Not(self.exprs + child),
+            ExprKind::Binary(op, lhs, rhs) => {
+                ExprKind::Binary(*op, self.exprs + lhs, self.exprs + rhs)
+            }
+            ExprKind::Macro(kind, items) => ExprKind::Macro(*kind, self.exprs(items).into()),
+            ExprKind::Error => ExprKind::Error,
+        };
+        Expr {
+            kind,
+            span: expr.span,
+        }
+    }
+
+    fn block(&self, block: &Block) -> Block {
+        Block {
+            name: block.name.clone(),
+            spreads: self.exprs(&block.spreads),
+            entries: block
+                .entries
+                .iter()
+                .map(|entry| Entry {
+                    op: entry.op,
+                    replace: entry.replace,
+                    if_set: entry.if_set,
+                    key: entry.key.clone(),
+                    key_optional: entry.key_optional,
+                    path: entry.path.clone(),
+                    value: entry.value.map(|value| self.exprs + value),
+                    span: entry.span,
+                })
+                .collect(),
+            defaults: block.defaults,
+            value_binds: block.value_binds.iter().map(|id| self.binds + id).collect(),
+        }
+    }
 }
 
 /// A lowered value-mode document.
@@ -247,6 +511,12 @@ struct Lowerer {
     root_defaults: Vec<RootDefaults>,
     /// Every `#![variant(group: name)]` so far.
     declared: Vec<DeclaredVariant>,
+    /// The templates of the data-mode document being lowered.
+    templates: HashMap<String, (BindId, Span)>,
+    /// References that may be to a template, found when linking.
+    uses: Vec<(ExprId, Arc<str>)>,
+    /// Bind names that may be a template's, an error found when linking.
+    binds: Vec<(Arc<str>, Span)>,
     /// Whose default a `&default` here is.
     default_target: DefaultTarget,
     /// The `&default` target of the block being lowered, for its value binds
@@ -417,6 +687,9 @@ pub(crate) fn lower_value_document(
         block_target: DefaultTarget::default(),
         root_defaults: Vec::new(),
         declared: Vec::new(),
+        templates: HashMap::new(),
+        uses: Vec::new(),
+        binds: Vec::new(),
     };
     let type_name = lowerer.attributes(document);
     let root = match document.expr() {
@@ -486,7 +759,7 @@ impl Lowerer {
                 }
                 // A template: its id was assigned when templates were collected.
                 let Some(name) = bind.name() else { return };
-                let Some(&(id, span)) = self.scopes[0].value_binds.get(name.text()) else {
+                let Some(&(id, span)) = self.templates.get(name.text()) else {
                     return;
                 };
                 if span != self.token_span(&name) {
@@ -1144,6 +1417,11 @@ impl Lowerer {
             self.diagnostics.push(diagnostic);
             return false;
         }
+        if self.data_mode {
+            // A template of the same name is found when linking.
+            let name = self.name(name);
+            self.binds.push((name, span));
+        }
         true
     }
 
@@ -1572,6 +1850,13 @@ impl Lowerer {
                         );
                     }
                     Some((_, kind)) => kind,
+                    // A template, found when the documents are linked.
+                    None if self.data_mode => {
+                        let id = self.ir.add_expr(ExprKind::Error, span);
+                        let name = self.name(name);
+                        self.uses.push((id, name));
+                        return id;
+                    }
                     None => {
                         return self.error_expr(
                             span,

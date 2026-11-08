@@ -1,0 +1,4 @@
+1-base/a.crod:2:1: the template `t` is defined twice
+1-base/a.crod:3:10: no bind `u` is visible; did you mean `&self.u`?
+1-base/b.crod:1:7: `t` is already bound
+1-base/b.crod:2:7: `t` is already bound
