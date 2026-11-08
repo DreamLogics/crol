@@ -249,8 +249,8 @@ A keyed value has:
   position; removing a key and adding it again moves it to the end;
 - a **defaults flag**, set by `..`: fields it does not hold take their
   defaults (section 10.3, which also says when a type needs no `..`);
-- a set of **defaulted fields**: fields removed with `-field`, which
-  take their defaults even without the flag.
+- a set of **defaulted fields**: fields removed with `-field` or
+  `-?field`, which take their defaults even without the flag.
 
 Structs and maps are the same thing in CROL: one notation, one kind of
 value. Whether a keyed value becomes a struct or a map is the Rust
@@ -2109,8 +2109,8 @@ schema says: `+name` on a field a lower layer sets is the usual error, and a
 ### 10.3 Defaults
 
 Without `..`, a struct must name every field, `Option` fields included.
-With `..` (or for a field removed with `-field`), a field the value does
-not hold is left out, and serde decides what it becomes:
+With `..` (or for a field removed with `-field` or `-?field`), a field
+the value does not hold is left out, and serde decides what it becomes:
 
 - an `Option` field becomes `None`;
 - a field with `#[serde(default)]`, or in a struct with it, takes that
@@ -2180,8 +2180,8 @@ since nothing replaces the root:
 | `#[crol(explicit_defaults)]` | an error that names them | take their defaults |
 | `#[crol(explicit_defaults = false)]` | take their defaults | the same; it changes nothing |
 
-- A field removed with `-key`, and set by no layer above, takes its default
-  without `..`, as with `-field`.
+- A field removed with `-key` or `-?key`, and set by no layer above, takes
+  its default without `..`, as with `-field`.
 - A field with no default is serde's "missing field" error in every row
   that takes defaults, also after `-key`: removing a required field is an error
   of the composed root, not of the layer that removes it.

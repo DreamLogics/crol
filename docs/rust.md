@@ -230,7 +230,8 @@ Everything else works as in a block, too:
 
 - `-tags` in a layer removes the field, and it takes its default, without `..`. A
   field with no default is then `missing field`, reported for the result, not
-  for the layer that removed it.
+  for the layer that removed it. `-?tags` does the same, and is no error where no
+  layer below sets `tags`.
 - `<prod> { .. }` leaves fields out in `prod` only.
 - A key the struct does not have is an error that lists its fields, unless you
   set `allow_unknown_fields`.

@@ -81,7 +81,8 @@ Line breaks do not separate list and tuple elements. Add the comma.
 **`` expected `,`: a line break does not separate entries before `-` and an integer or `[` ``**
 
 `-12` on a line of its own would read as a subtraction. To remove an integer key,
-end the line before with a comma.
+end the line before with a comma. `-?12` needs none, as it is never a value, but
+it is no error where `12` is not set.
 
 **A value is unexpectedly a number, such as `-7`.** The same rule, silently: after
 a value, `-12` on the next line is a subtraction, so `a: 5` then `-12` gives

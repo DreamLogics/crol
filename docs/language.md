@@ -92,12 +92,12 @@ Most lines are not in doubt: `?`, `^`, `..`, a key or a bind can only start an
 entry, and `.`, `*`, `/`, `%`, `~`, `~^` and `|` can only continue a value. Four tokens can do
 both, and what follows them on the same line decides:
 
-| Line starts with | Begins an entry when...                       | Otherwise it continues the value |
-| ---------------- | --------------------------------------------- | -------------------------------- |
-| `+`              | a key and `:` follow: `+b: 2`                 | `+ 2`, `+ b`                     |
-| `-`              | an identifier or string follows: `-b`         | `- 2`, `- &x`, `- ["x"]`         |
-| `[`              | it is a key and `:` follows: `["a b"]: 1`     | `[0]`, `["key"].name`            |
-| `<`              | it is a condition and `{` follows: `<prod> {` | `<prod>`, `<prod>.name`          |
+| Line starts with | Begins an entry when...                            | Otherwise it continues the value |
+| ---------------- | -------------------------------------------------- | -------------------------------- |
+| `+`              | a key and `:` follow: `+b: 2`                      | `+ 2`, `+ b`                     |
+| `-`              | an identifier, string or `?` follows: `-b`, `-?12` | `- 2`, `- &x`, `- ["x"]`         |
+| `[`              | it is a key and `:` follows: `["a b"]: 1`          | `[0]`, `["key"].name`            |
+| `<`              | it is a condition and `{` follows: `<prod> {`      | `<prod>`, `<prod>.name`          |
 
 ```crol
 // example.crod
@@ -234,6 +234,8 @@ none. If `limits` is `Some(...)`, the path goes into what it holds.
 
 Every other step of the path but the last must exist, or you get an error that
 names the missing step. Removing works the same way: `-web.limits.memory_mb`.
+`-?web.limits.memory_mb` is no error: without `limits` or `memory_mb`, it does
+nothing.
 With a schema, [`init_defaults`](rust.md#configuration) lets a path go through a
 field that was left out, from its default.
 
@@ -496,7 +498,8 @@ The same goes for [a struct at the root](rust.md#a-struct-at-the-root): write `.
 the top level of any layer.
 
 A field removed with `-field` also takes its default, without `..`. Use it to
-drop a value that a lower layer or a template set:
+drop a value that a lower layer or a template set. With `-?field`, the field takes
+its default even if nothing set it:
 
 ```crol
 // example.crod
