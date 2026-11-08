@@ -13,6 +13,9 @@ use crate::workspace::{DocumentSchema, Snapshot};
 /// itself.
 const MAX_DEPTH: usize = 8;
 
+/// How many fields a struct shows on hover.
+const MAX_FIELDS: usize = 20;
+
 /// What a place holds, by the schema.
 #[derive(Clone)]
 pub(crate) enum Shape<'a> {
@@ -80,6 +83,9 @@ pub(crate) struct About {
     pub(crate) doc: String,
     /// The type, as [`rust_type`] writes it.
     pub(crate) ty: Option<String>,
+    /// The struct the type is, with its fields, as [`struct_definition`]
+    /// writes it.
+    pub(crate) definition: Option<String>,
 }
 
 /// What the schema says of a place: nothing if it does not know the place,
@@ -93,8 +99,13 @@ pub(crate) fn about(schema: &DocumentSchema<'_>, place: &Place<'_>) -> Option<Ab
     if doc.is_empty() && ty == TypeExpr::Any {
         return None;
     }
+    let definition = struct_definition(schema.file, &ty);
     let ty = Some(rust_type(schema.file, &ty));
-    Some(About { doc, ty })
+    Some(About {
+        doc,
+        ty,
+        definition,
+    })
 }
 
 /// The type of a place. A root value of a struct variant of the root type
@@ -123,28 +134,31 @@ pub(crate) fn about_name(
         Some(ty) if ty != TypeExpr::Any => name_in(schema.file, &ty, name, 0),
         _ => self::named(schema.file, name).and_then(|ty| name_in(schema.file, &ty, name, 0)),
     }?;
-    let chosen = match found {
-        (own, ty, true) if !own.is_empty() => About {
-            doc: own,
-            ty: Some(ty),
-        },
-        (_, ty, true) => About { doc, ty: Some(ty) },
-        (own, ty, false) if doc.is_empty() => About {
-            doc: own,
-            ty: Some(ty),
-        },
-        (_, ty, false) => About { doc, ty: Some(ty) },
+    let (own, ty, of_type) = found;
+    let definition = of_type
+        .as_ref()
+        .and_then(|of_type| struct_definition(schema.file, of_type));
+    // A variant's own doc goes first; a type's goes where the place has none.
+    let doc = match of_type {
+        None if !own.is_empty() => own,
+        Some(_) if doc.is_empty() => own,
+        _ => doc,
     };
-    Some(chosen)
+    Some(About {
+        doc,
+        ty: Some(ty),
+        definition,
+    })
 }
 
-/// `Name` in a type: its doc, how to write it, and whether it is a variant.
+/// `Name` in a type: its doc, how to write it, and the type it names, or
+/// nothing where it is a variant.
 fn name_in(
     schema: &SchemaFile,
     ty: &TypeExpr,
     name: &str,
     depth: usize,
-) -> Option<(String, String, bool)> {
+) -> Option<(String, String, Option<TypeExpr>)> {
     if depth > MAX_DEPTH {
         return None;
     }
@@ -157,9 +171,13 @@ fn name_in(
                 ..
             } => {
                 let found = variant(variants, name)?;
-                Some((found.doc.clone(), format!("{own}::{name}"), true))
+                Some((found.doc.clone(), format!("{own}::{name}"), None))
             }
-            def if def.name() == name => Some((def.doc().to_owned(), name.to_owned(), false)),
+            def if def.name() == name => Some((
+                def.doc().to_owned(),
+                name.to_owned(),
+                Some(TypeExpr::Named(path.clone())),
+            )),
             TypeDef::Newtype { inner, .. } | TypeDef::Transparent { inner, .. } => {
                 name_in(schema, inner, name, depth + 1)
             }
@@ -401,6 +419,47 @@ pub(crate) fn rust_type(schema: &SchemaFile, ty: &TypeExpr) -> String {
     crol::typed::rust_type(schema, ty)
 }
 
+/// The struct a type is, through options, as Rust writes it with its
+/// fields:
+///
+/// ```text
+/// struct Limits {
+///     cpu: f64,
+///     memory_mb: u32,
+/// }
+/// ```
+///
+/// Nothing for any other type. Past [`MAX_FIELDS`] fields, the rest are
+/// `/* … */`.
+pub(crate) fn struct_definition(schema: &SchemaFile, ty: &TypeExpr) -> Option<String> {
+    let mut ty = ty;
+    while let TypeExpr::Option(inner) = ty {
+        ty = inner;
+    }
+    let TypeExpr::Named(path) = ty else {
+        return None;
+    };
+    let Some(TypeDef::Struct { fields, .. }) = schema.get(path) else {
+        return None;
+    };
+    let name = rust_type(schema, ty);
+    if fields.is_empty() {
+        return Some(format!("struct {name} {{}}"));
+    }
+    let mut out = format!("struct {name} {{\n");
+    for (field, def) in fields.iter().take(MAX_FIELDS) {
+        if def.flatten {
+            out.push_str("    #[serde(flatten)]\n");
+        }
+        out.push_str(&format!("    {field}: {},\n", rust_type(schema, &def.ty)));
+    }
+    if fields.len() > MAX_FIELDS {
+        out.push_str("    /* … */\n");
+    }
+    out.push('}');
+    Some(out)
+}
+
 /// The named type with the serde name `name`, if exactly one has it.
 pub(crate) fn named(schema: &SchemaFile, name: &str) -> Option<TypeExpr> {
     let mut found = schema.by_name(name);
@@ -557,5 +616,67 @@ fn placeholder_at(schema: &SchemaFile, ty: &TypeExpr, depth: usize) -> String {
                 },
             },
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn with(types: impl IntoIterator<Item = (&'static str, TypeDef)>) -> SchemaFile {
+        SchemaFile {
+            format: 1,
+            root: String::new(),
+            types: types.into_iter().map(|(p, d)| (p.to_owned(), d)).collect(),
+            constraints: Default::default(),
+        }
+    }
+
+    fn structure(name: &str, fields: impl IntoIterator<Item = (String, Field)>) -> TypeDef {
+        TypeDef::Struct {
+            name: name.to_owned(),
+            doc: String::new(),
+            source: (String::new(), 0),
+            fields: fields.into_iter().collect(),
+            deny_unknown_fields: false,
+            default: None,
+            explicit_defaults: None,
+        }
+    }
+
+    #[test]
+    fn a_struct_shows_its_fields() {
+        let mut base = Field::new(TypeExpr::Named("app::Base".to_owned()));
+        base.flatten = true;
+        let schema = with([
+            (
+                "app::Web",
+                structure(
+                    "Web",
+                    [
+                        ("port".to_owned(), Field::new(TypeExpr::U16)),
+                        ("base".to_owned(), base),
+                    ],
+                ),
+            ),
+            ("app::Base", structure("Base", [])),
+        ]);
+        let web = TypeExpr::Named("app::Web".to_owned());
+        let wanted = "struct Web {\n    port: u16,\n    #[serde(flatten)]\n    base: Base,\n}";
+        assert_eq!(struct_definition(&schema, &web).unwrap(), wanted);
+        let optional = TypeExpr::Option(Box::new(web));
+        assert_eq!(struct_definition(&schema, &optional).unwrap(), wanted);
+        let base = TypeExpr::Named("app::Base".to_owned());
+        assert_eq!(struct_definition(&schema, &base).unwrap(), "struct Base {}");
+        assert_eq!(struct_definition(&schema, &TypeExpr::U16), None);
+    }
+
+    #[test]
+    fn a_struct_with_many_fields_shows_the_first() {
+        let fields = (0..MAX_FIELDS + 1).map(|i| (format!("f{i}"), Field::new(TypeExpr::Bool)));
+        let schema = with([("app::Big", structure("Big", fields))]);
+        let shown = struct_definition(&schema, &TypeExpr::Named("app::Big".to_owned())).unwrap();
+        assert_eq!(shown.lines().count(), MAX_FIELDS + 3, "{shown}");
+        assert!(shown.ends_with("    /* … */\n}"), "{shown}");
     }
 }

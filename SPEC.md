@@ -3394,8 +3394,12 @@ it is sealed (sections 10.12, 10.13), and completion leaves a sealed field out
 in a layer above one that has the value's key.
 
 **Hover.** Hover says what a place is for: the doc comment first, then the
-type on a line of its own, in Markdown, with nothing to scroll past. Evaluated
-values are for inlay hints, `crol eval` and `crol explain`.
+type on a line of its own, in Markdown, with nothing to scroll past. Where the
+type is a struct, or an `Option` of one, the type is followed by the struct as
+Rust writes it, with the type of each field (a flattened field under
+`#[serde(flatten)]`), in a `rust` code block; the struct's own name is in it,
+so on its own it replaces the line. Past 20 fields the rest are `/* … */`.
+Evaluated values are for inlay hints, `crol eval` and `crol explain`.
 
 On a key, a value, a reference or an id, the doc comments written in data (section
 2.2) come before the field's: those of every operation on that path in the

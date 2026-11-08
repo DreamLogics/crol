@@ -829,6 +829,22 @@ fn completion_and_hover_from_the_schema() {
     );
     let markdown = hover["contents"]["value"].as_str().unwrap();
     assert_eq!(markdown, "Number of copies to run.\n\n`u32`");
+
+    // Hover on a field of a struct type, and on the struct's name: its
+    // fields, as Rust shows them.
+    let limits = "struct Limits {\n    cpu: f64,\n    memory_mb: u32,\n}";
+    let line = "+web: Service { replicas: 2, port: 80, limits: Limits { cpu";
+    for at in [
+        line.find("limits").unwrap() + 1,
+        line.find("Limits").unwrap() + 1,
+    ] {
+        let hover = client.request(
+            "textDocument/hover",
+            json!({ "textDocument": { "uri": base }, "position": { "line": 0, "character": at } }),
+        );
+        let markdown = hover["contents"]["value"].as_str().unwrap();
+        assert_eq!(markdown, format!("```rust\n{limits}\n```"), "at {at}");
+    }
     client.stop();
 }
 
@@ -3044,9 +3060,18 @@ fn hover_on_a_dotted_target_is_about_the_segment_under_it() {
     let mut buffer = Buffer::open(&client, &dir, "config.crol");
     let text = |marked: &str| format!("#![schema(schema)]\n\n{{ {marked}: \"a\" }}\n");
     for (marked, wanted) in [
-        ("ser|ver.tls.cert.path", "`Server`"),
-        ("server.t|ls.cert.path", "How to encrypt.\n\n`Tls`"),
-        ("server.tls.ce|rt.path", "`Cert`"),
+        (
+            "ser|ver.tls.cert.path",
+            "```rust\nstruct Server {\n    tls: Tls,\n    listeners: Vec<Listener>,\n}\n```",
+        ),
+        (
+            "server.t|ls.cert.path",
+            "How to encrypt.\n\n```rust\nstruct Tls {\n    cert: Cert,\n    enabled: bool,\n}\n```",
+        ),
+        (
+            "server.tls.ce|rt.path",
+            "```rust\nstruct Cert {\n    path: String,\n    mode: Mode,\n}\n```",
+        ),
         (
             "server.tls.cert.pa|th",
             "Where the certificate is.\n\n`String`",
@@ -3196,9 +3221,10 @@ fn check_every_hover_renders(client: &mut Client, buffer: &Buffer, text: &str) {
             for (at, _) in markdown.match_indices("```") {
                 assert!(at == 0 || markdown[..at].ends_with('\n'), "{place}");
             }
-            // Not a value: a doc and a type.
+            // Not a value: a doc and a type, and the fields of a struct.
             assert!(!markdown.starts_with("**"), "{place}");
-            assert!(markdown.lines().count() <= 5, "{place}");
+            let prose = markdown.split("```").step_by(2).flat_map(str::lines);
+            assert!(prose.count() <= 5, "{place}");
         }
     }
 }
@@ -3354,7 +3380,11 @@ fn hover_in_data_shows_the_doc_of_the_field() {
         &mut buffer,
         text,
         &[
-            ("+web", "web", "The main configuration.\n\n`Config`"),
+            (
+                "+web",
+                "web",
+                "The main configuration.\n\n```rust\nstruct Config {\n",
+            ),
             ("Config {", "Config", "The main configuration."),
             ("name: \"w\"", "name", name),
             ("\"w\"", "w", name),
@@ -3828,7 +3858,11 @@ fn hover_at_a_struct_root_shows_the_field() {
         ("name: \"x\"", 1, name),
         ("name: \"x\"", 7, name),
         ("items:", 1, "What it holds.\n\n`Vec<Item>`"),
-        ("options:", 1, "How it behaves.\n\n`Options`"),
+        (
+            "options:",
+            1,
+            "How it behaves.\n\n```rust\nstruct Options {\n    fast: bool,\n    quiet: bool,\n}\n```",
+        ),
         ("fast: true", 1, fast),
         ("fast: true", 7, fast),
         ("id: 1", 1, "Its number.\n\n`u32`"),
@@ -4027,7 +4061,10 @@ fn an_enum_root_stays_the_type_of_each_root_value() {
     ];
     check_completions(&mut client, &mut base, "", cases);
     let hover = base.hover(&mut client, "w|eb: Options { fast: true, quiet: true }\n");
-    assert_eq!(hover, "The options.\n\n`Options`");
+    assert_eq!(
+        hover,
+        "The options.\n\n```rust\nstruct Options {\n    fast: bool,\n    quiet: bool,\n}\n```"
+    );
     client.stop();
 }
 
@@ -4253,9 +4290,18 @@ fn completion_in_and_after_type_attributes() {
 fn hover_in_and_after_type_attributes() {
     let (mut client, mut buffer) = nested_document("lsp-typed-binds-hover");
     let cases = [
-        ("#[type(Server.t|ls)]\nt := {}", "How to encrypt.\n\n`Tls`"),
-        ("#[type(Ser|ver.tls)]\nt := {}", "`Server`"),
-        ("#[type(Config.services.[|])]\nt := {}", "`Service`"),
+        (
+            "#[type(Server.t|ls)]\nt := {}",
+            "How to encrypt.\n\n```rust\nstruct Tls {\n    cert: Cert,\n    enabled: bool,\n}\n```",
+        ),
+        (
+            "#[type(Ser|ver.tls)]\nt := {}",
+            "```rust\nstruct Server {\n    tls: Tls,\n    listeners: Vec<Listener>,\n}\n```",
+        ),
+        (
+            "#[type(Config.services.[|])]\nt := {}",
+            "```rust\nstruct Service {\n    name: String,\n    server: Server,\n    depends_on: Vec<Id>,\n}\n```",
+        ),
         (
             "#[type(Backend::Re|mote.host)]\nt := {}",
             "`Backend::Remote`",

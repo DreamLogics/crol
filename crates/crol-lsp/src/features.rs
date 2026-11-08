@@ -637,7 +637,11 @@ pub(crate) fn hover(
         if !about.doc.trim().is_empty() {
             parts.push(about.doc.trim().to_owned());
         }
-        parts.extend(about.ty.map(|ty| code(&ty)));
+        parts.extend(
+            about
+                .ty
+                .map(|ty| type_markdown(&ty, about.definition.as_deref())),
+        );
     }
     parts.extend(named_value(snapshot, file, &token, settings));
     let mut markdown = parts.join("\n\n");
@@ -689,7 +693,11 @@ fn type_hover(
         TypeAt::Type { ty, doc } => {
             let own = crate::schema::named_def(schema, ty).map(|d| d.doc().trim().to_owned());
             let doc = doc.clone().or(own).unwrap_or_default();
-            (doc, crate::schema::rust_type(schema, ty))
+            let definition = crate::schema::struct_definition(schema, ty);
+            (
+                doc,
+                type_markdown(&crate::schema::rust_type(schema, ty), definition.as_deref()),
+            )
         }
         TypeAt::Variant { path, name } => {
             let doc = match schema.get(path) {
@@ -699,14 +707,14 @@ fn type_hover(
                 _ => None,
             };
             let own = schema.get(path).map_or(path.as_str(), |d| d.name());
-            (doc.unwrap_or_default(), format!("{own}::{name}"))
+            (doc.unwrap_or_default(), code(&format!("{own}::{name}")))
         }
     };
     let mut parts = Vec::new();
     if !doc.is_empty() {
         parts.push(doc);
     }
-    parts.push(code(&ty));
+    parts.push(ty);
     let index = LineIndex::new(text);
     Some(Hover {
         contents: HoverContents::Markup(MarkupContent {
@@ -715,6 +723,18 @@ fn type_hover(
         }),
         range: Some(convert::range(text, &index, range, encoding)),
     })
+}
+
+/// A type on hover: in code, and where it is a struct, its definition with
+/// its fields, as Rust shows it. A struct's own name is in its definition.
+fn type_markdown(ty: &str, definition: Option<&str>) -> String {
+    match definition {
+        Some(definition) if definition.starts_with(&format!("struct {ty} ")) => {
+            format!("```rust\n{definition}\n```")
+        }
+        Some(definition) => format!("{}\n\n```rust\n{definition}\n```", code(ty)),
+        None => code(ty),
+    }
 }
 
 /// On the name of a built-in macro or its `!`: how a call is written, and

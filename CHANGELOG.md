@@ -59,6 +59,9 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Changed
 
+- Hover on a field, value or type name whose type is a struct shows the struct with
+  its fields, as Rust writes it, rather than only its name:
+  `struct Limits { cpu: f64, memory_mb: u32 }`, one field per line.
 - Type arguments in `#![use(...)]` are written as Rust types, as in `#[type(...)]`:
   `app::Pair<u32, Vec<String>>`. The schema file's form, `List(String)`, is no longer
   read there.
