@@ -176,7 +176,7 @@ impl Gen {
             "\"s\"",
             "[1, 2]",
             "{ x: 1 }",
-            "&root.c | 0",
+            "&root.c ?? 0",
             "Some(1)",
         ])
         .to_owned()
@@ -188,12 +188,12 @@ impl Gen {
             0 => format!("<{}> {{ {key}: {} }}", self.condition(), self.simple()),
             1 | 2 => format!("{key}<{}>: {}", self.condition(), self.simple()),
             3 => format!(
-                "{key}: &root.{}<{}> | 0",
+                "{key}: &root.{}<{}> ?? 0",
                 self.key(),
                 self.pick(&["a", "!a", "b & !a"])
             ),
             4 => format!("{key}: {{ x<{}>: 1, x: 2 }}", self.condition()),
-            5 => format!("{key}: & + 1 | 1"),
+            5 => format!("{key}: & + 1 ?? 1"),
             _ => format!("{key}: {}", self.simple()),
         }
     }
@@ -305,12 +305,12 @@ impl Gen {
     fn linked(&mut self, keys: usize) -> String {
         let other = self.next() % keys as u64;
         match self.next() % 8 {
-            0 => format!("&root.k{other}.a | 0"),
-            1 => format!("{{ ..(&root.k{other}.b | {{}}), a: 1 }}"),
-            2 => format!("{{ ..(&root.k{other} | {{}}), c: 2 }}"),
-            3 => "{ a: 1, b: { x: &parent.k1 | 3, y: &parent.a | 4 } }".to_owned(),
+            0 => format!("&root.k{other}.a ?? 0"),
+            1 => format!("{{ ..(&root.k{other}.b ?? {{}}), a: 1 }}"),
+            2 => format!("{{ ..(&root.k{other} ?? {{}}), c: 2 }}"),
+            3 => "{ a: 1, b: { x: &parent.k1 ?? 3, y: &parent.a ?? 4 } }".to_owned(),
             4 => format!("{{ a: {other}, b: {{ ..&t, y: &parent.a }} }}"),
-            5 => format!("{{ b: {{ x: &root.k{other}.b.x | 5 }} }}"),
+            5 => format!("{{ b: {{ x: &root.k{other}.b.x ?? 5 }} }}"),
             6 => format!("& ~ {{ a: {other} }}"),
             _ => format!("{other}"),
         }
@@ -318,7 +318,7 @@ impl Gen {
 
     fn linked_document(&mut self) -> String {
         let keys = 2 + self.next() as usize % 6;
-        let mut entries = vec!["t := { x: &parent.k0 | 6, z: 1 }".to_owned()];
+        let mut entries = vec!["t := { x: &parent.k0 ?? 6, z: 1 }".to_owned()];
         for key in 0..keys {
             entries.push(format!("k{key}: {}", self.linked(keys)));
         }
@@ -353,7 +353,7 @@ fn evaluated(documents: &[&str]) -> (Option<crol_eval::Value>, Vec<String>) {
 
 /// Reading the whole root keeps every key's cells, as this key does without
 /// being evaluated.
-const KEEP_EVERY_KEY: &str = "zz: 1 | &root";
+const KEEP_EVERY_KEY: &str = "zz: 1 ?? &root";
 
 /// The base without the key of [`KEEP_EVERY_KEY`].
 fn without_keeper(value: crol_eval::Value) -> crol_eval::Value {

@@ -201,7 +201,7 @@ result counts as a literal.
 ### 2.5 Punctuation and adjacency
 
 ```
-{ } [ ] ( ) < > , : ; :: := . .. + - * / % ~ ~^ | & ^ @ ? = # !
+{ } [ ] ( ) < > , : ; :: := . .. + - * / % ~ ~^ | & ^ @ ? ?? = # !
 ```
 
 Three adjacency rules, all to keep one-token lookahead:
@@ -711,7 +711,7 @@ and so can any number of steps: `a?.b?.c: 1`.
   cannot go on is the same error.
 
 `&` in such an entry reads what the step starts from. A `?` goes in a target, not a
-reference, where `|` says what to do about a missing value (section 6.5). It
+reference, where `??` says what to do about a missing value (section 6.5). It
 cannot make a list longer: `a.list[5]?.b` needs the index to exist. It must directly
 follow a key, field or accessor and directly precede the next step, not a
 condition, so that it is never the `?` of an entry on the next line. To set the last
@@ -839,8 +839,8 @@ start an entry; what follows them, on that same line, decides:
 | `<` | it is a variant and `{` follows: `<prod> {` | `<prod>`, `<prod>.name` |
 
 Any other line needs no such look: `?`, `^`, `..`, a key or a bind can
-only start an entry, and `.`, `*`, `/`, `%`, `~`, `~^`, `|` can only
-continue a value. A `(` or `{` continues a bare name, as a named tuple or a block's
+only start an entry, and `.`, `*`, `/`, `%`, `~`, `~^`, `|`, `??` can only
+continue a value: `??` is one token, not two `?`. A `(` or `{` continues a bare name, as a named tuple or a block's
 type name, and otherwise is an error. A value also goes on when what is
 before the line break needs it: a line that ends with a binary operator,
 `:` or `:=`. After a `:`, a line that begins an entry is an error for
@@ -890,7 +890,7 @@ A file whose entries were all separated by commas means what it always
 did, with one exception: `a: &x`, then `-b` or `-"b"` on the next line,
 used to be a subtraction of a unit name or a string. That is an error
 whenever it is evaluated, so only a value that was never read, or
-whose left side was missing under a `|`, ever got past it; it is now
+whose left side was missing under a fallback, ever got past it; it is now
 a remove.
 
 ---
@@ -950,7 +950,7 @@ and is that entry's value below:
 **Self and parent.** Every block has a **location**: the path where its
 value ends up.
 
-- A block that is an entry's value, or an operand of `~` or `|` there,
+- A block that is an entry's value, or an operand of `~` or `??` there,
   is at the entry's target.
 - A list element is at `[i]`; a tuple or named-tuple element is at `.i`;
   a spread's operand is at the location of the block containing it.
@@ -961,7 +961,7 @@ value ends up.
 
 A block has a **fixed location** when it is an entry's value or the
 right side of `~` there, or a field value nested in such a block. List
-elements, `|` operands and spread operands have a location, but not a
+elements, `??` operands and spread operands have a location, but not a
 fixed one, because whether and where their entries end up depends on
 evaluation. Variant entries need a fixed location (section 8.2).
 
@@ -1186,7 +1186,7 @@ more_cols := { a: [], b: [] },
   lands, as part of the root value it lands in (section 10.9), against the
   type of that place. Tools also warn where a template with a type is used
   as a whole value at a place of another type: as the operand of a spread,
-  of `~`, `~^` or `|`, or as the value of an entry, an element or a
+  of `~`, `~^` or `??`, or as the value of an entry, an element or a
   payload. Types are the same through `Option`, newtypes and
   `#[serde(transparent)]`. A place whose type is not known, such as an
   operand of arithmetic or a root value of an enum type whose variant the
@@ -1228,7 +1228,7 @@ struct):
   the one it names (section 12.5). Value mode has no defaults.
 - **Missing.** A field without a default, a type without recorded
   defaults, or a target whose type cannot be found makes `&default`
-  *missing*, so `&default | 1` falls back (section 6.5). Without a
+  *missing*, so `&default ?? 1` falls back (section 6.5). Without a
   schema at all, and in value mode, `&default` is an error.
 - **Fixed.** Defaults depend neither on layers nor on the context, so
   `&default` is evaluated once per target and never takes part in a
@@ -1248,9 +1248,9 @@ From tightest to loosest:
 | 1 | postfix `.field`, `.0`, `[key]`, `<v>` | left |
 | 2 | unary `-`, `!` | right |
 | 3 | `*`, `/`, `%` | left |
-| 4 | `+`, `-` | left |
+| 4 | `+`, `-`, `\|` (add to a list) | left |
 | 5 | `~`, `~^` (merge) | left |
-| 6 | `\|` (fallback) | left |
+| 6 | `??` (fallback) | left |
 
 Parentheses group. `&-1` is `&` minus 1, `-&` negates `&`, and `!&`
 inverts it.
@@ -1273,13 +1273,20 @@ Postfix selectors apply to any expression: `(&root.a ~ { b: 1 }).b`,
 | string, integer/float/char/boolean (either order) | concatenate the formatted value (section 6.6) | | | | | |
 | list, list | concatenate | remove every left element equal to a right element | | | | |
 
+`a | b` takes two lists too: it is `a` with each element of `b` that is
+not equal to one already in it added at the end, in order, so
+`["a", "b"] | ["b", "c", "c"]` is `["a", "b", "c"]`. It never removes
+an element: `["a", "a"] | ["a"]` is `["a", "a"]`. Equality is that of
+`-` (section 3.3): `1` and `1.0` are not equal. On anything but two lists
+`|` is an error.
+
 - Integer overflow (outside `i128`) is an error. Integer division or
   remainder by zero is an error.
 - A float result that is not finite (division by zero, overflow) is an
   error.
 - Converting an integer to a float rounds to nearest, ties to even.
-- Lists only take lists: `tags: & + ["x"]`. A single element is an
-  error, because without types `[[1]] + [2]` could not tell an element
+- Lists only take lists: `tags: & + ["x"]`, `tags: & | ["x"]`. A single
+  element is an error, because without types `[[1]] + [2]` could not tell an element
   from a list to append.
 - Any other combination is an error naming both kinds.
 
@@ -1316,9 +1323,9 @@ So `Some({ x: 1, y: 2 }) ~ Some({ x: 5 })` is `Some({ x: 5, y: 2 })`, and
 `Rgb(1, 2, 3) ~ Rgb(4, 5)` is `Rgb(4, 5)`: the elements of `b` decide how many
 there are, and values that are not keyed replace.
 
-### 6.5 Fallback `a | b`
+### 6.5 Fallback `a ?? b`
 
-`a | b` is `a`, unless evaluating `a` fails because a value is
+`a ?? b` is `a`, unless evaluating `a` fails because a value is
 *missing*, in which case it is `b`. Missing means:
 
 - `&` with nothing below;
@@ -1332,13 +1339,17 @@ mismatch) is reported, not caught.
 
 `a` is checked *to its own level*: evaluation is lazy (section 7.5),
 and a missing value inside one of `a`'s entries or list elements is not
-caught here; put the `|` inside, where the value is. Examples:
+caught here; put the `??` inside, where the value is. Examples:
 
 ```rust
-counter: & + 1 | 1,                        // counts from 1
-web: & ~ { replicas: 2 } | Service { replicas: 2, .. }, // patch, or create
-port: &root.settings.port | 80,
+counter: & + 1 ?? 1,                       // counts from 1
+web: & ~ { replicas: 2 } ?? Service { replicas: 2, .. }, // patch, or create
+port: &root.settings.port ?? 80,
+tags: & | ["x"] ?? ["x"],                  // add to the list, or start it
 ```
+
+`??` binds more loosely than any other operator, so `& + 1 ?? 1` is
+`(& + 1) ?? 1`.
 
 ### 6.6 Formatting values into strings
 
@@ -1528,7 +1539,7 @@ Operations need only what they use:
 
 | Needs the shape of its operands | Needs the full value of its operands |
 |---|---|
-| `~`, spreads, selectors, path entries, `\|` (left side), list `+` | arithmetic, string concatenation, list `-` (equality) |
+| `~`, spreads, selectors, path entries, `??` (left side), list `+` | arithmetic, string concatenation, list `-` and `\|` (equality) |
 
 The application deserializing a value needs its full value.
 
@@ -1823,7 +1834,7 @@ adds 2.
 Variant entries inside blocks are lifted out when the document is read.
 They are allowed only in blocks whose location is fixed: blocks that are
 an entry's value or the right side of `~` there, and blocks nested in
-those as field values. Inside a list, a `|` operand, an arithmetic
+those as field values. Inside a list, a `??` operand, an arithmetic
 operand or a spread, they are an error.
 
 A condition that cannot hold in any valid context (`<dev & prod>`, with
@@ -1981,9 +1992,9 @@ cond_and     ::= cond_not ( "&" cond_not )*
 cond_not     ::= "!" cond_not | identifier | "(" condition ")"
 tuple_index  ::= decimal digits, no underscore or sign
 
-expr         ::= merge ( "|" merge )*
+expr         ::= merge ( "??" merge )*
 merge        ::= sum ( ( "~" | "~^" ) sum )*
-sum          ::= product ( ( "+" | "-" ) product )*
+sum          ::= product ( ( "+" | "-" | "|" ) product )*
 product      ::= unary ( ( "*" | "/" | "%" ) unary )*
 unary        ::= ( "-" | "!" ) unary | postfix
 postfix      ::= primary selector*
@@ -3631,7 +3642,7 @@ selector on `&` or `&default`.
 **Evaluation**: `+` on something that is set; `-` or a path on something
 that is not; declare or ensure on a list index or tuple element, set
 on a missing index, removing a tuple element; a missing value referenced
-outside `|`, or spread; `&default` without a schema; operators on the wrong kinds; integer overflow;
+outside `??`, or spread; `&default` without a schema; operators on the wrong kinds; integer overflow;
 division by zero; a non-finite float; `~` on lists, scalars, different
 type names; `.0` on a keyed value; an
 integer key at the root; a spread of something that is not keyed; `&self`, `&parent` or a bind in a block
@@ -3833,7 +3844,7 @@ where it is not obvious.
   instead of always allowing defaults (3.1, 5.2). `Option` fields must
   be written unless the block has `..` (10.3).
 - Laziness with shape and contents levels, and what counts as a cycle
-  (7.5); `|` checks its left side to its own level only (6.5).
+  (7.5); `??` checks its left side to its own level only (6.5).
 - String concatenation with numbers, chars and booleans (6.6).
 - Variants are combinable: `Discrete` flags and `Grouped` alternatives,
   declared with `CrolVariants<T>`, where `T` may be the application's

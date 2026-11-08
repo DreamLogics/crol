@@ -1232,9 +1232,9 @@ impl Parser<'_> {
     /// Binary operators, loosest first (`SPEC.md` 6.2).
     fn binary(&mut self, level: usize) {
         const LEVELS: [&[SyntaxKind]; 4] = [
-            &[PIPE],
+            &[QUESTION2],
             &[TILDE, TILDE_CARET],
-            &[PLUS, MINUS],
+            &[PLUS, MINUS, PIPE],
             &[STAR, SLASH, PERCENT],
         ];
         let Some(ops) = LEVELS.get(level) else {

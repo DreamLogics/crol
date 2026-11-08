@@ -283,6 +283,9 @@ static bool at_target_and_colon(TSLexer *lexer) {
 static bool at_entry_shape(TSLexer *lexer) {
   switch (lexer->lookahead) {
     case '?':
+      // `??` continues a value, as a fallback.
+      advance(lexer);
+      return lexer->lookahead != '?';
     case '^':
       return true;
     case '.':

@@ -17,7 +17,7 @@ hundred := { hp: 100 }
 +child: { ..&hundred, ..&root.parent }
 
 // Nothing below it here either: the fallback applies.
-counted := { count: & + 1 | 1 }
+counted := { count: & + 1 ?? 1 }
 +first: { ..&counted }
 +second: { count: 5 }
 second: & ~ &counted

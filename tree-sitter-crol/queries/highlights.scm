@@ -42,6 +42,6 @@
 ["use" "schema" "type" "extends" "variant" "as" "super"] @keyword
 
 ; Operators and punctuation.
-["+" "-" "*" "/" "%" "~" "~^" "|" "^" "&" "!" "?" ":=" "=" ".."] @operator
+["+" "-" "*" "/" "%" "~" "~^" "|" "??" "^" "&" "!" "?" ":=" "=" ".."] @operator
 [":" ";" "," "." "::"] @punctuation.delimiter
 ["{" "}" "[" "]" "(" ")"] @punctuation.bracket

@@ -9,7 +9,7 @@ languages = ["languages/crol"]
 
 [grammars.crol]
 repository = "https://github.com/DreamLogics/crol"
-rev = "3ebef0536feb2489fe1abdb3047cac51e732fa09"
+rev = "01ec8ba6466717b93d72a6505d497479798492dc"
 path = "tree-sitter-crol"
 
 [language_servers.crol]

@@ -99,19 +99,19 @@ fn value_mode_expression() {
 
 #[test]
 fn operator_precedence() {
-    // `|` is loosest, then `~`, then `+`, then `*`; `-` before a number is
-    // a prefix.
+    // `??` is loosest, then `~`, then `+`, `-` and `|`, then `*`; `-` before
+    // a number is a prefix.
     check(
-        "x: & ~ { a: 1 } | -2 * 3 + 4",
+        "x: & ~ { a: 1 } ?? -2 * 3 + 4",
         expect![[r#"
-            DOCUMENT@0..28
-              ENTRY@0..28
+            DOCUMENT@0..29
+              ENTRY@0..29
                 TARGET@0..1
                   KEY@0..1
                     IDENT@0..1 "x"
                 COLON@1..2 ":"
                 WHITESPACE@2..3 " "
-                BINARY_EXPR@3..28
+                BINARY_EXPR@3..29
                   BINARY_EXPR@3..15
                     REFERENCE@3..4
                       AMP@3..4 "&"
@@ -132,24 +132,24 @@ fn operator_precedence() {
                       WHITESPACE@13..14 " "
                       R_BRACE@14..15 "}"
                   WHITESPACE@15..16 " "
-                  PIPE@16..17 "|"
-                  WHITESPACE@17..18 " "
-                  BINARY_EXPR@18..28
-                    BINARY_EXPR@18..24
-                      PREFIX_EXPR@18..20
-                        MINUS@18..19 "-"
-                        LITERAL@19..20
-                          INT@19..20 "2"
-                      WHITESPACE@20..21 " "
-                      STAR@21..22 "*"
-                      WHITESPACE@22..23 " "
-                      LITERAL@23..24
-                        INT@23..24 "3"
-                    WHITESPACE@24..25 " "
-                    PLUS@25..26 "+"
-                    WHITESPACE@26..27 " "
-                    LITERAL@27..28
-                      INT@27..28 "4"
+                  QUESTION2@16..18 "??"
+                  WHITESPACE@18..19 " "
+                  BINARY_EXPR@19..29
+                    BINARY_EXPR@19..25
+                      PREFIX_EXPR@19..21
+                        MINUS@19..20 "-"
+                        LITERAL@20..21
+                          INT@20..21 "2"
+                      WHITESPACE@21..22 " "
+                      STAR@22..23 "*"
+                      WHITESPACE@23..24 " "
+                      LITERAL@24..25
+                        INT@24..25 "3"
+                    WHITESPACE@25..26 " "
+                    PLUS@26..27 "+"
+                    WHITESPACE@27..28 " "
+                    LITERAL@28..29
+                      INT@28..29 "4"
         "#]],
     );
 }

@@ -439,7 +439,7 @@ fn significant_tokens(text: &str) -> Vec<Tok> {
 fn expects_operand(kind: SyntaxKind) -> bool {
     matches!(
         kind,
-        PLUS | MINUS | BANG | STAR | SLASH | PERCENT | TILDE | TILDE_CARET | PIPE
+        PLUS | MINUS | BANG | STAR | SLASH | PERCENT | TILDE | TILDE_CARET | PIPE | QUESTION2
     )
 }
 

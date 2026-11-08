@@ -41,7 +41,7 @@ fn expr(rng: &mut Rng, i: usize) -> String {
     let j = rng.below(i);
     match rng.below(4) {
         0 => format!("&root.k{j}.v + {n}"),
-        1 => format!("&root.k{j}.v | {n}"),
+        1 => format!("&root.k{j}.v ?? {n}"),
         _ => n.to_string(),
     }
 }
@@ -72,7 +72,7 @@ fn patches(rng: &mut Rng, templates: bool) -> String {
             1 => format!("k{i}<rebels>: {{ v: {}, w: 0 }},\n", expr(rng, i)),
             2 => format!("k{i}<hard>.w: & + 1,\n"),
             3 if templates => format!("k{i}.w: &t.w,\n"),
-            4 => format!("n{i}: {{ v: &root.k{i}.v | 0 }},\n"),
+            4 => format!("n{i}: {{ v: &root.k{i}.v ?? 0 }},\n"),
             _ => format!("k{i}.v: {},\n", expr(rng, i)),
         };
     }

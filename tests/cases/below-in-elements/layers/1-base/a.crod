@@ -28,7 +28,7 @@ items: [&, & + 1]
 
 // A position it lacks is missing, and a fallback catches that.
 +short: Pair(1)
-short: Pair(&, & | 2)
+short: Pair(&, & ?? 2)
 
 // A template lands the same way.
 more := { list: OneOf(& + ["t"]) }

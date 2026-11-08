@@ -189,11 +189,11 @@ fn merge_errors() {
 #[test]
 fn fallback_catches_missing_values_only() {
     check(
-        r#"a: & + 1 | 1,
-b: &root.nope | "default",
-c: &root.a.x | 3,
-d: (1 / 0) | 2,
-e: { inner: &root.nope } | 5,"#,
+        r#"a: & + 1 ?? 1,
+b: &root.nope ?? "default",
+c: &root.a.x ?? 3,
+d: (1 / 0) ?? 2,
+e: { inner: &root.nope } ?? 5,"#,
         expect![[r#"
             3:11: .x: cannot select in an integer (while evaluating c)
             4:5: /: division by zero (while evaluating d)

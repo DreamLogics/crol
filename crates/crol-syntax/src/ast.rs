@@ -1117,6 +1117,8 @@ pub enum BinaryOp {
     /// `~^`
     MergeShallow,
     /// `|`
+    Union,
+    /// `??`
     Fallback,
 }
 
@@ -1149,7 +1151,8 @@ impl BinaryExpr {
             PERCENT => BinaryOp::Rem,
             TILDE => BinaryOp::Merge,
             TILDE_CARET => BinaryOp::MergeShallow,
-            PIPE => BinaryOp::Fallback,
+            PIPE => BinaryOp::Union,
+            QUESTION2 => BinaryOp::Fallback,
             _ => return None,
         })
     }

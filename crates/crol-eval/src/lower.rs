@@ -1372,6 +1372,7 @@ impl Lowerer {
                     Some(ast::BinaryOp::Rem) => BinOp::Rem,
                     Some(ast::BinaryOp::Merge) => BinOp::Merge,
                     Some(ast::BinaryOp::MergeShallow) => BinOp::MergeShallow,
+                    Some(ast::BinaryOp::Union) => BinOp::Union,
                     Some(ast::BinaryOp::Fallback) => BinOp::Fallback,
                     None => return self.ir.add_expr(ExprKind::Error, span),
                 };

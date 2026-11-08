@@ -174,6 +174,7 @@ impl Lexer<'_> {
             '&' => AMP,
             '^' => CARET,
             '@' => AT,
+            '?' if self.eat('?') => QUESTION2,
             '?' => QUESTION,
             '=' => EQ,
             '#' => POUND,
@@ -409,7 +410,7 @@ mod tests {
     #[test]
     fn punctuation() {
         check(
-            "{}[]()<>,: :: := . .. +-*/%~|&^@?=#!",
+            "{}[]()<>,: :: := . .. +-*/%~|&^@?=#! ?? ???",
             expect![[r##"
                 L_BRACE "{"
                 R_BRACE "}"
@@ -444,6 +445,11 @@ mod tests {
                 EQ "="
                 POUND "#"
                 BANG "!"
+                WHITESPACE " "
+                QUESTION2 "??"
+                WHITESPACE " "
+                QUESTION2 "??"
+                QUESTION "?"
             "##]],
         );
     }
