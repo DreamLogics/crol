@@ -714,6 +714,7 @@ fn completion_and_hover_from_the_schema() {
                                 mode: { ty: Named("app::Mode"), .. },
                                 url: { ty: Option(String), .. },
                                 depends_on: { ty: List(Id(["app::Service"])), .. },
+                                mounts: { ty: Map(String, Id(["app::Volume"])), .. },
                             },
                             ..
                         },
@@ -743,7 +744,7 @@ fn completion_and_hover_from_the_schema() {
             ),
             (
                 "base/a.crod",
-                "+web: Service { replicas: 2, port: 80, limits: Limits { cpu: 1.0, memory_mb: 512 }, mode: Fast, url: None, depends_on: [] },\n+data: Volume { size_gb: 10 },",
+                "+web: Service { replicas: 2, port: 80, limits: Limits { cpu: 1.0, memory_mb: 512 }, mode: Fast, url: None, depends_on: [], mounts: {} },\n+data: Volume { size_gb: 10 },",
             ),
             ("local/a.crod", "web.port: 81,"),
         ],
@@ -816,6 +817,10 @@ fn completion_and_hover_from_the_schema() {
     let items = complete(&mut client, "web.depends_on: [@");
     let labels: Vec<&str> = items.iter().map(|(l, _, _)| l.as_str()).collect();
     assert_eq!(labels, ["web"]);
+    // Also as the values of a map.
+    let items = complete(&mut client, "web.mounts: { logs: @");
+    let labels: Vec<&str> = items.iter().map(|(l, _, _)| l.as_str()).collect();
+    assert_eq!(labels, ["data"]);
 
     // The keys of `&self`, while the text does not parse.
     let items = complete(&mut client, "web.limits: Limits { ..&, cpu: &self.");
