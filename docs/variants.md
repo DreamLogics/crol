@@ -185,7 +185,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-crol = { version = "0.1", features = ["derive"] }
+crol = { version = "0.2", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 ```
 

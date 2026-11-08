@@ -24,7 +24,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-crol = { version = "0.1", features = ["derive"] }
+crol = { version = "0.2", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 ```
 
@@ -106,7 +106,7 @@ Commit the result. It is a CROL file, sorted so that it gives small diffs:
 
 ```console
 $ head -n 12 crol/schema.crol
-#![schema("crate:crol@0.1")]
+#![schema("crate:crol@0.2")]
 
 Schema {
     format: 1,

@@ -1,4 +1,4 @@
-#![schema("crate:crol@0.1")]
+#![schema("crate:crol@0.2")]
 
 Schema {
     format: 1,

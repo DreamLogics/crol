@@ -49,7 +49,7 @@ All crates share one version number (`SPEC.md` 14.4).
    `[workspace.dependencies]`, and move the `Unreleased` section of
    `CHANGELOG.md` under the new version, with the date. The workflow refuses a
    tag without that section, and uses it as the release notes.
-2. Update the version in `crol = "0.1"` in the guide and the READMEs if the
+2. Update the version in `crol = "0.2"` in the guide and the READMEs if the
    minor version changed.
 3. Commit, wait for CI to pass on `main`, then tag `vX.Y.Z` and push the tag. The
    release workflow builds the binaries, publishes to crates.io whatever is not

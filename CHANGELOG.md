@@ -9,8 +9,22 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-08
+
+This release changes the format in ways that break documents and programs written for
+0.1.0:
+
+- The fallback is written `??`, and `|` adds to a list. A document that used `|` as a
+  fallback is an error that says to write `??`.
+- Patches to one key from two documents of a layer that only the documents' names
+  order are an error, and `warn_cross_file_patches` is gone.
+- `Variant` has a third case, `Open`.
+- `.crob` files have a new format: compile layers again.
+
 ### Added
 
+- Hover on a built-in macro shows how a call is written and what it does.
+  `crol_eval::macro_help` gives the same.
 - `-?target` removes a key if it is set, and does nothing where it, a step of its
   path or a list index is not: `-?cache`, `-?web.limits.cpu`. A struct field removed
   with it takes its default either way. `-target` stays an error where the target is
@@ -65,7 +79,6 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   unless the list holds it, and `["a"] | ["b", "b"]` is `["a", "b"]`. It takes two
   lists and binds as `+` and `-` do. A document that used `|` as a fallback is now
   an error, which says to write `??`. Conditions keep `|` for "or": `<a | b>`.
-  Compiled layers have format 5, and are compiled again.
 - Hover on a field, value or type name whose type is a struct shows the struct with
   its fields, as Rust writes it, rather than only its name:
   `struct Limits { cpu: f64, memory_mb: u32 }`, one field per line.
@@ -77,8 +90,8 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   data set of 14,000 keys, reloading a document of the top layer takes 192 ms instead of
   920 ms. A change to a template, a `..` at a root or a variant declaration still
   evaluates everything.
-- `.crob` files are format 4, for `!`, the order of documents, the `variant`
-  attribute and `-?`; compile layers again.
+- `.crob` files are format 5, where 0.1.0 wrote format 2, for `!`, the order of
+  documents, the `variant` attribute, `-?` and `??`; compile layers again.
 - The documents of a layer are in folder order: a folder's own documents come before
   those of its subfolders, and an `#![extends(...)]` that names a document or folder of
   the same layer puts it first; otherwise they go by name. Root keys can come in another
@@ -105,11 +118,11 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   what differs from the base, on threads, and a directory is read without looking at each
   file in it. Documents are not parsed to find attributes they do not have.
 
-
 ### Removed
 
 - `CrolConfig::warn_cross_file_patches`, `DataOptions::warn_cross_file_patches` and the
   project option `warn_cross_file_patches`: what they turned off is an error now.
+
 ## [0.1.0] - 2026-11-05
 
 The first release, with the format as `SPEC.md` describes it:
@@ -128,8 +141,6 @@ What changed during development, before anything was published.
 
 ### Added
 
-- Hover on a built-in macro shows how a call is written and what it does.
-  `crol_eval::macro_help` gives the same.
 - Doc comments in data (`SPEC.md` 2.2): `///` above an entry and `//!` at the top of
   a file. Hover shows those of every layer, lowest first, and completion after `@`
   those of root keys. `DataWriter::doc` writes one. Evaluation does not see them.
@@ -525,5 +536,6 @@ What changed during development, before anything was published.
   cursor, keep an existing `:`, and are triggered where keys and values
   start; a document just opened is evaluated at once.
 
-[Unreleased]: https://github.com/DreamLogics/crol/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/DreamLogics/crol/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/DreamLogics/crol/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/DreamLogics/crol/releases/tag/v0.1.0

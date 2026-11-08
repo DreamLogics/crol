@@ -694,12 +694,11 @@ mod tests {
             &Offline,
         ))
         .unwrap_err();
-        assert!(
-            error
-                .message()
-                .contains("`crol-eval` 0.1.0 publishes no schema"),
-            "{error}"
+        let expected = format!(
+            "`crol-eval` {} publishes no schema",
+            env!("CARGO_PKG_VERSION")
         );
+        assert!(error.message().contains(&expected), "{error}");
     }
 
     #[test]
