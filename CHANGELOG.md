@@ -9,6 +9,21 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ## [Unreleased]
 
+`top` and `super` are now keywords after `&`, so a bind can no longer be named either
+of them, and `&top` or `&super` no longer names one. `.crob` files have a new format:
+compile layers again.
+
+### Added
+
+- `&top` is the root entry a block is in, however deep and however many steps its
+  target has: `web.limits: { budget: &top.limits.cpu * 100 }` reads `web`, with no
+  need to write `&root.web`. A template's `&top` is the root entry it is spread into.
+  At the top level, or in a value bind's own block, it is an error.
+- `&super` is another spelling of `&parent`, as module paths go up with `super`. The
+  two may be mixed: `&super.&parent` is two blocks up.
+- The language server completes `top` and `super` after `&`, and the keys after
+  `&top.` and `&super.`; the editors highlight them.
+
 ## [0.2.0] - 2026-11-08
 
 This release changes the format in ways that break documents and programs written for

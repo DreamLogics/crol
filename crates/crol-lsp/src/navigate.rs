@@ -186,7 +186,10 @@ pub(crate) fn rename(
     encoding: Encoding,
 ) -> Result<Option<WorkspaceEdit>, String> {
     if !crol_eval::is_identifier(new_name)
-        || matches!(new_name, "self" | "parent" | "root" | "default")
+        || matches!(
+            new_name,
+            "self" | "parent" | "super" | "top" | "root" | "default"
+        )
     {
         return Err(format!("`{new_name}` cannot be the name of a bind"));
     }

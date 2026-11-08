@@ -1914,6 +1914,24 @@ fn completion_from_the_project_at_any_depth() {
     let marked = base.replace("name: \"first\",", "name: \"first\", port: &parent.|");
     let items = base_buffer.complete(&mut client, &marked);
     assert!(labels(&items).contains(&"services"), "{items:?}");
+    // `&super` is `&parent`; `&top` is the root entry, here the same block.
+    for reference in ["&super", "&top"] {
+        let marked = base.replace(
+            "name: \"first\",",
+            &format!("name: \"first\", port: {reference}.|"),
+        );
+        let items = base_buffer.complete(&mut client, &marked);
+        assert!(
+            labels(&items).contains(&"services"),
+            "{reference}: {items:?}"
+        );
+    }
+    // After `&`: the keywords, `top` and `super` among them.
+    let marked = base.replace("name: \"first\",", "name: \"first\", port: &|");
+    let items = base_buffer.complete(&mut client, &marked);
+    for keyword in ["self", "parent", "super", "top", "root", "default"] {
+        assert!(labels(&items).contains(&keyword), "{keyword}: {items:?}");
+    }
     client.stop();
 }
 

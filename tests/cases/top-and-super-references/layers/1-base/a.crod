@@ -1,0 +1,26 @@
+// `&top` is the root entry a block is in, however deep (SPEC.md 6.1).
+service := {
+    port: 80,
+    // Copied by a spread, `&top` is the root entry it lands in.
+    probe: { url: "http://" + &top.host + ":" + &top.port },
+},
++web: {
+    ..&service,
+    host: "web",
+    port: 8080,
+    limits: { cpu: 2, budget: &top.limits.cpu * 100 },
+    replicas: [{ name: &top.host + "-0" }, { name: &top.host + "-1" }],
+    // `&super` is `&parent`, and the two may be mixed.
+    nested: {
+        b: 1,
+        a: { up: &super.b, upup: &super.&super.port, mixed: &parent.&super.port, top: &top.port },
+    },
+},
+web<prod>.host: "web.prod",
++db: {
+    host: "db",
+    port: 5432,
+    // A target with several steps is one block: `&top` is still `db`.
+    pool: { size: 4 },
+},
+db.pool.deep: { size: &top.pool.size * 2, other: &top<dev>.host },

@@ -1,0 +1,29 @@
+web: {
+    port: 9090,
+    probe: { url: "http://web:9090" },
+    host: "web",
+    limits: { cpu: 2, budget: 200 },
+    replicas: [{ name: "web-0" }, { name: "web-1" }],
+    nested: { b: 1, a: { up: 1, upup: 9090, mixed: 9090, top: 9090 } },
+}
+db: {
+    host: "db",
+    port: 5432,
+    pool: { size: 4, deep: { size: 8, other: "db" } },
+}
+
+<!dev & prod> {
+    web: {
+        port: 9090,
+        probe: { url: "http://web.prod:9090" },
+        host: "web.prod",
+        limits: { cpu: 2, budget: 200 },
+        replicas: [{ name: "web.prod-0" }, { name: "web.prod-1" }],
+        nested: { b: 1, a: { up: 1, upup: 9090, mixed: 9090, top: 9090 } },
+    },
+    db: {
+        host: "db.prod",
+        port: 5432,
+        pool: { size: 4, deep: { size: 8, other: "db" } },
+    },
+}

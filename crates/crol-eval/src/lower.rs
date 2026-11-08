@@ -207,7 +207,7 @@ pub(crate) struct Lowered {
     pub(crate) root: ExprId,
 }
 
-const RESERVED_BIND_NAMES: [&str; 4] = ["self", "parent", "root", "default"];
+const RESERVED_BIND_NAMES: [&str; 6] = ["self", "parent", "super", "top", "root", "default"];
 
 /// Names visible in one block (`SPEC.md` 6.1.1).
 #[derive(Default)]
@@ -1232,7 +1232,7 @@ impl Lowerer {
                     SelectorUse::Other => {
                         self.error(
                             span,
-                            "a variant selector reads a value in another context, so it must follow a late reference (`&root`, `&self`, `&parent` or a bind)",
+                            "a variant selector reads a value in another context, so it must follow a late reference (`&root`, `&top`, `&self`, `&parent` or a bind)",
                         );
                         return None;
                     }
@@ -1524,6 +1524,7 @@ impl Lowerer {
             }
             ast::ReferenceKind::SelfValue => RefKind::SelfValue,
             ast::ReferenceKind::Parent(n) => RefKind::Parent(n),
+            ast::ReferenceKind::Top => RefKind::Top,
             ast::ReferenceKind::Root => RefKind::Root,
             ast::ReferenceKind::Default => RefKind::Default(Box::new(self.default_target.clone())),
             ast::ReferenceKind::Bind(name) => {

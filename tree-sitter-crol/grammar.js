@@ -249,14 +249,19 @@ module.exports = grammar({
     // A reference is one token, so that its name follows `&` directly
     // (SPEC.md 2.5). At equal length a string beats a pattern, so `&self`
     // is the keyword and `&selfie` a bind; `&parent.&parent` continues
-    // with one token per `.&parent`. In a condition, these tokens are not
-    // valid, so `&` there is the operator.
+    // with one token per `.&parent`. `&super` is another spelling of
+    // `&parent`, and the two may be mixed. In a condition, these tokens are
+    // not valid, so `&` there is the operator.
     reference: $ => choice(
       '&',
       alias('&self', $.self),
+      alias('&top', $.top),
       alias('&root', $.root),
       alias('&default', $.default),
-      seq(alias('&parent', $.parent), repeat(alias(token(seq('.', /\s*/, '&parent')), $.parent))),
+      seq(
+        alias(choice('&parent', '&super'), $.parent),
+        repeat(alias(token(seq('.', /\s*/, choice('&parent', '&super'))), $.parent)),
+      ),
       alias(token(seq('&', IDENTIFIER)), $.bind_name),
     ),
 

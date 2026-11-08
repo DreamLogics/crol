@@ -269,3 +269,45 @@ b: &root.c
         (identifier)))
     (literal
       (integer))))
+
+==================
+Top and super references
+==================
+
+web.limits: { cpu: &top.port, a: &super.&parent.x, topic: &topic }
+
+---
+
+(document
+  (entry
+    (target
+      (key
+        (identifier))
+      (field_selector
+        (identifier)))
+    (block
+      (entry
+        (target
+          (key
+            (identifier)))
+        (path_expr
+          (reference
+            (top))
+          (field_selector
+            (identifier))))
+      (entry
+        (target
+          (key
+            (identifier)))
+        (path_expr
+          (reference
+            (parent)
+            (parent))
+          (field_selector
+            (identifier))))
+      (entry
+        (target
+          (key
+            (identifier)))
+        (reference
+          (bind_name))))))
