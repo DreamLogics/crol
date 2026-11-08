@@ -39,7 +39,7 @@
 (type_expr (identifier) @type)
 
 ; References and binds.
-[(self) (root) (parent) (default)] @variable.builtin
+[(self) (top) (root) (parent) (default)] @variable.builtin
 (reference "&" @variable.builtin)
 (bind_name) @variable
 (bind name: (identifier) @variable)
