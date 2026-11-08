@@ -11,6 +11,10 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Added
 
+- `-?target` removes a key if it is set, and does nothing where it, a step of its
+  path or a list index is not: `-?cache`, `-?web.limits.cpu`. A struct field removed
+  with it takes its default either way. `-target` stays an error where the target is
+  not set.
 - `#[type(...)]` before a value bind gives a template a type, so that a map, list,
   tuple or number template can be checked and completed: a Rust type
   (`HashMap<String, u16>`, `[u8; 3]`) or a path into a schema type
@@ -63,8 +67,8 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   data set of 14,000 keys, reloading a document of the top layer takes 192 ms instead of
   920 ms. A change to a template, a `..` at a root or a variant declaration still
   evaluates everything.
-- `.crob` files are format 4, for `!`, the order of documents and the `variant`
-  attribute; compile layers again.
+- `.crob` files are format 4, for `!`, the order of documents, the `variant`
+  attribute and `-?`; compile layers again.
 - The documents of a layer are in folder order: a folder's own documents come before
   those of its subfolders, and an `#![extends(...)]` that names a document or folder of
   the same layer puts it first; otherwise they go by name. Root keys can come in another

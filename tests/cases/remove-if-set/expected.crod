@@ -1,0 +1,8 @@
+web: {
+    cache: { size: 20, ttl: (), -ttl },
+    hosts: ["b"],
+    port: (),
+    -port,
+    proxy: (),
+    -proxy,
+}

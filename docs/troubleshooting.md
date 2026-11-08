@@ -31,7 +31,7 @@ value, use `web: ...` or `web.port: ...`. To set it only if it is missing, use
 **`` -: `web` is not set ``**
 
 `-` removes a key, and the key is not set. Check the spelling and the order of
-your layers.
+your layers. To remove it only when something sets it, write `-?web`.
 
 **`` `web` is defined twice in the layer `base`; a layer may define a key once ``**
 

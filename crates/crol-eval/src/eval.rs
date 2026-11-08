@@ -234,6 +234,8 @@ struct PathRecipe {
     key_optional: bool,
     path: Vec<Selector>,
     op: Option<SetOp>,
+    /// `-?target`: a remove that is no error where the target is not set.
+    if_set: bool,
     value: Option<Rc<EntryRecipe>>,
     span: Span,
 }
@@ -490,6 +492,7 @@ fn key_selector(key: &Key, span: Span) -> Selector {
 /// An entry's target as written: `web.limits.cpu`, with its operator.
 fn describe_target(entry: &Entry) -> String {
     let mut out = match entry.op {
+        None if entry.if_set => "-?".to_owned(),
         None => "-".to_owned(),
         Some(SetOp::Declare) => "+".to_owned(),
         Some(SetOp::Ensure) => "?".to_owned(),
@@ -1933,6 +1936,7 @@ fn explain_key(
             });
         evaluator.diagnostics.clear();
         let mut entry = match op.op {
+            None if op.if_set => "-?".to_owned(),
             None => "-".to_owned(),
             Some(SetOp::Declare) => "+".to_owned(),
             Some(SetOp::Ensure) => "?".to_owned(),
@@ -2826,6 +2830,10 @@ impl Evaluator<'_> {
                     None
                 };
                 let Some((created, base)) = value.clone().or(filled) else {
+                    // `-?`: a remove below a key that is not set does nothing.
+                    if op.if_set {
+                        continue;
+                    }
                     let mut target = match op.op {
                         None => format!("-{key}"),
                         Some(SetOp::Set) => key.to_string(),
@@ -2860,6 +2868,7 @@ impl Evaluator<'_> {
                     key_optional: op.key_optional,
                     path: op.path.clone(),
                     op: op.op,
+                    if_set: op.if_set,
                     value: entry,
                     span: op.span,
                 });
@@ -2878,7 +2887,7 @@ impl Evaluator<'_> {
             }
             match op.op {
                 None => {
-                    if value.take().is_none() {
+                    if value.take().is_none() && !op.if_set {
                         let _ = self.fail(op.span, format!("-: `{key}` is not set"));
                     }
                 }
@@ -4148,6 +4157,10 @@ impl Evaluator<'_> {
                 recipe: Recipe::Fixed,
             });
             let Some(slot) = existing.or(filled) else {
+                // `-?`: a remove below a key that is not set does nothing.
+                if entry.if_set {
+                    return;
+                }
                 let target = describe_target(entry);
                 let _ = self.fail(
                     entry.span,
@@ -4175,6 +4188,7 @@ impl Evaluator<'_> {
                 key_optional: entry.key_optional,
                 path: entry.path.clone(),
                 op: entry.op,
+                if_set: entry.if_set,
                 value,
                 span: entry.span,
             }));
@@ -4184,7 +4198,7 @@ impl Evaluator<'_> {
         }
         match entry.op {
             None => {
-                if existing.is_none() {
+                if existing.is_none() && !entry.if_set {
                     let _ = self.fail(entry.span, format!("-: `{key}` is not set"));
                     return;
                 }
@@ -4315,6 +4329,10 @@ impl Evaluator<'_> {
                 // Only a keyed value can take a key it does not have.
                 let optional = selector.optional && matches!(value.shape, Shape::Keyed(_));
                 let Some(child) = self.start_of(&below, selector.span, optional) else {
+                    // `-?`: a remove below a step that is not set does nothing.
+                    if recipe.if_set {
+                        return Ok(value.clone());
+                    }
                     let message = missing_step(selector, rest, recipe.op, here.as_ref());
                     return Err(self.fail(selector.span, message));
                 };
@@ -4395,7 +4413,7 @@ impl Evaluator<'_> {
                 let mut keyed = keyed.clone();
                 let exists = keyed.slots.contains_key(&key);
                 match recipe.op {
-                    None if !exists => {
+                    None if !exists && !recipe.if_set => {
                         return Err(self.fail(span, format!("-: `{key}` is not set")));
                     }
                     None => {
@@ -4427,6 +4445,9 @@ impl Evaluator<'_> {
             (Shape::List(elements), SelectorKind::Accessor(i)) => {
                 let index = usize::try_from(*i).ok().filter(|&i| i < elements.len());
                 let Some(index) = index else {
+                    if recipe.op.is_none() && recipe.if_set {
+                        return Ok(value.clone());
+                    }
                     let symbol = recipe.op.map_or("-", SetOp::symbol);
                     return Err(self.fail(span, format!("{symbol}: the list has no element [{i}]")));
                 };

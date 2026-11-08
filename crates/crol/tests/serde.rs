@@ -93,6 +93,10 @@ fn completeness_needs_every_field_or_defaults() {
     }
     let value: WithDefault = crol::from_str("{ a: 1, b: 2, -a }").unwrap();
     assert_eq!((value.a, value.b), (0, 2));
+    // `-?` also where nothing set it; `-` there is an error.
+    let value: WithDefault = crol::from_str("{ b: 2, -?a }").unwrap();
+    assert_eq!((value.a, value.b), (0, 2));
+    assert!(crol::from_str::<WithDefault>("{ b: 2, -a }").is_err());
 }
 
 #[test]

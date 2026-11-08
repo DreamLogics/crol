@@ -642,6 +642,7 @@ optional path into its value.
 | `?target: expr` | ensure | set the target if it is not set; otherwise nothing | |
 | `^target: expr` | replace | as set, but the value never merges with what is there (section 5.2) | |
 | `-target` | remove | remove the target | it is not set |
+| `-?target` | remove if set | remove the target if it is set; otherwise nothing | |
 | `<c> { entries }` | variant block | the entries apply under condition `c` (section 8.2) | |
 | `..operand` | spread | copy the keyed value's entries in | it is not a keyed value |
 | `..` | defaults | fields left out take their defaults (section 10.3) | |
@@ -690,6 +691,10 @@ applies at the last step:
   in the entries of a `~^`.
 - remove works on keys, and on list indices (later elements move down).
   Removing a tuple element is an error.
+- `-?target` is a remove that is no error where `-target` would find
+  nothing: where the key, a step before it, or the list index is not
+  set, it changes no value. A key it names is still added to the
+  defaulted fields (section 5.2), as for `-target`.
 
 A path entry is always a patch: `web.replicas: 4` needs `web` to exist.
 
@@ -751,7 +756,10 @@ So explicit entries always win over spreads; `+field` fails if a spread
 supplied `field`; `?field` keeps a value that a spread supplied.
 
 `-key` removes the entry and adds the key to the defaulted fields, so a
-struct field takes its default. Setting the key again (`+key`, `?key`,
+struct field takes its default. `-?key` does the same, and is no error
+where the key is not set: the key is added to the defaulted fields all
+the same, so a field removed with `-?` takes its default whether or not
+anything set it. Setting the key again (`+key`, `?key`,
 `key`) takes it out of the defaulted fields.
 
 Entries inside a block may have paths (`limits.cpu: 2.0`), which
@@ -875,7 +883,8 @@ spread over lines as before.
 subtraction: a number from a number, a list from a list. After `a: 5`,
 `-12` on the next line is the value `-7`. Write `a: 5,` to remove key
 `12`; after a remove or a variant block, where there is no value to
-continue, a missing comma here is an error.
+continue, a missing comma here is an error. `-?12` and `-?[0]` need no
+comma: `-?` never continues a value.
 
 A file whose entries were all separated by commas means what it always
 did, with one exception: `a: &x`, then `-b` or `-"b"` on the next line,
@@ -1477,6 +1486,7 @@ Let `v` be *missing*. Apply each operation in order:
 | set `k: e`, replace `^k: e` | `e`, evaluated with `&` = `v` |
 | ensure `?k: e` | `v` if it exists; else `e` (`&` missing) |
 | remove `-k` | error if `v` is missing; else missing |
+| remove if set `-?k` | missing |
 | path entry `k.p…: e` | error if `v` is missing; else `v` with the path entry applied (section 5.1) |
 
 The key's final value is `v` after the last operation. If it is missing,
@@ -1954,7 +1964,7 @@ type_expr    ::= identifier ( "::" identifier )* type_args?    (* section 6.1.2 
 block        ::= identifier? "{" entries "}"
 entries      ::= ( entry ( separator entry )* ","? )?
 separator    ::= "," | line_break                    (* section 5.3 *)
-entry        ::= "-" target
+entry        ::= "-" "?"? target
                | bind? ( "+" | "?" | "^" )? target ":" expr
                | entry_attr? identifier ":=" expr    (* value bind, 6.1.2 *)
                | variant "{" entries "}"
@@ -2009,7 +2019,8 @@ Notes:
   references or arithmetic.
 - In a reference, a `variant` may only use names, `!` and `&`
   (section 8.4).
-- In `entry`, `"-" target` is removal. An expression never starts an
+- In `entry`, `"-" target` is removal, and `"-" "?" target` removal if
+  set; the `?` directly follows the `-`. An expression never starts an
   entry, so `-1` cannot be confused with it.
 - In `selector`, `.0.1` is lexed as `.` `0` `.` `1`, not as the float
   `0.1`, after a `.`.

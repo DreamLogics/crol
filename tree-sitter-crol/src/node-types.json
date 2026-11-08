@@ -1138,6 +1138,16 @@
     "type": "remove_entry",
     "named": true,
     "fields": {
+      "if_set": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "?",
+            "named": false
+          }
+        ]
+      },
       "target": {
         "multiple": false,
         "required": true,

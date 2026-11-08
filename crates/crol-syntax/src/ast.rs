@@ -551,11 +551,16 @@ impl Bind {
 }
 
 ast_node!(
-    /// `-target`
+    /// `-target`, or `-?target`
     RemoveEntry, REMOVE_ENTRY
 );
 
 impl RemoveEntry {
+    /// `-?target`: the target need not be set.
+    pub fn if_set(&self) -> bool {
+        token(&self.0, QUESTION).is_some()
+    }
+
     /// A bind before the entry, which is an error.
     pub fn bind(&self) -> Option<Bind> {
         child(&self.0)

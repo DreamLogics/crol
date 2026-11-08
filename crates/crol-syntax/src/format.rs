@@ -435,8 +435,10 @@ impl Formatter {
             return false;
         }
         let first = node.children().next();
+        // `-12` would read as an integer; `-?12` is always an entry.
         !first.is_some_and(|entry| {
             entry.kind() == REMOVE_ENTRY
+                && child_token(&entry, &[QUESTION]).is_none()
                 && entry
                     .descendants_with_tokens()
                     .filter_map(|it| it.into_token())
@@ -647,7 +649,14 @@ impl Formatter {
             ENTRY | VALUE_BIND | SPREAD => {
                 self.entry_prefix(node) + &self.flat(&child_node(node, is_expr)?)?
             }
-            REMOVE_ENTRY => format!("-{}", self.target(&child_node(node, |k| k == TARGET)?)),
+            REMOVE_ENTRY => {
+                let mark = if child_token(node, &[QUESTION]).is_some() {
+                    "-?"
+                } else {
+                    "-"
+                };
+                format!("{mark}{}", self.target(&child_node(node, |k| k == TARGET)?))
+            }
             DEFAULTS => "..".to_owned(),
             ATTRIBUTE => self.attribute(node),
             _ => node.text().to_string(),

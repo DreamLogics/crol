@@ -264,6 +264,8 @@ pub(crate) struct Entry {
     pub(crate) op: Option<SetOp>,
     /// `^target: expr`: a set that never merges (`SPEC.md` 5.2).
     pub(crate) replace: bool,
+    /// `-?target`: a remove that is no error where the target is not set.
+    pub(crate) if_set: bool,
     pub(crate) key: Key,
     /// `a?.b`: the path goes through the key whatever it holds.
     pub(crate) key_optional: bool,
@@ -288,6 +290,8 @@ pub(crate) struct RootOp {
     pub(crate) op: Option<SetOp>,
     /// `^target: expr`: a set that never merges (`SPEC.md` 5.2).
     pub(crate) replace: bool,
+    /// `-?target`: a remove that is no error where the target is not set.
+    pub(crate) if_set: bool,
     /// `a?.b`: the path goes through the key whatever it holds.
     pub(crate) key_optional: bool,
     pub(crate) path: Vec<Selector>,

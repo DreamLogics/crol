@@ -127,7 +127,12 @@ module.exports = grammar({
       field('value', $._expression),
     ),
     bind: $ => seq(field('name', $.identifier), '='),
-    remove_entry: $ => seq('-', field('target', $.target)),
+    // `-?target` removes the target if it is set.
+    remove_entry: $ => seq(
+      '-',
+      optional(field('if_set', alias(token.immediate('?'), '?'))),
+      field('target', $.target),
+    ),
     value_bind: $ => seq(
       optional(field('attr', $.entry_attr)),
       field('name', $.identifier),

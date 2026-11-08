@@ -27,6 +27,15 @@ The fourth removes a key, and is an error if the key is not set:
 -replicas
 ```
 
+To remove a key only if it is set, write `-?`. It does nothing when the key, or a
+step of its path, is not set, so it keeps working when a file below stops setting
+the key:
+
+```crol
+-?replicas
+-?web.limits.cpu // no error without `web.limits`
+```
+
 A key is _set_ when the data holds a value for it. That goes for the keys of a
 map and the fields of a struct alike: a struct's type always has its fields, but
 each one is unset until an entry sets it, and `-` unsets it again.

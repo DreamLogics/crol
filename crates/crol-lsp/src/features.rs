@@ -75,8 +75,9 @@ fn entry_symbol(
         }
         ast::AnyEntry::Remove(e) => {
             let target = e.target()?;
+            let op = if e.if_set() { "-?" } else { "-" };
             (
-                format!("{prefix}-{}", target_text(&target)),
+                format!("{prefix}{op}{}", target_text(&target)),
                 None,
                 SymbolKind::FIELD,
                 target.syntax().text_range(),

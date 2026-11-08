@@ -457,6 +457,7 @@ impl Lowerer {
     ) {
         let conditional = conditions.iter().any(Option::is_some);
         let mut replace = false;
+        let mut if_set = false;
         let (target, op, value) = match entry {
             ast::AnyEntry::Entry(entry) => {
                 if let Some(bind) = entry.bind() {
@@ -470,7 +471,10 @@ impl Lowerer {
                 replace = entry.op() == ast::EntryOp::Replace;
                 (entry.target(), Some(op), entry.value())
             }
-            ast::AnyEntry::Remove(entry) => (entry.target(), None, None),
+            ast::AnyEntry::Remove(entry) => {
+                if_set = entry.if_set();
+                (entry.target(), None, None)
+            }
             ast::AnyEntry::ValueBind(bind) => {
                 if conditional {
                     let span = self.span(bind.syntax());
@@ -598,6 +602,7 @@ impl Lowerer {
                 key: key.clone(),
                 op,
                 replace,
+                if_set,
                 key_optional: target_optional,
                 path: path.clone(),
                 value,
@@ -617,6 +622,7 @@ impl Lowerer {
     /// e` in the block at `web` is `web<c>.field: e` (`SPEC.md` 8.2).
     fn lift(&mut self, entry: &ast::AnyEntry, fixed: &FixedBlock, conditions: &[Option<Cond>]) {
         let mut replace = false;
+        let mut if_set = false;
         let (target, op, value) = match entry {
             ast::AnyEntry::Entry(e) => {
                 if let Some(bind) = e.bind() {
@@ -627,7 +633,10 @@ impl Lowerer {
                 replace = e.op() == ast::EntryOp::Replace;
                 (e.target(), Some(op), e.value())
             }
-            ast::AnyEntry::Remove(e) => (e.target(), None, None),
+            ast::AnyEntry::Remove(e) => {
+                if_set = e.if_set();
+                (e.target(), None, None)
+            }
             ast::AnyEntry::VariantBlock(block) => {
                 let Some(variant) = block.variant() else {
                     return;
@@ -704,6 +713,7 @@ impl Lowerer {
                 key: fixed.key.clone(),
                 op,
                 replace,
+                if_set,
                 key_optional: false,
                 path: full_path.clone(),
                 value,
@@ -1049,6 +1059,7 @@ impl Lowerer {
                     lowered.push(Entry {
                         op: Some(set_op(op)),
                         replace: op == ast::EntryOp::Replace,
+                        if_set: false,
                         key,
                         key_optional: key_is_optional(&target),
                         path,
@@ -1064,6 +1075,7 @@ impl Lowerer {
                         lowered.push(Entry {
                             op: None,
                             replace: false,
+                            if_set: entry.if_set(),
                             key,
                             key_optional: key_is_optional(&target),
                             path,

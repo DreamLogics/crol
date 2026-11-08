@@ -392,7 +392,10 @@ impl Parser<'_> {
         match self.current() {
             EOF | PLUS | QUESTION | CARET | DOT2 | L_ANGLE | POUND => true,
             IDENT if matches!(self.nth(1), EQ | COLON_EQ) => true,
-            MINUS => matches!(self.nth(1), IDENT | STRING | RAW_STRING | L_BRACK),
+            MINUS => matches!(
+                self.nth(1),
+                IDENT | STRING | RAW_STRING | L_BRACK | QUESTION
+            ),
             _ => self.at_target_then_colon(),
         }
     }
@@ -793,6 +796,10 @@ impl Parser<'_> {
             PLUS => same_line(n + 1) && self.has_target_and_colon(n + 1),
             // Not `-12` or `-[key]`: those read as subtracting an integer or
             // a list too, while subtracting a name or a string is an error.
+            // `-?` is never an expression, so any key may follow it.
+            MINUS if self.nth(n + 1) == QUESTION => {
+                same_line(n + 1) && same_line(n + 2) && starts_key(self.nth(n + 2))
+            }
             MINUS => same_line(n + 1) && matches!(self.nth(n + 1), IDENT | STRING | RAW_STRING),
             L_ANGLE => self
                 .after_variant(n)
@@ -906,6 +913,12 @@ impl Parser<'_> {
             MINUS => {
                 self.start_at(checkpoint, REMOVE_ENTRY);
                 self.bump();
+                if self.at(QUESTION) {
+                    if !self.current_is_adjacent() {
+                        self.error("a remove that may find nothing is written `-?`, with no space");
+                    }
+                    self.bump();
+                }
                 self.start(TARGET);
                 self.key();
                 self.optional_step(false);
@@ -974,8 +987,8 @@ impl Parser<'_> {
         if !self.nth_starts_line(0) {
             self.expr();
         } else if colon {
-            // `-x` here negates, as it always did.
-            if self.at_next_entry() && !self.at(MINUS) {
+            // `-x` here negates, as it always did; `-?x` is an entry.
+            if self.at_next_entry() && !(self.at(MINUS) && self.nth(1) != QUESTION) {
                 self.error_missing("expected a value after `:`");
             } else {
                 self.expr();

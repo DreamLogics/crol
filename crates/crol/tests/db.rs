@@ -704,6 +704,7 @@ fn the_active_layer_holds_only_what_a_database_writes() {
         "<prod> {\n    <cache> {\n        retries: 1\n    }\n}\n",
         "retries<prod>: 1\n",
         "name = retries: 1\n",
+        "-?retries\n",
     ] {
         std::fs::write(&file, text).unwrap();
         let error = composer().load_active(&file).err();

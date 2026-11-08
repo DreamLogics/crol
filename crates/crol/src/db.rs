@@ -123,7 +123,8 @@ impl Log {
                     _ => None,
                 }
             }
-            ast::AnyEntry::Remove(remove) if remove.bind().is_none() => {
+            // A transaction writes only `-target`.
+            ast::AnyEntry::Remove(remove) if remove.bind().is_none() && !remove.if_set() => {
                 plain(remove.target()).map(|target| Operation {
                     target,
                     kind: OperationKind::Remove { settle: None },

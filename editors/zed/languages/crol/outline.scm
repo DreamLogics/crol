@@ -4,7 +4,7 @@
   target: (target) @name
   value: (block type: (identifier) @context)?) @item
 
-(remove_entry "-" @context target: (target) @name) @item
+(remove_entry "-" @context "?"? @context target: (target) @name) @item
 
 (value_bind name: (identifier) @name ":=" @context) @item
 

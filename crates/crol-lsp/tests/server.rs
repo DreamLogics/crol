@@ -3788,6 +3788,7 @@ fn completion_at_a_struct_root_offers_its_fields() {
         ),
         ("name: \"x\"\n|", &["items", "options"], &["name"]),
         ("-name\n|", &["items"], &["name"]),
+        ("-?name\n|", &["items"], &["name"]),
         // A template is no field, and does not count as written.
         ("t := { a: 1 }\n|", root, &["t"]),
         // At depth.

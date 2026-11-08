@@ -1,0 +1,10 @@
+// `-?` removes what is set, and does nothing where it is not: a key, a key in
+// a block, a key below a step that is not set, and a list element.
+-?gone,
+-?never,
+-?never.x,
+web: & ~ { -?proxy, -?tls.cert, -?port },
+-?web.cache.ttl,
+-?web.limits.cpu,
+-?web.hosts[5],
+-?web.hosts[0],

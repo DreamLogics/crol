@@ -293,6 +293,8 @@ static bool at_entry_shape(TSLexer *lexer) {
       return skip_inline_trivia(lexer) && at_target_and_colon(lexer);
     case '-':
       advance(lexer);
+      // `-?` is never an expression.
+      if (lexer->lookahead == '?') return true;
       if (!skip_inline_trivia(lexer)) return false;
       // Not `-12` or `-[key]`.
       return lexer->lookahead == '"' || (is_identifier_char(lexer->lookahead) && !is_digit(lexer->lookahead));

@@ -197,3 +197,31 @@ web: {
                   (integer))))))
         (identifier)
         (block)))))
+
+==================
+Removes of what may not be set
+==================
+
+a: 1
+-?12
+-?b.c
+
+---
+
+(document
+  (entry
+    (target
+      (key
+        (identifier)))
+    (literal
+      (integer)))
+  (remove_entry
+    (target
+      (key
+        (integer))))
+  (remove_entry
+    (target
+      (key
+        (identifier))
+      (field_selector
+        (identifier)))))

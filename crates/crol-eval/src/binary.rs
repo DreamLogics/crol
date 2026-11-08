@@ -299,6 +299,7 @@ impl Writer<'_> {
     fn entry(&mut self, entry: &Entry) {
         self.set_op(entry.op);
         self.flag(entry.replace);
+        self.flag(entry.if_set);
         self.key(&entry.key);
         self.flag(entry.key_optional);
         self.selectors(&entry.path);
@@ -341,6 +342,7 @@ impl Writer<'_> {
         self.string(&op.key);
         self.set_op(op.op);
         self.flag(op.replace);
+        self.flag(op.if_set);
         self.flag(op.key_optional);
         self.selectors(&op.path);
         self.option(op.value.as_ref(), |w, id| w.id(*id));
@@ -766,16 +768,18 @@ impl Reader<'_> {
     fn entry(&mut self) -> Read<Entry> {
         let op = self.set_op()?;
         let replace = self.flag()?;
+        let if_set = self.flag()?;
         let key = self.key()?;
         let key_optional = self.flag()?;
         let path = self.selectors()?;
         let value = self.option(Self::expr_id)?;
-        if op.is_some() != value.is_some() {
+        if op.is_some() != value.is_some() || op.is_some() && if_set {
             return Err(Corrupt);
         }
         Ok(Entry {
             op,
             replace,
+            if_set,
             key,
             key_optional,
             path,
@@ -817,16 +821,18 @@ impl Reader<'_> {
         let key = self.string()?;
         let op = self.set_op()?;
         let replace = self.flag()?;
+        let if_set = self.flag()?;
         let key_optional = self.flag()?;
         let path = self.selectors()?;
         let value = self.option(Self::expr_id)?;
-        if op.is_some() != value.is_some() {
+        if op.is_some() != value.is_some() || op.is_some() && if_set {
             return Err(Corrupt);
         }
         Ok(RootOp {
             key,
             op,
             replace,
+            if_set,
             key_optional,
             path,
             value,
