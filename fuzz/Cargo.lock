@@ -74,12 +74,13 @@ dependencies = [
 
 [[package]]
 name = "crol-eval"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "blake3",
  "crol-syntax",
  "indexmap",
  "lz4_flex",
+ "rustc-hash",
 ]
 
 [[package]]
@@ -93,7 +94,7 @@ dependencies = [
 
 [[package]]
 name = "crol-syntax"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "rowan",
 ]
