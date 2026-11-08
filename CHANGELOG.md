@@ -9,6 +9,12 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ## [Unreleased]
 
+### Fixed
+
+- Hover on an id shows the doc comment of the key it names in a value document,
+  which has no layers, and for a key written as a string with a space in it
+  (`@"odd id"`).
+
 ## [0.3.0] - 2026-11-08
 
 This release changes the format in ways that break documents and programs written for

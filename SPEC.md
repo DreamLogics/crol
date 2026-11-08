@@ -3448,7 +3448,9 @@ Evaluated values are for inlay hints, `crol eval` and `crol explain`.
 On a key, a value, a reference or an id, the doc comments written in data (section
 2.2) come before the field's: those of every operation on that path in the
 chain of the context in use, lowest layer first. A patch's note adds to the
-definition's, and a reference shows the docs of what it names.
+definition's, and a reference or an id shows the docs of what it names. A value
+document has no layers: there they are those of the entry at that path in its
+root.
 
 - On a target or key, for the segment under the cursor (`limits` in
   `web.limits.cpu: 2` is `web.limits`): the field's doc comment and type.
