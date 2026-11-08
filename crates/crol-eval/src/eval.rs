@@ -77,7 +77,7 @@ struct Poisoned;
 
 /// Why evaluating an expression failed.
 enum Fail {
-    /// A value is missing (`SPEC.md` 6.5); `|` catches this.
+    /// A value is missing (`SPEC.md` 6.5); `??` catches this.
     Missing(Span, String),
     /// An error, already reported, or a dependency on one.
     Poison,
@@ -4587,6 +4587,21 @@ impl Evaluator<'_> {
                 let right = self.eval(rhs, env)?;
                 self.merge(&left, &right, deep, env, span)
             }
+            BinOp::Union => {
+                let detached = Self::detached(env);
+                // `|` used to be the fallback: where its left side is
+                // missing, say what is written now. It stays missing, so
+                // that a `??` around it still catches it.
+                let left = self.eval(lhs, &detached).map_err(|fail| match fail {
+                    Fail::Missing(at, message) => Fail::Missing(
+                        at,
+                        format!("{message}; for a fallback where a value is missing, write `??`"),
+                    ),
+                    fail => fail,
+                })?;
+                let right = self.eval(rhs, &detached)?;
+                self.arithmetic(op, &left, &right, span)
+            }
             _ => {
                 let detached = Self::detached(env);
                 let left = self.eval(lhs, &detached)?;
@@ -4782,7 +4797,7 @@ impl Evaluator<'_> {
         use Shape::*;
         let symbol = op.symbol();
         let result = match (&left.shape, &right.shape) {
-            (Int(a), Int(b)) => {
+            (Int(a), Int(b)) if op != BinOp::Union => {
                 let result = match op {
                     BinOp::Add => a.checked_add(*b),
                     BinOp::Sub => a.checked_sub(*b),
@@ -4799,7 +4814,7 @@ impl Evaluator<'_> {
                     None => return Err(self.fail(span, format!("{symbol}: integer overflow"))),
                 }
             }
-            (Int(_) | Float(_), Int(_) | Float(_)) => {
+            (Int(_) | Float(_), Int(_) | Float(_)) if op != BinOp::Union => {
                 let as_float = |s: &Shape| match s {
                     Int(i) => *i as f64,
                     Float(f) => *f,
@@ -4843,6 +4858,21 @@ impl Evaluator<'_> {
                 }
                 List(kept)
             }
+            (List(a), List(b)) if op == BinOp::Union => {
+                let mut held: Vec<Value> = a
+                    .iter()
+                    .map(|cell| self.full_value(cell, span, &mut Vec::new()))
+                    .collect::<Result<_, _>>()?;
+                let mut list = a.clone();
+                for cell in b {
+                    let value = self.full_value(cell, span, &mut Vec::new())?;
+                    if !held.iter().any(|h| h.equals(&value)) {
+                        held.push(value);
+                        list.push(cell.clone());
+                    }
+                }
+                List(list)
+            }
             (a, b) => {
                 let (a, b) = (a.kind_name(), b.kind_name());
                 let message = match op {
@@ -4850,6 +4880,13 @@ impl Evaluator<'_> {
                     BinOp::Sub => format!("-: cannot subtract {b} from {a}"),
                     BinOp::Mul => format!("*: cannot multiply {a} by {b}"),
                     BinOp::Div => format!("/: cannot divide {a} by {b}"),
+                    BinOp::Union if a == "a list" => {
+                        format!("|: cannot add {b} to a list; put it in one: `| [x]`")
+                    }
+                    BinOp::Union => format!(
+                        "|: cannot add {b} to {a}; `|` adds to a list, and a fallback where \
+                         a value is missing is written `??`"
+                    ),
                     _ => format!("%: cannot take the remainder of {a} by {b}"),
                 };
                 return Err(self.fail(span, message));

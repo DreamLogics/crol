@@ -225,3 +225,47 @@ a: 1
         (identifier))
       (field_selector
         (identifier)))))
+
+==================
+Fallbacks and list unions
+==================
+
+a: & | ["x"] ?? ["x"]
+b: &root.c
+  ?? 1
+?c: 2
+
+---
+
+(document
+  (entry
+    (target
+      (key
+        (identifier)))
+    (binary_expr
+      (binary_expr
+        (reference)
+        (list_expr
+          (literal
+            (string))))
+      (list_expr
+        (literal
+          (string)))))
+  (entry
+    (target
+      (key
+        (identifier)))
+    (binary_expr
+      (path_expr
+        (reference
+          (root))
+        (field_selector
+          (identifier)))
+      (literal
+        (integer))))
+  (entry
+    (target
+      (key
+        (identifier)))
+    (literal
+      (integer))))

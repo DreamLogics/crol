@@ -569,10 +569,10 @@ fn a_block_that_broke_does_not_change_the_layout_around_it() {
     // Once broken, the block has a line break after its `{`, and no flat form.
     check_with(
         &FormatConfig::default().with_max_width(8),
-        "n := 2 * 2 | 5 ~ { o: 1 }\nm: aaaaaaa + b * { c: 1 }",
+        "n := 2 * 2 ?? 5 ~ { o: 1 }\nm: aaaaaaa + b * { c: 1 }",
         expect![[r#"
             n := 2 *
-                2 | 5 ~ {
+                2 ?? 5 ~ {
                 o: 1,
             }
             m: aaaaaaa + b * {

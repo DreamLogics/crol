@@ -89,7 +89,7 @@ sum: 3
 ```
 
 Most lines are not in doubt: `?`, `^`, `..`, a key or a bind can only start an
-entry, and `.`, `*`, `/`, `%`, `~`, `~^` and `|` can only continue a value. Four tokens can do
+entry, and `.`, `*`, `/`, `%`, `~`, `~^`, `|` and `??` can only continue a value. Four tokens can do
 both, and what follows them on the same line decides:
 
 | Line starts with | Begins an entry when...                            | Otherwise it continues the value |
@@ -532,7 +532,7 @@ the current limits.
 | integer, float            | `+`, `-`, `*`, `/`, `%`, and `-x`                 |
 | string, string            | `+` concatenates                                  |
 | string, number/char/bool  | `+` formats the value into the string             |
-| list, list                | `+` concatenates, `-` removes the elements on the right |
+| list, list                | `+` concatenates, `-` removes the elements on the right, `\|` adds those it does not hold yet |
 | boolean                   | `!x` inverts it                                   |
 
 An integer and a float together count as floats. Integer division truncates.
@@ -557,7 +557,20 @@ tags: ["a", "c", "d"]
 ```
 
 Lists only combine with lists, so to append one element, write
-`tags: & + ["x"]`.
+`tags: & + ["x"]`. To add it only if the list does not hold it yet, write
+`tags: & | ["x"]`: each element on the right that is not equal to one in the
+list is added at the end, once.
+
+```crol
+// example.crod
++tags: ["web", "public"]
+tags: & | ["public", "tls", "tls"]
+```
+
+```console
+$ crol eval example.crod
+tags: ["web", "public", "tls"]
+```
 
 Multiplying an integer by a float gives a float, which an integer field does not
 accept. Four built-in macros bring a number back, or keep it in range:
@@ -584,19 +597,19 @@ armour: 0
 speed: 1.5
 ```
 
-The operators bind in the usual order: selectors, unary `-` and `!`, `* / %`, `+ -`,
-then `~` and `~^`, then `|`. Parentheses group.
+The operators bind in the usual order: selectors, unary `-` and `!`, `* / %`, `+ - |`,
+then `~` and `~^`, then `??`. Parentheses group.
 
 ## Fallback
 
-`a | b` is `a`, unless a value in `a` is missing, in which case it is `b`:
+`a ?? b` is `a`, unless a value in `a` is missing, in which case it is `b`:
 
 ```crol
 // example.crod
 +settings: { timeout: 30 }
-+timeout: &root.settings.timeout | 60
-+retries: &root.settings.retries | 3
-counter: & + 1 | 1
++timeout: &root.settings.timeout ?? 60
++retries: &root.settings.retries ?? 3
+counter: & + 1 ?? 1
 ```
 
 ```console
@@ -610,7 +623,7 @@ counter: 1
 The last line counts: it adds one if a lower layer wrote `counter`, and starts
 at 1 if not.
 
-`|` catches only missing values. Other errors, such as adding a string to a
+`??` catches only missing values. Other errors, such as adding a string to a
 list, are still reported.
 
 ## Ids

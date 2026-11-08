@@ -335,7 +335,7 @@ fn default_references() {
     let source = r#"
         +web: Service {
             // `Service` has no struct-level default, so this is missing.
-            ..(&default | {}),
+            ..(&default ?? {}),
             replicas: 2,
             depends_on: [],
             url: None,
@@ -356,7 +356,7 @@ fn default_references() {
             limits: { cpu: &default * 2, memory_mb: &default },
             ..
         },
-        +fallback: Service { replicas: &default | 3, depends_on: [], url: None, .. },
+        +fallback: Service { replicas: &default ?? 3, depends_on: [], url: None, .. },
     "#;
     let data = crol::CrolComposer::new()
         .schema(schema::build::<Definition>())

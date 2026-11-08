@@ -2,7 +2,7 @@
 ; match a node, the last one counts, so the general ones come first.
 
 ; Operators and punctuation.
-["+" "-" "*" "/" "%" "~" "~^" "|" "^" "&" "!" "?" ":=" "=" ".."] @operator
+["+" "-" "*" "/" "%" "~" "~^" "|" "??" "^" "&" "!" "?" ":=" "=" ".."] @operator
 [":" ";" "," "." "::"] @punctuation.delimiter
 ["{" "}" "[" "]" "(" ")"] @punctuation.bracket
 ["use" "schema" "type" "extends" "variant" "as" "super"] @keyword

@@ -59,6 +59,13 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Changed
 
+- The fallback is written `??`: `port: &root.settings.port ?? 80`,
+  `counter: & + 1 ?? 1`. It means what `|` meant, and binds as loosely.
+- `|` adds to a list what it does not hold yet: `tags: & | ["tls"]` adds `"tls"`
+  unless the list holds it, and `["a"] | ["b", "b"]` is `["a", "b"]`. It takes two
+  lists and binds as `+` and `-` do. A document that used `|` as a fallback is now
+  an error, which says to write `??`. Conditions keep `|` for "or": `<a | b>`.
+  Compiled layers have format 5, and are compiled again.
 - Hover on a field, value or type name whose type is a struct shows the struct with
   its fields, as Rust writes it, rather than only its name:
   `struct Limits { cpu: f64, memory_mb: u32 }`, one field per line.

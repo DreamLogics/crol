@@ -666,7 +666,17 @@ impl Formatter {
     fn binary_op(&self, node: &SyntaxNode) -> String {
         child_token(
             node,
-            &[PLUS, MINUS, STAR, SLASH, PERCENT, TILDE, TILDE_CARET, PIPE],
+            &[
+                PLUS,
+                MINUS,
+                STAR,
+                SLASH,
+                PERCENT,
+                TILDE,
+                TILDE_CARET,
+                PIPE,
+                QUESTION2,
+            ],
         )
         .map_or_else(String::new, |t| t.to_string())
     }

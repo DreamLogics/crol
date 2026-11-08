@@ -1,0 +1,4 @@
++int: 1 | 2
++single: [1] | 2
++text: "a" | ["b"]
++missing: &root.nope | [1]

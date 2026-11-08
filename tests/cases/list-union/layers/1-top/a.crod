@@ -1,0 +1,10 @@
+// Only what the list does not hold yet is added, once.
+tags: & | ["b", "c", "c"]
+// What the list held already stays, twice or not.
+dupes: & | ["a", "b"]
+nested: & | [[1], [2], { x: 1 }, { x: 2 }]
+// An integer and a float are never equal.
+numbers: & | [1, 1.0, 1]
+// `|` binds as `+` does, and `??` more loosely.
++chained: ["a"] + ["a"] | ["a", "b"]
++created: & | ["x"] ?? ["x"]

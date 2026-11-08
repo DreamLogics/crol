@@ -25,7 +25,7 @@ use crate::value::Key;
 const MAGIC: &[u8; 4] = b"CROB";
 
 /// The version of the format: files of another are refused, and made again.
-pub const FORMAT: u32 = 4;
+pub const FORMAT: u32 = 5;
 
 /// The magic, the format, the hash of the rest of the file, the hash of the
 /// documents and the size of what is compressed.
@@ -277,6 +277,7 @@ impl Writer<'_> {
                     BinOp::Merge => 5,
                     BinOp::MergeShallow => 6,
                     BinOp::Fallback => 7,
+                    BinOp::Union => 8,
                 });
                 self.id(*lhs);
                 self.id(*rhs);
@@ -737,6 +738,7 @@ impl Reader<'_> {
                     5 => BinOp::Merge,
                     6 => BinOp::MergeShallow,
                     7 => BinOp::Fallback,
+                    8 => BinOp::Union,
                     _ => return Err(Corrupt),
                 };
                 ExprKind::Binary(op, self.expr_id()?, self.expr_id()?)

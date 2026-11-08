@@ -214,9 +214,9 @@ module.exports = grammar({
     _expression: $ => choice($.binary_expr, $.prefix_expr, $._postfix),
 
     binary_expr: $ => choice(
-      prec.left(PREC.fallback, seq(field('lhs', $._expression), field('op', '|'), field('rhs', $._expression))),
+      prec.left(PREC.fallback, seq(field('lhs', $._expression), field('op', '??'), field('rhs', $._expression))),
       prec.left(PREC.merge, seq(field('lhs', $._expression), field('op', choice('~', '~^')), field('rhs', $._expression))),
-      prec.left(PREC.sum, seq(field('lhs', $._expression), field('op', choice('+', '-')), field('rhs', $._expression))),
+      prec.left(PREC.sum, seq(field('lhs', $._expression), field('op', choice('+', '-', '|')), field('rhs', $._expression))),
       prec.left(PREC.product, seq(field('lhs', $._expression), field('op', choice('*', '/', '%')), field('rhs', $._expression))),
     ),
     prefix_expr: $ => prec(PREC.prefix, seq(choice('-', '!'), field('operand', $._expression))),

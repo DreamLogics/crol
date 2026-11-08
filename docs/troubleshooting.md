@@ -99,7 +99,7 @@ field of this block, `&root.web.port` for one elsewhere, or
 **`&: there is no value below here`**
 
 `&` means the value before this entry, and there is none. If a value below is
-optional, add a fallback: `counter: & + 1 | 1`. In a template, `&` reads the value
+optional, add a fallback: `counter: & + 1 ?? 1`. In a template, `&` reads the value
 below where the template lands, so this means nothing was below there either.
 
 **`cycle: this value depends on itself`**

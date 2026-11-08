@@ -48,6 +48,7 @@ fn a_line_break_begins_each_kind_of_entry() {
     same("a: 1\nb: 2", "a: 1, b: 2");
     same("a: 1\n+b: 2", "a: 1, +b: 2");
     same("a: 1\n?b: 2", "a: 1, ?b: 2");
+    same("a: &\n? b: 2", "a: &, ?b: 2");
     same("a: 1\n-b", "a: 1, -b");
     same("a: 1\n-\"b c\"", "a: 1, -\"b c\"");
     same("a: 1\n-r\"b c\"", "a: 1, -r\"b c\"");
@@ -122,7 +123,8 @@ fn values_continue_over_lines() {
     same("a: 1\n/ 2", "a: 1 / 2");
     same("a: 1\n% 2", "a: 1 % 2");
     same("a: &\n~ { b: 1 }", "a: & ~ { b: 1 }");
-    same("a: &\n| 1", "a: & | 1");
+    same("a: &\n?? 1", "a: & ?? 1");
+    same("a: &\n| [1]", "a: & | [1]");
     same("a: b\n.c", "a: b.c");
     same("a: b\n[0]", "a: b[0]");
     same("a: b\n[\"c\"].d", "a: b[\"c\"].d");
@@ -205,7 +207,7 @@ fn a_line_with_no_entry_shape_fails_loudly() {
     // `-b` is a whole entry, so what follows it cannot be.
     fails("a: 5\n-b * 2");
     fails("a: 5\n-Foo(1)");
-    fails("a: &x\n-b | 5");
+    fails("a: &x\n-b ?? 5");
 }
 
 #[test]

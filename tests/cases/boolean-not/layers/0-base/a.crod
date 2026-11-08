@@ -4,8 +4,8 @@
     on: false,
     off: !&self.on,
     double: !!&self.on,
-    grouped: !(&self.on | true),
-    fallback: !&self.missing | false,
+    grouped: !(&self.on ?? true),
+    fallback: !&self.missing ?? false,
     path: !&root.opts.a,
 }
 +opts: { a: true }

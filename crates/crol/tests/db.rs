@@ -365,7 +365,7 @@ fn a_write_that_does_not_take_effect_is_an_error() {
     let error = db
         .transaction()
         .at(x())
-        .set_expr(croxp! { &root.y | 3 })
+        .set_expr(croxp! { &root.y ?? 3 })
         .unwrap()
         .commit()
         .unwrap_err();

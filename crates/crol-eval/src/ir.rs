@@ -114,6 +114,7 @@ pub(crate) enum BinOp {
     Rem,
     Merge,
     MergeShallow,
+    Union,
     Fallback,
 }
 
@@ -127,7 +128,8 @@ impl BinOp {
             BinOp::Rem => "%",
             BinOp::Merge => "~",
             BinOp::MergeShallow => "~^",
-            BinOp::Fallback => "|",
+            BinOp::Union => "|",
+            BinOp::Fallback => "??",
         }
     }
 }

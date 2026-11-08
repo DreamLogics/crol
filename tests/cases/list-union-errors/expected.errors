@@ -1,0 +1,4 @@
+0-base/a.crod:1:7: |: cannot add an integer to an integer; `|` adds to a list, and a fallback where a value is missing is written `??`
+0-base/a.crod:2:10: |: cannot add an integer to a list; put it in one: `| [x]`
+0-base/a.crod:3:8: |: cannot add a list to a string; `|` adds to a list, and a fallback where a value is missing is written `??`
+0-base/a.crod:4:16: .nope: there is no such value; for a fallback where a value is missing, write `??`

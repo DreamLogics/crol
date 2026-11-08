@@ -480,7 +480,7 @@ the whole default value, so `..&default` writes every default into the block.
 The difference with `..` is when the defaults are filled in: `..` leaves fields
 out for serde, and `..&default` copies them into the data.
 
-Where no default is recorded, `&default` counts as missing, so `&default | 1`
+Where no default is recorded, `&default` counts as missing, so `&default ?? 1`
 falls back.
 
 `crol check`, `crol eval`, `crol explain`, `crol fingerprint` and the language

@@ -1,0 +1,6 @@
+tags: ["a", "b", "c"]
+dupes: ["a", "a", "b"]
+nested: [[1], { x: 1 }, [2], { x: 2 }]
+numbers: [1, 1.0]
+chained: ["a", "a", "b"]
+created: ["x"]
