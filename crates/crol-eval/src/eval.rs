@@ -384,6 +384,20 @@ fn some_payload(value: &Shaped) -> Option<&Lazy> {
     }
 }
 
+/// What a named tuple of one element holds, where `selector` is a key: a
+/// field or an accessor goes into the payload (`SPEC.md` 5.1), so that
+/// `Some({ x: 1 }).x` is `1`.
+fn single_payload<'a>(value: &'a Shaped, selector: &Selector) -> Option<&'a Lazy> {
+    match (&value.shape, &selector.kind) {
+        (Shape::Named(_, items), SelectorKind::Field(_) | SelectorKind::Accessor(_))
+            if items.len() == 1 =>
+        {
+            Some(&items[0])
+        }
+        _ => None,
+    }
+}
+
 /// The step a selector takes; `None` for a context selector.
 fn selector_step(selector: &Selector) -> Option<Step> {
     match &selector.kind {
@@ -3890,6 +3904,11 @@ impl Evaluator<'_> {
     /// missing; selectors that do not apply to the value are errors.
     fn select(&mut self, value: &Shaped, selector: &Selector) -> Eval<Lazy> {
         let span = selector.span;
+        if let Some(payload) = single_payload(value, selector) {
+            let payload = payload.clone();
+            let inner = self.force(&payload, span)?;
+            return self.select(&inner, selector);
+        }
         let found = match (&value.shape, &selector.kind) {
             (Shape::Keyed(keyed), SelectorKind::Field(name)) => {
                 keyed.slots.get(&KeyRef::Str(name)).map(|s| s.value.clone())
@@ -4293,6 +4312,19 @@ impl Evaluator<'_> {
         context: usize,
     ) -> Eval<Rc<Shaped>> {
         let (selector, rest) = path.split_first().expect("a path entry has a path");
+        // A key goes into a named tuple of one element, and the result stays
+        // in it, as through a `?` step.
+        if let Some(payload) = single_payload(value, selector) {
+            let payload = payload.clone();
+            let inner = self.force(&payload, selector.span)?;
+            let new = self.apply_path(&inner, at, path, recipe, chain, here, context)?;
+            let element = Selector {
+                kind: SelectorKind::Element(0),
+                span: selector.span,
+                optional: false,
+            };
+            return Ok(self.with_child(value, &element, Cell::done(new)));
+        }
         let step = match (&value.shape, &selector.kind) {
             (Shape::Keyed(_), SelectorKind::Field(name)) => Step::Key(Key::Str(name.clone())),
             (Shape::Keyed(_), SelectorKind::Accessor(i)) => Step::Key(Key::Int(*i)),

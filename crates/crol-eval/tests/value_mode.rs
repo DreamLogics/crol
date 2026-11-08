@@ -300,3 +300,46 @@ fn use_aliases() {
         "#]],
     );
 }
+
+#[test]
+fn keys_go_into_a_named_tuple_of_one_element() {
+    check(
+        r#"w: Some({ damage: 5, tags: ["a", "b"] }),
+t: Trooper({ weapon: Some({ damage: 3 }) }),
+a: &root.w.damage,
+b: &root.t.weapon.damage,
+c: &root.w.tags[1],
+d: &root.w["damage"],
+e: &root.w.range ?? 10,
+f: &root.w.0.damage,
+g: { u: Trooper({ weapon: { damage: 1 } }), u.weapon.damage: & + 1, u.weapon.range: 4 },
+h: { s: Some({ x: 1 }), -s.x },
+i: { s: { x: 1 }, -s.x },"#,
+        expect![[r#"
+            w: Some({ damage: 5, tags: ["a", "b"] })
+            t: Trooper({ weapon: Some({ damage: 3 }) })
+            a: 5
+            b: 3
+            c: "b"
+            d: 5
+            e: 10
+            f: 5
+            g: { u: Trooper({ weapon: { damage: 2, range: 4 } }) }
+            h: { s: Some({ x: (), -x }) }
+            i: { s: { x: (), -x } }
+        "#]],
+    );
+}
+
+#[test]
+fn keys_do_not_go_into_other_named_tuples() {
+    check(
+        r#"c: Rgb(1, 2, 3), a: &root.c.r, n: None, b: &root.n.x, i: Some(5), d: &root.i.x, e: { c: Rgb(1, 2, 3), c.r: 4 },"#,
+        expect![[r#"
+            1:28: .r: cannot select in a named tuple (while evaluating a)
+            1:51: .x: cannot select in a unit name (while evaluating b)
+            1:77: .x: cannot select in an integer (while evaluating d)
+            1:104: .r: cannot select in a named tuple (while evaluating e.c)
+        "#]],
+    );
+}
