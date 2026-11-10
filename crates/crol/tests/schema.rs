@@ -1011,6 +1011,7 @@ fn schema_files_of_every_shape_pass_their_own_schema() {
         doc: String::new(),
         aliases: Vec::new(),
         explicit_defaults: Some(true),
+        scope: true,
     };
     let types = [
         TypeDef::Struct {
@@ -1021,6 +1022,7 @@ fn schema_files_of_every_shape_pass_their_own_schema() {
             deny_unknown_fields: true,
             default: crol::schema::default_value(&1),
             explicit_defaults: Some(false),
+            scope: true,
         },
         TypeDef::TupleStruct {
             name: "T".to_owned(),
@@ -1124,4 +1126,47 @@ fn schema_files_say_so_themselves() {
     ] {
         assert!(!schema::is_schema_file(text), "{text}");
     }
+}
+
+#[test]
+fn scope_types_are_recorded() {
+    #[allow(dead_code)]
+    #[derive(Deserialize, Schema)]
+    #[crol(scope)]
+    struct Screen {
+        layout: crol::Id,
+    }
+    #[allow(dead_code)]
+    #[derive(Deserialize, Schema)]
+    enum Group {
+        #[crol(scope)]
+        Env {
+            db: u8,
+        },
+        Plain {
+            db: u8,
+        },
+    }
+    #[allow(dead_code)]
+    #[derive(Deserialize, Schema)]
+    struct Root {
+        screen: Screen,
+        group: Group,
+    }
+    let schema = schema::build::<Root>();
+    let scope_of = |path: &str| match schema.get(path) {
+        Some(TypeDef::Struct { scope, .. }) => *scope,
+        other => panic!("{path}: {other:?}"),
+    };
+    assert!(scope_of(&format!("{}::Screen", module_path!())));
+    assert!(!scope_of(&format!("{}::Root", module_path!())));
+    let Some(TypeDef::Enum { variants, .. }) = schema.get(&format!("{}::Group", module_path!()))
+    else {
+        panic!()
+    };
+    assert!(variants["Env"].scope);
+    assert!(!variants["Plain"].scope);
+    // It survives the schema file.
+    let text = schema.to_text().unwrap();
+    assert_eq!(SchemaFile::from_text(&text).unwrap(), schema);
 }

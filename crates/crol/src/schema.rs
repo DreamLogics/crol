@@ -202,6 +202,10 @@ pub enum TypeDef {
         /// only with `..` (`SPEC.md` 10.3). `None`: `require_complete` says.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         explicit_defaults: Option<bool>,
+        /// `#[crol(scope)]`: whether its values are scopes for the ids in
+        /// them (`SPEC.md` 10.9).
+        #[serde(default, skip_serializing_if = "is_false")]
+        scope: bool,
     },
     /// A tuple struct: `struct P(A, B)`.
     TupleStruct {
@@ -351,6 +355,9 @@ pub struct VariantDef {
     /// For a struct variant, `#[crol(explicit_defaults)]`, as on a struct.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub explicit_defaults: Option<bool>,
+    /// For a struct variant, `#[crol(scope)]`, as on a struct.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub scope: bool,
 }
 
 /// What a variant holds.
@@ -1216,6 +1223,7 @@ impl Schema for std::time::Duration {
             deny_unknown_fields: false,
             default: None,
             explicit_defaults: None,
+            scope: false,
         })
     }
 }
@@ -1245,6 +1253,7 @@ pub(crate) fn struct_def(
         deny_unknown_fields: false,
         default,
         explicit_defaults: None,
+        scope: false,
     }
 }
 
@@ -1290,6 +1299,7 @@ pub(crate) fn variant(shape: VariantShape, doc: &str) -> VariantDef {
         doc: doc.to_owned(),
         aliases: Vec::new(),
         explicit_defaults: None,
+        scope: false,
     }
 }
 
@@ -1344,6 +1354,10 @@ fn aliases_field() -> Field {
         "Other names data may write it by: `#[serde(alias = \"...\")]`.",
         recorded_default(&Vec::<String>::new()),
     )
+}
+
+fn scope_doc(doc: &str) -> Field {
+    field(TypeExpr::Bool, doc, recorded_default(&false))
 }
 
 fn explicit_defaults_doc() -> Field {
@@ -1466,6 +1480,7 @@ impl Schema for TypeDef {
                                     ),
                                 ),
                                 ("explicit_defaults", explicit_defaults_doc()),
+                                ("scope", scope_doc("`#[crol(scope)]`: whether its values are scopes for the ids in them (`SPEC.md` 10.9).")),
                             ])),
                             "A struct with named fields.",
                         ),
@@ -1599,6 +1614,10 @@ impl Schema for VariantDef {
                     ("doc", doc_field()),
                     ("aliases", aliases_field()),
                     ("explicit_defaults", explicit_defaults),
+                    (
+                        "scope",
+                        scope_doc("For a struct variant, `#[crol(scope)]`, as on a struct."),
+                    ),
                 ],
                 None,
             )
@@ -1751,6 +1770,7 @@ impl Schema for Constraint {
                 doc: doc.to_owned(),
                 aliases: Vec::new(),
                 explicit_defaults: None,
+                scope: false,
             };
             enum_def(
                 "Constraint",

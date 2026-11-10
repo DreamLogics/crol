@@ -35,7 +35,9 @@ use syn::{
 ///   constraints, and `#[crol(open_constraints(...))]` ones that a
 ///   `schema.crod` may change;
 /// - `#[crol(sealed)]` on a field, or on a type for all of its fields: only
-///   the layer that defines a value can set it.
+///   the layer that defines a value can set it;
+/// - `#[crol(scope)]` on a struct with named fields or a struct variant:
+///   its values are scopes for the ids in them.
 #[proc_macro_derive(Schema, attributes(crol))]
 pub fn derive_schema(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -441,6 +443,8 @@ struct Attrs {
     with: bool,
     defaults: bool,
     explicit_defaults: Option<bool>,
+    /// `#[crol(scope)]`.
+    scope: bool,
     refers: Vec<Path>,
     /// `#[crol(constraint = "...")]`
     constraint: Option<String>,
@@ -555,6 +559,8 @@ impl Attrs {
                     let path = &meta.path;
                     if path.is_ident("defaults") {
                         out.defaults = true;
+                    } else if path.is_ident("scope") {
+                        out.scope = true;
                     } else if path.is_ident("explicit_defaults") {
                         out.explicit_defaults = Some(if meta.input.peek(Token![=]) {
                             meta.value()?.parse::<LitBool>()?.value
@@ -598,7 +604,7 @@ impl Attrs {
                         out.rename = Some(string_value(&meta)?);
                     } else {
                         return Err(meta.error(
-                            "unknown crol attribute; the attributes are `defaults`, `explicit_defaults`, `refers(...)`, `schema = ...`, `rename = \"...\"`, `constraint = \"...\"`, `key_constraint = \"...\"`, `constraints(...)`, `open_constraints(...)`, `sealed`, `leaf`, `path = \"...\"` and `default`",
+                            "unknown crol attribute; the attributes are `defaults`, `explicit_defaults`, `refers(...)`, `schema = ...`, `rename = \"...\"`, `constraint = \"...\"`, `key_constraint = \"...\"`, `constraints(...)`, `open_constraints(...)`, `sealed`, `scope`, `leaf`, `path = \"...\"` and `default`",
                         ));
                     }
                     Ok(())
@@ -739,6 +745,50 @@ fn check_explicit_defaults(input: &DeriveInput, attrs: &Attrs) -> syn::Result<()
     Ok(())
 }
 
+/// `#[crol(scope)]` goes on what data writes as a keyed value with fields
+/// of its own: a struct with named fields or a struct variant (`SPEC.md`
+/// 10.9).
+fn check_scope(input: &DeriveInput, attrs: &Attrs) -> syn::Result<()> {
+    let wrong = |span: Span, message: &str| Err(Error::new(span, message));
+    let no_field_has_it = |fields: &Fields| -> syn::Result<()> {
+        for field in fields {
+            if Attrs::parse(&field.attrs)?.scope {
+                return wrong(
+                    field.span(),
+                    "`scope` goes on a struct or a struct variant, not on a field",
+                );
+            }
+        }
+        Ok(())
+    };
+    match &input.data {
+        Data::Struct(data) => {
+            no_field_has_it(&data.fields)?;
+            if attrs.scope && (attrs.transparent || !matches!(data.fields, Fields::Named(_))) {
+                return wrong(input.span(), "`scope` needs a struct with named fields");
+            }
+        }
+        Data::Enum(data) => {
+            if attrs.scope {
+                return wrong(
+                    input.span(),
+                    "`scope` goes on each struct variant that is a scope, not on the enum",
+                );
+            }
+            for variant in &data.variants {
+                no_field_has_it(&variant.fields)?;
+                if Attrs::parse(&variant.attrs)?.scope
+                    && !matches!(variant.fields, Fields::Named(_))
+                {
+                    return wrong(variant.span(), "`scope` needs a struct variant");
+                }
+            }
+        }
+        Data::Union(_) => {}
+    }
+    Ok(())
+}
+
 /// An `Option<bool>` as an expression.
 fn option_bool(value: Option<bool>) -> TokenStream2 {
     match value {
@@ -756,6 +806,7 @@ fn is_option(ty: &Type) -> bool {
 fn schema(input: &DeriveInput) -> syn::Result<TokenStream2> {
     let attrs = Attrs::parse(&input.attrs)?;
     check_explicit_defaults(input, &attrs)?;
+    check_scope(input, &attrs)?;
     let ident = &input.ident;
     let name = serde_name(&ident.to_string(), &attrs, None, false)?;
     let doc = &attrs.doc;
@@ -843,12 +894,14 @@ fn schema(input: &DeriveInput) -> syn::Result<TokenStream2> {
                         .or(attrs.explicit_defaults)
                         .filter(|_| matches!(variant.fields, Fields::Named(_))),
                 );
+                let variant_scope = variant_attrs.scope;
                 variants.push(quote! {
                     (::std::string::String::from(#variant_name), ::crol::schema::VariantDef {
                         shape: #shape,
                         doc: ::std::string::String::from(#variant_doc),
                         aliases: ::std::vec![#(::std::string::String::from(#aliases)),*],
                         explicit_defaults: #explicit_defaults,
+                        scope: #variant_scope,
                     })
                 });
             }
@@ -1028,6 +1081,7 @@ fn struct_definition(
                 quote!(::std::option::Option::None)
             };
             let explicit_defaults = option_bool(attrs.explicit_defaults);
+            let scope = attrs.scope;
             quote! {
                 ::crol::schema::TypeDef::Struct {
                     name: #name_expr,
@@ -1037,6 +1091,7 @@ fn struct_definition(
                     deny_unknown_fields: #deny,
                     default: #default,
                     explicit_defaults: #explicit_defaults,
+                    scope: #scope,
                 }
             }
         }
@@ -1129,6 +1184,63 @@ mod tests {
     fn rejected(input: syn::DeriveInput, message: &str) {
         let error = schema(&input).unwrap_err().to_string();
         assert!(error.contains(message), "{error}");
+    }
+
+    #[test]
+    fn scope_goes_on_structs_and_struct_variants() {
+        for input in [
+            parse_quote!(
+                #[crol(scope)]
+                struct S {
+                    a: u8,
+                }
+            ),
+            parse_quote!(
+                enum E {
+                    #[crol(scope)]
+                    V {
+                        a: u8,
+                    },
+                    W(u8),
+                }
+            ),
+        ] {
+            schema(&input).unwrap();
+        }
+        rejected(
+            parse_quote!(
+                #[crol(scope)]
+                struct S(u8);
+            ),
+            "`scope` needs a struct with named fields",
+        );
+        rejected(
+            parse_quote!(
+                #[crol(scope)]
+                enum E {
+                    V { a: u8 },
+                }
+            ),
+            "not on the enum",
+        );
+        rejected(
+            parse_quote!(
+                enum E {
+                    #[crol(scope)]
+                    W(u8),
+                }
+            ),
+            "`scope` needs a struct variant",
+        );
+        rejected(
+            parse_quote!(
+                struct S {
+                    #[crol(scope)]
+                    a: u8,
+                }
+            ),
+            "not on a field",
+        );
     }
 
     #[test]

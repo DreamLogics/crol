@@ -392,6 +392,7 @@ impl Schema for ProjectLayers {
                 doc: doc.to_owned(),
                 aliases: Vec::new(),
                 explicit_defaults: None,
+                scope: false,
             };
             TypeDef::Enum {
                 name: "ProjectLayers".to_owned(),
@@ -552,6 +553,7 @@ impl<T: Schema> Schema for Variant<T> {
                 doc: doc.to_owned(),
                 aliases: Vec::new(),
                 explicit_defaults: None,
+                scope: false,
             };
             TypeDef::Enum {
                 name: "Variant".to_owned(),
