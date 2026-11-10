@@ -84,6 +84,20 @@ pub(crate) fn read(path: &Path, args: &InputArgs, reporter: &mut Reporter) -> Op
         Err(message) => return fail(message),
     };
     let root = checked(&mut evaluation, &expected);
+    // Without a schema, ids that name nothing in the document (`SPEC.md`
+    // 10.5); with one, the check reports them.
+    if expected.schema.is_none()
+        && let Some(value) = &evaluation.value
+    {
+        let found = crol::IdResolver::new(value)
+            .ids()
+            .into_iter()
+            .filter_map(|id| {
+                id.problem
+                    .map(|problem| crol_eval::Diagnostic::warning(id.span, problem))
+            });
+        evaluation.diagnostics.extend(found);
+    }
     if let Some(schema) = &expected.schema {
         let root = root.as_deref().unwrap_or(&schema.root);
         let root = crol::typed::TypeRoot::Value(root);

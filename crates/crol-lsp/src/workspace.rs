@@ -436,6 +436,57 @@ impl Snapshot {
         self.root_docs.get_or_init(find)
     }
 
+    /// The evaluated data a file is in: the project's for a file in its
+    /// layers, else the document's own.
+    pub(crate) fn data_of(&self, file: FileId) -> Option<&crol_eval::Value> {
+        if self.in_layers(file) {
+            return self.evaluation.value.as_ref();
+        }
+        let (_, evaluation) = self.documents.iter().find(|(f, _)| *f == file)?;
+        evaluation.value.as_ref()
+    }
+
+    /// Every id in the data a file is evaluated in, and what it names
+    /// (`SPEC.md` 10.5): the project's data for a file in its layers, else
+    /// the document's own.
+    pub(crate) fn resolved_ids(&self, file: FileId) -> Vec<crol::ResolvedId> {
+        self.id_resolver(file)
+            .map(|resolver| resolver.ids())
+            .unwrap_or_default()
+    }
+
+    /// What the ids of the data a file is in resolve against.
+    pub(crate) fn id_resolver(&self, file: FileId) -> Option<crol::IdResolver<'_>> {
+        let root = self.data_of(file)?;
+        let mut resolver = crol::IdResolver::new(root);
+        if self.in_layers(file)
+            && let Some(schema) = &self.schema
+        {
+            resolver = resolver.schema(schema);
+            if let Some(root) = &self.root_type {
+                resolver = resolver.root_type(root);
+            }
+        }
+        Some(resolver)
+    }
+
+    /// The keys an id written at `span` could name, in each place it is met:
+    /// those of the scopes around it, innermost first.
+    pub(crate) fn visible_keys(&self, span: crol_eval::Span) -> Vec<String> {
+        let Some(resolver) = self.id_resolver(span.file) else {
+            return Vec::new();
+        };
+        let mut out: Vec<String> = Vec::new();
+        for id in resolver.ids().into_iter().filter(|id| id.span == span) {
+            for key in resolver.visible(&id.location) {
+                if !out.contains(&key) {
+                    out.push(key);
+                }
+            }
+        }
+        out
+    }
+
     pub(crate) fn chain_of(&self, file: FileId) -> Option<(&[Layer], &DataOptions)> {
         if self.in_layers(file) {
             return Some((&self.layers, &self.options));
@@ -857,6 +908,21 @@ pub(crate) fn evaluate(
             }
             snapshot.extra.extend(found);
         }
+        // What ids name (`SPEC.md` 10.5): without a schema, those that name
+        // nothing; with one, the check above reports those.
+        if let Some(base) = &snapshot.evaluation.value {
+            let view = crol::DataView {
+                base,
+                contexts: &snapshot.evaluation.contexts,
+                variants: &snapshot.evaluation.variants,
+            };
+            let found = crol::check_ids(
+                view,
+                snapshot.schema.as_ref(),
+                snapshot.root_type.as_deref(),
+            );
+            snapshot.extra.extend(found);
+        }
         // Above a gap, an error may only say what is missing.
         if let Some((gap, why)) = &loading.gap {
             let above: HashSet<FileId> = snapshot.layers[*gap..]
@@ -982,6 +1048,35 @@ pub(crate) fn evaluate(
         let why = "what it extends did not all load, which may be why";
         if incomplete {
             soften(&mut evaluation.diagnostics, why, |_| true);
+        }
+        // What ids name (`SPEC.md` 10.5), here without a schema; with one,
+        // its check below reports them.
+        if !matches!(schema, Some(Ok(_)))
+            && let Some(value) = &evaluation.value
+        {
+            let mut found = match mode {
+                Mode::Data => {
+                    let view = crol::DataView {
+                        base: value,
+                        contexts: &evaluation.contexts,
+                        variants: &evaluation.variants,
+                    };
+                    crol::check_ids(view, None, None)
+                }
+                Mode::Value => crol::IdResolver::new(value)
+                    .ids()
+                    .into_iter()
+                    .filter_map(|id| {
+                        id.problem
+                            .map(|problem| crol_eval::Diagnostic::warning(id.span, problem))
+                    })
+                    .collect(),
+            };
+            only_in(&mut found, file);
+            if incomplete {
+                soften(&mut found, why, |_| true);
+            }
+            snapshot.extra.extend(found);
         }
         match schema {
             Some(Ok(schema)) => {

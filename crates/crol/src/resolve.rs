@@ -63,7 +63,7 @@ impl DataPath {
     }
 
     /// The value at this path in `root`.
-    pub(crate) fn value_in<'v>(&self, root: &'v Value) -> Option<&'v Value> {
+    pub fn value_in<'v>(&self, root: &'v Value) -> Option<&'v Value> {
         let mut value = root;
         for step in &self.0 {
             value = step_into(value, step)?;
@@ -581,4 +581,119 @@ impl<'a> Types<'a> {
 /// The span to report a resolution at.
 pub(crate) fn span_of(resolved: &Resolved<'_>) -> Span {
     resolved.value.span
+}
+
+impl<'a> Resolver<'a> {
+    /// The keys `@name` can name at `location`: those of each scope around
+    /// it, innermost first, each once.
+    pub(crate) fn visible(&self, location: &DataPath) -> Vec<String> {
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for (_, keyed) in self.scopes_around(location).into_iter().rev() {
+            for key in keyed.entries.keys() {
+                if let Key::Str(name) = key
+                    && seen.insert(name.clone())
+                {
+                    out.push(name.to_string());
+                }
+            }
+        }
+        out
+    }
+}
+
+/// An id met in evaluated data, and what it names (`SPEC.md` 10.5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ResolvedId {
+    /// The id as written.
+    pub id: crate::Id,
+    /// Where it was written: one id written in a template is met at each
+    /// place the template is copied to, with the same span.
+    pub span: Span,
+    /// Where it is in the data; for a map key, the map's place.
+    pub location: DataPath,
+    /// Where it resolved to, or `None` if it names nothing.
+    pub target: Option<DataPath>,
+    /// Why it names nothing, as a diagnostic says it.
+    pub problem: Option<String>,
+}
+
+/// Resolves the ids of evaluated data, as the loader and `crol::check` do,
+/// for tools (`SPEC.md` 10.5): `IdResolver::new(&root).schema(&schema)`.
+#[derive(Clone, Copy)]
+pub struct IdResolver<'a> {
+    root: &'a Value,
+    schema: Option<&'a SchemaFile>,
+    root_type: Option<&'a str>,
+    value_type: Option<&'a str>,
+}
+
+impl<'a> IdResolver<'a> {
+    /// Ids in `root`, a context's whole root, with scopes from `#[scope]`
+    /// only.
+    pub fn new(root: &'a Value) -> Self {
+        IdResolver {
+            root,
+            schema: None,
+            root_type: None,
+            value_type: None,
+        }
+    }
+
+    /// Scopes from the schema's `#[crol(scope)]` types as well.
+    pub fn schema(mut self, schema: &'a SchemaFile) -> Self {
+        self.schema = Some(schema);
+        self
+    }
+
+    /// Data-mode data of the type at `path` in the schema, rather than its
+    /// root type (`SPEC.md` 4.1, 12.4).
+    pub fn root_type(mut self, path: &'a str) -> Self {
+        self.root_type = Some(path);
+        self
+    }
+
+    /// A value document of the type at `path` in the schema (`SPEC.md` 4).
+    pub fn value_type(mut self, path: &'a str) -> Self {
+        self.value_type = Some(path);
+        self
+    }
+
+    fn inner(&self) -> Resolver<'a> {
+        match self.value_type {
+            Some(ty) => Resolver::for_value(self.root, self.schema, ty),
+            None => Resolver::with_root_type(self.root, self.schema, self.root_type),
+        }
+    }
+
+    /// What `id`, at `location`, names.
+    pub fn resolve(&self, id: &crate::Id, location: &DataPath) -> Option<DataPath> {
+        self.inner().resolve(&id.to_path(), location)
+    }
+
+    /// The keys `@name` can name at `location`, innermost scope first.
+    pub fn visible(&self, location: &DataPath) -> Vec<String> {
+        self.inner().visible(location)
+    }
+
+    /// Every id in the data and what it names: id values, and with a
+    /// schema, the keys of maps it types as keyed by ids.
+    pub fn ids(&self) -> Vec<ResolvedId> {
+        let resolver = self.inner();
+        resolver
+            .all()
+            .into_iter()
+            .map(|resolved| ResolvedId {
+                id: crate::Id::from_path(&resolved.id),
+                span: span_of(&resolved),
+                problem: resolved
+                    .target
+                    .is_none()
+                    .then(|| resolver.unresolved(&resolved.id, &resolved.location)),
+                location: resolved.location,
+                target: resolved.target,
+            })
+            .collect()
+    }
 }

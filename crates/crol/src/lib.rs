@@ -338,7 +338,7 @@ mod writer;
 use crol_eval::evaluate_value;
 use serde::{Deserialize, Serialize};
 
-pub use check::{CheckOptions, DataView, check, check_value, check_view, value_type};
+pub use check::{CheckOptions, DataView, check, check_ids, check_value, check_view, value_type};
 pub use compose::{
     CrolComposer, CrolConfig, CrolContext, CrolData, CrolLayer, CrolVariants, DocumentChange,
     ExtendsLoad, KeyChange, LayerSource, Reloaded, Variant, VariantName, changed_keys,
@@ -360,7 +360,7 @@ pub use loader::{
 };
 pub use mode::Mode;
 pub use raw::RawValue;
-pub use resolve::{DataPath, DataStep};
+pub use resolve::{DataPath, DataStep, IdResolver, ResolvedId};
 pub use schema::Schema;
 
 #[cfg(feature = "derive")]

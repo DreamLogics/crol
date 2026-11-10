@@ -4420,3 +4420,159 @@ fn templates_used_where_another_type_goes_get_a_warning() {
     assert_eq!(warnings[0]["range"]["start"]["line"], 7, "{diagnostics:?}");
     client.stop();
 }
+
+#[test]
+fn scoped_ids_resolve_where_their_value_ends_up() {
+    let dir = workspace(
+        "lsp-scoped-ids",
+        &[
+            (
+                "project.crol",
+                r#"Project { layers: List([{ name: "base", dir: "base", .. }]), .. }"#,
+            ),
+            (
+                "base/a.crod",
+                "pane := { layout: [@filter] }\n#[scope]\n+dashboard: { ..&pane, +filter: { p: 1 } }\n#[scope]\n+settings: { ..&pane, +filter: { p: 2 } }\n+other: { see: @dashboard.filter, gone: @nope }",
+            ),
+        ],
+    );
+    let mut client = Client::start(&dir);
+    let base = uri(&dir.join("base/a.crod"));
+    let text = std::fs::read_to_string(dir.join("base/a.crod")).unwrap();
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": base, "languageId": "crol", "version": 1, "text": text } }),
+    );
+    // The id that names nothing is a warning.
+    let diagnostics = client.diagnostics_for(&base, |d| !d.is_empty());
+    let messages: Vec<&str> = diagnostics
+        .iter()
+        .map(|d| d["message"].as_str().unwrap())
+        .collect();
+    assert_eq!(messages, ["the id `@nope` names no root key"]);
+    let starts = |found: &Value| -> Vec<(u64, u64)> {
+        let list = match found {
+            Value::Array(list) => list.clone(),
+            other => vec![other.clone()],
+        };
+        let mut starts: Vec<_> = list
+            .iter()
+            .map(|l| {
+                (
+                    l["range"]["start"]["line"].as_u64().unwrap(),
+                    l["range"]["start"]["character"].as_u64().unwrap(),
+                )
+            })
+            .collect();
+        starts.sort();
+        starts
+    };
+
+    // In the template: each screen's own `filter`.
+    let found = client.request(
+        "textDocument/definition",
+        json!({ "textDocument": { "uri": base }, "position": { "line": 0, "character": 21 } }),
+    );
+    assert_eq!(starts(&found), [(2, 24), (4, 23)]);
+
+    // A path id, on its second key.
+    let found = client.request(
+        "textDocument/definition",
+        json!({ "textDocument": { "uri": base }, "position": { "line": 5, "character": 28 } }),
+    );
+    assert_eq!(starts(&found), [(2, 24)]);
+
+    // References of a screen's `filter`: the id in the template, which
+    // names it there, and the path id, with the declaration.
+    let found = client.request(
+        "textDocument/references",
+        json!({
+            "textDocument": { "uri": base }, "position": { "line": 2, "character": 25 },
+            "context": { "includeDeclaration": true },
+        }),
+    );
+    assert_eq!(starts(&found), [(0, 20), (2, 24), (5, 16)]);
+    // Of the other screen's: only the template's id.
+    let found = client.request(
+        "textDocument/references",
+        json!({
+            "textDocument": { "uri": base }, "position": { "line": 4, "character": 24 },
+            "context": { "includeDeclaration": false },
+        }),
+    );
+    assert_eq!(starts(&found), [(0, 20)]);
+
+    // After `@` in a screen: its own keys first, then the root's.
+    let typed = text.replace("+filter: { p: 1 } }", "+filter: { p: 1 }, x: @ }");
+    client.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": base, "version": 2 },
+            "contentChanges": [{ "text": typed }],
+        }),
+    );
+    let line = typed.lines().nth(2).unwrap();
+    let character = line.find('@').unwrap() + 1;
+    let items = client.request(
+        "textDocument/completion",
+        json!({ "textDocument": { "uri": base }, "position": { "line": 2, "character": character } }),
+    );
+    let labels: Vec<&str> = items
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["label"].as_str().unwrap())
+        .collect();
+    assert_eq!(labels[..3], ["layout", "filter", "dashboard"], "{labels:?}");
+
+    // Hover on the id in the template: what it names in each screen.
+    let hover = client.request(
+        "textDocument/hover",
+        json!({ "textDocument": { "uri": base }, "position": { "line": 0, "character": 21 } }),
+    );
+    let markdown = hover["contents"]["value"].as_str().unwrap();
+    assert!(
+        markdown.contains("**dashboard.filter**: `{p: 1}`"),
+        "{markdown}"
+    );
+    assert!(
+        markdown.contains("**settings.filter**: `{p: 2}`"),
+        "{markdown}"
+    );
+
+    // A misspelt id in a screen: the fix is the screen's key.
+    let typed = text.replace("+filter: { p: 1 } }", "+filter: { p: 1 }, x: @filtr }");
+    client.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": base, "version": 3 },
+            "contentChanges": [{ "text": typed }],
+        }),
+    );
+    let diagnostics = client.diagnostics_for(&base, |d| d.len() == 2);
+    let diagnostic = diagnostics
+        .iter()
+        .find(|d| d["message"].as_str().unwrap().contains("@filtr"))
+        .unwrap()
+        .clone();
+    assert_eq!(
+        diagnostic["message"],
+        "the id `@filtr` names nothing: no `filtr` in `dashboard` or the root"
+    );
+    let found = client.request(
+        "textDocument/codeAction",
+        json!({
+            "textDocument": { "uri": base },
+            "range": diagnostic["range"],
+            "context": { "diagnostics": [diagnostic], "triggerKind": 2 },
+        }),
+    );
+    let titles: Vec<&str> = found
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["title"].as_str().unwrap())
+        .collect();
+    assert!(titles.iter().any(|t| t.contains("`filter`")), "{titles:?}");
+    client.stop();
+}

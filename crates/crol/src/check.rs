@@ -122,6 +122,79 @@ pub fn check_view(
     } else {
         check_keys(data, schema, &root_type, root, options, &contexts)
     };
+    in_contexts(found, data, &contexts)
+}
+
+/// Checks the ids of evaluated data for tools (`SPEC.md` 10.5), in every
+/// evaluated context. Without a schema, an id that names nothing is a
+/// warning; with one, [`check_view`] reports those, and this says where the
+/// first id names something only through a `#[crol(scope)]` type, since an
+/// application's loader needs the schema for that.
+pub fn check_ids(
+    data: DataView<'_>,
+    schema: Option<&SchemaFile>,
+    root: Option<&str>,
+) -> Vec<Diagnostic> {
+    let contexts: Vec<Option<&ContextData>> = std::iter::once(None)
+        .chain(data.contexts.iter().map(Some))
+        .collect();
+    let mut found = Found::new();
+    for (index, context) in contexts.iter().enumerate() {
+        let built = context.map(|context| context.root(data.base));
+        let value = built.as_ref().unwrap_or(data.base);
+        let plain = crate::IdResolver::new(value);
+        let mut diagnostics = Vec::new();
+        match schema {
+            None => {
+                for id in plain.ids() {
+                    if let Some(problem) = id.problem {
+                        diagnostics.push(Diagnostic::warning(id.span, problem));
+                    }
+                }
+            }
+            // Once is enough to say it.
+            Some(_) if index > 0 => {}
+            Some(schema) => {
+                let mut typed = crate::IdResolver::new(value).schema(schema);
+                if let Some(root) = root {
+                    typed = typed.root_type(root);
+                }
+                // With a schema, map keys may be ids too: match by place.
+                let plain = plain.ids();
+                let through_types = typed.ids().into_iter().find(|typed| {
+                    typed.target.is_some()
+                        && plain.iter().any(|plain| {
+                            plain.location == typed.location
+                                && plain.id == typed.id
+                                && plain.span == typed.span
+                                && plain.target != typed.target
+                        })
+                });
+                if let Some(id) = through_types {
+                    let target = id.target.unwrap_or_default();
+                    diagnostics.push(Diagnostic::warning(
+                        id.span,
+                        format!(
+                            "the id `{}` names `{target}` through a `#[crol(scope)]` type of the \
+                             schema; an application's loader needs the schema for this \
+                             (`CrolComposer::schema`)",
+                            id.id
+                        ),
+                    ));
+                }
+            }
+        }
+        merge(&mut found, diagnostics, index);
+    }
+    in_contexts(found, data, &contexts)
+}
+
+/// Each diagnostic, with the contexts it holds in if not all of them.
+fn in_contexts(
+    found: Found,
+    data: DataView<'_>,
+    contexts: &[Option<&ContextData>],
+) -> Vec<Diagnostic> {
     // An error in only some contexts says in which (`SPEC.md` 12.5).
     found
         .into_iter()
