@@ -271,6 +271,10 @@ impl Writer<'_> {
                 self.out.push(18);
                 self.id(*operand);
             }
+            ExprKind::Scope(operand) => {
+                self.out.push(19);
+                self.id(*operand);
+            }
             ExprKind::Binary(op, lhs, rhs) => {
                 self.out.push(15);
                 self.out.push(match op {
@@ -318,6 +322,7 @@ impl Writer<'_> {
         self.ids(&block.spreads);
         self.list(&block.entries, Self::entry);
         self.flag(block.defaults);
+        self.flag(block.scope);
         self.ids(&block.value_binds);
     }
 
@@ -776,6 +781,7 @@ impl Reader<'_> {
             }
             17 => ExprKind::Error,
             18 => ExprKind::Not(self.expr_id()?),
+            19 => ExprKind::Scope(self.expr_id()?),
             _ => return Err(Corrupt),
         };
         Ok(Expr {
@@ -813,6 +819,7 @@ impl Reader<'_> {
             spreads: self.expr_ids()?,
             entries: self.list(Self::entry)?,
             defaults: self.flag()?,
+            scope: self.flag()?,
             value_binds: self.list(Self::bind_id)?,
         })
     }
@@ -986,9 +993,10 @@ fn check(ir: &Ir, first_expr: usize, first_block: usize, first_bind: usize) -> R
                     holds(item)?;
                 }
             }
-            ExprKind::Path(child, _) | ExprKind::Neg(child) | ExprKind::Not(child) => {
-                holds(*child)?
-            }
+            ExprKind::Path(child, _)
+            | ExprKind::Neg(child)
+            | ExprKind::Not(child)
+            | ExprKind::Scope(child) => holds(*child)?,
             ExprKind::Binary(_, lhs, rhs) => {
                 holds(*lhs)?;
                 holds(*rhs)?;

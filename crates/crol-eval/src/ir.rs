@@ -180,6 +180,9 @@ pub(crate) enum ExprKind {
     Path(ExprId, Box<[Selector]>),
     Neg(ExprId),
     Not(ExprId),
+    /// A value with `#[scope]` that is not written as a block: it gets the
+    /// scope flag, and must be a keyed value (`SPEC.md` 6.1.2).
+    Scope(ExprId),
     Binary(BinOp, ExprId, ExprId),
     Macro(MacroKind, Box<[ExprId]>),
     /// An expression that failed to lower; the error is already reported.
@@ -350,6 +353,9 @@ pub(crate) struct Block {
     pub(crate) spreads: Vec<ExprId>,
     pub(crate) entries: Vec<Entry>,
     pub(crate) defaults: bool,
+    /// Set by `#[scope]` on the entry the block is the value of (`SPEC.md`
+    /// 6.1.2).
+    pub(crate) scope: bool,
     pub(crate) value_binds: Vec<BindId>,
 }
 

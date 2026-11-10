@@ -89,6 +89,7 @@ fn all_contexts(
         _ => &empty,
     };
     for (key, value) in &keyed.entries {
+        write_attrs(&mut text, value);
         write_key(&mut text, key);
         text.push_str(": ");
         write_value(&mut text, value, None);
@@ -124,6 +125,7 @@ fn all_contexts(
                     write_key(&mut body, key);
                 }
                 Some(value) => {
+                    write_attrs(&mut body, value);
                     write_key(&mut body, key);
                     body.push_str(": ");
                     write_value(&mut body, value, None);
@@ -213,6 +215,7 @@ fn write_value(out: &mut String, value: &Value, note: Note<'_>) {
             };
             for (key, value) in &keyed.entries {
                 separator(out, &mut after_entry);
+                write_attrs(out, value);
                 write_key(out, key);
                 out.push_str(": ");
                 write_value(out, value, note);
@@ -236,6 +239,14 @@ fn write_value(out: &mut String, value: &Value, note: Note<'_>) {
             }
             out.push('}');
         }
+    }
+}
+
+/// `#[scope]` before an entry whose value has the scope flag (`SPEC.md`
+/// 6.1.2). An element of a list or tuple has no entry to write it on.
+fn write_attrs(out: &mut String, value: &Value) {
+    if matches!(&value.kind, ValueKind::Keyed(keyed) if keyed.scope) {
+        out.push_str("#[scope] ");
     }
 }
 

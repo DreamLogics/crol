@@ -183,6 +183,8 @@ struct KeyedShape {
     slots: FastMap<Key, Slot>,
     defaults: bool,
     defaulted: BTreeSet<Key>,
+    /// `#[scope]` (`SPEC.md` 6.1.2).
+    scope: bool,
 }
 
 #[derive(Clone)]
@@ -779,6 +781,7 @@ fn shaped_from_value(value: &Value) -> Rc<Shaped> {
                 .collect(),
             defaults: keyed.defaults,
             defaulted: keyed.defaulted.clone(),
+            scope: keyed.scope,
         })),
     };
     Rc::new(Shaped {
@@ -1093,7 +1096,7 @@ fn collect_reads(
                 collect_reads(ir, item, depth, templates, out);
             }
         }
-        ExprKind::Neg(operand) | ExprKind::Not(operand) => {
+        ExprKind::Neg(operand) | ExprKind::Not(operand) | ExprKind::Scope(operand) => {
             collect_reads(ir, *operand, depth, templates, out)
         }
         ExprKind::Binary(op, lhs, rhs) => {
@@ -2808,6 +2811,7 @@ impl Evaluator<'_> {
             entries,
             defaults: keyed.defaults,
             defaulted: keyed.defaulted.clone(),
+            scope: keyed.scope,
         };
         Ok(Value::new(ValueKind::Keyed(Box::new(keyed)), shaped.span))
     }
@@ -3491,6 +3495,26 @@ impl Evaluator<'_> {
                     }
                 }
             }
+            // At the entry's location, as if it were not there: only the
+            // flag is added (`SPEC.md` 6.1.2).
+            ExprKind::Scope(operand) => {
+                let value = self.eval(*operand, env)?;
+                match &value.shape {
+                    Shape::Keyed(keyed) if keyed.scope => Ok(value),
+                    Shape::Keyed(keyed) => {
+                        let mut keyed = keyed.clone();
+                        keyed.scope = true;
+                        Self::shaped(Shape::Keyed(keyed), value.span)
+                    }
+                    other => {
+                        let kind = other.kind_name();
+                        Err(self.fail(
+                            span,
+                            format!("#[scope]: only a keyed value can be a scope, not {kind}"),
+                        ))
+                    }
+                }
+            }
             ExprKind::Binary(op, lhs, rhs) => self.binary(*op, *lhs, *rhs, env, span),
             ExprKind::Macro(kind, args) => {
                 let detached = Self::detached(env);
@@ -4123,6 +4147,9 @@ impl Evaluator<'_> {
         if block.defaults {
             keyed.defaults = true;
         }
+        if block.scope {
+            keyed.scope = true;
+        }
         Self::shaped(Shape::Keyed(Box::new(keyed)), span)
     }
 
@@ -4138,6 +4165,7 @@ impl Evaluator<'_> {
             target.defaulted.remove(key);
         }
         target.defaults |= source.defaults;
+        target.scope |= source.scope;
         target.defaulted.extend(source.defaulted.iter().cloned());
     }
 
@@ -5086,6 +5114,7 @@ impl Evaluator<'_> {
                     entries: keyed.slots.keys().cloned().zip(values).collect(),
                     defaults: keyed.defaults,
                     defaulted: keyed.defaulted.clone(),
+                    scope: keyed.scope,
                 }))
             }
         };

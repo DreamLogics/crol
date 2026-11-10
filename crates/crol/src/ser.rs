@@ -432,6 +432,7 @@ impl<'c> MapSerializer<'c> {
             entries: self.entries,
             defaults: self.defaults,
             defaulted: Default::default(),
+            scope: false,
         })))
     }
 }

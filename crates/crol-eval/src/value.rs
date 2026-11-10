@@ -259,6 +259,9 @@ pub struct Keyed {
     pub defaults: bool,
     /// Fields removed with `-field`, which take their defaults.
     pub defaulted: BTreeSet<Key>,
+    /// Set by `#[scope]`: the value is a scope for the ids in it (`SPEC.md`
+    /// 3.1, 6.1.2).
+    pub scope: bool,
 }
 
 impl Keyed {
@@ -350,7 +353,7 @@ impl Value {
     }
 
     /// Identity (`SPEC.md` 3.3): equal, with the same entry order, defaults
-    /// flags and defaulted fields, and floats with the same bits.
+    /// and scope flags and defaulted fields, and floats with the same bits.
     pub fn identical(&self, other: &Value) -> bool {
         use ValueKind::*;
         match (&self.kind, &other.kind) {
@@ -360,6 +363,7 @@ impl Value {
             (Keyed(a), Keyed(b)) => {
                 a.name == b.name
                     && a.defaults == b.defaults
+                    && a.scope == b.scope
                     && a.defaulted == b.defaulted
                     && a.entries.len() == b.entries.len()
                     && a.entries

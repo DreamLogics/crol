@@ -291,6 +291,7 @@ impl Parser<'_> {
                 entries,
                 defaults: true,
                 defaulted: Default::default(),
+                scope: false,
             }))));
         }
         let elements = self.values(')')?;

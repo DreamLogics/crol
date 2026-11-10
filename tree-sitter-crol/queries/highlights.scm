@@ -39,7 +39,8 @@
 ; Attributes.
 (attribute ["#" "!"] @punctuation.special)
 (entry_attr "#" @punctuation.special)
-["use" "schema" "type" "extends" "variant" "as" "super"] @keyword
+(scope_attr "#" @punctuation.special)
+["use" "schema" "type" "scope" "extends" "variant" "as" "super"] @keyword
 
 ; Operators and punctuation.
 ["+" "-" "*" "/" "%" "~" "~^" "|" "??" "^" "&" "!" "?" ":=" "=" ".."] @operator

@@ -1,0 +1,11 @@
+// A patch keeps the flag, a whole value replaces it, and a variant block
+// sets it there.
+staging.db.port: 5432
+kept: & ~ { y: 2 }
+#[scope]
+gained: & ~ { y: 2 }
+replaced: { z: 3 }
+<prod> {
+    #[scope]
+    in_variant: { z: 3 },
+}

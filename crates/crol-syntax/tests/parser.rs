@@ -1187,7 +1187,7 @@ fn entry_attribute_errors() {
             error 11..11: expected a value bind after `#[type(...)]`: `name := value`
             error 28..28: expected a field, an index or `[]` after `.`
             error 31..32: a value bind takes one `#[type(...)]`
-            error 52..57: unknown entry attribute `serde`; the only one is `type`, before a value bind
+            error 52..57: unknown entry attribute `serde`; there are `type`, before a value bind, and `scope`
         "##]],
     );
 }

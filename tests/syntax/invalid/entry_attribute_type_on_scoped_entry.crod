@@ -1,0 +1,2 @@
+#[scope] #[type(Foo)]
+x: {}
