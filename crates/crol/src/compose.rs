@@ -19,6 +19,7 @@ use crate::error::Error;
 use crate::id::IdUse;
 use crate::loader::{self, FileLoader, FileLoaders, FsLoader, Loaded, Origin, SourceId};
 use crate::mode::Mode;
+use crate::resolve::{DataPath, Resolver};
 
 /// A variant name type: maps values to the names data writes in selectors,
 /// and back (`SPEC.md` 8.1). Implemented for `String`, which accepts every
@@ -195,6 +196,10 @@ pub struct CrolConfig<T = String> {
     /// lowers to (`SPEC.md` 7.8). Without it, data takes less memory. Default:
     /// `true`.
     pub keep_lowered: bool,
+    /// Make an id that names nothing an error instead of a warning
+    /// (`SPEC.md` 10.5). Default: `false`, since ids may name things outside
+    /// the data.
+    pub strict_ids: bool,
 }
 
 impl<T> Default for CrolConfig<T> {
@@ -214,6 +219,7 @@ impl<T> Default for CrolConfig<T> {
             require_complete: true,
             init_defaults: false,
             keep_lowered: true,
+            strict_ids: false,
         }
     }
 }
@@ -1023,6 +1029,19 @@ impl<T: VariantName> CrolComposer<T> {
             .variants
             .context(&chosen)
             .map_err(|message| Error::new(format!("composer: {message}")))?;
+        let strict_ids = self.config.strict_ids;
+        let mut diagnostics = evaluation.diagnostics;
+        let ids = id_diagnostics(
+            &base,
+            &evaluation.contexts,
+            &composed,
+            self.schema.as_ref(),
+            strict_ids,
+        );
+        if strict_ids && !ids.is_empty() {
+            return Err(Error::from_diagnostics(&sources, &ids));
+        }
+        diagnostics.extend(ids);
         Ok(CrolData {
             sources,
             layers,
@@ -1036,11 +1055,12 @@ impl<T: VariantName> CrolComposer<T> {
             contexts: evaluation.contexts,
             variants: evaluation.variants,
             composed,
-            diagnostics: evaluation.diagnostics,
+            diagnostics,
             options: de::Options {
                 structs: self.structs.clone(),
                 ..self.config.deserialize_options()
             },
+            strict_ids,
             names: std::marker::PhantomData,
         })
     }
@@ -1211,9 +1231,44 @@ pub struct CrolData<T = String> {
     variants: Variants,
     /// The context `with_variant` chose, for `get` and `deserialize_root`.
     composed: Context,
+    /// What evaluating found, and after it, what resolving the ids found.
     diagnostics: Vec<Diagnostic>,
     options: de::Options,
+    /// [`CrolConfig::strict_ids`].
+    strict_ids: bool,
     names: std::marker::PhantomData<T>,
+}
+
+/// Resolves every id of the composed context (`SPEC.md` 10.5): one that
+/// names nothing is a warning, or with `strict` an error. These are found
+/// after evaluating, and never reach the evaluator, so that they do not make
+/// a reload evaluate everything (`SPEC.md` 7.9).
+fn id_diagnostics(
+    base: &Value,
+    contexts: &[ContextData],
+    composed: &Context,
+    schema: Option<&crate::schema::SchemaFile>,
+    strict: bool,
+) -> Vec<Diagnostic> {
+    let root = match contexts.iter().find(|data| data.context == *composed) {
+        Some(data) if !composed.is_base() => Cow::Owned(data.root(base)),
+        _ => Cow::Borrowed(base),
+    };
+    let resolver = Resolver::new(&root, schema);
+    resolver
+        .all()
+        .into_iter()
+        .filter(|resolved| resolved.target.is_none())
+        .map(|resolved| {
+            let span = crate::resolve::span_of(&resolved);
+            let message = resolver.unresolved(&resolved.id, &resolved.location);
+            if strict {
+                Diagnostic::error(span, message)
+            } else {
+                Diagnostic::warning(span, message)
+            }
+        })
+        .collect()
 }
 
 impl<T: VariantName> CrolData<T> {
@@ -1399,6 +1454,21 @@ impl<T: VariantName> CrolData<T> {
         }
     }
 
+    /// Whether something is at `path` in the composed context: what an id
+    /// resolved to, [`IdUse::target`] (`SPEC.md` 10.5).
+    pub fn contains_path(&self, path: &DataPath) -> bool {
+        path.value_in(&self.composed_root()).is_some()
+    }
+
+    /// The type name of the value at `path` in the composed context, such as
+    /// what an id resolved to.
+    pub fn type_name_at(&self, path: &DataPath) -> Option<String> {
+        let root = self.composed_root();
+        Resolver::new(&root, None)
+            .type_name_at(path)
+            .map(str::to_owned)
+    }
+
     /// Whether a root key exists in the composed context, for checking ids
     /// (`SPEC.md` 10.5).
     pub fn contains(&self, id: &str) -> bool {
@@ -1440,7 +1510,16 @@ impl<T: VariantName> CrolData<T> {
         let value = self
             .key_in(key, &self.composed)
             .ok_or_else(|| Error::new(format!("there is no root key `{key}`")))?;
-        crate::deserialize(value, &self.sources, self.options.clone(), Some(key))
+        // Ids resolve in the composed context's whole root (`SPEC.md` 10.5).
+        let root = self.composed_root();
+        let resolver = Resolver::new(&root, self.schema.as_deref());
+        crate::deserialize_resolved(
+            value,
+            &self.sources,
+            self.options.clone(),
+            Some(key),
+            Some(resolver),
+        )
     }
 
     /// Deserializes the whole root as `R`, in a context (`None`: the
@@ -1578,7 +1657,31 @@ impl<T: VariantName> CrolData<T> {
                 )
             };
             let before = fingerprints(self);
-            update.apply(&mut self.base, &mut self.contexts);
+            if self.strict_ids {
+                // An error keeps the data as it was, as any failed reload does.
+                let (mut base, mut contexts) = (self.base.clone(), self.contexts.clone());
+                update.apply(&mut base, &mut contexts);
+                let ids = id_diagnostics(
+                    &base,
+                    &contexts,
+                    &self.composed,
+                    self.schema.as_deref(),
+                    true,
+                );
+                if !ids.is_empty() {
+                    return Err(Error::from_diagnostics(&sources, &ids));
+                }
+                (self.base, self.contexts) = (base, contexts);
+            } else {
+                update.apply(&mut self.base, &mut self.contexts);
+            }
+            diagnostics.extend(id_diagnostics(
+                &self.base,
+                &self.contexts,
+                &self.composed,
+                self.schema.as_deref(),
+                false,
+            ));
             self.sources = sources;
             self.layers = layers;
             self.lowered = lowered;
@@ -1605,6 +1708,17 @@ impl<T: VariantName> CrolData<T> {
                 .collect();
             evaluation.variants.context(&ids).map_err(Error::new)?
         };
+        let ids = id_diagnostics(
+            &base,
+            &evaluation.contexts,
+            &composed,
+            self.schema.as_deref(),
+            self.strict_ids,
+        );
+        if self.strict_ids && !ids.is_empty() {
+            return Err(Error::from_diagnostics(&sources, &ids));
+        }
+        diagnostics.extend(ids);
         self.sources = sources;
         self.layers = layers;
         self.lowered = lowered;

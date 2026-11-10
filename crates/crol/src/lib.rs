@@ -328,6 +328,7 @@ pub mod project;
 mod raw;
 #[cfg(feature = "_remote")]
 mod remote;
+mod resolve;
 pub mod schema;
 mod ser;
 pub mod typed;
@@ -359,6 +360,7 @@ pub use loader::{
 };
 pub use mode::Mode;
 pub use raw::RawValue;
+pub use resolve::{DataPath, DataStep};
 pub use schema::Schema;
 
 #[cfg(feature = "derive")]
@@ -422,7 +424,9 @@ fn from_text<T: for<'de> Deserialize<'de>>(
     let Some(value) = evaluation.value else {
         return Err(Error::from_diagnostics(&sources, &evaluation.diagnostics));
     };
-    deserialize(&value, &sources, options, None)
+    // A value document has no schema, so only `#[scope]` makes scopes.
+    let resolver = resolve::Resolver::new(&value, None);
+    deserialize_resolved(&value, &sources, options, None, Some(resolver))
 }
 
 /// Deserializes an evaluated value as `T`. `sources` are the files the
@@ -454,10 +458,22 @@ pub(crate) fn deserialize<T: for<'de> Deserialize<'de>>(
     options: de::Options,
     key: Option<&str>,
 ) -> Result<(T, Vec<IdUse>)> {
+    deserialize_resolved(value, sources, options, key, None)
+}
+
+/// [`deserialize`], with what ids resolve against.
+pub(crate) fn deserialize_resolved<'a, T: for<'de> Deserialize<'de>>(
+    value: &'a Value,
+    sources: &'a Sources,
+    options: de::Options,
+    key: Option<&str>,
+    resolver: Option<resolve::Resolver<'a>>,
+) -> Result<(T, Vec<IdUse>)> {
     let context = de::Context {
         sources,
         options,
         ids: Default::default(),
+        resolver,
     };
     let deserializer = match key {
         Some(key) => de::ValueDeserializer::at_key(value, &context, key),

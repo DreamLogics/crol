@@ -298,7 +298,7 @@ fn main() -> Result<(), crol::Error> {
     let (web, ids): (Service, Vec<IdUse>) = data.get_with_ids("web")?;
     println!("web has {} dependencies", web.depends_on.len());
     for id in ids {
-        if id.id.name().is_some_and(|name| !data.contains(name)) {
+        if id.target.is_none() {
             println!("{}: nothing is called `{}`", id.rust_path, id.id);
         }
     }

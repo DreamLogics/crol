@@ -16,6 +16,7 @@ use crol_eval::{IdPath, Key, Keyed, Sources, Value, ValueKind};
 use crate::error::Error;
 use crate::id::{ID_TOKEN, Id, IdUse};
 use crate::raw::RAW_TOKEN;
+use crate::resolve::{DataPath, DataStep, Resolver};
 use crate::schema::{Field, SchemaFile, TypeDef, VariantShape};
 
 /// Options of the deserializer (`SPEC.md` 10.7's `CrolConfig` fields).
@@ -123,6 +124,29 @@ pub(crate) struct Context<'a> {
     pub(crate) sources: &'a Sources,
     pub(crate) options: Options,
     pub(crate) ids: RefCell<Vec<IdUse>>,
+    /// What ids resolve against (`SPEC.md` 10.5); without it, no id
+    /// resolves.
+    pub(crate) resolver: Option<Resolver<'a>>,
+}
+
+/// Where in the data we are, which a wrapper such as `Some(x)` adds a step
+/// to, though the Rust path stays: `web.depends_on[0]`.
+enum Place {
+    Root,
+    Step(Rc<Place>, DataStep),
+}
+
+impl Place {
+    fn to_path(&self) -> DataPath {
+        let mut steps = Vec::new();
+        let mut node = self;
+        while let Place::Step(parent, step) = node {
+            steps.push(step.clone());
+            node = parent;
+        }
+        steps.reverse();
+        DataPath::new(steps)
+    }
 }
 
 /// Where in the Rust value we are: `web.depends_on[0]`.
@@ -163,6 +187,7 @@ pub(crate) struct ValueDeserializer<'a> {
     value: &'a Value,
     context: &'a Context<'a>,
     path: Rc<PathNode>,
+    place: Rc<Place>,
     /// The name of the newtype variant whose payload this is: `V { ... }`
     /// deserializes as a newtype variant whose struct accepts the name `V`.
     variant: Option<&'a str>,
@@ -174,6 +199,7 @@ impl<'a> ValueDeserializer<'a> {
             value,
             context,
             path: Rc::new(PathNode::Root),
+            place: Rc::new(Place::Root),
             variant: None,
         }
     }
@@ -184,15 +210,28 @@ impl<'a> ValueDeserializer<'a> {
             value,
             context,
             path: Rc::new(PathNode::Key(Rc::new(PathNode::Root), Key::Str(key.into()))),
+            place: Rc::new(Place::Step(
+                Rc::new(Place::Root),
+                DataStep::Key(Key::Str(key.into())),
+            )),
             variant: None,
         }
     }
 
+    /// A deserializer for what `path` reaches in this value: a key, an
+    /// element, or with `PathNode::Root`, a wrapper's single element.
     fn child(&self, value: &'a Value, path: PathNode) -> ValueDeserializer<'a> {
+        let step = match (&path, &self.value.kind) {
+            (PathNode::Key(_, key), _) => DataStep::Key(key.clone()),
+            (PathNode::Index(_, i), ValueKind::List(_)) => DataStep::Index(*i),
+            (PathNode::Index(_, i), _) => DataStep::Element(*i),
+            (PathNode::Root, _) => DataStep::Element(0),
+        };
         ValueDeserializer {
             value,
             context: self.context,
             path: Rc::new(path),
+            place: Rc::new(Place::Step(self.place.clone(), step)),
             variant: None,
         }
     }
@@ -236,11 +275,18 @@ impl<'a> ValueDeserializer<'a> {
         self.error(format!("expected {what}, found {}", self.found()))
     }
 
+    /// Records an id this value is, or for a map key, holds as a key.
     fn record_id(&self, id: &IdPath) {
+        let place = self.place.to_path();
+        let target = self
+            .context
+            .resolver
+            .and_then(|resolver| resolver.resolve(id, &place));
         self.context.ids.borrow_mut().push(IdUse {
             id: Id::from_path(id),
             span: self.value.span,
             rust_path: describe(&self.path),
+            target,
         });
     }
 
@@ -485,6 +531,7 @@ impl<'a> de::Deserializer<'a> for ValueDeserializer<'a> {
                     value: self.value,
                     context: self.context,
                     path: self.path.clone(),
+                    place: self.place.clone(),
                     variant: None,
                 };
                 visitor.visit_some(inner)
@@ -554,6 +601,7 @@ impl<'a> de::Deserializer<'a> for ValueDeserializer<'a> {
                     value: self.value,
                     context: self.context,
                     path: self.path.clone(),
+                    place: self.place.clone(),
                     variant: None,
                 };
                 visitor.visit_newtype_struct(inner)
@@ -902,6 +950,7 @@ impl<'a> VariantAccess<'a> for EnumDeserializer<'_, 'a> {
                 value: parent.value,
                 context: parent.context,
                 path: parent.path.clone(),
+                place: parent.place.clone(),
                 variant: Some(self.variant),
             }),
             _ => Err(parent.expected(&format!("`{}(...)` with one element", self.variant))),

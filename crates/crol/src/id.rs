@@ -10,6 +10,7 @@ use serde::ser::{Serialize, Serializer};
 use crol_eval::{IdPath, Span};
 
 use crate::Error;
+use crate::resolve::DataPath;
 
 /// The newtype name through which `Id` and the CROL deserializer recognize
 /// each other. Inside it is the id's text, `@` included; other formats see an
@@ -161,4 +162,7 @@ pub struct IdUse {
     pub span: Span,
     /// The path in the deserialized value: `web.depends_on[0]`.
     pub rust_path: String,
+    /// The place in the data the id resolved to, or `None` if it names
+    /// nothing there (`SPEC.md` 10.5).
+    pub target: Option<DataPath>,
 }
