@@ -230,10 +230,21 @@ pub fn encode(out: &mut Vec<u8>, value: &Value) {
             out.push(0x05);
             encode_name(out, s);
         }
-        ValueKind::Id(s) => {
-            out.push(0x06);
-            encode_name(out, s);
-        }
+        // A single key keeps the encoding it had before path ids.
+        ValueKind::Id(id) => match id.name() {
+            Some(name) => {
+                out.push(0x06);
+                encode_name(out, name);
+            }
+            None => {
+                out.push(0x0C);
+                out.push(u8::from(id.is_rooted()));
+                leb128(out, id.keys().len() as u128);
+                for key in id.keys() {
+                    encode_name(out, key);
+                }
+            }
+        },
         ValueKind::List(items) => {
             out.push(0x07);
             encode_all(out, items);

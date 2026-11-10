@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 use crol_syntax::format::{FormatConfig, format};
 
 use crate::eval::ContextData;
-use crate::value::{Key, Keyed, Value, ValueKind, format_float, is_identifier, quote, quote_char};
+use crate::value::{Key, Keyed, Value, ValueKind, format_float, quote, quote_char};
 use crate::variants::Variants;
 
 /// Writes a value as a value-mode document, formatted. A keyed value without
@@ -175,11 +175,8 @@ fn write_value(out: &mut String, value: &Value, note: Note<'_>) {
         ValueKind::Float(f) => out.push_str(&format_float(*f)),
         ValueKind::Char(c) => out.push_str(&quote_char(*c)),
         ValueKind::String(s) => out.push_str(&quote(s)),
-        ValueKind::Id(id) if is_identifier(id) => {
-            let _ = write!(out, "@{id}");
-        }
         ValueKind::Id(id) => {
-            let _ = write!(out, "@{}", quote(id));
+            let _ = write!(out, "{id}");
         }
         ValueKind::List(elements) => {
             out.push('[');

@@ -14,7 +14,7 @@ use crate::diagnostic::Diagnostic;
 use crate::ir::*;
 use crate::literal;
 use crate::source::{FileId, Span};
-use crate::value::Key;
+use crate::value::{IdPath, Key};
 
 /// A data-mode document to lower, in its layer.
 pub(crate) struct DataDocument<'a> {
@@ -1045,6 +1045,53 @@ impl Lowerer {
         Some((key, path))
     }
 
+    /// An id and the selectors after it, as one path id (`SPEC.md` 5.1).
+    /// Only `.name` and `["key"]` are allowed; errors are reported, and give
+    /// `None`.
+    fn id_path(
+        &mut self,
+        id: &ast::IdExpr,
+        selectors: impl Iterator<Item = ast::Selector>,
+    ) -> Option<IdPath> {
+        let name = id.name()?;
+        let first = match name.kind() {
+            SyntaxKind::IDENT => name.text().to_owned(),
+            _ => literal::string(name.text()),
+        };
+        let mut keys = vec![self.name(&first)];
+        let mut ok = true;
+        for selector in selectors {
+            let key = match &selector {
+                ast::Selector::Field(field) => field.name().map(|n| n.text().to_owned()),
+                ast::Selector::Accessor(accessor) => match accessor.key() {
+                    Some(key) if key.kind() != SyntaxKind::INT => Some(literal::string(key.text())),
+                    _ => None,
+                },
+                _ => None,
+            };
+            match key {
+                Some(key) => keys.push(self.name(&key)),
+                // A missing name is a syntax error, already reported.
+                None if matches!(&selector, ast::Selector::Field(f) if f.name().is_none()) => {
+                    ok = false;
+                }
+                None => {
+                    let span = self.span(selector.syntax());
+                    self.error(
+                        span,
+                        "an id names keys, written `.name` or `[\"key\"]`: not list \
+                         elements, tuple elements, integer keys or conditions",
+                    );
+                    ok = false;
+                }
+            }
+        }
+        if !ok {
+            return None;
+        }
+        IdPath::new(id.is_rooted(), keys)
+    }
+
     /// The one copy of a name.
     fn name(&mut self, name: &str) -> Arc<str> {
         if let Some(name) = self.names.get(name) {
@@ -1557,17 +1604,10 @@ impl Lowerer {
                 }
                 None => self.ir.add_expr(ExprKind::Error, span),
             },
-            ast::Expr::Id(id) => {
-                let Some(name) = id.name() else {
-                    return self.ir.add_expr(ExprKind::Error, span);
-                };
-                let text = match name.kind() {
-                    SyntaxKind::IDENT => name.text().to_owned(),
-                    _ => literal::string(name.text()),
-                };
-                let text = self.name(&text);
-                self.ir.add_expr(ExprKind::Id(text), span)
-            }
+            ast::Expr::Id(id) => match self.id_path(id, std::iter::empty()) {
+                Some(id) => self.ir.add_expr(ExprKind::Id(id), span),
+                None => self.ir.add_expr(ExprKind::Error, span),
+            },
             ast::Expr::Reference(reference) => self.reference(reference, span),
             ast::Expr::Block(block) => {
                 let name = block
@@ -1619,6 +1659,13 @@ impl Lowerer {
                 let Some(base) = path.base() else {
                     return self.ir.add_expr(ExprKind::Error, span);
                 };
+                // `@a.b`: the selectors are the id's keys (`SPEC.md` 5.1).
+                if let ast::Expr::Id(id) = &base {
+                    return match self.id_path(id, path.selectors()) {
+                        Some(id) => self.ir.add_expr(ExprKind::Id(id), span),
+                        None => self.ir.add_expr(ExprKind::Error, span),
+                    };
+                }
                 if let Some(error) = self.check_reference_variants(&base, path) {
                     return self.error_expr(span, error);
                 }

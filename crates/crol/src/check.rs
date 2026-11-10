@@ -3,7 +3,7 @@
 
 use std::rc::Rc;
 
-use crol_eval::{Context, ContextData, Diagnostic, Key, Span, Value, ValueKind, Variants};
+use crol_eval::{Context, ContextData, Diagnostic, IdPath, Key, Span, Value, ValueKind, Variants};
 use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 
@@ -307,7 +307,7 @@ impl std::fmt::Display for Path<'_> {
 /// An id met in a value, to check in the other contexts.
 struct IdUse<'a> {
     value: &'a Value,
-    id: &'a str,
+    id: &'a IdPath,
     refers: &'a [String],
     path: String,
 }
@@ -423,7 +423,7 @@ impl<'a> Checker<'a> {
             TypeExpr::Any => true,
             TypeExpr::Bool => matches!(value.kind, ValueKind::Bool(_)),
             TypeExpr::Char => matches!(value.kind, ValueKind::Char(_)),
-            TypeExpr::String => matches!(value.kind, ValueKind::String(_) | ValueKind::Id(_)),
+            TypeExpr::String => matches!(value.kind, ValueKind::String(_)),
             TypeExpr::Unit => matches!(value.kind, ValueKind::Unit),
             TypeExpr::I8 => int(i8::MIN.into(), i8::MAX.into()),
             TypeExpr::I16 => int(i16::MIN.into(), i16::MAX.into()),
@@ -734,13 +734,26 @@ impl<'a> Checker<'a> {
     }
 
     /// An id must name a root key in the same context, of an allowed type.
-    fn id(&mut self, value: &Value, id: &str, refers: &[String], path: Path<'_>) {
-        let Some(target) = self.data.value(id, self.context) else {
-            return self.error(
-                value.span,
-                format!("the id `@{id}` names no root key"),
-                path,
-            );
+    fn id(&mut self, value: &Value, id: &IdPath, refers: &[String], path: Path<'_>) {
+        let [first, rest @ ..] = id.keys() else {
+            return;
+        };
+        let target = self.data.value(first, self.context).and_then(|mut target| {
+            for key in rest {
+                let ValueKind::Keyed(keyed) = &target.kind else {
+                    return None;
+                };
+                target = keyed.field(key)?;
+            }
+            Some(target)
+        });
+        let Some(target) = target else {
+            let what = if id.name().is_some() {
+                "no root key"
+            } else {
+                "nothing"
+            };
+            return self.error(value.span, format!("the id `{id}` names {what}"), path);
         };
         if refers.is_empty() {
             return;
@@ -758,7 +771,7 @@ impl<'a> Checker<'a> {
             self.error(
                 value.span,
                 format!(
-                    "the id `@{id}` names {}, but it may only name {}",
+                    "the id `{id}` names {}, but it may only name {}",
                     target_name.map_or_else(
                         || "a value without a type name".to_owned(),
                         |n| format!("a `{n}`")

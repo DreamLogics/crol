@@ -895,11 +895,17 @@ impl Literal {
 }
 
 ast_node!(
-    /// `@name` or `@"text"` (`SPEC.md` 3.2)
+    /// `@name`, `@"text"` or `@::name` (`SPEC.md` 3.2). In `@a.b`, the
+    /// selectors are a [`PathExpr`] around it.
     IdExpr, ID_EXPR
 );
 
 impl IdExpr {
+    /// Whether it starts from the root: `@::name`.
+    pub fn is_rooted(&self) -> bool {
+        token(&self.0, COLON2).is_some()
+    }
+
     /// The identifier or string after `@`.
     pub fn name(&self) -> Option<SyntaxToken> {
         [IDENT, STRING, RAW_STRING]

@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use crate::source::Span;
-use crate::value::Key;
+use crate::value::{IdPath, Key};
 
 pub(crate) type ExprId = usize;
 pub(crate) type BlockId = usize;
@@ -170,7 +170,7 @@ pub(crate) enum ExprKind {
     Float(f64),
     Char(char),
     Str(Arc<str>),
-    Id(Arc<str>),
+    Id(IdPath),
     Ref(RefKind),
     Block(BlockId),
     List(Vec<ExprId>),

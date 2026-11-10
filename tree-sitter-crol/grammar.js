@@ -239,11 +239,12 @@ module.exports = grammar({
 
     literal: $ => choice($.string, $.raw_string, $.char, $.integer, $.float, 'true', 'false'),
 
-    // `@name` and `@"text"` are one token each: the name must follow `@`
-    // directly (SPEC.md 2.5).
+    // `@name`, `@"text"`, `@::name` and `@::"text"` are one token each: the
+    // name must follow `@` or `::` directly (SPEC.md 2.5). Selectors after it,
+    // `@a.b`, are a path (SPEC.md 5.1).
     id_expr: $ => choice(
-      alias(token(seq('@', IDENTIFIER)), $.id),
-      alias(token(seq('@', STRING)), $.id),
+      alias(token(seq('@', optional('::'), IDENTIFIER)), $.id),
+      alias(token(seq('@', optional('::'), STRING)), $.id),
     ),
 
     // A reference is one token, so that its name follows `&` directly

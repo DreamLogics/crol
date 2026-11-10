@@ -11,10 +11,10 @@ use serde::de::{
     Visitor,
 };
 
-use crol_eval::{Key, Keyed, Sources, Value, ValueKind};
+use crol_eval::{IdPath, Key, Keyed, Sources, Value, ValueKind};
 
 use crate::error::Error;
-use crate::id::{ID_TOKEN, IdUse};
+use crate::id::{ID_TOKEN, Id, IdUse};
 use crate::raw::RAW_TOKEN;
 use crate::schema::{Field, SchemaFile, TypeDef, VariantShape};
 
@@ -224,13 +224,21 @@ impl<'a> ValueDeserializer<'a> {
         }
     }
 
+    /// The text of the id this is, without `@`, for a hint.
+    fn id_text(&self) -> String {
+        match &self.value.kind {
+            ValueKind::Id(id) => id.keys().join("."),
+            _ => String::new(),
+        }
+    }
+
     fn expected(&self, what: &str) -> Error {
         self.error(format!("expected {what}, found {}", self.found()))
     }
 
-    fn record_id(&self, id: &str) {
+    fn record_id(&self, id: &IdPath) {
         self.context.ids.borrow_mut().push(IdUse {
-            id: id.to_owned(),
+            id: Id::from_path(id),
             span: self.value.span,
             rust_path: describe(&self.path),
         });
@@ -356,9 +364,10 @@ impl<'a> de::Deserializer<'a> for ValueDeserializer<'a> {
             ValueKind::Float(f) => visitor.visit_f64(*f),
             ValueKind::Char(c) => visitor.visit_char(*c),
             ValueKind::String(s) => visitor.visit_borrowed_str(s),
+            // As its text, `@` included (`SPEC.md` 10.1, 10.5).
             ValueKind::Id(id) => {
                 self.record_id(id);
-                visitor.visit_borrowed_str(id)
+                visitor.visit_string(id.to_string())
             }
             ValueKind::UnitName(name) => visitor.visit_borrowed_str(name),
             ValueKind::List(elements) | ValueKind::Tuple(elements) => {
@@ -425,9 +434,13 @@ impl<'a> de::Deserializer<'a> for ValueDeserializer<'a> {
     fn deserialize_str<V: Visitor<'a>>(self, visitor: V) -> Result<V::Value, Error> {
         match &self.value.kind {
             ValueKind::String(s) => visitor.visit_borrowed_str(s),
-            ValueKind::Id(id) => {
-                self.record_id(id);
-                visitor.visit_borrowed_str(id)
+            // A string field takes no id (`SPEC.md` 10.1).
+            ValueKind::Id(_) => {
+                return Err(self.error(format!(
+                    "expected a string, found an id; a field that takes ids is a `crol::Id`, \
+                     and a string is written `\"{}\"`",
+                    self.id_text()
+                )));
             }
             _ => return Err(self.expected("a string")),
         }
@@ -520,8 +533,8 @@ impl<'a> de::Deserializer<'a> for ValueDeserializer<'a> {
                 return Err(self.expected("an id (`@name`)"));
             };
             self.record_id(id);
-            let inner: de::value::BorrowedStrDeserializer<'a, Error> =
-                de::value::BorrowedStrDeserializer::new(id);
+            let inner: de::value::StringDeserializer<Error> =
+                de::value::StringDeserializer::new(id.to_string());
             return visitor
                 .visit_newtype_struct(inner)
                 .map_err(|e| self.attach(e));
@@ -804,7 +817,13 @@ impl<'a> de::Deserializer<'a> for KeyDeserializer<'_, 'a> {
         match self.key {
             Key::Str(s) => {
                 if name == ID_TOKEN {
-                    self.at.record_id(s);
+                    // A key is written without `@`; `Id` takes its text with
+                    // one (`SPEC.md` 10.5).
+                    let id = IdPath::key(s.clone());
+                    self.at.record_id(&id);
+                    return visitor.visit_newtype_struct(
+                        de::value::StringDeserializer::<Error>::new(id.to_string()),
+                    );
                 }
                 visitor.visit_newtype_struct(de::value::BorrowedStrDeserializer::<Error>::new(s))
             }

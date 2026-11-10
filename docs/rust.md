@@ -298,7 +298,7 @@ fn main() -> Result<(), crol::Error> {
     let (web, ids): (Service, Vec<IdUse>) = data.get_with_ids("web")?;
     println!("web has {} dependencies", web.depends_on.len());
     for id in ids {
-        if !data.contains(&id.id) {
+        if id.id.name().is_some_and(|name| !data.contains(name)) {
             println!("{}: nothing is called `{}`", id.rust_path, id.id);
         }
     }
@@ -309,7 +309,7 @@ fn main() -> Result<(), crol::Error> {
 ```console
 $ cargo run
 web has 2 dependencies
-web.depends_on[1]: nothing is called `cache`
+web.depends_on[1]: nothing is called `@cache`
 ```
 
 With a [schema](schemas.md), `#[crol(refers(...))]` and `crol::check` do this

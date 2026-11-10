@@ -64,12 +64,12 @@ fn structs_with_templates_and_defaults() {
             port: 8080,
             tags: vec![],
             limits: Limits::default(),
-            depends_on: vec!["database".into()],
+            depends_on: vec![crol::Id::key("database")],
             url: Some("http://web:8080".into()),
         }
     );
     assert_eq!(ids.len(), 1);
-    assert_eq!(ids[0].id, "database");
+    assert_eq!(ids[0].id, crol::Id::key("database"));
     assert_eq!(ids[0].rust_path, "depends_on[0]");
 }
 
@@ -172,12 +172,87 @@ fn ids_need_the_at_sign() {
         err::<Vec<crol::Id>>(r#"["web"]"#),
         "expected an id (`@name`), found \"web\" (<string>:1:2, while deserializing [0])"
     );
-    // A `String` accepts an id too, and a map keyed by ids takes string keys.
-    let names: Vec<String> = crol::from_str("[@web, \"db\"]").unwrap();
-    assert_eq!(names, ["web", "db"]);
+    // A map keyed by ids takes string keys.
     let (map, ids): (HashMap<crol::Id, u32>, _) = crol::from_str_with_ids("{ web: 1 }").unwrap();
-    assert_eq!(map[&crol::Id::from("web")], 1);
-    assert_eq!(ids[0].id, "web");
+    assert_eq!(map[&crol::Id::key("web")], 1);
+    assert_eq!(ids[0].id, crol::Id::key("web"));
+}
+
+#[test]
+fn strings_refuse_ids() {
+    assert_eq!(
+        err::<Vec<String>>(r#"["db", @web]"#),
+        "expected a string, found an id; a field that takes ids is a `crol::Id`, and a \
+         string is written `\"web\"` (<string>:1:8, while deserializing [1])"
+    );
+}
+
+#[test]
+fn path_ids() {
+    let ids: Vec<crol::Id> = crol::from_str(r#"[@a.b, @::a, @"odd id"["x y"], @a["b"]]"#).unwrap();
+    assert_eq!(ids[0].path(), ["a", "b"]);
+    assert_eq!(ids[0].name(), None);
+    assert!(ids[1].is_rooted());
+    assert_eq!(ids[1].path(), ["a"]);
+    assert_eq!(ids[2].path(), ["odd id", "x y"]);
+    // `.b` and `["b"]` are the same key.
+    assert_eq!(ids[3], ids[0]);
+    // `@x` and `@::x` are different ids, though they may name the same key.
+    assert_ne!(crol::Id::key("a"), ids[1]);
+    assert_eq!(
+        err::<crol::Id>("@a[0]"),
+        "<string>:1:3: an id names keys, written `.name` or `[\"key\"]`: not list \
+         elements, tuple elements, integer keys or conditions"
+    );
+}
+
+#[test]
+fn ids_as_text() {
+    for text in ["@web", r#"@"odd id""#, "@a.b", r#"@a["x y"]"#, "@::a.b"] {
+        let id: crol::Id = text.parse().unwrap();
+        assert_eq!(id.to_string(), text);
+    }
+    // One key with a dot in it, and a path, stay apart.
+    let one: crol::Id = r#"@"a.b""#.parse().unwrap();
+    let path: crol::Id = "@a.b".parse().unwrap();
+    assert_ne!(one, path);
+    assert!("web".parse::<crol::Id>().is_err());
+    // Other formats see the text, `@` included.
+    let id: crol::Id = serde::de::Deserialize::deserialize(serde::de::value::StrDeserializer::<
+        serde::de::value::Error,
+    >::new("@::a.b"))
+    .unwrap();
+    assert_eq!(id.to_string(), "@::a.b");
+    let plain: Result<crol::Id, _> =
+        serde::de::Deserialize::deserialize(serde::de::value::StrDeserializer::<
+            serde::de::value::Error,
+        >::new("web"));
+    assert!(plain.is_err());
+}
+
+#[test]
+fn untagged_tells_ids_from_strings() {
+    #[derive(Debug, PartialEq, Deserialize)]
+    #[serde(untagged)]
+    enum Ref {
+        Id(crol::Id),
+        Name(String),
+    }
+    let refs: Vec<Ref> = crol::from_str(r#"[@web, "web"]"#).unwrap();
+    assert_eq!(
+        refs,
+        [Ref::Id(crol::Id::key("web")), Ref::Name("web".into())]
+    );
+}
+
+#[test]
+fn id_keys_serialize_bare() {
+    let map = BTreeMap::from([(crol::Id::key("web"), 1)]);
+    assert_eq!(crol::to_string(&map).unwrap(), "{web: 1}");
+    let path = BTreeMap::from([("@a.b".parse::<crol::Id>().unwrap(), 1)]);
+    assert!(crol::to_string(&path).is_err());
+    let ids = vec!["@::a.b".parse::<crol::Id>().unwrap()];
+    assert_eq!(crol::to_string(&ids).unwrap().trim(), "[@::a.b]");
 }
 
 #[test]
@@ -225,7 +300,8 @@ fn any_gives_the_natural_form() {
         map["b"],
         Any::Map(BTreeMap::from([("Some".into(), Any::Int(2))]))
     );
-    assert_eq!(map["c"], Any::Str("web".into()));
+    // An id is its text, `@` included.
+    assert_eq!(map["c"], Any::Str("@web".into()));
 }
 
 #[test]
@@ -236,7 +312,7 @@ fn serializer_writes_plain_data() {
         port: 80,
         tags: vec!["a b".into()],
         limits: Limits::default(),
-        depends_on: vec!["database".into(), "odd id".into()],
+        depends_on: vec![crol::Id::key("database"), crol::Id::key("odd id")],
         url: None,
     };
     let text =

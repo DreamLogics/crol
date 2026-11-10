@@ -20,12 +20,12 @@ use crate::cond::Cond;
 use crate::ir::*;
 use crate::lower::LoweredData;
 use crate::source::{FileId, Sources, Span};
-use crate::value::Key;
+use crate::value::{IdPath, Key};
 
 const MAGIC: &[u8; 4] = b"CROB";
 
 /// The version of the format: files of another are refused, and made again.
-pub const FORMAT: u32 = 6;
+pub const FORMAT: u32 = 7;
 
 /// The magic, the format, the hash of the rest of the file, the hash of the
 /// documents and the size of what is compressed.
@@ -225,9 +225,13 @@ impl Writer<'_> {
                 self.out.push(5);
                 self.string(s);
             }
-            ExprKind::Id(s) => {
+            ExprKind::Id(id) => {
                 self.out.push(6);
-                self.string(s);
+                self.flag(id.is_rooted());
+                self.uint(id.keys().len() as u64);
+                for key in id.keys() {
+                    self.string(key);
+                }
             }
             ExprKind::Ref(kind) => {
                 self.out.push(7);
@@ -725,7 +729,14 @@ impl Reader<'_> {
                 ExprKind::Char(char::from_u32(c).ok_or(Corrupt)?)
             }
             5 => ExprKind::Str(self.string()?),
-            6 => ExprKind::Id(self.string()?),
+            6 => {
+                let rooted = self.flag()?;
+                let count = self.count()?;
+                let keys = (0..count)
+                    .map(|_| self.string())
+                    .collect::<Read<Vec<_>>>()?;
+                ExprKind::Id(IdPath::new(rooted, keys).ok_or(Corrupt)?)
+            }
             7 => ExprKind::Ref(self.reference()?),
             8 => ExprKind::Block(self.id()?.saturating_add(self.blocks)),
             9 => ExprKind::List(self.expr_ids()?),

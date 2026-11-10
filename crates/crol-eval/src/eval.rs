@@ -21,7 +21,7 @@ use crate::cond::Resolved;
 use crate::diagnostic::Diagnostic;
 use crate::ir::*;
 use crate::source::Span;
-use crate::value::{Key, KeyRef, Keyed, Value, ValueKind, format_float};
+use crate::value::{IdPath, Key, KeyRef, Keyed, Value, ValueKind, format_float};
 use crate::variants::{Context, Variants};
 
 /// The most cells being computed at once, so that deeply nested references
@@ -145,7 +145,7 @@ enum Shape {
     Float(f64),
     Char(char),
     Str(Arc<str>),
-    Id(Arc<str>),
+    Id(IdPath),
     List(Vec<Lazy>),
     Tuple(Vec<Lazy>),
     UnitName(Arc<str>),

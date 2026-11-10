@@ -623,7 +623,8 @@ impl Formatter {
             LITERAL | UNIT_NAME | REFERENCE => {
                 significant_tokens(node).map(|t| t.to_string()).collect()
             }
-            ID_EXPR => format!("@{}", significant_tokens(node).nth(1)?),
+            // `@`, `::` and the name, which are adjacent.
+            ID_EXPR => significant_tokens(node).map(|t| t.to_string()).collect(),
             BLOCK | LIST_EXPR | TUPLE_EXPR | NAMED_TUPLE | MACRO_CALL | VARIANT_BLOCK => {
                 self.flat_container(node)?
             }

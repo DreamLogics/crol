@@ -224,7 +224,9 @@ impl<'c> ser::Serializer for ValueSerializer<'c> {
         }
         if name == ID_TOKEN {
             return match inner.kind {
-                ValueKind::String(id) => Ok(value(ValueKind::Id(id))),
+                ValueKind::String(text) => crol_eval::IdPath::parse(&text)
+                    .map(|id| value(ValueKind::Id(id)))
+                    .map_err(Error::new),
                 _ => Err(Error::new("an id must be a string")),
             };
         }
@@ -617,9 +619,21 @@ impl ser::Serializer for KeySerializer {
 
     fn serialize_newtype_struct<T: Serialize + ?Sized>(
         self,
-        _: &'static str,
+        name: &'static str,
         v: &T,
     ) -> Result<Key, Error> {
+        // An id key is written without `@` (`SPEC.md` 10.5), and only a
+        // single key can be one.
+        if name == ID_TOKEN {
+            let Key::Str(text) = v.serialize(self)? else {
+                return Err(Error::new("an id must be a string"));
+            };
+            let id = crol_eval::IdPath::parse(&text).map_err(Error::new)?;
+            return match id.name() {
+                Some(name) => Ok(Key::Str(name.into())),
+                None => Err(bad_key(&format!("the path id `{id}`"))),
+            };
+        }
         v.serialize(self)
     }
 

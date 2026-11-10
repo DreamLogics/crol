@@ -1428,10 +1428,15 @@ impl Parser<'_> {
         }
     }
 
-    /// `@name` or `@"text"` (`SPEC.md` 3.2).
+    /// `@name`, `@"text"`, or either after `::`: `@::name` (`SPEC.md` 3.2,
+    /// 5.1). Selectors after it are parsed as a path, which lowering reads
+    /// as the id's keys.
     fn id(&mut self) {
         self.start(ID_EXPR);
         self.bump(); // `@`
+        if self.at(COLON2) && self.current_is_adjacent() {
+            self.bump();
+        }
         let adjacent = self.current_is_adjacent();
         match self.current() {
             IDENT | STRING | RAW_STRING => {

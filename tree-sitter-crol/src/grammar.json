@@ -1849,6 +1849,18 @@
                   "value": "@"
                 },
                 {
+                  "type": "CHOICE",
+                  "members": [
+                    {
+                      "type": "STRING",
+                      "value": "::"
+                    },
+                    {
+                      "type": "BLANK"
+                    }
+                  ]
+                },
+                {
                   "type": "PATTERN",
                   "value": "[A-Za-z][A-Za-z0-9_]*|_[A-Za-z0-9_]+"
                 }
@@ -1868,6 +1880,18 @@
                 {
                   "type": "STRING",
                   "value": "@"
+                },
+                {
+                  "type": "CHOICE",
+                  "members": [
+                    {
+                      "type": "STRING",
+                      "value": "::"
+                    },
+                    {
+                      "type": "BLANK"
+                    }
+                  ]
                 },
                 {
                   "type": "SEQ",
