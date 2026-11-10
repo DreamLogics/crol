@@ -148,6 +148,7 @@ Serde's attributes are understood: `rename`, `rename_all`, `alias`, `default`,
 | `#[crol(constraints(name = Min(0)))]` | a type | define sealed constraints                                  |
 | `#[crol(open_constraints(...))]` | a type     | define constraints that layers may change                   |
 | `#[crol(sealed)]`                | a field, type | [only the layer that defines a value can set it](#sealed-fields) |
+| `#[crol(scope)]`                 | a struct, struct variant | its values are [scopes for ids](language.md#scopes); give your loader the schema for this |
 
 Use `schema = ...` for a field whose type has no `Schema`, such as a type from
 another crate, and for fields with `#[serde(with = "...")]`, which the derive
@@ -190,8 +191,9 @@ error: the id `@database` names no root key
 ```
 
 Every problem appears at once, in every context, with the same rules and
-messages as loading the data in your program. Unlike your program, it also
-checks ids: each must name a root key, of a type that `refers` allows.
+messages as loading the data in your program. It also checks ids: each must
+name something, through the [scopes](language.md#scopes) around it, of a type
+that `refers` allows.
 
 `crol eval` uses a schema too. Fields that take their defaults are written out,
 each marked with a comment, so you can see what your program will get:
@@ -623,12 +625,17 @@ changed. Your editor leaves sealed fields out of completion in higher layers.
 
 ## What else the loader learns from a schema
 
-serde tells a deserializer nothing about attributes, so two more things reach it
-only through a schema: which field names are `#[serde(alias)]`es of one field, so
-that a field written by its alias counts as present, and
-[`explicit_defaults`](#types-that-decide-about-). Give the loader the schema if
-you use either: `CrolComposer::schema` for layers, and
+serde tells a deserializer nothing about attributes, so three more things reach
+it only through a schema: which field names are `#[serde(alias)]`es of one field,
+so that a field written by its alias counts as present,
+[`explicit_defaults`](#types-that-decide-about-), and which types are
+[scopes for ids](language.md#scopes) (`#[crol(scope)]`). Give the loader the
+schema if you use any of them: `CrolComposer::schema` for layers, and
 `crol::from_str_with_schema(text, &schema)` for a single document.
+
+Without the schema, ids in a `#[crol(scope)]` type resolve as if it were no
+scope, so your program and `crol check` would disagree. `crol check` and your
+editor point this out at the first id it changes.
 
 ## Checking from Rust
 
