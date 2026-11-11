@@ -215,6 +215,46 @@ pub(crate) fn rename(
     Ok(Some(WorkspaceEdit::new(changes)))
 }
 
+/// The first name of the id written at `span`: `web` in `@web`, `a` in
+/// `@::a.b`.
+fn id_name_span(snapshot: &Snapshot, span: crol_eval::Span) -> crol_eval::Span {
+    let text = snapshot.sources.file(span.file).text();
+    let parse = crol_syntax::parse(text);
+    let name = parse
+        .syntax()
+        .descendants()
+        .find(|node| node.text_range() == span.range)
+        .and_then(|node| {
+            node.descendants_with_tokens()
+                .filter_map(|it| it.into_token())
+                .find(|t| {
+                    t.parent().is_some_and(|p| p.kind() == SyntaxKind::ID_EXPR)
+                        && matches!(
+                            t.kind(),
+                            SyntaxKind::IDENT | SyntaxKind::STRING | SyntaxKind::RAW_STRING
+                        )
+                })
+        });
+    match name {
+        Some(name) => crol_eval::Span::new(span.file, name.text_range()),
+        None => span,
+    }
+}
+
+/// Where a span is, as a location.
+fn span_location(
+    snapshot: &Snapshot,
+    span: crol_eval::Span,
+    encoding: Encoding,
+) -> Option<Location> {
+    let file = snapshot.sources.file(span.file);
+    let index = LineIndex::new(file.text());
+    Some(Location::new(
+        convert::path_to_uri(snapshot.path(span.file)?)?,
+        convert::range(file.text(), &index, span.range, encoding),
+    ))
+}
+
 // ---- Find references ----
 
 /// For a bind, its declaration (if asked for) and uses; for a root key,
@@ -244,8 +284,50 @@ pub(crate) fn references(
         return Some(out);
     }
     let (_, token) = crate::features::token_at(text, position, encoding)?;
-    let key = crate::features::root_key_at(&token)?;
+    // What the token names in the data, and the ids that name it there
+    // (`SPEC.md` 10.5).
+    let file = snapshot.and_then(|s| Some((s, s.file_of(&convert::uri_to_path(uri)?)?)));
+    let places = file.map_or_else(Vec::new, |(snapshot, file)| {
+        crate::features::places_named(snapshot, file, &token)
+    });
     let mut out = Vec::new();
+    if let Some((snapshot, file)) = file
+        && !places.is_empty()
+    {
+        for id in snapshot.resolved_ids(file) {
+            if id
+                .target
+                .as_ref()
+                .is_some_and(|target| places.contains(target))
+                && let Some(location) =
+                    span_location(snapshot, id_name_span(snapshot, id.span), encoding)
+                && !out.contains(&location)
+            {
+                out.push(location);
+            }
+        }
+        // Inside a root value, the id's place has no operations of its own
+        // to find: its entry is the declaration.
+        if places.iter().all(|place| place.steps().len() > 1) {
+            if include_declaration && let Some(root) = snapshot.data_of(file) {
+                for place in &places {
+                    if let Some(value) = place.value_in(root)
+                        && let Some(location) = span_location(
+                            snapshot,
+                            crate::features::entry_key_span(snapshot, value.span),
+                            encoding,
+                        )
+                    {
+                        out.push(location);
+                    }
+                }
+            }
+            return Some(out);
+        }
+    }
+    let key = crate::features::root_key_at(&token)?;
+    // With the data, ids were found by what they resolve to.
+    let ids_found = !places.is_empty();
     // A plain key is written as it is, so most files need no parsing.
     let plain = crol_eval::is_identifier(&key);
     for (file, text) in documents(snapshot, uri, text) {
@@ -254,7 +336,7 @@ pub(crate) fn references(
         }
         let index = LineIndex::new(&text);
         let parse = crol_syntax::parse(&text);
-        for range in key_occurrences(&parse.syntax(), &key, include_declaration) {
+        for range in key_occurrences(&parse.syntax(), &key, include_declaration, !ids_found) {
             out.push(Location::new(
                 file.clone(),
                 convert::range(&text, &index, range, encoding),
@@ -299,7 +381,12 @@ fn root_target(entry: &ast::AnyEntry) -> Option<ast::Target> {
 
 /// The ranges naming the root key `key` in a document: the keys of root
 /// entries that operate on it (if `operations`), `&root.key` and `@key`.
-fn key_occurrences(document: &SyntaxNode, key: &str, operations: bool) -> Vec<TextRange> {
+fn key_occurrences(
+    document: &SyntaxNode,
+    key: &str,
+    operations: bool,
+    ids: bool,
+) -> Vec<TextRange> {
     let mut out = Vec::new();
     if operations {
         for entry in root_entries(document) {
@@ -312,7 +399,7 @@ fn key_occurrences(document: &SyntaxNode, key: &str, operations: bool) -> Vec<Te
     }
     for node in document.descendants() {
         match node.kind() {
-            SyntaxKind::ID_EXPR => {
+            SyntaxKind::ID_EXPR if ids => {
                 if let Some(token) = node
                     .children_with_tokens()
                     .filter_map(|it| it.into_token())

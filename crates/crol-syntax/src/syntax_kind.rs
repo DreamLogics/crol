@@ -39,6 +39,7 @@ pub enum SyntaxKind {
     EXTENDS_KW,
     VARIANT_KW,
     SUPER_KW,
+    SCOPE_KW,
 
     // Punctuation (`SPEC.md` 2.5).
     L_BRACE,
@@ -265,6 +266,7 @@ const KINDS: [SyntaxKind; __LAST as usize] = [
     EXTENDS_KW,
     VARIANT_KW,
     SUPER_KW,
+    SCOPE_KW,
     L_BRACE,
     R_BRACE,
     L_BRACK,

@@ -273,10 +273,11 @@ layers together.
 
 ## Ids
 
-An [id](language.md#ids) names a root key. Use `crol::Id` for a field that must
-hold one: unlike `String`, it refuses a plain string. CROL does not check what
-ids point at, because only you know what is valid. It tells you which ids it
-saw, so you can check them:
+An [id](language.md#ids) names a key. Use `crol::Id` for a field that holds
+one: it refuses a plain string, and a `String` field refuses an id. Every id
+the deserializer reads is reported with what it resolved to, through the
+[scopes](language.md#scopes) around the place it ends up, so you can check
+them:
 
 ```rust
 // src/main.rs
@@ -298,7 +299,7 @@ fn main() -> Result<(), crol::Error> {
     let (web, ids): (Service, Vec<IdUse>) = data.get_with_ids("web")?;
     println!("web has {} dependencies", web.depends_on.len());
     for id in ids {
-        if !data.contains(&id.id) {
+        if id.target.is_none() {
             println!("{}: nothing is called `{}`", id.rust_path, id.id);
         }
     }
@@ -309,11 +310,19 @@ fn main() -> Result<(), crol::Error> {
 ```console
 $ cargo run
 web has 2 dependencies
-web.depends_on[1]: nothing is called `cache`
+web.depends_on[1]: nothing is called `@cache`
 ```
 
-With a [schema](schemas.md), `#[crol(refers(...))]` and `crol::check` do this
-for you, including the type of what an id names.
+`id.target` is where in the data an id resolved to, such as `dashboard.filter`;
+`data.contains_path` and `data.type_name_at` look one up. An id that names
+nothing is also among `data.warnings()`, and with `CrolConfig { strict_ids:
+true, .. }` it is an error that stops the data from loading.
+
+As text, an id is written as in a file, with its `@`: `id.to_string()` is
+`"@web"`, `"@web".parse::<Id>()` reads one, and in JSON an `Id` is `"@web"`.
+
+With a [schema](schemas.md), `#[crol(refers(...))]` and `crol::check` check the
+type of what an id names too.
 
 ## Configuration
 

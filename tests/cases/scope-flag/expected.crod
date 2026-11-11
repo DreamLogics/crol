@@ -1,0 +1,24 @@
+#[scope]
+staging: { db: { host: "staging-db", port: 5432 }, web: { depends_on: [@db] } }
+#[scope]
+spread: { members: [], extra: 1 }
+#[scope]
+merged: { a: 1, members: [] }
+#[scope]
+copied: { members: [] }
+#[scope]
+gained: { x: 1, y: 2 }
+replaced: { z: 3 }
+#[scope]
+kept: { x: 1, y: 2 }
+in_variant: { x: 1 }
+nested: {
+    #[scope]
+    inner: { y: 1 },
+    other: { name: "g" },
+}
+
+<!dev & prod> {
+    #[scope]
+    in_variant: { z: 3 },
+}

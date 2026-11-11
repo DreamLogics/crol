@@ -478,6 +478,30 @@ impl Completer<'_> {
         self.evaluation().value.as_ref()
     }
 
+    /// The keys `@name` can name at `place`, innermost scope first, with
+    /// what each holds.
+    fn visible_keys(
+        root: &Value,
+        resolver: &crol::IdResolver<'_>,
+        place: &crol::DataPath,
+    ) -> Vec<CompletionItem> {
+        resolver
+            .visible(place)
+            .into_iter()
+            .map(|name| {
+                let id: crol::Id = crol::Id::key(name.as_str());
+                let detail = resolver
+                    .resolve(&id, place)
+                    .and_then(|target| target.value_in(root).and_then(describe));
+                item(
+                    crol_eval::Key::Str(name.as_str().into()).to_string(),
+                    CompletionItemKind::FIELD,
+                    detail,
+                )
+            })
+            .collect()
+    }
+
     /// The keys of a value, through a named tuple of one element, which a
     /// field selects in (`SPEC.md` 5.1).
     fn keys_of(value: &Value, only_keyed: bool) -> Vec<CompletionItem> {
@@ -634,12 +658,19 @@ impl Completer<'_> {
         items
     }
 
-    /// After `@`: root keys, only those of the types the field may refer
-    /// to when the schema says (`#[crol(refers(...))]`).
+    /// After `@`: the keys of the scopes around the cursor, innermost first
+    /// (`SPEC.md` 10.5), only those of the types the field may refer to when
+    /// the schema says (`#[crol(refers(...))]`).
     fn ids(&self) -> Vec<CompletionItem> {
         let Some(root) = self.root_value() else {
             return Vec::new();
         };
+        let schema = self.snapshot.schema_for(self.file);
+        let place = self
+            .cursor
+            .value_or_root()
+            .and_then(|place| place.path.as_deref())
+            .map(|steps| features::data_path_lenient(root, steps));
         let refers = self.value_type().and_then(|ty| refers_of(&ty));
         let names: Option<Vec<&str>> = refers.map(|paths| {
             let schema = self.snapshot.schema_for(self.file).map(|s| s.file);
@@ -648,7 +679,21 @@ impl Completer<'_> {
                 .filter_map(|p| schema.and_then(|s| s.get(p)).map(TypeDef::name))
                 .collect()
         });
-        let mut items = Self::keys_of(root, false);
+        let mut items = match place {
+            Some(place) if place.steps().len() > 1 => {
+                let mut resolver = crol::IdResolver::new(root);
+                if let Some(schema) = &schema {
+                    resolver = resolver.schema(schema.file);
+                    resolver = match (schema.value_mode, schema.root) {
+                        (true, Some(root)) => resolver.value_type(root),
+                        (false, Some(root)) => resolver.root_type(root),
+                        _ => resolver,
+                    };
+                }
+                Self::visible_keys(root, &resolver, &place)
+            }
+            _ => Self::keys_of(root, false),
+        };
         if let Some(names) = names.filter(|n| !n.is_empty()) {
             items.retain(|i| i.detail.as_deref().is_some_and(|d| names.contains(&d)));
         }

@@ -41,7 +41,9 @@ mod variants;
 pub use diagnostic::{Diagnostic, Related, Severity};
 pub use order::{LayerTarget, layer_target};
 pub use source::{FileId, Location, SourceFile, Sources, Span};
-pub use value::{Key, Keyed, Value, ValueKind, format_float, is_identifier, quote, quote_char};
+pub use value::{
+    IdPath, Key, Keyed, Value, ValueKind, format_float, is_identifier, quote, quote_char,
+};
 pub use variants::{Context, VariantId, Variants};
 
 pub use eval::{

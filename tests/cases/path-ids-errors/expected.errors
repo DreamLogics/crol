@@ -1,0 +1,4 @@
+1-base/a.crod:1:10: an id names keys, written `.name` or `["key"]`: not list elements, tuple elements, integer keys or conditions
+1-base/a.crod:2:11: an id names keys, written `.name` or `["key"]`: not list elements, tuple elements, integer keys or conditions
+1-base/a.crod:3:14: an id names keys, written `.name` or `["key"]`: not list elements, tuple elements, integer keys or conditions
+1-base/a.crod:4:15: an id names keys, written `.name` or `["key"]`: not list elements, tuple elements, integer keys or conditions

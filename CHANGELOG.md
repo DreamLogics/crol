@@ -9,6 +9,44 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ## [Unreleased]
 
+This release changes the format in ways that break documents and programs written for
+0.3.0 (#11):
+
+- A `String` field no longer accepts an id: `name: @web` there is an error. Use
+  `crol::Id` for a field that takes ids, or write a string.
+- `crol::Id` holds the keys of an id and whether it starts from the root, instead of
+  being a newtype over `String`. `Id::key("web")` makes one, `Id::name()` gives the
+  key of `@web`, and `From<String>` and `From<&str>` are gone. As text it has its `@`:
+  `Display` writes `@web`, `FromStr` reads it, other serde formats see `"@web"`, and so
+  does `deserialize_any`, as in `#[serde(flatten)]` and `#[serde(untagged)]`.
+- `IdUse.id` is an `Id`, and `IdUse` is `#[non_exhaustive]`.
+- `crol_eval::ValueKind::Id` holds a `crol_eval::IdPath`, and `crol_eval::Keyed` has a
+  `scope` field.
+- `crol_syntax::SyntaxKind` has a new kind, `SCOPE_KW`, which renumbers the kinds after
+  it.
+- `.crob` files have a new format: compile layers again.
+
+### Added
+
+- Scoped ids. An id names a key of the innermost scope around the place its value ends
+  up, falling back to the root, so that grouped data need not have global names: two
+  screens can each have a `filter`, and `@filter` in each names its own. A block is a
+  scope with `#[scope]` before its entry, or when its type has `#[crol(scope)]` and the
+  loader has the schema. `#[crol(scope)]` goes on a struct, a struct variant, or a
+  newtype or transparent struct, such as one around a map of components. Without scopes, ids name root keys as before.
+- Path ids: `@settings.filter` reaches into another scope, `@"odd id"["x y"]` names keys
+  that are not identifiers, and `@::web` names the root key whatever the scopes around.
+- `IdUse.target` says where an id resolved to, as a `crol::DataPath`, and
+  `CrolData::contains_path` and `type_name_at` look one up. An id that names nothing is
+  a warning in `CrolData::warnings()`, or with `CrolConfig::strict_ids` an error. A
+  reload resolves every id again without evaluating more.
+- `crol check` and the language server report ids that name nothing, also without a
+  schema. The language server goes to what an id names in each place a template puts
+  it, finds the ids that name a key at any depth, completes `@` with the keys of the
+  scopes around the cursor, and suggests them for a misspelt id.
+- `crol::IdResolver` and `crol::check_ids` resolve and check the ids of evaluated data,
+  for tools.
+
 ### Changed
 
 - `reload` keeps what the layers it does not change decode to, so it decodes a layer

@@ -659,15 +659,22 @@ impl Server {
                             let uri = p.text_document_position_params.text_document.uri;
                             let text = self.text(&uri)?;
                             let snapshot = self.snapshot.as_ref()?;
-                            features::definition(
+                            let mut found = features::definition(
                                 snapshot,
                                 &uri,
                                 &text,
                                 p.text_document_position_params.position,
                                 encoding,
-                            )
+                            );
+                            // An id written in a template may name several
+                            // things.
+                            match found.len() {
+                                0 => None,
+                                1 => found.pop().map(lsp_types::GotoDefinitionResponse::Scalar),
+                                _ => Some(lsp_types::GotoDefinitionResponse::Array(found)),
+                            }
                         });
-                self.respond(id, result.map(lsp_types::GotoDefinitionResponse::Scalar));
+                self.respond(id, result);
             }
             request::References::METHOD => {
                 let result = serde_json::from_value::<lsp_types::ReferenceParams>(request.params)

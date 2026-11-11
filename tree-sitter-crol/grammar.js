@@ -120,6 +120,7 @@ module.exports = grammar({
     ),
 
     entry: $ => seq(
+      optional(field('scope', $.scope_attr)),
       optional($.bind),
       optional(field('op', choice('+', '?', '^'))),
       field('target', $.target),
@@ -133,15 +134,20 @@ module.exports = grammar({
       optional(field('if_set', alias(token.immediate('?'), '?'))),
       field('target', $.target),
     ),
+    // `#[type(...)]` and `#[scope]`, once each, in either order.
     value_bind: $ => seq(
-      optional(field('attr', $.entry_attr)),
+      optional(choice(
+        seq(field('scope', $.scope_attr), optional(field('attr', $.entry_attr))),
+        seq(field('attr', $.entry_attr), optional(field('scope', $.scope_attr))),
+      )),
       field('name', $.identifier),
       ':=',
       field('value', $._expression),
     ),
 
-    // `#[type(...)]` (SPEC.md 6.1.2).
+    // `#[type(...)]` and `#[scope]` (SPEC.md 6.1.2).
     entry_attr: $ => seq('#', '[', 'type', '(', $.type_ref, ')', ']'),
+    scope_attr: _ => seq('#', '[', 'scope', ']'),
     type_ref: $ => seq($.type_expr, repeat($.type_step)),
     type_step: $ => seq('.', choice(
       field('name', $.identifier),
@@ -239,11 +245,12 @@ module.exports = grammar({
 
     literal: $ => choice($.string, $.raw_string, $.char, $.integer, $.float, 'true', 'false'),
 
-    // `@name` and `@"text"` are one token each: the name must follow `@`
-    // directly (SPEC.md 2.5).
+    // `@name`, `@"text"`, `@::name` and `@::"text"` are one token each: the
+    // name must follow `@` or `::` directly (SPEC.md 2.5). Selectors after it,
+    // `@a.b`, are a path (SPEC.md 5.1).
     id_expr: $ => choice(
-      alias(token(seq('@', IDENTIFIER)), $.id),
-      alias(token(seq('@', STRING)), $.id),
+      alias(token(seq('@', optional('::'), IDENTIFIER)), $.id),
+      alias(token(seq('@', optional('::'), STRING)), $.id),
     ),
 
     // A reference is one token, so that its name follows `&` directly

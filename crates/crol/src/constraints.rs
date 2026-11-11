@@ -2,6 +2,7 @@
 //! (`SPEC.md` 10.12, 10.13), and the `schema.crod` of a layer, which defines
 //! and extends constraints.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use crol_eval::{
@@ -17,9 +18,10 @@ use crate::schema::{
 };
 
 /// The text of a value, where it stands for a name.
-fn text_of(value: &Value) -> Option<&str> {
+fn text_of(value: &Value) -> Option<Cow<'_, str>> {
     match &value.kind {
-        ValueKind::String(s) | ValueKind::Id(s) | ValueKind::UnitName(s) => Some(s),
+        ValueKind::String(s) | ValueKind::UnitName(s) => Some(Cow::Borrowed(s)),
+        ValueKind::Id(id) => Some(crate::id::id_text(id)),
         _ => None,
     }
 }
@@ -96,7 +98,7 @@ fn broken(
                     value.kind.kind_name()
                 ));
             };
-            let Some(target) = root(id) else {
+            let Some(target) = root(&id) else {
                 return Some(format!("`{id}` names nothing (`{name}`)"));
             };
             let type_name = match &target.kind {

@@ -3,11 +3,12 @@
 
 use std::rc::Rc;
 
-use crol_eval::{Context, ContextData, Diagnostic, Key, Span, Value, ValueKind, Variants};
+use crol_eval::{Context, ContextData, Diagnostic, IdPath, Key, Span, Value, ValueKind, Variants};
 use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 
 use crate::compose::{CrolData, VariantName};
+use crate::resolve::{DataPath, DataStep, Resolver};
 use crate::schema::{
     DataRoot, Field, FieldDefault, Repr, SchemaFile, TypeDef, TypeExpr, VariantShape,
 };
@@ -49,17 +50,6 @@ pub struct DataView<'a> {
 }
 
 impl<'a> DataView<'a> {
-    fn value(&self, key: &str, context: Option<&'a ContextData>) -> Option<&'a Value> {
-        let key = Key::Str(key.into());
-        match context {
-            Some(data) => data.get(self.base, &key),
-            None => match &self.base.kind {
-                ValueKind::Keyed(keyed) => keyed.entries.get(&key),
-                _ => None,
-            },
-        }
-    }
-
     fn names(&self, context: &Context) -> String {
         format!("{{{}}}", self.variants.chosen_names(context).join(", "))
     }
@@ -95,8 +85,9 @@ pub fn check_value(
         contexts: &[],
         variants: &variants,
     };
-    let root_type = TypeExpr::Named(root.unwrap_or(&schema.root).to_owned());
-    let mut checker = Checker::new(schema, options, data, None);
+    let root_path = root.unwrap_or(&schema.root);
+    let root_type = TypeExpr::Named(root_path.to_owned());
+    let mut checker = Checker::new(schema, options, data, None, ResolveAs::Value(root_path));
     checker.value(value, &root_type, Path::Root(""), None);
     checker.found
 }
@@ -127,10 +118,83 @@ pub fn check_view(
         .chain(data.contexts.iter().map(Some))
         .collect();
     let found = if whole {
-        check_whole(data, schema, &root_type, options, &contexts)
+        check_whole(data, schema, &root_type, root, options, &contexts)
     } else {
-        check_keys(data, schema, &root_type, options, &contexts)
+        check_keys(data, schema, &root_type, root, options, &contexts)
     };
+    in_contexts(found, data, &contexts)
+}
+
+/// Checks the ids of evaluated data for tools (`SPEC.md` 10.5), in every
+/// evaluated context. Without a schema, an id that names nothing is a
+/// warning; with one, [`check_view`] reports those, and this says where the
+/// first id names something only through a `#[crol(scope)]` type, since an
+/// application's loader needs the schema for that.
+pub fn check_ids(
+    data: DataView<'_>,
+    schema: Option<&SchemaFile>,
+    root: Option<&str>,
+) -> Vec<Diagnostic> {
+    let contexts: Vec<Option<&ContextData>> = std::iter::once(None)
+        .chain(data.contexts.iter().map(Some))
+        .collect();
+    let mut found = Found::new();
+    for (index, context) in contexts.iter().enumerate() {
+        let built = context.map(|context| context.root(data.base));
+        let value = built.as_ref().unwrap_or(data.base);
+        let plain = crate::IdResolver::new(value);
+        let mut diagnostics = Vec::new();
+        match schema {
+            None => {
+                for id in plain.ids() {
+                    if let Some(problem) = id.problem {
+                        diagnostics.push(Diagnostic::warning(id.span, problem));
+                    }
+                }
+            }
+            // Once is enough to say it.
+            Some(_) if index > 0 => {}
+            Some(schema) => {
+                let mut typed = crate::IdResolver::new(value).schema(schema);
+                if let Some(root) = root {
+                    typed = typed.root_type(root);
+                }
+                // With a schema, map keys may be ids too: match by place.
+                let plain = plain.ids();
+                let through_types = typed.ids().into_iter().find(|typed| {
+                    typed.target.is_some()
+                        && plain.iter().any(|plain| {
+                            plain.location == typed.location
+                                && plain.id == typed.id
+                                && plain.span == typed.span
+                                && plain.target != typed.target
+                        })
+                });
+                if let Some(id) = through_types {
+                    let target = id.target.unwrap_or_default();
+                    diagnostics.push(Diagnostic::warning(
+                        id.span,
+                        format!(
+                            "the id `{}` names `{target}` through a `#[crol(scope)]` type of the \
+                             schema; an application's loader needs the schema for this \
+                             (`CrolComposer::schema`)",
+                            id.id
+                        ),
+                    ));
+                }
+            }
+        }
+        merge(&mut found, diagnostics, index);
+    }
+    in_contexts(found, data, &contexts)
+}
+
+/// Each diagnostic, with the contexts it holds in if not all of them.
+fn in_contexts(
+    found: Found,
+    data: DataView<'_>,
+    contexts: &[Option<&ContextData>],
+) -> Vec<Diagnostic> {
     // An error in only some contexts says in which (`SPEC.md` 12.5).
     found
         .into_iter()
@@ -176,12 +240,13 @@ fn check_whole(
     data: DataView<'_>,
     schema: &SchemaFile,
     root_type: &TypeExpr,
+    root: Option<&str>,
     options: &CheckOptions,
     contexts: &[Option<&ContextData>],
 ) -> Found {
     let mut found = Found::new();
     for (index, context) in contexts.iter().enumerate() {
-        let mut checker = Checker::new(schema, options, data, *context);
+        let mut checker = Checker::new(schema, options, data, *context, ResolveAs::Data(root));
         let root = context.map(|data_in| data_in.root(data.base));
         checker.value(
             root.as_ref().unwrap_or(data.base),
@@ -201,6 +266,7 @@ fn check_keys(
     data: DataView<'_>,
     schema: &SchemaFile,
     root_type: &TypeExpr,
+    root_path: Option<&str>,
     options: &CheckOptions,
     contexts: &[Option<&ContextData>],
 ) -> Found {
@@ -210,7 +276,7 @@ fn check_keys(
     let mut found = Found::new();
     // What each base value found, and the ids in it.
     let mut base = Vec::with_capacity(root.entries.len());
-    let mut checker = Checker::new(schema, options, data, None);
+    let mut checker = Checker::new(schema, options, data, None, ResolveAs::Data(root_path));
     for (key, value) in &root.entries {
         let Key::Str(name) = key else { continue };
         checker.ids = Some(Vec::new());
@@ -222,7 +288,13 @@ fn check_keys(
     }
     // Each context on its own, and with enough to do on a thread of its own.
     let check_context = |context: &&ContextData| {
-        let mut checker = Checker::new(schema, options, data, Some(context));
+        let mut checker = Checker::new(
+            schema,
+            options,
+            data,
+            Some(context),
+            ResolveAs::Data(root_path),
+        );
         let mut same = Vec::new();
         for (key, diagnostics, ids) in &base {
             if context.changes.contains_key(*key) {
@@ -230,7 +302,13 @@ fn check_keys(
             }
             same.extend(diagnostics.iter().cloned());
             for id in ids {
-                checker.id(id.value, id.id, id.refers, Path::Root(&id.path));
+                checker.id(
+                    id.value,
+                    id.id,
+                    id.refers,
+                    Path::Root(&id.path),
+                    &id.location,
+                );
             }
         }
         for (key, change) in &context.changes {
@@ -285,6 +363,29 @@ enum Path<'p> {
 }
 
 impl Path<'_> {
+    /// The place in the data it is.
+    fn data_path(&self) -> DataPath {
+        let mut steps = Vec::new();
+        let mut path = self;
+        loop {
+            let (step, parent) = match path {
+                Path::Root("") => break,
+                Path::Root(key) => {
+                    steps.push(DataStep::Key(Key::Str((*key).into())));
+                    break;
+                }
+                Path::Field(parent, field) => (DataStep::Key(Key::Str((*field).into())), parent),
+                Path::Key(parent, key) => (DataStep::Key((*key).clone()), parent),
+                Path::Index(parent, index) => (DataStep::Index(*index), parent),
+                Path::Element(parent, index) => (DataStep::Element(*index), parent),
+            };
+            steps.push(step);
+            path = parent;
+        }
+        steps.reverse();
+        DataPath::new(steps)
+    }
+
     fn is_empty(&self) -> bool {
         matches!(self, Path::Root(""))
     }
@@ -307,9 +408,19 @@ impl std::fmt::Display for Path<'_> {
 /// An id met in a value, to check in the other contexts.
 struct IdUse<'a> {
     value: &'a Value,
-    id: &'a str,
+    id: &'a IdPath,
     refers: &'a [String],
     path: String,
+    location: DataPath,
+}
+
+/// What the ids of the data checked resolve against (`SPEC.md` 10.5).
+#[derive(Clone, Copy)]
+enum ResolveAs<'a> {
+    /// Data-mode data, of the type at this path (`None`: the root type).
+    Data(Option<&'a str>),
+    /// A value document of the type at this path.
+    Value(&'a str),
 }
 
 struct Checker<'a> {
@@ -324,6 +435,9 @@ struct Checker<'a> {
     types: FxHashMap<&'a str, &'a TypeDef>,
     /// What is looked up in each struct met, by its fields.
     structs: FxHashMap<*const IndexMap<String, Field>, Rc<StructIndex<'a>>>,
+    resolve_as: ResolveAs<'a>,
+    /// The whole root of `context`, built the first time an id needs it.
+    context_root: std::cell::OnceCell<Value>,
 }
 
 /// A struct's fields as checking looks them up: for every value of it, so
@@ -379,6 +493,7 @@ impl<'a> Checker<'a> {
         options: &'a CheckOptions,
         data: DataView<'a>,
         context: Option<&'a ContextData>,
+        resolve_as: ResolveAs<'a>,
     ) -> Self {
         Self {
             schema,
@@ -391,6 +506,8 @@ impl<'a> Checker<'a> {
                 .map(|(path, definition)| (path.as_str(), definition))
                 .collect(),
             structs: FxHashMap::default(),
+            resolve_as,
+            context_root: std::cell::OnceCell::new(),
         }
     }
 
@@ -423,7 +540,7 @@ impl<'a> Checker<'a> {
             TypeExpr::Any => true,
             TypeExpr::Bool => matches!(value.kind, ValueKind::Bool(_)),
             TypeExpr::Char => matches!(value.kind, ValueKind::Char(_)),
-            TypeExpr::String => matches!(value.kind, ValueKind::String(_) | ValueKind::Id(_)),
+            TypeExpr::String => matches!(value.kind, ValueKind::String(_)),
             TypeExpr::Unit => matches!(value.kind, ValueKind::Unit),
             TypeExpr::I8 => int(i8::MIN.into(), i8::MAX.into()),
             TypeExpr::I16 => int(i16::MIN.into(), i16::MAX.into()),
@@ -449,9 +566,10 @@ impl<'a> Checker<'a> {
                             id,
                             refers,
                             path: path.to_string(),
+                            location: path.data_path(),
                         });
                     }
-                    self.id(value, id, refers, path);
+                    self.id(value, id, refers, path, &path.data_path());
                     true
                 } else {
                     false
@@ -733,14 +851,33 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// An id must name a root key in the same context, of an allowed type.
-    fn id(&mut self, value: &Value, id: &str, refers: &[String], path: Path<'_>) {
-        let Some(target) = self.data.value(id, self.context) else {
-            return self.error(
-                value.span,
-                format!("the id `@{id}` names no root key"),
-                path,
-            );
+    /// An id must name something in the same context, through the scopes
+    /// around it (`SPEC.md` 10.5), and of an allowed type.
+    fn id(
+        &mut self,
+        value: &Value,
+        id: &IdPath,
+        refers: &[String],
+        path: Path<'_>,
+        location: &DataPath,
+    ) {
+        let base = self.data.base;
+        let root = match self.context {
+            Some(context) => self.context_root.get_or_init(|| context.root(base)),
+            None => base,
+        };
+        let resolver = match self.resolve_as {
+            ResolveAs::Data(root_type) => {
+                Resolver::with_root_type(root, Some(self.schema), root_type)
+            }
+            ResolveAs::Value(ty) => Resolver::for_value(root, Some(self.schema), ty),
+        };
+        let Some(target) = resolver
+            .resolve(id, location)
+            .and_then(|target| target.value_in(root))
+        else {
+            let message = resolver.unresolved(id, location);
+            return self.error(value.span, message, path);
         };
         if refers.is_empty() {
             return;
@@ -758,7 +895,7 @@ impl<'a> Checker<'a> {
             self.error(
                 value.span,
                 format!(
-                    "the id `@{id}` names {}, but it may only name {}",
+                    "the id `{id}` names {}, but it may only name {}",
                     target_name.map_or_else(
                         || "a value without a type name".to_owned(),
                         |n| format!("a `{n}`")

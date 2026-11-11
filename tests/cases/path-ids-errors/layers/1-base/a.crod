@@ -1,0 +1,4 @@
++list: @a[0]
++tuple: @a.0
++negative: @a[-1]
++condition: @a<prod>

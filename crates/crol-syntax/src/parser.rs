@@ -609,31 +609,37 @@ impl Parser<'_> {
 
     // ---- Entry attributes (`SPEC.md` 6.1.2) ----
 
-    /// Whether the current token starts `#[type(...)]`, an entry attribute.
-    /// Any other `#[...]` before the first entry is taken for a document
-    /// attribute without its `!`.
+    /// Whether the current token starts `#[type(...)]` or `#[scope]`, an
+    /// entry attribute. Any other `#[...]` before the first entry is taken
+    /// for a document attribute without its `!`.
     fn at_entry_attr(&self) -> bool {
         self.at(POUND)
             && self.nth(1) == L_BRACK
             && self.nth(2) == IDENT
-            && self.nth_text(2) == "type"
+            && matches!(self.nth_text(2), "type" | "scope")
     }
 
-    /// `#[type(...)]`.
-    fn entry_attr(&mut self) {
+    /// `#[type(...)]` or `#[scope]`; which one it was.
+    fn entry_attr(&mut self) -> Option<&'static str> {
         self.start(ENTRY_ATTR);
         self.bump(); // `#`
         self.bump(); // `[`
+        let mut which = None;
         if self.at(IDENT) && self.nth_text(0) == "type" {
+            which = Some("type");
             self.bump_as(TYPE_KW);
             if self.expect(L_PAREN, "`(`") {
                 self.type_ref();
                 self.recover_until(&[R_PAREN, R_BRACK]);
                 self.expect(R_PAREN, "`)`");
             }
+        } else if self.at(IDENT) && self.nth_text(0) == "scope" {
+            which = Some("scope");
+            self.bump_as(SCOPE_KW);
         } else if self.at(IDENT) {
             self.error(format!(
-                "unknown entry attribute `{}`; the only one is `type`, before a value bind",
+                "unknown entry attribute `{}`; there are `type`, before a value bind, and \
+                 `scope`",
                 self.nth_text(0)
             ));
         } else {
@@ -642,6 +648,7 @@ impl Parser<'_> {
         self.recover_until(&[R_BRACK]);
         self.expect(R_BRACK, "`]`");
         self.finish();
+        which
     }
 
     /// A type expression and the steps into it: `Foo.bar.[].0`.
@@ -664,24 +671,49 @@ impl Parser<'_> {
         self.finish();
     }
 
-    /// A value bind with its attributes before it, from `#`.
+    /// An entry with its attributes before it, from `#` (`SPEC.md` 6.1.2):
+    /// `#[type(...)]` before a value bind, `#[scope]` before a value bind or
+    /// an entry that sets a value. The attributes are part of the entry's
+    /// node.
     fn attributed_entry(&mut self) {
         let checkpoint = self.checkpoint();
-        self.entry_attr();
+        let mut seen: Vec<&'static str> = Vec::new();
         while self.at(POUND) && self.nth(1) == L_BRACK {
-            self.error("a value bind takes one `#[type(...)]`");
-            self.entry_attr();
+            // A second one is reported where it starts.
+            match self.nth_text(2) {
+                "type" if seen.contains(&"type") => {
+                    self.error("a value bind takes one `#[type(...)]`");
+                }
+                "scope" if seen.contains(&"scope") => {
+                    self.error("an entry takes one `#[scope]`");
+                }
+                _ => {}
+            }
+            seen.extend(self.entry_attr());
         }
+        let typed = seen.contains(&"type");
         if self.at(IDENT) && self.nth(1) == COLON_EQ {
             self.start_at(checkpoint, VALUE_BIND);
             self.bump();
             self.bump();
             self.expr();
             self.finish();
-        } else {
+        } else if typed || seen.is_empty() {
             self.error_missing("expected a value bind after `#[type(...)]`: `name := value`");
             if !matches!(self.current(), COMMA | R_BRACE | EOF) {
                 self.entry();
+            }
+        } else {
+            match self.current() {
+                PLUS | QUESTION | CARET => {}
+                kind if starts_key(kind) => {}
+                _ => self.error_missing(
+                    "expected an entry that sets a value after `#[scope]`: `key: { ... }`, or a \
+                     value bind",
+                ),
+            }
+            if !matches!(self.current(), COMMA | R_BRACE | EOF) {
+                self.entry_at(checkpoint);
             }
         }
     }
@@ -1428,10 +1460,15 @@ impl Parser<'_> {
         }
     }
 
-    /// `@name` or `@"text"` (`SPEC.md` 3.2).
+    /// `@name`, `@"text"`, or either after `::`: `@::name` (`SPEC.md` 3.2,
+    /// 5.1). Selectors after it are parsed as a path, which lowering reads
+    /// as the id's keys.
     fn id(&mut self) {
         self.start(ID_EXPR);
         self.bump(); // `@`
+        if self.at(COLON2) && self.current_is_adjacent() {
+            self.bump();
+        }
         let adjacent = self.current_is_adjacent();
         match self.current() {
             IDENT | STRING | RAW_STRING => {

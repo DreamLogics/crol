@@ -14,7 +14,7 @@ use crate::diagnostic::Diagnostic;
 use crate::ir::*;
 use crate::literal;
 use crate::source::{FileId, Span};
-use crate::value::Key;
+use crate::value::{IdPath, Key};
 
 /// A data-mode document to lower, in its layer.
 pub(crate) struct DataDocument<'a> {
@@ -429,6 +429,7 @@ impl Shift {
             ExprKind::Path(base, path) => ExprKind::Path(self.exprs + base, path.clone()),
             ExprKind::Neg(child) => ExprKind::Neg(self.exprs + child),
             ExprKind::Not(child) => ExprKind::Not(self.exprs + child),
+            ExprKind::Scope(child) => ExprKind::Scope(self.exprs + child),
             ExprKind::Binary(op, lhs, rhs) => {
                 ExprKind::Binary(*op, self.exprs + lhs, self.exprs + rhs)
             }
@@ -460,6 +461,7 @@ impl Shift {
                 })
                 .collect(),
             defaults: block.defaults,
+            scope: block.scope,
             value_binds: block.value_binds.iter().map(|id| self.binds + id).collect(),
         }
     }
@@ -770,6 +772,7 @@ impl Lowerer {
                     Some(value) => self.expr(&value),
                     None => self.ir.add_expr(ExprKind::Error, span),
                 };
+                let expr = self.scoped_entry(bind.syntax(), expr);
                 self.ir.value_binds[id].expr = expr;
                 return;
             }
@@ -867,6 +870,7 @@ impl Lowerer {
             path: field_names(&path),
         };
         let value = value.map(|value| self.expr(&value));
+        let value = value.map(|value| self.scoped(entry, value));
         self.default_target = DefaultTarget::default();
         self.fixed = None;
         self.reach = Reach::default();
@@ -977,6 +981,7 @@ impl Lowerer {
         let saved_target = std::mem::replace(&mut self.default_target, entry_target);
         self.fixed = Some(fixed.child(&key, &path, span, alternatives.clone()));
         let value = value.map(|value| self.expr(&value));
+        let value = value.map(|value| self.scoped(entry, value));
         self.fixed = None;
         self.reach = saved_reach;
         self.lift_floor = saved_floor;
@@ -1043,6 +1048,81 @@ impl Lowerer {
         let key = self.target_key(target)?;
         let path = self.selectors(target.selectors(), SelectorUse::Target, conditions)?;
         Some((key, path))
+    }
+
+    /// `value` with `#[scope]` applied, if `entry` has it (`SPEC.md` 6.1.2).
+    fn scoped(&mut self, entry: &ast::AnyEntry, value: ExprId) -> ExprId {
+        match entry {
+            ast::AnyEntry::Entry(e) => self.scoped_entry(e.syntax(), value),
+            _ => value,
+        }
+    }
+
+    /// `value` with the `#[scope]` of the entry or value bind `node`, if it
+    /// has one: a block written there gets the scope flag, as `..` gives it
+    /// the defaults flag, so that it still merges; any other value is
+    /// wrapped, and the flag is set on what it evaluates to.
+    fn scoped_entry(&mut self, node: &crol_syntax::SyntaxNode, value: ExprId) -> ExprId {
+        let Some(attr) = node
+            .children()
+            .filter_map(ast::EntryAttr::cast)
+            .find(ast::EntryAttr::is_scope)
+        else {
+            return value;
+        };
+        if let ExprKind::Block(block) = self.ir.exprs[value].kind {
+            self.ir.blocks[block].scope = true;
+            return value;
+        }
+        let span = self.span(attr.syntax());
+        self.ir.add_expr(ExprKind::Scope(value), span)
+    }
+
+    /// An id and the selectors after it, as one path id (`SPEC.md` 5.1).
+    /// Only `.name` and `["key"]` are allowed; errors are reported, and give
+    /// `None`.
+    fn id_path(
+        &mut self,
+        id: &ast::IdExpr,
+        selectors: impl Iterator<Item = ast::Selector>,
+    ) -> Option<IdPath> {
+        let name = id.name()?;
+        let first = match name.kind() {
+            SyntaxKind::IDENT => name.text().to_owned(),
+            _ => literal::string(name.text()),
+        };
+        let mut keys = vec![self.name(&first)];
+        let mut ok = true;
+        for selector in selectors {
+            let key = match &selector {
+                ast::Selector::Field(field) => field.name().map(|n| n.text().to_owned()),
+                ast::Selector::Accessor(accessor) => match accessor.key() {
+                    Some(key) if key.kind() != SyntaxKind::INT => Some(literal::string(key.text())),
+                    _ => None,
+                },
+                _ => None,
+            };
+            match key {
+                Some(key) => keys.push(self.name(&key)),
+                // A missing name is a syntax error, already reported.
+                None if matches!(&selector, ast::Selector::Field(f) if f.name().is_none()) => {
+                    ok = false;
+                }
+                None => {
+                    let span = self.span(selector.syntax());
+                    self.error(
+                        span,
+                        "an id names keys, written `.name` or `[\"key\"]`: not list \
+                         elements, tuple elements, integer keys or conditions",
+                    );
+                    ok = false;
+                }
+            }
+        }
+        if !ok {
+            return None;
+        }
+        IdPath::new(id.is_rooted(), keys)
     }
 
     /// The one copy of a name.
@@ -1218,6 +1298,7 @@ impl Lowerer {
             spreads: Vec::new(),
             entries: Vec::new(),
             defaults: false,
+            scope: false,
             value_binds: Vec::new(),
         });
 
@@ -1328,6 +1409,7 @@ impl Lowerer {
                         });
                     }
                     let value = value.map(|value| self.expr(&value));
+                    let value = value.map(|value| self.scoped_entry(entry.syntax(), value));
                     let op = entry.op();
                     lowered.push(Entry {
                         op: Some(set_op(op)),
@@ -1381,6 +1463,7 @@ impl Lowerer {
                 Some(value) => self.expr(&value),
                 None => self.ir.add_expr(ExprKind::Error, self.span(bind.syntax())),
             };
+            let expr = self.scoped_entry(bind.syntax(), expr);
             self.ir.value_binds[bind_id].expr = expr;
         }
         self.reach = outer;
@@ -1557,17 +1640,10 @@ impl Lowerer {
                 }
                 None => self.ir.add_expr(ExprKind::Error, span),
             },
-            ast::Expr::Id(id) => {
-                let Some(name) = id.name() else {
-                    return self.ir.add_expr(ExprKind::Error, span);
-                };
-                let text = match name.kind() {
-                    SyntaxKind::IDENT => name.text().to_owned(),
-                    _ => literal::string(name.text()),
-                };
-                let text = self.name(&text);
-                self.ir.add_expr(ExprKind::Id(text), span)
-            }
+            ast::Expr::Id(id) => match self.id_path(id, std::iter::empty()) {
+                Some(id) => self.ir.add_expr(ExprKind::Id(id), span),
+                None => self.ir.add_expr(ExprKind::Error, span),
+            },
             ast::Expr::Reference(reference) => self.reference(reference, span),
             ast::Expr::Block(block) => {
                 let name = block
@@ -1619,6 +1695,13 @@ impl Lowerer {
                 let Some(base) = path.base() else {
                     return self.ir.add_expr(ExprKind::Error, span);
                 };
+                // `@a.b`: the selectors are the id's keys (`SPEC.md` 5.1).
+                if let ast::Expr::Id(id) = &base {
+                    return match self.id_path(id, path.selectors()) {
+                        Some(id) => self.ir.add_expr(ExprKind::Id(id), span),
+                        None => self.ir.add_expr(ExprKind::Error, span),
+                    };
+                }
                 if let Some(error) = self.check_reference_variants(&base, path) {
                     return self.error_expr(span, error);
                 }

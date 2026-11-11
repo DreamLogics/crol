@@ -388,6 +388,17 @@ pub(crate) fn evaluate(inputs: &Inputs) -> Evaluation {
         let found = crol::check_view(view, schema, inputs.root.as_deref(), &inputs.check);
         evaluation.diagnostics.extend(found);
     }
+    // What ids name (`SPEC.md` 10.5): without a schema, those that name
+    // nothing; with one, the check above reports those.
+    if let Some(base) = &evaluation.value {
+        let view = crol::DataView {
+            base,
+            contexts: &evaluation.contexts,
+            variants: &evaluation.variants,
+        };
+        let found = crol::check_ids(view, inputs.schema.as_ref(), inputs.root.as_deref());
+        evaluation.diagnostics.extend(found);
+    }
     if let Some(schema) = &inputs.schema {
         let root = crol::typed::TypeRoot::Data {
             root: inputs.root.as_deref(),

@@ -309,11 +309,17 @@ impl TypeExpr {
 }
 
 ast_node!(
-    /// `#[type(...)]` before a value bind (`SPEC.md` 6.1.2).
+    /// `#[type(...)]` before a value bind, or `#[scope]` before a value bind
+    /// or an entry (`SPEC.md` 6.1.2).
     EntryAttr, ENTRY_ATTR
 );
 
 impl EntryAttr {
+    /// Whether it is `#[scope]`.
+    pub fn is_scope(&self) -> bool {
+        token(&self.0, SCOPE_KW).is_some()
+    }
+
     /// The type, for `#[type(...)]`.
     pub fn type_ref(&self) -> Option<TypeRef> {
         token(&self.0, TYPE_KW)?;
@@ -499,6 +505,11 @@ impl Entry {
         child(&self.0)
     }
 
+    /// Whether `#[scope]` is before the entry (`SPEC.md` 6.1.2).
+    pub fn is_scope(&self) -> bool {
+        children::<EntryAttr>(&self.0).any(|attr| attr.is_scope())
+    }
+
     /// The entry's operation.
     pub fn op(&self) -> EntryOp {
         match self.op_token().map(|t| t.kind()) {
@@ -580,7 +591,12 @@ ast_node!(
 impl ValueBind {
     /// The `#[type(...)]` before the bind; the first, if there are more.
     pub fn attr(&self) -> Option<EntryAttr> {
-        child(&self.0)
+        children::<EntryAttr>(&self.0).find(|attr| !attr.is_scope())
+    }
+
+    /// Whether `#[scope]` is before the bind (`SPEC.md` 6.1.2).
+    pub fn is_scope(&self) -> bool {
+        children::<EntryAttr>(&self.0).any(|attr| attr.is_scope())
     }
 
     /// The bound name.
@@ -895,11 +911,17 @@ impl Literal {
 }
 
 ast_node!(
-    /// `@name` or `@"text"` (`SPEC.md` 3.2)
+    /// `@name`, `@"text"` or `@::name` (`SPEC.md` 3.2). In `@a.b`, the
+    /// selectors are a [`PathExpr`] around it.
     IdExpr, ID_EXPR
 );
 
 impl IdExpr {
+    /// Whether it starts from the root: `@::name`.
+    pub fn is_rooted(&self) -> bool {
+        token(&self.0, COLON2).is_some()
+    }
+
     /// The identifier or string after `@`.
     pub fn name(&self) -> Option<SyntaxToken> {
         [IDENT, STRING, RAW_STRING]
