@@ -1036,6 +1036,7 @@ fn schema_files_of_every_shape_pass_their_own_schema() {
             source: source.clone(),
             inner: TypeExpr::F64,
             constraint: None,
+            scope: true,
         },
         TypeDef::Transparent {
             name: "W".to_owned(),
@@ -1043,6 +1044,7 @@ fn schema_files_of_every_shape_pass_their_own_schema() {
             source: source.clone(),
             inner: TypeExpr::Unit,
             constraint: None,
+            scope: true,
         },
         TypeDef::UnitStruct {
             name: "U".to_owned(),

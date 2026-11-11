@@ -148,7 +148,7 @@ Serde's attributes are understood: `rename`, `rename_all`, `alias`, `default`,
 | `#[crol(constraints(name = Min(0)))]` | a type | define sealed constraints                                  |
 | `#[crol(open_constraints(...))]` | a type     | define constraints that layers may change                   |
 | `#[crol(sealed)]`                | a field, type | [only the layer that defines a value can set it](#sealed-fields) |
-| `#[crol(scope)]`                 | a struct, struct variant | its values are [scopes for ids](language.md#scopes); give your loader the schema for this |
+| `#[crol(scope)]`                 | a struct, newtype, struct variant | its values are [scopes for ids](language.md#scopes); give your loader the schema for this |
 
 Use `schema = ...` for a field whose type has no `Schema`, such as a type from
 another crate, and for fields with `#[serde(with = "...")]`, which the derive

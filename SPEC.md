@@ -2754,10 +2754,14 @@ whether fields left out take their defaults only with `..` (section
 10.3). It does not depend on `#[crol(defaults)]`: whether a field has a
 default is known without recording its value.
 
-`#[crol(scope)]` on a struct with named fields or a struct variant makes
-its values scopes for the ids in them (section 3.2): in a `Screen` marked
-so, `@filter` names the screen's own `filter`. On a field, a tuple
-struct, a tuple or unit variant, or a whole enum it is an error. The
+`#[crol(scope)]` on a struct with named fields, a newtype or
+`#[serde(transparent)]` struct, or a struct variant makes its values scopes
+for the ids in them (section 3.2): in a `Screen` marked so, `@filter` names
+the screen's own `filter`. A newtype or transparent struct around a map,
+`struct Screen(BTreeMap<String, Node>)`, is a scope of the keyed value it is
+written as, and needs no `#[serde(flatten)]`, which would read enums in the
+map without their names (section 10.1, `any`). On a field, a tuple struct of
+several fields, a tuple or unit variant, or a whole enum it is an error. The
 schema records it as `scope` (section 10.10), and the loader needs the
 schema for it (section 10.5).
 
@@ -2903,8 +2907,8 @@ Cargo workspace root as `file!()` gives it, and line) and:
 |---|---|---|
 | `Struct` | struct with named fields | `fields`, `deny_unknown_fields` (default `false`), `default` (the struct's recorded default value, if any), `explicit_defaults` (`Some(true)` or `Some(false)` with the attribute of that value, section 10.3; default `None`), `scope` (`#[crol(scope)]`, section 10.9; default `false`) |
 | `TupleStruct` | `struct P(A, B)` | `fields`: list of type expressions |
-| `Newtype` | `struct N(A)` | `inner`; data writes `N(x)` or `x` |
-| `Transparent` | `#[serde(transparent)]` | `inner`; data writes only `x` |
+| `Newtype` | `struct N(A)` | `inner`, `scope` (as for a `Struct`); data writes `N(x)` or `x` |
+| `Transparent` | `#[serde(transparent)]` | `inner`, `scope` (as for a `Struct`); data writes only `x` |
 | `UnitStruct` | `struct U;` | |
 | `Enum` | enum | `repr`, `variants` |
 

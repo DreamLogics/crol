@@ -32,7 +32,8 @@ This release changes the format in ways that break documents and programs writte
   up, falling back to the root, so that grouped data need not have global names: two
   screens can each have a `filter`, and `@filter` in each names its own. A block is a
   scope with `#[scope]` before its entry, or when its type has `#[crol(scope)]` and the
-  loader has the schema. Without scopes, ids name root keys as before.
+  loader has the schema. `#[crol(scope)]` goes on a struct, a struct variant, or a
+  newtype or transparent struct, such as one around a map of components. Without scopes, ids name root keys as before.
 - Path ids: `@settings.filter` reaches into another scope, `@"odd id"["x y"]` names keys
   that are not identifiers, and `@::web` names the root key whatever the scopes around.
 - `IdUse.target` says where an id resolved to, as a `crol::DataPath`, and

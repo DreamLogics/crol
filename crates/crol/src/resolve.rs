@@ -418,16 +418,27 @@ impl<'a> Types<'a> {
         let name = keyed.name.as_deref()?;
         let mut found = self.schema.by_name(name);
         let (path, def) = found.next()?;
-        if found.next().is_some() || !matches!(def, TypeDef::Struct { .. }) {
+        // A struct, or what data may write as one: a newtype or transparent
+        // struct around a keyed value (`Screen { ... }` for a map).
+        if found.next().is_some()
+            || !matches!(
+                def,
+                TypeDef::Struct { .. } | TypeDef::Newtype { .. } | TypeDef::Transparent { .. }
+            )
+        {
             return None;
         }
         Some(TypeExpr::Named(path.to_owned()))
     }
 
-    /// Whether a keyed value of type `ty` is a scope: a struct, or a struct
-    /// variant, with `#[crol(scope)]`.
+    /// Whether a keyed value of type `ty` is a scope: a struct, a newtype or
+    /// transparent struct around it, or a struct variant, with
+    /// `#[crol(scope)]`.
     fn is_scope(&self, ty: &TypeExpr, value: &Value) -> bool {
         let ty = self.named(value).unwrap_or_else(|| ty.clone());
+        if self.wrapper_is_scope(&ty, value) {
+            return true;
+        }
         match self.definition(&ty, value) {
             Some((TypeDef::Struct { scope, .. }, _)) => *scope,
             Some((TypeDef::Enum { variants, .. }, _)) => match &value.kind {
@@ -440,6 +451,32 @@ impl<'a> Types<'a> {
             },
             _ => false,
         }
+    }
+
+    /// Whether a newtype or transparent struct with `#[crol(scope)]` wraps
+    /// the value, through `Option` and other wrappers. Data writes such a
+    /// value as what it wraps, here a keyed value.
+    fn wrapper_is_scope(&self, ty: &TypeExpr, value: &Value) -> bool {
+        let mut ty = ty.clone();
+        for _ in 0..MAX_WRAPPERS {
+            match ty {
+                TypeExpr::Option(inner) => ty = *inner,
+                TypeExpr::Named(ref path) => match self.schema.get(path) {
+                    Some(
+                        TypeDef::Newtype { inner, scope, .. }
+                        | TypeDef::Transparent { inner, scope, .. },
+                    ) if matches!(value.kind, ValueKind::Keyed(_)) => {
+                        if *scope {
+                            return true;
+                        }
+                        ty = inner.clone();
+                    }
+                    _ => return false,
+                },
+                _ => return false,
+            }
+        }
+        false
     }
 
     /// Whether a value of type `ty` is a map keyed by ids.

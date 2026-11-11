@@ -36,8 +36,9 @@ use syn::{
 ///   `schema.crod` may change;
 /// - `#[crol(sealed)]` on a field, or on a type for all of its fields: only
 ///   the layer that defines a value can set it;
-/// - `#[crol(scope)]` on a struct with named fields or a struct variant:
-///   its values are scopes for the ids in them.
+/// - `#[crol(scope)]` on a struct with named fields, a newtype or
+///   transparent struct, or a struct variant: its values are scopes for the
+///   ids in them.
 #[proc_macro_derive(Schema, attributes(crol))]
 pub fn derive_schema(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -764,8 +765,15 @@ fn check_scope(input: &DeriveInput, attrs: &Attrs) -> syn::Result<()> {
     match &input.data {
         Data::Struct(data) => {
             no_field_has_it(&data.fields)?;
-            if attrs.scope && (attrs.transparent || !matches!(data.fields, Fields::Named(_))) {
-                return wrong(input.span(), "`scope` needs a struct with named fields");
+            // A struct with fields of its own, or one that is the value it
+            // wraps: a newtype or a transparent struct.
+            let wraps = attrs.transparent
+                || matches!(&data.fields, Fields::Unnamed(fields) if fields.unnamed.len() == 1);
+            if attrs.scope && !(matches!(data.fields, Fields::Named(_)) || wraps) {
+                return wrong(
+                    input.span(),
+                    "`scope` needs a struct with named fields, a newtype or a transparent struct",
+                );
             }
         }
         Data::Enum(data) => {
@@ -1042,6 +1050,7 @@ fn struct_definition(
     let name_expr = quote!(::std::string::String::from(#name));
     let doc_expr = quote!(::std::string::String::from(#doc));
     let constraint = option_string(attrs.constraint.as_deref());
+    let scope = attrs.scope;
     let wraps = attrs.transparent || matches!(fields, Fields::Unnamed(f) if f.unnamed.len() == 1);
     if attrs.constraint.is_some() && !wraps {
         return Err(Error::new(
@@ -1061,7 +1070,7 @@ fn struct_definition(
                 .ok_or_else(|| Error::new(named.span(), "a transparent struct needs a field"))?;
             let inner = field_type(&Attrs::parse(&field.attrs)?, &field.ty)?;
             quote! {
-                ::crol::schema::TypeDef::Transparent { name: #name_expr, doc: #doc_expr, source: #source, inner: #inner, constraint: #constraint }
+                ::crol::schema::TypeDef::Transparent { name: #name_expr, doc: #doc_expr, source: #source, inner: #inner, constraint: #constraint, scope: #scope }
             }
         }
         Fields::Named(_) => {
@@ -1081,7 +1090,6 @@ fn struct_definition(
                 quote!(::std::option::Option::None)
             };
             let explicit_defaults = option_bool(attrs.explicit_defaults);
-            let scope = attrs.scope;
             quote! {
                 ::crol::schema::TypeDef::Struct {
                     name: #name_expr,
@@ -1107,13 +1115,13 @@ fn struct_definition(
                 (1, true) => {
                     let inner = &types[0];
                     quote! {
-                        ::crol::schema::TypeDef::Transparent { name: #name_expr, doc: #doc_expr, source: #source, inner: #inner, constraint: #constraint }
+                        ::crol::schema::TypeDef::Transparent { name: #name_expr, doc: #doc_expr, source: #source, inner: #inner, constraint: #constraint, scope: #scope }
                     }
                 }
                 (1, false) => {
                     let inner = &types[0];
                     quote! {
-                        ::crol::schema::TypeDef::Newtype { name: #name_expr, doc: #doc_expr, source: #source, inner: #inner, constraint: #constraint }
+                        ::crol::schema::TypeDef::Newtype { name: #name_expr, doc: #doc_expr, source: #source, inner: #inner, constraint: #constraint, scope: #scope }
                     }
                 }
                 _ => quote! {
@@ -1207,12 +1215,27 @@ mod tests {
         ] {
             schema(&input).unwrap();
         }
+        for input in [
+            parse_quote!(
+                #[crol(scope)]
+                struct S(std::collections::BTreeMap<String, u8>);
+            ),
+            parse_quote!(
+                #[crol(scope)]
+                #[serde(transparent)]
+                struct S {
+                    nodes: std::collections::BTreeMap<String, u8>,
+                }
+            ),
+        ] {
+            schema(&input).unwrap();
+        }
         rejected(
             parse_quote!(
                 #[crol(scope)]
-                struct S(u8);
+                struct S(u8, u8);
             ),
-            "`scope` needs a struct with named fields",
+            "`scope` needs a struct with named fields, a newtype or a transparent struct",
         );
         rejected(
             parse_quote!(

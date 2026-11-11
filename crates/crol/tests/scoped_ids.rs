@@ -344,3 +344,56 @@ fn check_resolves_through_scopes() {
         ]
     );
 }
+
+#[derive(Debug, Deserialize, Schema)]
+enum Node {
+    Stack { children: Vec<(Size, Id)> },
+    TextInput { placeholder: String },
+    List { vim_keys: bool },
+}
+
+/// A screen as a map of nodes, `layout` among them: enum components keep
+/// their names, which `#[serde(flatten)]` would drop.
+#[derive(Debug, Deserialize, Schema)]
+#[serde(transparent)]
+#[crol(scope)]
+struct NodeScreen(BTreeMap<String, Node>);
+
+/// The same as a newtype.
+#[derive(Debug, Deserialize, Schema)]
+#[crol(scope)]
+struct NewtypeScreen(BTreeMap<String, Node>);
+
+#[test]
+fn newtypes_and_transparent_structs_can_be_scopes() {
+    let text = r#"
+        dashboard: Screen {
+            layout: Stack { children: [(Length(1), @filter), (Fill(1), @list)] },
+            +filter: TextInput { placeholder: "Filter workers" },
+            +list: List { vim_keys: true },
+        }
+        settings: {
+            layout: Stack { children: [(Length(1), @filter)] },
+            +filter: TextInput { placeholder: "Search settings" },
+        }
+    "#;
+    fn check<S: crol::schema::Schema + for<'de> serde::Deserialize<'de>>(text: &str) {
+        let layer = CrolLayer::from_sources("base", [("a.crod", text)]);
+        let data = CrolComposer::new()
+            .schema(crol::schema::build::<BTreeMap<String, S>>())
+            .load_layer(layer)
+            .compose_data()
+            .unwrap();
+        assert!(data.warnings().is_empty(), "{:?}", data.warnings());
+        let (_, ids): (S, _) = data.get_with_ids("dashboard").unwrap();
+        assert_eq!(
+            targets(&ids),
+            ["@filter -> dashboard.filter", "@list -> dashboard.list"]
+        );
+        // Without a type name, the root type says it is a screen.
+        let (_, ids): (S, _) = data.get_with_ids("settings").unwrap();
+        assert_eq!(targets(&ids), ["@filter -> settings.filter"]);
+    }
+    check::<NodeScreen>(text);
+    check::<NewtypeScreen>(&text.replace("Screen {", "NewtypeScreen {"));
+}

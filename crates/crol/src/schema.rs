@@ -235,6 +235,10 @@ pub enum TypeDef {
         /// The constraint on the value, wherever the type is used.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         constraint: Option<String>,
+        /// `#[crol(scope)]`: whether its values are scopes for the ids in
+        /// them, as for a struct (`SPEC.md` 10.9).
+        #[serde(default, skip_serializing_if = "is_false")]
+        scope: bool,
     },
     /// A struct with `#[serde(transparent)]`: data writes only `x`.
     Transparent {
@@ -251,6 +255,10 @@ pub enum TypeDef {
         /// The constraint on the value, wherever the type is used.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         constraint: Option<String>,
+        /// `#[crol(scope)]`: whether its values are scopes for the ids in
+        /// them, as for a struct (`SPEC.md` 10.9).
+        #[serde(default, skip_serializing_if = "is_false")]
+        scope: bool,
     },
     /// A unit struct: `struct U;`.
     UnitStruct {
@@ -789,6 +797,7 @@ pub fn build<T: Schema + ?Sized>() -> SchemaFile {
                 source: (String::new(), 0),
                 inner: other,
                 constraint: None,
+                scope: false,
             };
             registry.types.insert(path.clone(), wrapper);
             path
@@ -1443,6 +1452,10 @@ impl Schema for TypeDef {
                             "The constraint on the value, wherever the type is used.",
                             none_value(),
                         ),
+                    ),
+                    (
+                        "scope",
+                        scope_doc("`#[crol(scope)]`: whether its values are scopes for the ids in them, as for a struct (`SPEC.md` 10.9)."),
                     ),
                 ])
             };
