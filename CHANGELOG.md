@@ -46,6 +46,14 @@ This release changes the format in ways that break documents and programs writte
   scopes around the cursor, and suggests them for a misspelt id.
 - `crol::IdResolver` and `crol::check_ids` resolve and check the ids of evaluated data,
   for tools.
+- `crol explain` says which scope an id resolved in. For a value that is an id or holds
+  ids it adds a line for each: what the id names, or that it names nothing, and the
+  scopes around it, innermost first, with which of them has the key and whether
+  `#[scope]` or a `#[crol(scope)]` type makes each a scope. Hover on an id in the
+  language server shows the same line.
+- `IdResolver::scopes` and `IdResolver::chains` return that as a `crol::ScopeChain` of
+  `IdScope`s, each with a `ScopeKind`, and `IdResolver::within` keeps to the ids at a
+  place or in what is there. `DataPath::starts_with`.
 
 ### Changed
 

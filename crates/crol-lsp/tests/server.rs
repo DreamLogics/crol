@@ -4422,6 +4422,104 @@ fn templates_used_where_another_type_goes_get_a_warning() {
 }
 
 #[test]
+fn hover_on_an_id_shows_the_scopes_around_it() {
+    let text = "pane := { layout: [@filter] }\n#[scope]\n+dashboard: { ..&pane, +filter: { p: 1 } }\n\
+                +settings: { ..&pane, +filter: { p: 2 } }\n+filter: 0\n\
+                +other: { see: @dashboard.filter, gone: @nope, top: @::filter }\n";
+    let dir = workspace("lsp-hover-id-scopes", &[("a.crod", text)]);
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "a.crod");
+    // In a template: a line for each place it is spread into, after what
+    // it names there.
+    let markdown = buffer.hover(&mut client, &mark(text, "[@filter]", "filter"));
+    assert_eq!(
+        markdown,
+        "**dashboard.filter**: `{p: 1}`\n\n**filter**: `0`\n\n\
+         the id `@filter` names `dashboard.filter`; scopes: `dashboard` (`#[scope]`, has \
+         `filter`), the root (has `filter`, shadowed)\n\n\
+         the id `@filter` names `filter`; scopes: the root (has `filter`)"
+    );
+    // A path id, on either key.
+    for word in ["dashboard", "filter"] {
+        let markdown = buffer.hover(&mut client, &mark(text, "@dashboard.filter", word));
+        assert_eq!(
+            markdown,
+            "**dashboard.filter**: `{p: 1}`\n\n\
+             the id `@dashboard.filter` names `dashboard.filter`; scopes: the root (has \
+             `dashboard`)",
+            "{word}"
+        );
+    }
+    // One that names nothing, and one from the root.
+    let markdown = buffer.hover(&mut client, &mark(text, "@nope", "nope"));
+    assert_eq!(
+        markdown,
+        "the id `@nope` names nothing; scopes: the root (no `nope`)"
+    );
+    let markdown = buffer.hover(&mut client, &mark(text, "@::filter", "filter"));
+    assert_eq!(
+        markdown,
+        "**filter**: `0`\n\nthe id `@::filter` names `filter`; scopes: the root (has `filter`)"
+    );
+    client.stop();
+}
+
+#[test]
+fn hover_on_an_id_says_when_the_schema_makes_the_scope() {
+    let schema = r#"Schema {
+    format: 1,
+    root: "app::Screens",
+    types: {
+        "app::Screens": Transparent {
+            name: "Screens",
+            source: ("src/lib.rs", 2),
+            inner: Map(String, Named("app::Screen")),
+            ..
+        },
+        "app::Screen": Struct {
+            name: "Screen",
+            source: ("src/lib.rs", 1),
+            fields: { layout: { ty: Any, .. }, filter: { ty: Any, .. } },
+            scope: true,
+            ..
+        },
+    },
+}"#;
+    let text = "+dashboard: Screen { layout: [@filter, @settings], filter: 1 }\n\
+                +settings: Screen { layout: [], filter: 2 }\n";
+    let dir = workspace(
+        "lsp-hover-id-schema-scope",
+        &[
+            (
+                "project.crol",
+                r#"Project { layers: List([{ name: "base", dir: "base", .. }]), schema: Some("crol::schema"), .. }"#,
+            ),
+            ("crol/schema.crol", schema),
+            ("base/a.crod", text),
+        ],
+    );
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "base/a.crod");
+    let markdown = buffer.hover(&mut client, &mark(text, "@filter", "filter"));
+    assert!(
+        markdown.ends_with(
+            "the id `@filter` names `dashboard.filter`; scopes: `dashboard` \
+             (`#[crol(scope)]`, has `filter`), the root (no `filter`)"
+        ),
+        "{markdown}"
+    );
+    let markdown = buffer.hover(&mut client, &mark(text, "@settings", "settings"));
+    assert!(
+        markdown.ends_with(
+            "the id `@settings` names `settings`; scopes: `dashboard` (`#[crol(scope)]`, no \
+             `settings`), the root (has `settings`)"
+        ),
+        "{markdown}"
+    );
+    client.stop();
+}
+
+#[test]
 fn scoped_ids_resolve_where_their_value_ends_up() {
     let dir = workspace(
         "lsp-scoped-ids",

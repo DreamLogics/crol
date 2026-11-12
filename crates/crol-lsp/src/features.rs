@@ -652,6 +652,7 @@ pub(crate) fn hover(
         );
     }
     parts.extend(named_value(snapshot, file, &token, settings));
+    parts.extend(id_scopes(snapshot, file, &token));
     let mut markdown = parts.join("\n\n");
     if let Some((key, steps)) = entry_path
         && let Some(history) = history(snapshot, file, &describe_path(&key, &steps), settings)
@@ -911,6 +912,24 @@ fn named_value(
     }
     let (key, steps) = named_path(token)?;
     named_line(snapshot, file, &key, &steps, settings)
+}
+
+/// On an id: what it names and the scopes around it, as `crol explain`
+/// says it (`SPEC.md` 3.2), a line for each place its value is met in that
+/// says something else.
+fn id_scopes(snapshot: &Snapshot, file: crol_eval::FileId, token: &SyntaxToken) -> Option<String> {
+    let range = id_node(token)?.text_range();
+    let resolver = snapshot.id_resolver(file)?;
+    let mut lines: Vec<String> = Vec::new();
+    for id in resolver.ids() {
+        if id.span.file == file && id.span.range == range {
+            let line = resolver.scopes(&id.id, &id.location).to_string();
+            if !lines.contains(&line) {
+                lines.push(line);
+            }
+        }
+    }
+    (!lines.is_empty()).then(|| lines.join("\n\n"))
 }
 
 /// For an id that resolved: the root key and steps of each thing it names.

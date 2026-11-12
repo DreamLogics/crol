@@ -58,6 +58,11 @@ impl DataPath {
         }
     }
 
+    /// Whether it is `other`, or a place in what is there.
+    pub fn starts_with(&self, other: &DataPath) -> bool {
+        self.0.starts_with(&other.0)
+    }
+
     fn push(&mut self, step: DataStep) {
         self.0.push(step);
     }
@@ -187,13 +192,24 @@ impl<'a> Resolver<'a> {
     /// at `location` itself is not among them.
     fn scopes_around(&self, location: &DataPath) -> Vec<(usize, &'a Keyed)> {
         let mut scopes = Vec::new();
+        self.each_scope_around(location, |depth, keyed, _| scopes.push((depth, keyed)));
+        scopes
+    }
+
+    /// Calls `found` for each scope around `location`, outermost first, with
+    /// how many steps of `location` lead to it and what makes it a scope.
+    fn each_scope_around(
+        &self,
+        location: &DataPath,
+        mut found: impl FnMut(usize, &'a Keyed, ScopeKind),
+    ) {
         let mut value = self.root;
         let mut ty = self.root_type();
         if let ValueKind::Keyed(keyed) = &value.kind {
-            scopes.push((0, &**keyed));
+            found(0, keyed, ScopeKind::Root);
         }
         let Some((_, inner)) = location.0.split_last() else {
-            return scopes;
+            return;
         };
         for (i, step) in inner.iter().enumerate() {
             let Some(next) = step_into(value, step) else {
@@ -201,13 +217,15 @@ impl<'a> Resolver<'a> {
             };
             ty = ty.and_then(|ty| self.types?.child(&ty, value, step));
             value = next;
-            if let ValueKind::Keyed(keyed) = &value.kind
-                && (keyed.scope || self.is_scope_type(ty.as_ref(), value))
-            {
-                scopes.push((i + 1, &**keyed));
+            if let ValueKind::Keyed(keyed) = &value.kind {
+                // The flag first: it needs no schema.
+                if keyed.scope {
+                    found(i + 1, keyed, ScopeKind::Flag);
+                } else if self.is_scope_type(ty.as_ref(), value) {
+                    found(i + 1, keyed, ScopeKind::Type);
+                }
             }
         }
-        scopes
     }
 
     fn is_scope_type(&self, ty: Option<&TypeExpr>, value: &Value) -> bool {
@@ -664,6 +682,7 @@ pub struct IdResolver<'a> {
     schema: Option<&'a SchemaFile>,
     root_type: Option<&'a str>,
     value_type: Option<&'a str>,
+    within: Option<&'a DataPath>,
 }
 
 impl<'a> IdResolver<'a> {
@@ -675,6 +694,7 @@ impl<'a> IdResolver<'a> {
             schema: None,
             root_type: None,
             value_type: None,
+            within: None,
         }
     }
 
@@ -695,6 +715,17 @@ impl<'a> IdResolver<'a> {
     pub fn value_type(mut self, path: &'a str) -> Self {
         self.value_type = Some(path);
         self
+    }
+
+    /// Only the ids at `path` or in what is there, for [`ids`](Self::ids)
+    /// and [`chains`](Self::chains). They resolve in the whole root still.
+    pub fn within(mut self, path: &'a DataPath) -> Self {
+        self.within = Some(path);
+        self
+    }
+
+    fn is_within(&self, location: &DataPath) -> bool {
+        self.within.is_none_or(|path| location.starts_with(path))
     }
 
     fn inner(&self) -> Resolver<'a> {
@@ -721,6 +752,7 @@ impl<'a> IdResolver<'a> {
         resolver
             .all()
             .into_iter()
+            .filter(|resolved| self.is_within(&resolved.location))
             .map(|resolved| ResolvedId {
                 id: crate::Id::from_path(&resolved.id),
                 span: span_of(&resolved),
@@ -732,5 +764,168 @@ impl<'a> IdResolver<'a> {
                 target: resolved.target,
             })
             .collect()
+    }
+
+    /// The scopes that `id`, at `location`, is looked up in, and which of
+    /// them has it (`SPEC.md` 3.2).
+    pub fn scopes(&self, id: &crate::Id, location: &DataPath) -> ScopeChain {
+        let resolver = self.inner();
+        let path = id.to_path();
+        let target = resolver.resolve(&path, location);
+        resolver.chain(&path, location.clone(), target)
+    }
+
+    /// [`scopes`](Self::scopes) of every id in the data, as
+    /// [`ids`](Self::ids) finds them.
+    pub fn chains(&self) -> Vec<ScopeChain> {
+        let resolver = self.inner();
+        resolver
+            .all()
+            .into_iter()
+            .filter(|resolved| self.is_within(&resolved.location))
+            .map(|resolved| resolver.chain(&resolved.id, resolved.location, resolved.target))
+            .collect()
+    }
+}
+
+/// What makes a keyed value a scope (`SPEC.md` 3.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ScopeKind {
+    /// The root, which is always one.
+    Root,
+    /// The scope flag in the data: `#[scope]`. A value that has the flag
+    /// is this, whatever its type.
+    Flag,
+    /// A `#[crol(scope)]` type of the schema, which a loader needs the
+    /// schema for.
+    Type,
+}
+
+/// One scope around an id, in a [`ScopeChain`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct IdScope {
+    /// Where the scope is; the root for the root.
+    pub path: DataPath,
+    /// What makes it a scope.
+    pub kind: ScopeKind,
+    /// Whether it has the id's first key, also where the id does not ask
+    /// it: a scope past the one that has it, or for an id from the root,
+    /// `@::x`, any but the root.
+    pub has_key: bool,
+}
+
+/// The scopes an id is looked up in, and what came of it (`SPEC.md` 3.2):
+/// [`IdResolver::scopes`]. As text it is one line, as `crol explain` and
+/// the language server's hover show it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ScopeChain {
+    /// The id as written.
+    pub id: crate::Id,
+    /// Where it is in the data; for a map key, the map's place.
+    pub location: DataPath,
+    /// Where it resolved to, or `None` if it names nothing.
+    pub target: Option<DataPath>,
+    /// Why it names nothing, as a diagnostic says it.
+    pub problem: Option<String>,
+    /// The scopes around it, innermost first, ending at the root.
+    pub scopes: Vec<IdScope>,
+    /// Which of [`scopes`](Self::scopes) the id's first key was found in:
+    /// the innermost that has it, or for an id from the root, the root.
+    pub found: Option<usize>,
+}
+
+impl ScopeChain {
+    /// The scope the id's first key was found in.
+    pub fn found(&self) -> Option<&IdScope> {
+        self.scopes.get(self.found?)
+    }
+}
+
+impl Resolver<'_> {
+    fn chain(&self, id: &IdPath, location: DataPath, target: Option<DataPath>) -> ScopeChain {
+        let first = id.keys().first().map(|key| Key::Str(key.clone()));
+        let mut scopes = Vec::new();
+        self.each_scope_around(&location, |depth, keyed, kind| {
+            scopes.push(IdScope {
+                path: DataPath(location.0[..depth].to_vec()),
+                kind,
+                has_key: first
+                    .as_ref()
+                    .is_some_and(|first| keyed.entries.contains_key(first)),
+            });
+        });
+        scopes.reverse();
+        let found = if id.is_rooted() {
+            scopes
+                .iter()
+                .rposition(|scope| scope.kind == ScopeKind::Root && scope.has_key)
+        } else {
+            scopes.iter().position(|scope| scope.has_key)
+        };
+        ScopeChain {
+            id: crate::Id::from_path(id),
+            problem: target.is_none().then(|| self.unresolved(id, &location)),
+            location,
+            target,
+            scopes,
+            found,
+        }
+    }
+}
+
+/// One line: ``the id `@filter` names `dashboard.filter`; scopes:
+/// `dashboard` (`#[crol(scope)]`, has `filter`), the root (has `filter`,
+/// shadowed)``. The scopes are innermost first, and the first that has the
+/// key is the one the id names it in.
+impl fmt::Display for ScopeChain {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let id = &self.id;
+        match (&self.target, &self.problem, self.found) {
+            (Some(target), ..) => write!(f, "the id `{id}` names `{target}`")?,
+            // A path id that stops at a key, which the problem names.
+            (None, Some(problem), Some(_)) => f.write_str(problem)?,
+            (None, ..) => write!(f, "the id `{id}` names nothing")?,
+        }
+        if self.scopes.is_empty() {
+            return Ok(());
+        }
+        let key = self.id.path().first().map_or("", String::as_str);
+        let key = if crol_eval::is_identifier(key) {
+            key.to_owned()
+        } else {
+            crol_eval::quote(key)
+        };
+        f.write_str("; scopes: ")?;
+        for (i, scope) in self.scopes.iter().enumerate() {
+            if i > 0 {
+                f.write_str(", ")?;
+            }
+            let mut notes = Vec::new();
+            match scope.kind {
+                ScopeKind::Root => f.write_str("the root")?,
+                ScopeKind::Flag => {
+                    write!(f, "`{}`", scope.path)?;
+                    notes.push("`#[scope]`".to_owned());
+                }
+                ScopeKind::Type => {
+                    write!(f, "`{}`", scope.path)?;
+                    notes.push("`#[crol(scope)]`".to_owned());
+                }
+            }
+            if self.id.is_rooted() && scope.kind != ScopeKind::Root {
+                notes.push("passed by `::`".to_owned());
+            } else if !scope.has_key {
+                notes.push(format!("no `{key}`"));
+            } else if self.found.is_some_and(|found| i > found) {
+                notes.push(format!("has `{key}`, shadowed"));
+            } else {
+                notes.push(format!("has `{key}`"));
+            }
+            write!(f, " ({})", notes.join(", "))?;
+        }
+        Ok(())
     }
 }
