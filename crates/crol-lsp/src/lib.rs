@@ -16,6 +16,7 @@
 #![forbid(unsafe_code)]
 
 mod actions;
+mod attributes;
 mod completion;
 mod convert;
 mod docs;

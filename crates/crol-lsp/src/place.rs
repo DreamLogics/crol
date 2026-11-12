@@ -288,6 +288,13 @@ impl<'a> Cursor<'a> {
         self.frames.last().map(|f| &f.place)
     }
 
+    /// Whether the innermost bracket is the `{ ... }` of a variant block.
+    pub(crate) fn in_variant_block(&self) -> bool {
+        self.frames
+            .last()
+            .is_some_and(|f| f.bracket == Bracket::Variant)
+    }
+
     /// The place of what the slot writes: of the value being written, or
     /// the place a path has reached.
     pub(crate) fn current(&self) -> Option<&Place<'a>> {

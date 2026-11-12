@@ -3709,6 +3709,14 @@ trigger completion, as do `.`, `&`, `<` and `@`.
 - In `#[type(...)]` (section 6.1.2): the Rust names and schema type names;
   after a `.`, the steps the type there has: its fields, tuple indices and
   `[]`.
+- After `#[` where an entry starts (section 6.1.2): `scope`, before an entry
+  that sets a value, a value bind, or nothing yet, and `type`, before a value
+  bind or nothing yet, and not in a variant block. After `#![` (section 4.1):
+  `use`, `schema`, and for the document's mode `type`, or `extends` and
+  `variant`; only before the first entry or expression, and `type` only for a
+  document that can have one. Each has its doc, and neither list has an
+  attribute that would be an error there, such as one the entry or document
+  already has and takes once. The closing `]` need not be written yet.
 - After `..&root.`: root keys whose value is keyed.
 - Hover on a template use shows the template and where it is defined;
   go to definition jumps there.
