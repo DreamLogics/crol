@@ -221,7 +221,7 @@ fn says_what_the_guide_says() {
     let output = crol(&dir, &["--init"]);
     assert!(output.status.success(), "{output:?}");
     // As `docs/getting-started.md` has it.
-    let dependency = "`crol = \"0.3\"`";
+    let dependency = "`crol = \"0.4\"`";
     assert!(stderr(&output).contains(dependency), "{output:?}");
 
     // The schema where `crol::schema::check_file` puts it (`docs/schemas.md`).

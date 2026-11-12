@@ -90,7 +90,7 @@ Make sure you add `crol` and `serde` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-crol = "0.3"
+crol = "0.4"
 serde = { version = "1", features = ["derive"] }
 ```
 

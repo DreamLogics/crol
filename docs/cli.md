@@ -46,7 +46,7 @@ Created /path/to/project/project.crol
 Created /path/to/project/data/base/main.crod
 
 Next:
-  - add `crol = "0.3"` to [dependencies] in Cargo.toml, if it is not there yet
+  - add `crol = "0.4"` to [dependencies] in Cargo.toml, if it is not there yet
   - write your data in data/base/main.crod
   - run `crol check`
 ```
