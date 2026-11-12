@@ -105,9 +105,11 @@ fn holds(value: &Value, steps: &[Step], wanted: &Value) -> bool {
         return false;
     };
     let equal = |value: &Value| match (&value.kind, &wanted.kind) {
-        (ValueKind::Id(a) | ValueKind::String(a), ValueKind::Id(b) | ValueKind::String(b)) => {
-            a == b
+        (ValueKind::Id(a), ValueKind::Id(b)) => a == b,
+        (ValueKind::Id(id), ValueKind::String(s)) | (ValueKind::String(s), ValueKind::Id(id)) => {
+            crate::id::id_text(id) == **s
         }
+        (ValueKind::String(a), ValueKind::String(b)) => a == b,
         _ => value.equals(wanted),
     };
     match &found.kind {

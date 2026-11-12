@@ -1,0 +1,11 @@
+settings: { filter: { placeholder: "Search" } }
+refs: [
+    @settings.filter,
+    @::settings,
+    @settings.filter,
+    @"odd id".x,
+    @"odd id"["x y"],
+    @::"odd id".x,
+]
+same: @web
+copied: { pick: @settings.filter }

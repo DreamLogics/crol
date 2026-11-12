@@ -1,0 +1,7 @@
+#[scope]
++number: 1
+#[scope]
++list: [1, 2]
+n := 2
+#[scope]
++copy: &n

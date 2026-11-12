@@ -2,11 +2,30 @@
   {
     "type": "accessor",
     "named": true,
-    "fields": {},
+    "fields": {
+      "id": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "id_expr",
+            "named": true
+          }
+        ]
+      }
+    },
     "children": {
-      "multiple": false,
-      "required": true,
+      "multiple": true,
+      "required": false,
       "types": [
+        {
+          "type": "accessor",
+          "named": true
+        },
+        {
+          "type": "field_selector",
+          "named": true
+        },
         {
           "type": "integer",
           "named": true
@@ -557,6 +576,16 @@
           }
         ]
       },
+      "scope": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "scope_attr",
+            "named": true
+          }
+        ]
+      },
       "target": {
         "multiple": false,
         "required": true,
@@ -671,9 +700,19 @@
     "type": "field_selector",
     "named": true,
     "fields": {
+      "id": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "id_expr",
+            "named": true
+          }
+        ]
+      },
       "name": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "identifier",
@@ -724,6 +763,10 @@
       "types": [
         {
           "type": "accessor",
+          "named": true
+        },
+        {
+          "type": "id_expr",
           "named": true
         },
         {
@@ -1192,6 +1235,11 @@
     }
   },
   {
+    "type": "scope_attr",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "spread",
     "named": true,
     "fields": {
@@ -1551,6 +1599,16 @@
           }
         ]
       },
+      "scope": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "scope_attr",
+            "named": true
+          }
+        ]
+      },
       "value": {
         "multiple": false,
         "required": true,
@@ -1874,6 +1932,10 @@
   },
   {
     "type": "schema",
+    "named": false
+  },
+  {
+    "type": "scope",
     "named": false
   },
   {

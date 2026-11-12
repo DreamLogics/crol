@@ -1,0 +1,4 @@
+// A third layer merges into the scope again, after the path entries, and
+// adds a key that an entry before it already names.
+marine.weapon.bonus.@shield: 9.0
+marine: & ~ { shield: Tag {}, weapon: { bonus: { @marine.heavy: 7.5 } } }

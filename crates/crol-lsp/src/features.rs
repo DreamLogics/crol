@@ -212,11 +212,102 @@ pub(crate) fn key_text(key: &ast::Key) -> Option<String> {
     Some(string_text(token.text()))
 }
 
-/// The steps of a target: its key and selectors.
+/// Whether a selector is an id key: `.@name` or `[@name]` (`SPEC.md` 5.1).
+pub(crate) fn is_id_step(selector: &ast::Selector) -> bool {
+    match selector {
+        ast::Selector::Field(field) => field.id().is_some(),
+        ast::Selector::Accessor(accessor) => accessor.id().is_some(),
+        _ => false,
+    }
+}
+
+/// The steps of a target: its key and selectors. None for a target with an
+/// id key in it, which is no step of a path as tools write them: what it
+/// names decides the entry.
 fn target_steps(target: &ast::Target) -> Option<Vec<PathStep>> {
     let mut steps = key_steps(target)?;
+    if target.selectors().any(|selector| is_id_step(&selector)) {
+        return None;
+    }
     steps.extend(selector_steps(target.selectors()));
     Some(steps)
+}
+
+/// The selectors after an id written without brackets that are its own
+/// keys (`SPEC.md` 5.1): all up to a `?` or a condition.
+fn own_keys(optional: bool, selectors: impl Iterator<Item = ast::Selector>) -> Vec<ast::Selector> {
+    let mut own = Vec::new();
+    let mut optional = optional;
+    for selector in selectors {
+        if optional || matches!(selector, ast::Selector::Variant(_)) {
+            break;
+        }
+        optional = selector.is_optional();
+        own.push(selector);
+    }
+    own
+}
+
+/// For an id written as a key, `@x: 1`, `m.@x` or `m[@x]`: the id, and the
+/// path of the place it resolves at (`SPEC.md` 3.2). In a target that is
+/// the value it is a key of; in a reference, the place of the expression,
+/// as for an id value there. None for another id, and where the place has
+/// no path, as in a template.
+pub(crate) fn key_id(node: &SyntaxNode) -> Option<(crol::Id, Vec<PathStep>)> {
+    let holder = node.parent()?;
+    let owner = holder.parent()?;
+    let after = |holder: &SyntaxNode| {
+        let mut selectors = owner.children().filter_map(ast::Selector::cast);
+        if holder.kind() != SyntaxKind::KEY {
+            selectors
+                .by_ref()
+                .find(|selector| selector.syntax() == holder);
+        }
+        let optional = holder
+            .next_sibling_or_token()
+            .is_some_and(|next| next.kind() == SyntaxKind::QUESTION);
+        own_keys(optional, selectors)
+    };
+    let text = match holder.kind() {
+        SyntaxKind::ACCESSOR => {
+            let text = holder.text().to_string();
+            text.trim()
+                .strip_prefix('[')?
+                .strip_suffix(']')?
+                .trim()
+                .to_owned()
+        }
+        SyntaxKind::KEY | SyntaxKind::FIELD_SELECTOR => {
+            let mut text = node.text().to_string();
+            for selector in after(&holder) {
+                text.push_str(&selector.syntax().text().to_string());
+            }
+            text
+        }
+        _ => return None,
+    };
+    let id: crol::Id = text.parse().ok()?;
+    match owner.kind() {
+        SyntaxKind::TARGET => {
+            let target = ast::Target::cast(owner.clone())?;
+            let mut path = place_path(&owner.parent()?)?;
+            if holder.kind() != SyntaxKind::KEY {
+                path.extend(key_steps(&target)?);
+                for selector in target.selectors() {
+                    if selector.syntax() == &holder {
+                        break;
+                    }
+                    if is_id_step(&selector) {
+                        return None;
+                    }
+                    path.extend(selector_steps(std::iter::once(selector)));
+                }
+            }
+            Some((id, path))
+        }
+        SyntaxKind::PATH_EXPR => Some((id, place_path(&owner)?)),
+        _ => None,
+    }
 }
 
 /// The step of a target's key. An integer key is a key of that integer, not
@@ -243,7 +334,7 @@ fn key_steps(target: &ast::Target) -> Option<Vec<PathStep>> {
 /// of the entries around it, list elements at `[i]`, and tuple and
 /// named-tuple elements at `.i`. None for what has no such place, as a
 /// value bind's expression, or a list that is an operand.
-fn place_path(node: &SyntaxNode) -> Option<Vec<PathStep>> {
+pub(crate) fn place_path(node: &SyntaxNode) -> Option<Vec<PathStep>> {
     let position = |parent: &SyntaxNode, node: &SyntaxNode| {
         parent
             .children()
@@ -414,6 +505,9 @@ fn relative_reference_path(token: &SyntaxToken) -> Option<(String, Vec<PathStep>
         _ => return None,
     };
     if let Some(expr) = reference.syntax().parent().and_then(ast::PathExpr::cast) {
+        if expr.selectors().any(|selector| is_id_step(&selector)) {
+            return None;
+        }
         path.extend(selector_steps(expr.selectors()));
     }
     Some((key, path))
@@ -425,7 +519,9 @@ fn reference_path(token: &SyntaxToken) -> Option<(String, Vec<PathStep>)> {
     let ast::Expr::Reference(reference) = path.base()? else {
         return None;
     };
-    if reference.kind() != ast::ReferenceKind::Root {
+    if reference.kind() != ast::ReferenceKind::Root
+        || path.selectors().any(|selector| is_id_step(&selector))
+    {
         return None;
     }
     let mut steps = selector_steps(path.selectors());
@@ -631,7 +727,13 @@ pub(crate) fn hover(
         }
     }
     let mut parts = Vec::new();
-    let documented = named_path(&token)
+    // An id: what it resolved to, if one thing (`SPEC.md` 10.5).
+    let id_paths = id_paths(snapshot, file, &token);
+    let named = match &id_paths {
+        Some(paths) => paths.first().cloned().filter(|_| paths.len() == 1),
+        None => named_path(&token),
+    };
+    let documented = named
         .or_else(|| entry_path.clone())
         .map(|(key, steps)| describe_path(&key, &steps));
     parts.extend(documented.and_then(|path| crate::docs::of_path(snapshot, file, &path, settings)));
@@ -646,6 +748,7 @@ pub(crate) fn hover(
         );
     }
     parts.extend(named_value(snapshot, file, &token, settings));
+    parts.extend(id_scopes(snapshot, file, &token));
     let mut markdown = parts.join("\n\n");
     if let Some((key, steps)) = entry_path
         && let Some(history) = history(snapshot, file, &describe_path(&key, &steps), settings)
@@ -786,6 +889,117 @@ fn named_path(token: &SyntaxToken) -> Option<(String, Vec<PathStep>)> {
     reference_path(token).or_else(|| relative_reference_path(token))
 }
 
+/// The place in `root` that a root key and steps into it reach, as a path
+/// of the data: `[3]` is an index on a list and a key elsewhere.
+pub(crate) fn data_path(root: &Value, key: &str, steps: &[PathStep]) -> Option<crol::DataPath> {
+    let mut out = vec![crol::DataStep::Key(Key::Str(key.into()))];
+    let mut value = crol::DataPath::new(out.clone()).value_in(root)?;
+    for step in steps {
+        let next = match (step, &value.kind) {
+            (PathStep::Field(name), _) => crol::DataStep::Key(Key::Str(name.as_str().into())),
+            (PathStep::Element(i), _) => crol::DataStep::Element(*i),
+            (PathStep::Accessor(i), ValueKind::List(_)) => {
+                crol::DataStep::Index(usize::try_from(*i).ok()?)
+            }
+            (PathStep::Accessor(i), _) => crol::DataStep::Key(Key::Int(*i)),
+        };
+        out.push(next);
+        value = crol::DataPath::new(out.clone()).value_in(root)?;
+    }
+    Some(crol::DataPath::new(out))
+}
+
+/// [`data_path`] for a place that may not be in the data yet, as where a
+/// value is being written: the steps the data does not have are taken as
+/// written, `[3]` as a key.
+pub(crate) fn data_path_lenient(root: &Value, steps: &[PathStep]) -> crol::DataPath {
+    let mut out = Vec::new();
+    let mut value = Some(root);
+    for step in steps {
+        let next = match (step, value.map(|v| &v.kind)) {
+            (PathStep::Field(name), _) => crol::DataStep::Key(Key::Str(name.as_str().into())),
+            (PathStep::Element(i), _) => crol::DataStep::Element(*i),
+            (PathStep::Accessor(i), Some(ValueKind::List(_))) => {
+                crol::DataStep::Index(usize::try_from(*i).unwrap_or(usize::MAX))
+            }
+            (PathStep::Accessor(i), _) => crol::DataStep::Key(Key::Int(*i)),
+        };
+        out.push(next);
+        value = value.and_then(|_| crol::DataPath::new(out.clone()).value_in(root));
+    }
+    crol::DataPath::new(out)
+}
+
+/// The places a token names in the data: what an id at it resolves to, or
+/// the place of the key of an entry's target.
+pub(crate) fn places_named(
+    snapshot: &Snapshot,
+    file: crol_eval::FileId,
+    token: &SyntaxToken,
+) -> Vec<crol::DataPath> {
+    if let Some(node) = id_node(token) {
+        return id_targets(snapshot, file, &node);
+    }
+    let Some(root) = snapshot.data_of(file) else {
+        return Vec::new();
+    };
+    target_path(token)
+        .and_then(|(key, steps)| data_path(root, &key, &steps))
+        .into_iter()
+        .collect()
+}
+
+/// The id expression a token is part of: `@a` itself, or the path around it
+/// in `@a.b`, which is one id (`SPEC.md` 5.1).
+pub(crate) fn id_node(token: &SyntaxToken) -> Option<SyntaxNode> {
+    let mut node = token
+        .parent_ancestors()
+        .find(|n| n.kind() == SyntaxKind::ID_EXPR)
+        .or_else(|| {
+            // On a selector of `@a.b`.
+            let path = token.parent_ancestors().find_map(ast::PathExpr::cast)?;
+            match path.base()? {
+                ast::Expr::Id(id) => Some(id.syntax().clone()),
+                _ => None,
+            }
+        })?;
+    if let Some(path) = node.parent().filter(|p| p.kind() == SyntaxKind::PATH_EXPR) {
+        node = path;
+    }
+    Some(node)
+}
+
+/// What the id written at `node` names, in each place its value is met in
+/// the data: one written in a template, in each place it is copied to.
+pub(crate) fn id_targets(
+    snapshot: &Snapshot,
+    file: crol_eval::FileId,
+    node: &SyntaxNode,
+) -> Vec<crol::DataPath> {
+    // A key resolves at the place of the value it is a key of, whichever
+    // id the data has its entry under (`SPEC.md` 3.1).
+    if let Some((id, steps)) = key_id(node) {
+        let (Some(root), Some(resolver)) = (snapshot.data_of(file), snapshot.id_resolver(file))
+        else {
+            return Vec::new();
+        };
+        let place = data_path_lenient(root, &steps);
+        return resolver.resolve(&id, &place).into_iter().collect();
+    }
+    let range = node.text_range();
+    let mut targets = Vec::new();
+    for id in snapshot.resolved_ids(file) {
+        if id.span.file == file
+            && id.span.range == range
+            && let Some(target) = id.target
+            && !targets.contains(&target)
+        {
+            targets.push(target);
+        }
+    }
+    targets
+}
+
 /// On a reference or an id, what it names: its path and value on one line,
 /// which is not to be read off the document as a written value is.
 fn named_value(
@@ -794,7 +1008,81 @@ fn named_value(
     token: &SyntaxToken,
     settings: &Settings,
 ) -> Option<String> {
+    // An id names what it resolved to, perhaps several things.
+    if let Some(paths) = id_paths(snapshot, file, token) {
+        let lines: Vec<String> = paths
+            .iter()
+            .filter_map(|(key, steps)| named_line(snapshot, file, key, steps, settings))
+            .collect();
+        return (!lines.is_empty()).then(|| lines.join("\n\n"));
+    }
     let (key, steps) = named_path(token)?;
+    named_line(snapshot, file, &key, &steps, settings)
+}
+
+/// On an id: what it names and the scopes around it, as `crol explain`
+/// says it (`SPEC.md` 3.2), a line for each place its value is met in that
+/// says something else.
+fn id_scopes(snapshot: &Snapshot, file: crol_eval::FileId, token: &SyntaxToken) -> Option<String> {
+    let node = id_node(token)?;
+    let resolver = snapshot.id_resolver(file)?;
+    // A key, at the place of the value it is a key of, as in `id_targets`.
+    if let Some((id, steps)) = key_id(&node) {
+        let place = data_path_lenient(snapshot.data_of(file)?, &steps);
+        return Some(resolver.scopes(&id, &place).to_string());
+    }
+    let range = node.text_range();
+    let mut lines: Vec<String> = Vec::new();
+    for id in resolver.ids() {
+        if id.span.file == file && id.span.range == range {
+            let line = resolver.scopes(&id.id, &id.location).to_string();
+            if !lines.contains(&line) {
+                lines.push(line);
+            }
+        }
+    }
+    (!lines.is_empty()).then(|| lines.join("\n\n"))
+}
+
+/// For an id that resolved: the root key and steps of each thing it names.
+fn id_paths(
+    snapshot: &Snapshot,
+    file: crol_eval::FileId,
+    token: &SyntaxToken,
+) -> Option<Vec<(String, Vec<PathStep>)>> {
+    let node = id_node(token)?;
+    let paths: Vec<_> = id_targets(snapshot, file, &node)
+        .iter()
+        .filter_map(|target| {
+            let (first, rest) = target.steps().split_first()?;
+            let crol::DataStep::Key(Key::Str(key)) = first else {
+                return None;
+            };
+            let steps = rest
+                .iter()
+                .filter_map(|step| match step {
+                    crol::DataStep::Key(Key::Str(name)) => Some(PathStep::Field(name.to_string())),
+                    crol::DataStep::Key(Key::Int(i)) => Some(PathStep::Accessor(*i)),
+                    crol::DataStep::Index(i) => i128::try_from(*i).ok().map(PathStep::Accessor),
+                    crol::DataStep::Element(i) => Some(PathStep::Element(*i)),
+                    _ => None,
+                })
+                .collect();
+            Some((key.to_string(), steps))
+        })
+        .collect();
+    (!paths.is_empty()).then_some(paths)
+}
+
+/// `**path**: value` for the value at a root key and steps.
+fn named_line(
+    snapshot: &Snapshot,
+    file: crol_eval::FileId,
+    key: &str,
+    steps: &[PathStep],
+    settings: &Settings,
+) -> Option<String> {
+    let (key, steps) = (key.to_owned(), steps.to_vec());
     let evaluation = evaluation_for(snapshot, Some(file));
     let stale = snapshot
         .last_good_of(Some(file))
@@ -864,8 +1152,129 @@ pub(crate) fn definition(
     text: &str,
     position: Position,
     encoding: Encoding,
+) -> Vec<Location> {
+    let Some((_, token)) = token_at(text, position, encoding) else {
+        return Vec::new();
+    };
+    // An id: what it names, through the scopes around each place it ends up
+    // (`SPEC.md` 10.5).
+    if let Some(node) = id_node(&token)
+        && let Some(file) = convert::uri_to_path(uri).and_then(|path| snapshot.file_of(&path))
+    {
+        let targets = id_targets(snapshot, file, &node);
+        if !targets.is_empty() {
+            let (layers, options) = snapshot
+                .chain_of(file)
+                .unwrap_or((&snapshot.layers, &snapshot.options));
+            let root = snapshot.data_of(file);
+            return targets
+                .iter()
+                .filter_map(|target| {
+                    // Inside a root value: the entry whose value it is.
+                    if target.steps().len() > 1 {
+                        let value = target.value_in(root?)?;
+                        return location(snapshot, entry_key_span(snapshot, value.span), encoding);
+                    }
+                    let steps = snapshot
+                        .explain(layers, options, &target.to_string(), &[])
+                        .ok()?;
+                    let step = steps
+                        .iter()
+                        .find(|s| s.kind == StepKind::Definition)
+                        .or_else(|| steps.first())?;
+                    location(snapshot, step.span, encoding)
+                })
+                .collect();
+        }
+    }
+    definition_of_key(snapshot, uri, &token, encoding)
+        .into_iter()
+        .collect()
+}
+
+/// Where the id key of the entry whose value was written at `span` is
+/// written: the name of `@x` in `@x: 1`. None if the value is not that of
+/// an entry with the key `id`, as when another entry set it since.
+pub(crate) fn id_key_span(
+    snapshot: &Snapshot,
+    span: crol_eval::Span,
+    id: &crol::Id,
+) -> Option<crol_eval::Span> {
+    let text = snapshot.sources.file(span.file).text();
+    let parse = crol_syntax::parse(text);
+    let entry = parse
+        .syntax()
+        .descendants()
+        .find(|node| {
+            node.text_range() == span.range
+                && node.parent().is_some_and(|p| p.kind() == SyntaxKind::ENTRY)
+        })
+        .and_then(|value| value.parent().and_then(ast::Entry::cast))?;
+    let name = entry
+        .target()?
+        .syntax()
+        .descendants()
+        .filter(|node| node.kind() == SyntaxKind::ID_EXPR)
+        .filter(|node| key_id(node).is_some_and(|(written, _)| written == *id))
+        .last()
+        .and_then(|node| {
+            node.children_with_tokens()
+                .filter_map(|it| it.into_token())
+                .find(|t| {
+                    matches!(
+                        t.kind(),
+                        SyntaxKind::IDENT | SyntaxKind::STRING | SyntaxKind::RAW_STRING
+                    )
+                })
+        })?;
+    Some(crol_eval::Span::new(span.file, name.text_range()))
+}
+
+/// The key of the entry whose value was written at `span`, if it was the
+/// value of an entry: `filter` in `+filter: { ... }`; else `span`.
+pub(crate) fn entry_key_span(snapshot: &Snapshot, span: crol_eval::Span) -> crol_eval::Span {
+    let text = snapshot.sources.file(span.file).text();
+    let parse = crol_syntax::parse(text);
+    let key = parse
+        .syntax()
+        .descendants()
+        .find(|node| {
+            node.text_range() == span.range
+                && node.parent().is_some_and(|p| p.kind() == SyntaxKind::ENTRY)
+        })
+        .and_then(|value| value.parent().and_then(ast::Entry::cast))
+        .and_then(|entry| entry.target())
+        .map(|target| {
+            // The last key or field of the target: `b` in `a.b: { ... }`.
+            target
+                .syntax()
+                .descendants_with_tokens()
+                .filter_map(|it| it.into_token())
+                .filter(|t| {
+                    matches!(
+                        t.kind(),
+                        SyntaxKind::IDENT | SyntaxKind::STRING | SyntaxKind::INT
+                    )
+                })
+                .last()
+                .map_or(target.syntax().text_range(), |t| t.text_range())
+        });
+    match key {
+        Some(range) => crol_eval::Span::new(span.file, range),
+        None => span,
+    }
+}
+
+/// [`definition`] for what is not an id that resolved.
+fn definition_of_key(
+    snapshot: &Snapshot,
+    uri: &Uri,
+    token: &SyntaxToken,
+    encoding: Encoding,
 ) -> Option<Location> {
-    let (_, token) = token_at(text, position, encoding)?;
+    let text = token.parent_ancestors().last()?.text().to_string();
+    let text = text.as_str();
+    let token = token.clone();
     if let Some(location) = value_below(snapshot, uri, &token, encoding) {
         return Some(location);
     }

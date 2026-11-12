@@ -34,9 +34,9 @@ with any format, with a few CROL rules on top.
 | `()`                           | `()`                                                   |
 | `Vec<T>`, sets                 | a list                                                 |
 | tuples, arrays                 | a tuple                                                |
-| maps                           | a keyed value; keys are strings, integers, unit enum variants or `crol::Id` |
+| maps                           | a keyed value; keys are strings, integers or unit enum variants, and for a map keyed by `crol::Id`, [ids](#ids) |
 | structs                        | a keyed value, with the checks below                   |
-| `struct N(T)`                  | `N(x)` or `x`                                          |
+| `struct N(T)`                  | `N(x)` or `x`; a block `x` may be written `N { ... }`  |
 | `struct P(A, B)`               | `P(a, b)` or `(a, b)`                                  |
 | enums                          | `V`, `V(x)`, `V(a, b)`, `V { ... }`                    |
 
@@ -56,6 +56,41 @@ change.
 
 `#[serde(flatten)]` makes serde ask for a map rather than a struct. It works,
 but these checks then do not apply to that struct.
+
+### Type names on maps and wrappers
+
+A block can also load into a map, or into a newtype or `#[serde(transparent)]`
+struct around a map or a struct. Its type name is then the wrapper's:
+
+```rust,ignore
+#[derive(Deserialize, crol::Schema)]
+struct Screen(BTreeMap<String, Node>);
+```
+
+```crol
+dashboard: Screen { +filter: TextInput { placeholder: "Filter" } }
+settings: { +filter: TextInput { placeholder: "Search" } }   // the name is optional
+dashbaord: Scren { }   // error: `Scren { ... }` is not a `Screen`
+```
+
+How much is checked depends on what serde tells the loader:
+
+| Rust type                           | A type name on its block                                  |
+| ----------------------------------- | --------------------------------------------------------- |
+| a struct                            | must be the struct's                                      |
+| a newtype, `struct N(T)`            | must be `N`, or a name `T` takes                          |
+| `#[serde(transparent)] struct N(T)` | must be `N`, or a name `T` takes, if the loader has the [schema](schemas.md) |
+| a map, such as `BTreeMap`           | names nothing: a warning, if the loader has the schema    |
+
+Serde passes a newtype's name to the loader, but for a transparent struct it
+asks for what is inside, so `Scren { ... }` there is caught only when you give
+the loader your schema with `CrolComposer::schema(...)`. `crol check` and your
+editor have the schema, and report all of these.
+
+A name on a plain map, such as `stats: Stats { ... }` for a
+`BTreeMap<String, u32>` field, loads as before. With the schema it is a warning
+in `data.warnings()`, since the name says nothing about the value. Write
+`stats: { ... }`.
 
 ### Types that decide for themselves
 
@@ -273,10 +308,11 @@ layers together.
 
 ## Ids
 
-An [id](language.md#ids) names a root key. Use `crol::Id` for a field that must
-hold one: unlike `String`, it refuses a plain string. CROL does not check what
-ids point at, because only you know what is valid. It tells you which ids it
-saw, so you can check them:
+An [id](language.md#ids) names a key. Use `crol::Id` for a field that holds
+one: it refuses a plain string, and a `String` field refuses an id. Every id
+the deserializer reads is reported with what it resolved to, through the
+[scopes](language.md#scopes) around the place it ends up, so you can check
+them:
 
 ```rust
 // src/main.rs
@@ -298,7 +334,7 @@ fn main() -> Result<(), crol::Error> {
     let (web, ids): (Service, Vec<IdUse>) = data.get_with_ids("web")?;
     println!("web has {} dependencies", web.depends_on.len());
     for id in ids {
-        if !data.contains(&id.id) {
+        if id.target.is_none() {
             println!("{}: nothing is called `{}`", id.rust_path, id.id);
         }
     }
@@ -309,11 +345,85 @@ fn main() -> Result<(), crol::Error> {
 ```console
 $ cargo run
 web has 2 dependencies
-web.depends_on[1]: nothing is called `cache`
+web.depends_on[1]: nothing is called `@cache`
 ```
 
-With a [schema](schemas.md), `#[crol(refers(...))]` and `crol::check` do this
-for you, including the type of what an id names.
+`id.target` is where in the data an id resolved to, such as `dashboard.filter`;
+`data.contains_path` and `data.type_name_at` look one up. An id that names
+nothing is also among `data.warnings()`, and with `CrolConfig { strict_ids:
+true, .. }` it is an error that stops the data from loading.
+
+As text, an id is written as in a file, with its `@`: `id.to_string()` is
+`"@web"`, `"@web".parse::<Id>()` reads one, and in JSON an `Id` is `"@web"`.
+
+A map keyed by `Id` takes [id keys](language.md#ids-as-keys), and only those:
+
+```rust
+// src/main.rs
+use std::collections::BTreeMap;
+
+use crol::{CrolComposer, CrolLayer, Id, IdUse};
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct Weapon {
+    bonus: BTreeMap<Id, f64>,
+}
+
+fn main() -> Result<(), crol::Error> {
+    let base = CrolLayer::from_sources(
+        "base",
+        [(
+            "a.crod",
+            "+is_biological: {}\n+armored: {}\n\
+             +grenade: { bonus: { @is_biological: 47.0, @armored: 5.0 } }",
+        )],
+    );
+    // Another id for the same entry sets it.
+    let balance = CrolLayer::from_sources(
+        "balance",
+        [("a.crod", "grenade.bonus.@::is_biological: 50.0")],
+    );
+    let data = CrolComposer::new()
+        .load_layer(base)
+        .load_layer(balance)
+        .compose_data()?;
+
+    let (grenade, ids): (Weapon, Vec<IdUse>) = data.get_with_ids("grenade")?;
+    for (tag, bonus) in &grenade.bonus {
+        println!("{tag}: {bonus}");
+    }
+    for id in ids {
+        println!("{} names {}", id.rust_path, id.target.unwrap());
+    }
+    Ok(())
+}
+```
+
+```console
+$ cargo run
+@armored: 5
+@is_biological: 50
+grenade.bonus[@is_biological] names is_biological
+grenade.bonus[@armored] names armored
+```
+
+Keys are compared by what they name, so the map has each entry once, under the
+id first written for it, and each key is reported as an `IdUse` like any other
+id. A key that names nothing does not load: it is an error, with or without
+`strict_ids`. A string key in such a map is an error too, "expected an id key,
+found the string key web; write `@web`", and so is an id key in any other map
+or in a struct. Where serde reads a value before it knows its type, as under
+`#[serde(flatten)]`, an id key is its text, `"@web"`, as an id value is.
+
+`crol::to_string` writes the keys of such a map as ids, `{@web: 1}`. That reads
+back in a document where the keys name something; a map on its own, with
+nothing for its keys to name, does not.
+
+In a [typed path](#paths), `.key(&id)` takes an `Id` for a map keyed by ids.
+
+With a [schema](schemas.md), `#[crol(refers(...))]` and `crol::check` check the
+type of what an id names too.
 
 ## Configuration
 
@@ -478,10 +588,11 @@ those that read them. `reloaded.evaluated` says how many, or `None` where everyt
 was, as when a template changed. The result is always what loading everything again
 would give.
 
-A reload also keeps what each layer that did not change lowers to, so later reloads do
-not parse those layers. The first reload parses them, and so takes longer. A layer that
-uses a template of another layer is parsed every time, and `keep_lowered: false` turns
-this off.
+A reload keeps what each document lowers to, so it parses and lowers only the documents
+that changed. It also keeps what each layer that did not change lowers to as a whole,
+which spares putting that layer's documents together again. The first reload works that
+out, and so takes longer. A layer that uses a template of another layer is not kept as a
+whole, and `keep_lowered: false` turns this off.
 
 ## Views and queries
 

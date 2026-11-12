@@ -1,0 +1,77 @@
+// Ids as keys (SPEC.md 3.1): they are compared by what they name.
++is_biological: Tag {}
++armored: Tag {}
++"odd id": Tag {}
+
+// A key can name a key declared later, or in a later layer.
++grenade: Weapon {
+    bonus: { @is_biological: 47.0, @late: 1.0, @"odd id": 2.0 },
+}
++late: Tag {}
+
+// `@x` and `@::x` are one key where `@x` names the root's `x`: the second
+// sets the first, and keeps its place and the id first written.
++same: { @armored: 1, @is_biological: 2, @::armored: 3 }
+
+// In a scope with an `armored` of its own they are two keys.
+#[scope]
++zerg: {
+    armored: Tag {},
+    bonus: { @armored: 1, @::armored: 2, @zerg.armored: 3 },
+}
+
+// Path ids and rooted ids reach out of the scopes around the key.
++terran: { bonus: { @zerg.armored: 4, @::zerg.bonus: 5 } }
+
+// Declaring, ensuring, replacing and removing by what the key names.
++ops: {
+    @armored: 1,
+    ?@::armored: 2,
+    ?@late: 3,
+    ^@::late: 4,
+    @is_biological: 5,
+    -@::is_biological,
+    -?@grenade
+}
+
+// A path goes on below an id key written in brackets.
++nested: {
+    @armored: { amount: 1 },
+    [@::armored].factor: 2,
+    @late: { amount: 3 },
+}
+
+// A reference resolves the id where it is written, then looks it up.
++read: {
+    direct: &root.grenade.bonus[@is_biological],
+    dotted: &root.grenade.bonus.@late,
+    rooted: &root.same[@::armored] + 1,
+    missing: &root.grenade.bonus[@zerg] ?? -1.0,
+    in_scope: &root.zerg.bonus[@::armored],
+}
+
+// A template's keys resolve where it is spread: in `protoss` its `@armored`
+// is the scope's own, so it and `@::armored` stay two keys there.
+bonuses := { @armored: 10 }
++plain: { ..&bonuses, @::armored: 11 }
+#[scope]
++protoss: {
+    armored: Tag {},
+    bonus: { ..&bonuses, @::armored: 12 },
+}
+
+// Merging compares keys the same way.
++merged: { @armored: 1, @late: 2 } ~ { @::armored: 3, @is_biological: 4 }
+
+// An id key is never a string key.
++mixed: { armored: "a string key", @armored: "an id key" }
+
++in_variant: { @armored: 1 }
+
+// Path entries into a map inside a scope, from a later layer.
+#[scope]
++marine: Unit {
+    light: Tag {},
+    weapon: { bonus: { @light: 1.0, @::armored: 2.0 } },
+    squad: [{ bonus: { @light: 1.5 } }],
+}

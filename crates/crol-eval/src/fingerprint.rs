@@ -98,6 +98,7 @@ fn fingerprints_of(
         let name = match key {
             Key::Str(name) => name.to_string(),
             Key::Int(i) => i.to_string(),
+            Key::Id(id) => id.to_string(),
         };
         found.insert(name, *blake3::hash(&out).as_bytes());
     }
@@ -192,9 +193,11 @@ fn encode_name(out: &mut Vec<u8>, name: &str) {
     out.extend_from_slice(name.as_bytes());
 }
 
-/// A key, encoded as the value it is (tag `0x02` or `0x05`).
+/// A key, encoded as the value it is (tag `0x02` or `0x05`, or for an id
+/// key `0x06` or `0x0C`).
 fn encode_key(out: &mut Vec<u8>, key: &Key) {
     match key {
+        Key::Id(id) => encode_id(out, id),
         Key::Int(i) => {
             out.push(0x02);
             out.extend_from_slice(&i.to_le_bytes());
@@ -202,6 +205,24 @@ fn encode_key(out: &mut Vec<u8>, key: &Key) {
         Key::Str(s) => {
             out.push(0x05);
             encode_name(out, s);
+        }
+    }
+}
+
+/// An id. A single key keeps the encoding it had before path ids.
+fn encode_id(out: &mut Vec<u8>, id: &crate::value::IdPath) {
+    match id.name() {
+        Some(name) => {
+            out.push(0x06);
+            encode_name(out, name);
+        }
+        None => {
+            out.push(0x0C);
+            out.push(u8::from(id.is_rooted()));
+            leb128(out, id.keys().len() as u128);
+            for key in id.keys() {
+                encode_name(out, key);
+            }
         }
     }
 }
@@ -230,10 +251,7 @@ pub fn encode(out: &mut Vec<u8>, value: &Value) {
             out.push(0x05);
             encode_name(out, s);
         }
-        ValueKind::Id(s) => {
-            out.push(0x06);
-            encode_name(out, s);
-        }
+        ValueKind::Id(id) => encode_id(out, id),
         ValueKind::List(items) => {
             out.push(0x07);
             encode_all(out, items);
@@ -254,7 +272,8 @@ pub fn encode(out: &mut Vec<u8>, value: &Value) {
         ValueKind::Keyed(keyed) => {
             out.push(0x0B);
             encode_name(out, keyed.name.as_deref().unwrap_or(""));
-            out.push(u8::from(keyed.defaults));
+            // Bit 0 the defaults flag, bit 1 the scope flag (appendix B).
+            out.push(u8::from(keyed.defaults) | (u8::from(keyed.scope) << 1));
             // `defaulted` is a sorted set: integers ascending, then strings
             // in byte order.
             leb128(out, keyed.defaulted.len() as u128);
@@ -281,6 +300,7 @@ fn encode_all(out: &mut Vec<u8>, items: &[Value]) {
 mod tests {
     use super::*;
     use crate::source::Span;
+    use crate::value::IdPath;
 
     fn v(kind: ValueKind) -> Value {
         Value::new(kind, Span::detached())
@@ -304,6 +324,39 @@ mod tests {
         let mut out = Vec::new();
         encode(&mut out, &v(ValueKind::Char('é')));
         assert_eq!(out, [0x04, 0xE9, 0, 0, 0]);
+    }
+
+    #[test]
+    fn the_scope_flag_is_bit_one_of_the_flag_byte() {
+        let keyed = |defaults, scope| {
+            let mut out = Vec::new();
+            encode(
+                &mut out,
+                &v(ValueKind::Keyed(Box::new(crate::value::Keyed {
+                    defaults,
+                    scope,
+                    ..Default::default()
+                }))),
+            );
+            out
+        };
+        // Tag, empty name, flag byte, no defaulted keys, no entries.
+        assert_eq!(keyed(false, false), [0x0B, 0, 0, 0, 0]);
+        assert_eq!(keyed(true, false), [0x0B, 0, 1, 0, 0]);
+        assert_eq!(keyed(false, true), [0x0B, 0, 2, 0, 0]);
+        assert_eq!(keyed(true, true), [0x0B, 0, 3, 0, 0]);
+    }
+
+    #[test]
+    fn a_single_key_id_keeps_its_encoding() {
+        let id = |text: &str| {
+            let mut out = Vec::new();
+            encode(&mut out, &v(ValueKind::Id(IdPath::parse(text).unwrap())));
+            out
+        };
+        assert_eq!(id("@ab"), [0x06, 2, b'a', b'b']);
+        assert_eq!(id("@a.b"), [0x0C, 0, 2, 1, b'a', 1, b'b']);
+        assert_eq!(id("@::a"), [0x0C, 1, 1, 1, b'a']);
     }
 
     #[test]

@@ -19,6 +19,7 @@ use crate::error::Error;
 use crate::id::IdUse;
 use crate::loader::{self, FileLoader, FileLoaders, FsLoader, Loaded, Origin, SourceId};
 use crate::mode::Mode;
+use crate::resolve::{DataPath, Resolver};
 
 /// A variant name type: maps values to the names data writes in selectors,
 /// and back (`SPEC.md` 8.1). Implemented for `String`, which accepts every
@@ -195,6 +196,10 @@ pub struct CrolConfig<T = String> {
     /// lowers to (`SPEC.md` 7.8). Without it, data takes less memory. Default:
     /// `true`.
     pub keep_lowered: bool,
+    /// Make an id that names nothing an error instead of a warning
+    /// (`SPEC.md` 10.5). Default: `false`, since ids may name things outside
+    /// the data.
+    pub strict_ids: bool,
 }
 
 impl<T> Default for CrolConfig<T> {
@@ -214,6 +219,7 @@ impl<T> Default for CrolConfig<T> {
             require_complete: true,
             init_defaults: false,
             keep_lowered: true,
+            strict_ids: false,
         }
     }
 }
@@ -761,7 +767,8 @@ impl<T: VariantName> CrolComposer<T> {
 
     /// Gives the composer a schema, from which `&default` reads defaults
     /// (`SPEC.md` 6.1.3) and the deserializer learns which names are
-    /// aliases of one field (10.2) and which types set
+    /// aliases of one field, what names the type of a block where it is a
+    /// transparent struct or a map (10.2), and which types set
     /// `#[crol(explicit_defaults)]` (10.3), which serde does not tell it:
     /// `.schema(crol::schema::build::<Definition>())`.
     pub fn schema(mut self, schema: crate::schema::SchemaFile) -> Self {
@@ -1023,6 +1030,20 @@ impl<T: VariantName> CrolComposer<T> {
             .variants
             .context(&chosen)
             .map_err(|message| Error::new(format!("composer: {message}")))?;
+        let strict_ids = self.config.strict_ids;
+        let mut diagnostics = evaluation.diagnostics;
+        let (ids, names) = id_diagnostics(
+            &base,
+            &evaluation.contexts,
+            &composed,
+            self.schema.as_ref(),
+            strict_ids,
+        );
+        if strict_ids && !ids.is_empty() {
+            return Err(Error::from_diagnostics(&sources, &ids));
+        }
+        diagnostics.extend(ids);
+        diagnostics.extend(names);
         Ok(CrolData {
             sources,
             layers,
@@ -1036,11 +1057,12 @@ impl<T: VariantName> CrolComposer<T> {
             contexts: evaluation.contexts,
             variants: evaluation.variants,
             composed,
-            diagnostics: evaluation.diagnostics,
+            diagnostics,
             options: de::Options {
                 structs: self.structs.clone(),
                 ..self.config.deserialize_options()
             },
+            strict_ids,
             names: std::marker::PhantomData,
         })
     }
@@ -1211,9 +1233,59 @@ pub struct CrolData<T = String> {
     variants: Variants,
     /// The context `with_variant` chose, for `get` and `deserialize_root`.
     composed: Context,
+    /// What evaluating found, and after it, what resolving the ids found.
     diagnostics: Vec<Diagnostic>,
     options: de::Options,
+    /// [`CrolConfig::strict_ids`].
+    strict_ids: bool,
     names: std::marker::PhantomData<T>,
+}
+
+/// Resolves every id of the composed context (`SPEC.md` 10.5): one that
+/// names nothing is a warning, or with `strict` an error. These are found
+/// after evaluating, and never reach the evaluator, so that they do not make
+/// a reload evaluate everything (`SPEC.md` 7.9).
+///
+/// The same walk finds, with a schema, the type names written on maps that
+/// nothing names (`SPEC.md` 10.2): these are the second list, of warnings
+/// whatever `strict` is.
+fn id_diagnostics(
+    base: &Value,
+    contexts: &[ContextData],
+    composed: &Context,
+    schema: Option<&crate::schema::SchemaFile>,
+    strict: bool,
+) -> (Vec<Diagnostic>, Vec<Diagnostic>) {
+    let root = match contexts.iter().find(|data| data.context == *composed) {
+        Some(data) if !composed.is_base() => Cow::Owned(data.root(base)),
+        _ => Cow::Borrowed(base),
+    };
+    let resolver = Resolver::new(&root, schema);
+    let (ids, unnamed) = resolver.all_with_unnamed();
+    let names = unnamed
+        .into_iter()
+        .filter_map(|value| match &value.kind {
+            ValueKind::Keyed(keyed) => {
+                let message = de::unnamed_map(keyed.name.as_deref()?);
+                Some(Diagnostic::warning(value.span, message))
+            }
+            _ => None,
+        })
+        .collect();
+    let ids = ids
+        .into_iter()
+        .filter(|resolved| resolved.target.is_none())
+        .map(|resolved| {
+            let span = crate::resolve::span_of(&resolved);
+            let message = resolver.unresolved(&resolved.id, &resolved.location);
+            if strict {
+                Diagnostic::error(span, message)
+            } else {
+                Diagnostic::warning(span, message)
+            }
+        })
+        .collect();
+    (ids, names)
 }
 
 impl<T: VariantName> CrolData<T> {
@@ -1392,11 +1464,26 @@ impl<T: VariantName> CrolData<T> {
                 .keys()
                 .filter_map(|k| match k {
                     Key::Str(s) => Some(s.to_string()),
-                    Key::Int(_) => None,
+                    Key::Int(_) | Key::Id(_) => None,
                 })
                 .collect(),
             _ => Vec::new(),
         }
+    }
+
+    /// Whether something is at `path` in the composed context: what an id
+    /// resolved to, [`IdUse::target`] (`SPEC.md` 10.5).
+    pub fn contains_path(&self, path: &DataPath) -> bool {
+        path.value_in(&self.composed_root()).is_some()
+    }
+
+    /// The type name of the value at `path` in the composed context, such as
+    /// what an id resolved to.
+    pub fn type_name_at(&self, path: &DataPath) -> Option<String> {
+        let root = self.composed_root();
+        Resolver::new(&root, None)
+            .type_name_at(path)
+            .map(str::to_owned)
     }
 
     /// Whether a root key exists in the composed context, for checking ids
@@ -1428,7 +1515,23 @@ impl<T: VariantName> CrolData<T> {
         let value = self
             .key_in(key, &context.0)
             .ok_or_else(|| Error::new(format!("there is no root key `{key}` in this context")))?;
-        crate::deserialize(value, &self.sources, self.options.clone(), Some(key)).map(|(v, _)| v)
+        // What the schema says a block's type name is checked against
+        // (`SPEC.md` 10.2). Where its root type is the type of each root
+        // value, the value is enough, and the whole root is not built.
+        let schema = self.schema.as_deref();
+        let whole =
+            schema.filter(|schema| schema.data_root(None) == crate::schema::DataRoot::Document);
+        let root = whole.and_then(|_| self.root_in(&context.0));
+        let typed = match (schema, &root) {
+            (Some(_), Some(root)) => Some((Resolver::new(root, schema), 0)),
+            (Some(schema), None) => {
+                Some((Resolver::for_value(value, Some(schema), &schema.root), 1))
+            }
+            (None, _) => None,
+        };
+        let options = self.options.clone();
+        crate::deserialize_typed(value, &self.sources, options, Some(key), None, typed)
+            .map(|(v, _)| v)
     }
 
     /// Deserializes a root key's value in the composed context, and returns
@@ -1440,7 +1543,20 @@ impl<T: VariantName> CrolData<T> {
         let value = self
             .key_in(key, &self.composed)
             .ok_or_else(|| Error::new(format!("there is no root key `{key}`")))?;
-        crate::deserialize(value, &self.sources, self.options.clone(), Some(key))
+        // Ids resolve in the composed context's whole root (`SPEC.md` 10.5).
+        let root = self.composed_root();
+        let resolver = Resolver::new(&root, self.schema.as_deref());
+        // And there the schema says what a block's type name is checked
+        // against (`SPEC.md` 10.2).
+        let typed = self.schema.is_some().then_some((resolver, 0));
+        crate::deserialize_typed(
+            value,
+            &self.sources,
+            self.options.clone(),
+            Some(key),
+            Some(resolver),
+            typed,
+        )
     }
 
     /// Deserializes the whole root as `R`, in a context (`None`: the
@@ -1455,7 +1571,13 @@ impl<T: VariantName> CrolData<T> {
                 .root_in(&context.0)
                 .ok_or_else(|| Error::new("this context was not evaluated"))?,
         };
-        crate::deserialize(&root, &self.sources, self.options.clone(), None).map(|(value, _)| value)
+        // The schema says what a block's type name is checked against
+        // (`SPEC.md` 10.2).
+        let schema = self.schema.as_deref();
+        let typed = schema.map(|_| (Resolver::new(&root, schema), 0));
+        let options = self.options.clone();
+        crate::deserialize_typed(&root, &self.sources, options, None, None, typed)
+            .map(|(value, _)| value)
     }
 
     /// The data as a [`DataView`](crate::DataView), for [`crate::check`].
@@ -1532,7 +1654,10 @@ impl<T: VariantName> CrolData<T> {
             }
             options = options.with_defaults(Some(schema.defaults()));
         }
-        let (compiled, mut diagnostics) = compile_lowered(&sources, &layers, &lowered);
+        // What the layers from bytes decoded to is kept from before.
+        let bytes: Vec<Option<&[u8]>> = lowered.iter().map(|l| l.as_deref()).collect();
+        let (compiled, mut diagnostics) =
+            crol_eval::compile_binary_after(&sources, &layers, &bytes, &self.compiled);
         let Some(compiled) = compiled else {
             return Err(Error::from_diagnostics(&sources, &diagnostics));
         };
@@ -1575,7 +1700,33 @@ impl<T: VariantName> CrolData<T> {
                 )
             };
             let before = fingerprints(self);
-            update.apply(&mut self.base, &mut self.contexts);
+            if self.strict_ids {
+                // An error keeps the data as it was, as any failed reload does.
+                let (mut base, mut contexts) = (self.base.clone(), self.contexts.clone());
+                update.apply(&mut base, &mut contexts);
+                let (ids, _) = id_diagnostics(
+                    &base,
+                    &contexts,
+                    &self.composed,
+                    self.schema.as_deref(),
+                    true,
+                );
+                if !ids.is_empty() {
+                    return Err(Error::from_diagnostics(&sources, &ids));
+                }
+                (self.base, self.contexts) = (base, contexts);
+            } else {
+                update.apply(&mut self.base, &mut self.contexts);
+            }
+            let (ids, names) = id_diagnostics(
+                &self.base,
+                &self.contexts,
+                &self.composed,
+                self.schema.as_deref(),
+                false,
+            );
+            diagnostics.extend(ids);
+            diagnostics.extend(names);
             self.sources = sources;
             self.layers = layers;
             self.lowered = lowered;
@@ -1602,6 +1753,18 @@ impl<T: VariantName> CrolData<T> {
                 .collect();
             evaluation.variants.context(&ids).map_err(Error::new)?
         };
+        let (ids, names) = id_diagnostics(
+            &base,
+            &evaluation.contexts,
+            &composed,
+            self.schema.as_deref(),
+            self.strict_ids,
+        );
+        if self.strict_ids && !ids.is_empty() {
+            return Err(Error::from_diagnostics(&sources, &ids));
+        }
+        diagnostics.extend(ids);
+        diagnostics.extend(names);
         self.sources = sources;
         self.layers = layers;
         self.lowered = lowered;

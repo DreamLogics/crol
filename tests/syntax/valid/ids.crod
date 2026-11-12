@@ -1,0 +1,4 @@
+// Path ids and ids from the root (SPEC.md 5.1).
+a: @::web
+b: @::"odd id".x
+c: @settings.filter["x y"]

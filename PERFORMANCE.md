@@ -151,12 +151,18 @@ one document, from the second reload on, as the mean of ten:
 
 |                                     | Keys evaluated again | Before   | Now    |
 | ----------------------------------- | -------------------- | -------- | ------ |
-| A unit's document in the top layer  | 2                    | 920 ms   | 192 ms |
-| A unit's document in the base layer | 2                    | 1,361 ms | 605 ms |
-| `sounds.crod` in the base layer     | 1,430                | 1,379 ms | 666 ms |
+| A unit's document in the top layer  | 2                    | 920 ms   | 62 ms  |
+| A unit's document in the base layer | 2                    | 1,361 ms | 105 ms |
+| `sounds.crod` in the base layer     | 1,430                | 1,379 ms | 190 ms |
 
-Most of what is left is reading the layers again: the base layer's lowered form is read
-back on every reload, and a change in the base layer lowers that whole layer again.
+What a layer that did not change decodes to is kept from one reload to the next, and so
+is what each document of a text layer lowers to, so only the document that changed is
+parsed and lowered again. Of the 105 ms, putting the 2,839 documents of the base layer
+together again takes 25 ms, and planning the evaluation of every key 27 ms.
+
+Documents are lowered on threads, as they are parsed, so loading the real data set from
+text takes 590 ms instead of 940 ms. Keeping each document's IR as well as the IR they
+make together raises the peak of that load from 384 MB to 408 MB.
 
 ### The target of `SPEC.md`
 

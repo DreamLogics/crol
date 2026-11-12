@@ -1,0 +1,20 @@
+// `#[scope]` before entries and value binds (SPEC.md 6.1.2).
+#[scope]
+staging: { db: 1 }
+#[scope] +prod: {}
+services: {
+    #[scope]
+    ?web: {},
+    #[scope] ^db: {},
+    #[scope]
+    t := {},
+}
+#[scope]
+#[type(Foo)]
+u := {}
+#[type(Foo)] #[scope] v := {}
+w: { a.b: 1 }
+<prod> {
+    #[scope]
+    w: & ~ {},
+}

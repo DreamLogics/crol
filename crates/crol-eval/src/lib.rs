@@ -19,6 +19,7 @@
 
 #![forbid(unsafe_code)]
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use indexmap::IndexMap;
@@ -40,11 +41,13 @@ mod variants;
 pub use diagnostic::{Diagnostic, Related, Severity};
 pub use order::{LayerTarget, layer_target};
 pub use source::{FileId, Location, SourceFile, Sources, Span};
-pub use value::{Key, Keyed, Value, ValueKind, format_float, is_identifier, quote, quote_char};
+pub use value::{
+    IdPath, Key, Keyed, Value, ValueKind, format_float, is_identifier, quote, quote_char,
+};
 pub use variants::{Context, VariantId, Variants};
 
 pub use eval::{
-    ContextData, DefaultsProvider, ExplainStep, PathStep, StepKind, VariantKeys,
+    ContextData, DefaultsProvider, ExplainStep, PathStep, ScopeStep, StepKind, VariantKeys,
     single_payload_value, value_at_path,
 };
 
@@ -246,6 +249,21 @@ pub struct Compiled {
     orders: Vec<order::LayerOrder>,
     /// For each layer, its documents in order.
     documents: Vec<Vec<FileId>>,
+    /// What the layers decoded from bytes gave, which the IR holds frozen.
+    decoded: Option<Arc<Decoded>>,
+    /// What each document of the layers from text lowered to on its own, so
+    /// that compiling again lowers only the documents that changed.
+    texts: HashMap<FileId, Arc<lower::LoweredDocument>>,
+}
+
+/// What layers decoded from bytes gave, so that compiling again with the
+/// same bytes for the same documents need not decode them.
+#[derive(Debug)]
+struct Decoded {
+    /// Each such layer: its index, its documents, and where its bytes are
+    /// and how many.
+    from: Vec<(usize, Vec<FileId>, usize, usize)>,
+    parts: Vec<binary::Part>,
 }
 
 /// Evaluates layers of data-mode documents (`SPEC.md` 7): later layers
@@ -268,7 +286,7 @@ pub fn evaluate_data(sources: &Sources, layers: &[Layer], options: &DataOptions)
 /// Reads and lowers layers of data-mode documents, with every diagnostic
 /// found; `None` if there are errors.
 pub fn compile(sources: &Sources, layers: &[Layer]) -> (Option<Compiled>, Vec<Diagnostic>) {
-    compile_documents(sources, layers, false, &[])
+    compile_documents(sources, layers, false, &[], None)
 }
 
 /// [`compile`], where `lowered` holds, for each layer that has one, what its
@@ -279,7 +297,19 @@ pub fn compile_binary(
     layers: &[Layer],
     lowered: &[Option<&[u8]>],
 ) -> (Option<Compiled>, Vec<Diagnostic>) {
-    compile_documents(sources, layers, false, lowered)
+    compile_documents(sources, layers, false, lowered, None)
+}
+
+/// [`compile_binary`], after `before` was compiled: what it decoded from
+/// the same bytes, for the same documents, is not decoded again, and the
+/// two share it.
+pub fn compile_binary_after(
+    sources: &Sources,
+    layers: &[Layer],
+    lowered: &[Option<&[u8]>],
+    before: &Compiled,
+) -> (Option<Compiled>, Vec<Diagnostic>) {
+    compile_documents(sources, layers, false, lowered, Some(before))
 }
 
 /// The `.crob` file of a layer (`SPEC.md` 7.8). It must evaluate on its own
@@ -322,7 +352,7 @@ pub fn compile_schema_documents(
     sources: &Sources,
     layers: &[Layer],
 ) -> (Option<Compiled>, Vec<Diagnostic>) {
-    compile_documents(sources, layers, true, &[])
+    compile_documents(sources, layers, true, &[], None)
 }
 
 /// A layer's documents in the order they apply (`SPEC.md` 7.1), without
@@ -347,24 +377,35 @@ const PARSE_STACK: usize = 8 << 20;
 
 /// Parses documents, which do not depend on each other, on several threads
 /// if there is enough text. The results are in the order of `texts`.
+#[cfg(test)]
 fn parse_all(texts: &[&str]) -> Vec<crol_syntax::Parse> {
+    on_threads(texts, |_, text| crol_syntax::parse(text))
+}
+
+/// `work` for each of `texts`, which do not depend on each other, on several
+/// threads if there is enough text. The results are in the order of `texts`.
+fn on_threads<R: Send>(texts: &[&str], work: impl Fn(usize, &str) -> R + Sync) -> Vec<R> {
     let bytes: usize = texts.iter().map(|text| text.len()).sum();
     let threads = std::thread::available_parallelism()
         .map_or(1, std::num::NonZero::get)
         .min(MAX_PARSE_THREADS)
         .min(bytes / PARSE_BYTES_PER_THREAD);
     if threads < 2 {
-        return texts.iter().map(|text| crol_syntax::parse(text)).collect();
+        return texts
+            .iter()
+            .enumerate()
+            .map(|(index, text)| work(index, text))
+            .collect();
     }
     let next = std::sync::atomic::AtomicUsize::new(0);
-    let work = || {
+    let each = || {
         let mut parsed = Vec::new();
         loop {
             let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let Some(text) = texts.get(index) else {
                 return parsed;
             };
-            parsed.push((index, crol_syntax::parse(text)));
+            parsed.push((index, work(index, text)));
         }
     };
     let mut parsed = std::thread::scope(|scope| {
@@ -374,11 +415,11 @@ fn parse_all(texts: &[&str]) -> Vec<crol_syntax::Parse> {
             .filter_map(|_| {
                 std::thread::Builder::new()
                     .stack_size(PARSE_STACK)
-                    .spawn_scoped(scope, work)
+                    .spawn_scoped(scope, each)
                     .ok()
             })
             .collect();
-        let mut parsed = work();
+        let mut parsed = each();
         for worker in workers {
             match worker.join() {
                 Ok(more) => parsed.extend(more),
@@ -396,11 +437,31 @@ fn compile_documents(
     layers: &[Layer],
     schema: bool,
     lowered: &[Option<&[u8]>],
+    before: Option<&Compiled>,
 ) -> (Option<Compiled>, Vec<Diagnostic>) {
     let mut diagnostics = Vec::new();
-    let mut parses = Vec::new();
+    // The documents of the layers from text: file, layer and position.
+    let mut texts = Vec::new();
     let mut ir = ir::Ir::default();
     let mut parts = Vec::new();
+    // The layers from bytes, and whether `before` decoded them already.
+    let from: Vec<(usize, Vec<FileId>, usize, usize)> = layers
+        .iter()
+        .enumerate()
+        .filter_map(|(index, layer)| {
+            let bytes = lowered.get(index).copied().flatten()?;
+            let files = documents_of(sources, layer, true);
+            let files = files.iter().map(|(_, file)| *file).collect();
+            Some((index, files, bytes.as_ptr() as usize, bytes.len()))
+        })
+        .collect();
+    let reused = before
+        .and_then(|before| Some((before, before.decoded.as_ref()?)))
+        .filter(|(_, decoded)| !from.is_empty() && decoded.from == from);
+    if let Some((before, decoded)) = reused {
+        ir = before.lowered.ir.frozen_part();
+        parts = decoded.parts.clone();
+    }
     let mut last_file = None;
     let mut orders = Vec::with_capacity(layers.len());
     let mut in_order = Vec::with_capacity(layers.len());
@@ -411,6 +472,9 @@ fn compile_documents(
         in_order.push(documents.iter().map(|(_, file)| *file).collect());
         last_file = documents.last().map(|(_, file)| *file).or(last_file);
         if let Some(Some(bytes)) = lowered.get(layer_index) {
+            if reused.is_some() {
+                continue;
+            }
             let all = documents_of(sources, layer, true);
             let files: Vec<FileId> = all.iter().map(|(_, file)| *file).collect();
             match binary::read_lowered(bytes, &files, sources, layer_index, &mut ir) {
@@ -443,32 +507,65 @@ fn compile_documents(
                 );
             }
         }
-        let texts: Vec<&str> = documents
-            .iter()
-            .map(|(_, file)| sources.file(*file).text())
-            .collect();
-        let layer_parses = parse_all(&texts);
-        for (index, ((_, file), parse)) in documents.into_iter().zip(layer_parses).enumerate() {
-            diagnostics.extend(
-                parse.errors().iter().map(|error| {
-                    Diagnostic::error(Span::new(*file, error.range()), error.message())
-                }),
-            );
-            parses.push((*file, parse.document(), layer_index, index));
+        for (index, (_, file)) in documents.into_iter().enumerate() {
+            texts.push((*file, layer_index, index));
         }
     }
-    let documents: Vec<lower::DataDocument<'_>> = parses
+    // What was decoded is fixed from here on, for a compilation after this
+    // one to start from.
+    let decoded = match reused {
+        Some((_, decoded)) => Some(Arc::clone(decoded)),
+        None if !from.is_empty() => {
+            ir.freeze();
+            Some(Arc::new(Decoded {
+                from,
+                parts: parts.clone(),
+            }))
+        }
+        None => None,
+    };
+    // A document lowered before is lowered the same again; the others are
+    // parsed and lowered, on threads if there are many.
+    let kept = |file: &FileId| before.and_then(|before| before.texts.get(file));
+    let fresh: Vec<FileId> = texts
         .iter()
-        .map(|(file, document, layer, index)| lower::DataDocument {
-            file: *file,
-            document,
+        .map(|(file, _, _)| *file)
+        .filter(|file| kept(file).is_none())
+        .collect();
+    let fresh_texts: Vec<&str> = fresh
+        .iter()
+        .map(|file| sources.file(*file).text())
+        .collect();
+    let fresh_lowered = on_threads(&fresh_texts, |index, text| {
+        let file = fresh[index];
+        let parse = crol_syntax::parse(text);
+        let errors: Vec<Diagnostic> = parse
+            .errors()
+            .iter()
+            .map(|error| Diagnostic::error(Span::new(file, error.range()), error.message()))
+            .collect();
+        (errors, lower::lower_document(file, &parse.document()))
+    });
+    let mut lowered_texts = HashMap::with_capacity(texts.len());
+    for (file, (mut errors, lowered)) in fresh.iter().zip(fresh_lowered) {
+        diagnostics.append(&mut errors);
+        lowered_texts.insert(*file, Arc::new(lowered));
+    }
+    for (file, _, _) in &texts {
+        if let Some(kept) = kept(file) {
+            lowered_texts.insert(*file, Arc::clone(kept));
+        }
+    }
+    let placed: Vec<lower::Placed<'_>> = texts
+        .iter()
+        .map(|(file, layer, index)| lower::Placed {
+            lowered: &lowered_texts[file],
             layer: *layer,
             index: *index,
         })
         .collect();
-    let (mut lowered, mut errors) = lower::lower_data_over(&documents, ir, parts);
-    drop(documents);
-    drop(parses);
+    let (mut lowered, mut errors) = lower::link(&placed, ir, parts);
+    drop(placed);
     if let Some(file) = last_file {
         lowered.root_span = Span::new(file, Default::default());
     }
@@ -485,6 +582,8 @@ fn compile_documents(
             layer_names,
             orders,
             documents: in_order,
+            decoded,
+            texts: lowered_texts,
         }),
         diagnostics,
     )
@@ -525,7 +624,7 @@ impl Update {
         base.span = self.root_span;
         let is_affected = |key: &Key| match key {
             Key::Str(name) => affected.contains(name),
-            Key::Int(_) => false,
+            Key::Int(_) | Key::Id(_) => false,
         };
         if let ValueKind::Keyed(keyed) = &mut base.kind {
             let mut old = std::mem::take(&mut keyed.entries);
@@ -1103,6 +1202,7 @@ fn check_constraints(
     let name_of = |key: &Key| match key {
         Key::Str(name) => name.to_string(),
         Key::Int(i) => i.to_string(),
+        Key::Id(id) => id.to_string(),
     };
     let in_base = |name: &str| keyed.entries.get(&value::KeyRef::Str(name)).cloned();
     for (key, value) in &keyed.entries {
@@ -1180,5 +1280,89 @@ mod tests {
             assert_eq!(parse.errors(), alone.errors());
         }
         assert!(parsed.iter().any(|parse| !parse.errors().is_empty()));
+    }
+
+    #[test]
+    fn lowering_and_linking_on_threads_keep_the_documents_apart() {
+        // Enough for several threads, with templates used across documents.
+        const DOCUMENTS: usize = 300;
+        let text = |i: usize, extra: usize| {
+            let next = (i + 1) % DOCUMENTS;
+            let mut text = format!("t{i} := {},\n", i + extra);
+            for j in 0..50 {
+                text += &format!(
+                    "+k{i}_{j}: {{ a: {j}, b: &t{next} + {j}, c: [&root.k{i}_0.a, {{ d: &t{i} }}], s: \"{}\" }},\n",
+                    "text ".repeat(20)
+                );
+            }
+            text
+        };
+        let mut sources = Sources::new();
+        let mut layer = Layer {
+            name: "base".to_owned(),
+            documents: (0..DOCUMENTS)
+                .map(|i| {
+                    (
+                        format!("d{i:03}.crod"),
+                        sources.add(format!("d{i:03}.crod"), text(i, 0)),
+                    )
+                })
+                .collect(),
+        };
+        let bytes: usize = (0..DOCUMENTS).map(|i| text(i, 0).len()).sum();
+        assert!(bytes >= 2 * PARSE_BYTES_PER_THREAD);
+        let (compiled, diagnostics) = compile(&sources, std::slice::from_ref(&layer));
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let compiled = compiled.unwrap();
+        assert!(compiled.lowered.ir.exprs.len() >= 2 * lower::LINK_EXPRS_PER_THREAD);
+        let options = DataOptions::default();
+        let evaluation = evaluate_compiled(&compiled, &options);
+        let root = evaluation.value.unwrap();
+        let before = fingerprint::fingerprint(&root, &evaluation.contexts, &evaluation.variants);
+        let field = |value: &Value, name: &str| match &value.kind {
+            ValueKind::Keyed(keyed) => keyed.entries[&Key::Str(name.into())].clone(),
+            _ => panic!("{value:?} is not keyed"),
+        };
+        let int = |value: Value| match value.kind {
+            ValueKind::Int(i) => i,
+            kind => panic!("{kind:?} is not an integer"),
+        };
+        for i in [0, 1, DOCUMENTS / 2, DOCUMENTS - 1] {
+            for j in [0, 49] {
+                let key = field(&root, &format!("k{i}_{j}"));
+                let next = ((i + 1) % DOCUMENTS) as i128;
+                assert_eq!(int(field(&key, "b")), next + j as i128);
+                let ValueKind::List(items) = field(&key, "c").kind else {
+                    panic!("not a list");
+                };
+                assert_eq!(int(field(&items[1], "d")), i as i128);
+            }
+        }
+
+        // Compiling again after one document changes keeps the others.
+        layer.documents[DOCUMENTS / 2].1 = sources.add("changed", text(DOCUMENTS / 2, 1000));
+        let (again, _) =
+            compile_binary_after(&sources, std::slice::from_ref(&layer), &[], &compiled);
+        let (fresh, _) = compile(&sources, std::slice::from_ref(&layer));
+        let fingerprint = |compiled: &Compiled| {
+            let evaluation = evaluate_compiled(compiled, &options);
+            fingerprint::fingerprint(
+                &evaluation.value.unwrap(),
+                &evaluation.contexts,
+                &evaluation.variants,
+            )
+        };
+        let again = again.unwrap();
+        assert_eq!(fingerprint(&again), fingerprint(&fresh.unwrap()));
+        assert_ne!(fingerprint(&again), before);
+        let kept = layer
+            .documents
+            .iter()
+            .filter(|(_, file)| {
+                let before = compiled.texts.get(file);
+                before.is_some_and(|before| Arc::ptr_eq(before, &again.texts[file]))
+            })
+            .count();
+        assert_eq!(kept, DOCUMENTS - 1);
     }
 }

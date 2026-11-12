@@ -641,6 +641,7 @@ mod tests {
             deny_unknown_fields: false,
             default: None,
             explicit_defaults: None,
+            scope: false,
         }
     }
 

@@ -9,6 +9,107 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ## [Unreleased]
 
+This release changes the format in ways that break documents and programs written for
+0.3.0 (#11, #19):
+
+- A `String` field no longer accepts an id: `name: @web` there is an error. Use
+  `crol::Id` for a field that takes ids, or write a string.
+- `crol::Id` holds the keys of an id and whether it starts from the root, instead of
+  being a newtype over `String`. `Id::key("web")` makes one, `Id::name()` gives the
+  key of `@web`, and `From<String>` and `From<&str>` are gone. As text it has its `@`:
+  `Display` writes `@web`, `FromStr` reads it, other serde formats see `"@web"`, and so
+  does `deserialize_any`, as in `#[serde(flatten)]` and `#[serde(untagged)]`.
+- A map keyed by `crol::Id` takes only id keys: `{ web: 1 }` for a `HashMap<Id, u32>`
+  is an error, "expected an id key, found the string key web; write `@web`". Write
+  `{ @web: 1 }`. `to_string` writes the keys of such a map as ids, and an id key that
+  names nothing is an error, not a warning.
+- `IdUse.id` is an `Id`, and `IdUse` is `#[non_exhaustive]`.
+- `crol_eval::ValueKind::Id` holds a `crol_eval::IdPath`, and `crol_eval::Keyed` has a
+  `scope` field.
+- `crol_eval::Key` has a third kind of key, `Id`.
+- `crol_syntax::SyntaxKind` has a new kind, `SCOPE_KW`, which renumbers the kinds after
+  it.
+- `.crob` files have a new format: compile layers again.
+- A type name on a block that loads into a newtype around a map must be the newtype's
+  serde name: `Scren { ... }` for a `struct Screen(BTreeMap<..>)` was accepted, and is
+  now an error, "`Scren { ... }` is not a `Screen`" (#17). With a schema, the same
+  holds for a `#[serde(transparent)]` struct, and for a struct with a
+  `#[serde(flatten)]` field.
+
+### Added
+
+- Ids as map keys: `@name: value`, with every form an id has, `@a.b: 1` and `@::a: 1`
+  too, for a map whose keys name other entries, such as a `HashMap<crol::Id, f64>` of
+  damage bonuses by tag. An id key is no string key, and names things as an id value
+  does, through the scopes around its map. Two id keys are the same key when they name
+  the same entry, so a later layer's `bonus.@::is_biological: 50.0` sets what
+  `@is_biological: 47.0` wrote; a path takes an id after a dot or in brackets,
+  `bonus[@armored].factor`, and a reference reads one, `&bonus[@armored]`. An id key
+  is reported as an `IdUse`, also in a value document, and `crol::check` checks what a
+  key of a map typed `Map(Id([types]), _)` names. A map that takes id keys takes no
+  others, and no other map takes them; through `any` an id key is its text, `"@web"`.
+- The language server goes to what an id key names and shows it on hover, lists id keys
+  among the references of what they name, completes `@` where a key goes, and suggests
+  a key for one that names nothing. The tree-sitter grammar has id keys.
+- `ResolvedId::is_key` tells an id key from an id value, a typed path's `.key(...)` takes
+  an `Id`, and `crol_eval::DefaultsProvider` has `has_scopes` and `scopes_on`, through
+  which the evaluator learns the scopes of `#[crol(scope)]` types.
+- Scoped ids. An id names a key of the innermost scope around the place its value ends
+  up, falling back to the root, so that grouped data need not have global names: two
+  screens can each have a `filter`, and `@filter` in each names its own. A block is a
+  scope with `#[scope]` before its entry, or when its type has `#[crol(scope)]` and the
+  loader has the schema. `#[crol(scope)]` goes on a struct, a struct variant, or a
+  newtype or transparent struct, such as one around a map of components. Without scopes, ids name root keys as before.
+- Path ids: `@settings.filter` reaches into another scope, `@"odd id"["x y"]` names keys
+  that are not identifiers, and `@::web` names the root key whatever the scopes around.
+- `IdUse.target` says where an id resolved to, as a `crol::DataPath`, and
+  `CrolData::contains_path` and `type_name_at` look one up. An id that names nothing is
+  a warning in `CrolData::warnings()`, or with `CrolConfig::strict_ids` an error. A
+  reload resolves every id again without evaluating more.
+- `crol check` and the language server report ids that name nothing, also without a
+  schema. The language server goes to what an id names in each place a template puts
+  it, finds the ids that name a key at any depth, completes `@` with the keys of the
+  scopes around the cursor, and suggests them for a misspelt id.
+- `crol::IdResolver` and `crol::check_ids` resolve and check the ids of evaluated data,
+  for tools.
+- Type names are checked on blocks that become maps, newtypes and transparent structs
+  (#17). A newtype's name is checked always. With `CrolComposer::schema`, the loader
+  compares a block's type name with the schema type at its place, through `Option`,
+  newtypes and transparent structs, and `crol::check`, `crol check` and the language
+  server report the same errors. A wrapper's name is also accepted on the struct it
+  wraps: `Quota { ... }` for a `struct Quota(Limits)`.
+- A type name on a plain map, where nothing names the type, is a warning when there is
+  a schema: in `CrolData::warnings()`, from `crol::check` and `crol check`, and in the
+  language server. The data loads as before.
+- The language server completes attributes: after `#[`, `scope` and `type`, where the
+  entry after it can have them and has not; after `#![`, the document attributes that
+  fit the document and its mode. Each comes with its doc (#16).
+- `crol explain` says which scope an id resolved in. For a value that is an id or holds
+  ids it adds a line for each: what the id names, or that it names nothing, and the
+  scopes around it, innermost first, with which of them has the key and whether
+  `#[scope]` or a `#[crol(scope)]` type makes each a scope. Hover on an id in the
+  language server shows the same line.
+- `IdResolver::scopes` and `IdResolver::chains` return that as a `crol::ScopeChain` of
+  `IdScope`s, each with a `ScopeKind`, and `IdResolver::within` keeps to the ids at a
+  place or in what is there. An id key is in both its map and its entry, and
+  `ScopeChain::place` is its entry's place. `DataPath::starts_with`.
+- The language server renames keys, at any depth, from the key or from an id or
+  reference that names it: every operation on the key in every layer, the references
+  through it, and the ids that resolve to it, of which a path id changes only the key
+  that names it. It refuses, and says why, where an id written once names other keys
+  too, where the new name would change what an id names, where the name is taken, and
+  where the key is written in a template (#14).
+
+### Changed
+
+- `reload` keeps what the layers it does not change decode to, so it decodes a layer
+  loaded from bytes only when one of its documents changes. It also keeps what each
+  document of a text layer lowers to, so it parses and lowers only the documents that
+  changed. On a data set of 14,000 keys, reloading a document of the top layer takes
+  62 ms instead of 192 ms, and one of the base layer 105 ms instead of 604 ms.
+- Documents are lowered on several threads, as they are parsed. Loading a data set of
+  14,000 keys from text takes 590 ms instead of 940 ms.
+
 ### Fixed
 
 - Hover on an id shows the doc comment of the key it names in a value document,

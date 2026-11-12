@@ -66,6 +66,11 @@ impl Client {
     }
 
     fn request(&mut self, method: &str, params: Value) -> Value {
+        self.try_request(method, params).unwrap_or(Value::Null)
+    }
+
+    /// The result of a request, or the message of the error it got.
+    fn try_request(&mut self, method: &str, params: Value) -> Result<Value, String> {
         self.next_id += 1;
         let id = RequestId::from(self.next_id);
         self.connection
@@ -84,7 +89,7 @@ impl Client {
                 .unwrap()
             {
                 Message::Response(response) if response.id == id => {
-                    return response.response_result.unwrap_or(Value::Null);
+                    return response.response_result.map_err(|error| error.message);
                 }
                 _ => {}
             }
@@ -364,10 +369,10 @@ fn references_rename_and_workspace_symbols() {
     assert_eq!(changes[&local].as_array().unwrap().len(), 1, "{edit}");
     assert_eq!(changes[&local][0]["newText"], "port");
 
-    // Not a bind, and not a name a bind can have.
+    // Not a bind or a key, and not a name a bind can have.
     let range = client.request(
         "textDocument/prepareRename",
-        json!({ "textDocument": { "uri": local }, "position": { "line": 0, "character": 1 } }),
+        json!({ "textDocument": { "uri": local }, "position": { "line": 0, "character": 11 } }),
     );
     assert_eq!(range, Value::Null);
     let edit = client.request(
@@ -960,6 +965,78 @@ fn diagnostics_follow_a_types_explicit_defaults() {
         json!({
             "textDocument": { "uri": config, "version": 2 },
             "contentChanges": [{ "text": "#![schema(::schema)]\n\nRelaxed { name: \"a\" }" }],
+        }),
+    );
+    client.diagnostics_for(&config, <[Value]>::is_empty);
+    client.stop();
+}
+
+/// Type names where serde gives the loader none (`SPEC.md` 10.2): an error
+/// on a transparent struct around a map, a warning on a map.
+#[test]
+fn type_names_on_maps_are_checked() {
+    let dir = workspace(
+        "lsp-type-names-on-maps",
+        &[
+            (
+                "schema.crol",
+                r#"Schema {
+                    format: 1,
+                    root: "app::App",
+                    types: {
+                        "app::App": Struct {
+                            name: "App",
+                            source: ("src/lib.rs", 1),
+                            fields: {
+                                screen: { ty: Named("app::Screen"), .. },
+                                stats: { ty: Map(String, U32), .. },
+                            },
+                            ..
+                        },
+                        "app::Screen": Transparent {
+                            name: "Screen",
+                            source: ("src/lib.rs", 2),
+                            inner: Map(String, U32),
+                            ..
+                        },
+                    },
+                }"#,
+            ),
+            ("config.crol", ""),
+        ],
+    );
+    let client = Client::start(&dir);
+    let config = uri(&dir.join("config.crol"));
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": config, "languageId": "crol", "version": 1, "text": "#![schema(::schema)]\n\nApp { screen: Scren { a: 1 }, stats: Stats { a: 1 } }" } }),
+    );
+    let diagnostics = client.diagnostics_for(&config, |d| !d.is_empty());
+    let found: Vec<(u64, &str)> = diagnostics
+        .iter()
+        .map(|d| {
+            (
+                d["severity"].as_u64().unwrap(),
+                // Without the path below it.
+                d["message"].as_str().unwrap().lines().next().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        found,
+        [
+            (1, "`Scren { ... }` is not a `Screen`"),
+            (
+                2,
+                "the type name `Stats` names nothing: this is a map, which has no type name; write `{ ... }`"
+            ),
+        ]
+    );
+    client.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": config, "version": 2 },
+            "contentChanges": [{ "text": "#![schema(::schema)]\n\nApp { screen: Screen { a: 1 }, stats: { a: 1 } }" }],
         }),
     );
     client.diagnostics_for(&config, <[Value]>::is_empty);
@@ -2322,6 +2399,228 @@ fn completion_answers_at_the_end_of_every_prefix() {
     }
     let items = buffer.complete(&mut client, &format!("{HEADER}{{ | }}"));
     assert!(labels(&items).contains(&"name"), "{items:?}");
+    client.stop();
+}
+
+/// A completion case: the text, and every label wanted, in order.
+type Exact<'a> = (&'a str, &'a [&'a str]);
+
+/// Runs completion on each case, and reports every one that fails at once.
+fn check_exact_completions(client: &mut Client, buffer: &mut Buffer, cases: &[Exact<'_>]) {
+    let mut failures = Vec::new();
+    for (marked, wanted) in cases {
+        let items = buffer.complete(client, marked);
+        let found = labels(&items);
+        if found != *wanted {
+            failures.push(format!("{marked:?}: wanted {wanted:?}, got {found:?}"));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} of {} cases:\n{}",
+        failures.len(),
+        cases.len(),
+        failures.join("\n")
+    );
+}
+
+#[test]
+fn completion_of_entry_attributes() {
+    let (mut client, mut buffer) = nested_document("lsp-entry-attributes");
+    let both: &[&str] = &["scope", "type"];
+    let scope: &[&str] = &["scope"];
+    let ty: &[&str] = &["type"];
+    let cases: &[Exact<'_>] = &[
+        // Nothing after it yet, closed or not, with a part of the name or not.
+        ("#[|", both),
+        ("#[|]", both),
+        ("#[sc|", both),
+        ("#[sc|]", both),
+        ("#[ty|]", both),
+        ("#[ |", both),
+        ("#![schema(schema)]\n\n#[|", both),
+        ("{\n  #[|]\n}", both),
+        ("{\n  #[|\n}", both),
+        ("{ name: \"x\", #[|] }", both),
+        ("{\n  name: \"x\"\n  #[|]\n}", both),
+        // A name alone can still become a value bind.
+        ("#[|] t", both),
+        // Before a value bind.
+        ("#[|]\nt := { a: 1 }", both),
+        ("#[|\nt := { a: 1 }", both),
+        ("#[sc|\nt := { a: 1 }", both),
+        ("#[|] t := { a: 1 }", both),
+        ("{\n  #[|]\n  t := { a: 1 },\n  name: \"x\",\n}", both),
+        // Before an entry that sets a value, there is no `type`.
+        ("#[|] web: { }", scope),
+        ("#[|]\nweb: { }", scope),
+        ("#[|\nweb: { }", scope),
+        ("#[sc|\nweb: { }", scope),
+        ("#[|]\n+web: { }", scope),
+        ("#[|]\n?web: { }", scope),
+        ("#[|]\n^web: { }", scope),
+        ("#[|]\nweb.limits: { }", scope),
+        ("#[|]\n\"a key\": { }", scope),
+        ("{\n  #[|]\n  server: { },\n}", scope),
+        // Not the one the entry has, before or after the cursor.
+        ("#[scope] #[|] t := { }", ty),
+        ("#[scope]\n#[|]\nt := { }", ty),
+        ("#[scope]\n#[|", ty),
+        ("#[|] #[scope]\nt := { }", ty),
+        ("#[|\n#[scope]\nt := { }", ty),
+        ("#[type(u8)]\n#[|]\nt := 1", scope),
+        ("#[|]\n#[type(Vec<u8>)]\nt := [1]", scope),
+        ("#[type(Foo.items.[])]\n#[|", scope),
+        ("#[scope]\n#[type(u8)]\n#[|]\nt := 1", &[]),
+        ("#[scope]\n#[|]\nweb: { }", &[]),
+        // The attribute at the cursor is not one the entry has.
+        ("#[sc|ope]\nweb: { }", scope),
+        ("#[ty|pe(u8)]\nt := 1", both),
+        ("#[scope]\n#[ty|pe(u8)]\nt := 1", ty),
+        // The attributes of the entry before are its own.
+        ("#[scope]\nweb: { }\n#[|]\nt := { }", both),
+        // Before what takes no attribute.
+        ("#[|] -web", &[]),
+        ("#[|]\n..&t", &[]),
+        ("#[|]\n..", &[]),
+        ("#[|]\n<prod> { web: { } }", &[]),
+        ("#[|]\nb = web: { }", &[]),
+        // Only where an entry starts.
+        ("{ name: #[| }", &[]),
+        ("{ name: \"x\" #[| }", &[]),
+        ("[#[|]]", &[]),
+        // Not in a string or a comment.
+        ("// #[|", &[]),
+        ("{ name: \"#[|\" }", &[]),
+    ];
+    check_exact_completions(&mut client, &mut buffer, cases);
+
+    // Each has its doc, and `type` its parentheses unless they are there.
+    let items = buffer.complete(&mut client, "#[|]\nt := 1");
+    let texts: Vec<_> = items.iter().map(|i| &i["textEdit"]["newText"]).collect();
+    assert_eq!(texts, ["scope", "type()"], "{items:?}");
+    let details: Vec<_> = items.iter().map(|i| &i["detail"]).collect();
+    assert_eq!(details, ["#[scope]", "#[type(...)]"], "{items:?}");
+    let doc = |item: &Value| item["documentation"]["value"].as_str().unwrap().to_owned();
+    assert!(doc(&items[0]).contains("scope for ids"), "{items:?}");
+    assert!(doc(&items[1]).contains("value bind"), "{items:?}");
+    let items = buffer.complete(&mut client, "#[t|(u8)]\nt := 1");
+    assert_eq!(items[1]["textEdit"]["newText"], "type", "{items:?}");
+    // The word at the cursor is what an item replaces.
+    let items = buffer.complete(&mut client, "#[sc|op]\nweb: { }");
+    assert_eq!(
+        items[0]["textEdit"]["range"],
+        json!({ "start": { "line": 0, "character": 2 }, "end": { "line": 0, "character": 6 } }),
+        "{items:?}"
+    );
+    client.stop();
+}
+
+#[test]
+fn completion_of_entry_attributes_in_data() {
+    let dir = workspace("lsp-entry-attributes-data", &[("data.crod", "+web: { }\n")]);
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "data.crod");
+    let both: &[&str] = &["scope", "type"];
+    let scope: &[&str] = &["scope"];
+    let cases: &[Exact<'_>] = &[
+        ("+web: { }\n#[|", both),
+        ("#[|]\ntemplate := { }\n+web: { ..&template }", both),
+        ("#[|]\n+web: { }", scope),
+        ("+web: {\n  #[|]\n}", both),
+        // A variant block has no value binds.
+        ("+web: { }\n<prod> {\n  #[|]\n}", scope),
+        ("+web: { }\n<prod> {\n  #[|]\n  web: { }\n}", scope),
+        ("+web: { }\n<prod> {\n  web: {\n    #[|]\n  }\n}", both),
+        ("+web: { }\n#[|]\n-web", &[]),
+    ];
+    check_exact_completions(&mut client, &mut buffer, cases);
+    client.stop();
+}
+
+#[test]
+fn completion_of_document_attributes() {
+    let dir = workspace(
+        "lsp-document-attributes",
+        &[
+            ("schema.crol", NESTED_SCHEMA),
+            ("config.crol", "{ name: \"x\" }"),
+            ("data.crod", "+web: { }\n"),
+        ],
+    );
+    let mut client = Client::start(&dir);
+    let mut value = Buffer::open(&client, &dir, "config.crol");
+    let all: &[&str] = &["use", "schema", "type"];
+    let cases: &[Exact<'_>] = &[
+        // Closed or not, with a part of the name or not.
+        ("#![|", all),
+        ("#![|]", all),
+        ("#![sch|", all),
+        ("#![sch|]", all),
+        ("// A comment.\n#![|]\n\nname: \"x\"", all),
+        ("#![|\nname: \"x\"", all),
+        // Several `use`s, one `schema` and one `type`.
+        ("#![use(app::Config)]\n#![|]", all),
+        ("#![schema(schema)]\n#![|]", &["use", "type"]),
+        (
+            "#![|]\n#![schema(schema)]\n\n{ name: \"x\" }",
+            &["use", "type"],
+        ),
+        ("#![type(Config)]\n#![|", &["use", "schema"]),
+        ("#![schema(schema)]\n#![type(Config)]\n#![|]", &["use"]),
+        // The attribute at the cursor is not one the document has.
+        ("#![sch|ema(schema)]\n#![type(Config)]", &["use", "schema"]),
+        // `type` names a document written as entries, which has no name.
+        ("#![|]\n{ name: \"x\" }", all),
+        ("#![|]\nConfig { name: \"x\" }", &["use", "schema"]),
+        ("#![|]\n[1, 2]", &["use", "schema"]),
+        ("#![|]\n\"text\"", &["use", "schema"]),
+        // Only before the first entry or expression.
+        ("name: \"x\"\n#![|]", &[]),
+        ("{ #![|] }", &[]),
+        ("#[scope]\n#![|]\nweb: { }", &[]),
+    ];
+    check_exact_completions(&mut client, &mut value, cases);
+
+    // Each has its doc, and its parentheses unless they are there.
+    let items = value.complete(&mut client, "#![|]");
+    let texts: Vec<_> = items.iter().map(|i| &i["textEdit"]["newText"]).collect();
+    assert_eq!(texts, ["use()", "schema()", "type()"], "{items:?}");
+    let details: Vec<_> = items.iter().map(|i| &i["detail"]).collect();
+    assert_eq!(
+        details,
+        ["#![use(...)]", "#![schema(...)]", "#![type(...)]"],
+        "{items:?}"
+    );
+    for item in &items {
+        let doc = item["documentation"]["value"].as_str().unwrap();
+        assert!(doc.contains("#!["), "{item:?}");
+    }
+    let items = value.complete(&mut client, "#![sch|(schema)]");
+    assert_eq!(items[1]["textEdit"]["newText"], "schema", "{items:?}");
+
+    // Data has layers and variants, and no type of its own (`SPEC.md` 4.1).
+    let mut data = Buffer::open(&client, &dir, "data.crod");
+    let all: &[&str] = &["use", "schema", "extends", "variant"];
+    let cases: &[Exact<'_>] = &[
+        ("#![|", all),
+        ("#![ex|]\n\n+web: { }", all),
+        (
+            "#![extends(base)]\n#![variant(env: prod)]\n#![|]\n+web: { }",
+            all,
+        ),
+        (
+            "#![schema(schema)]\n#![|]\n+web: { }",
+            &["use", "extends", "variant"],
+        ),
+        ("+web: { }\n#![|]", &[]),
+    ];
+    check_exact_completions(&mut client, &mut data, cases);
+    let items = data.complete(&mut client, "#![|]");
+    for item in &items {
+        let doc = item["documentation"]["value"].as_str().unwrap();
+        assert!(doc.contains("#!["), "{item:?}");
+    }
     client.stop();
 }
 
@@ -4467,4 +4766,977 @@ fn templates_used_where_another_type_goes_get_a_warning() {
     assert_eq!(warnings[0]["severity"], 2, "{diagnostics:?}");
     assert_eq!(warnings[0]["range"]["start"]["line"], 7, "{diagnostics:?}");
     client.stop();
+}
+
+#[test]
+fn hover_on_an_id_shows_the_scopes_around_it() {
+    let text = "pane := { layout: [@filter] }\n#[scope]\n+dashboard: { ..&pane, +filter: { p: 1 } }\n\
+                +settings: { ..&pane, +filter: { p: 2 } }\n+filter: 0\n\
+                +other: { see: @dashboard.filter, gone: @nope, top: @::filter }\n";
+    let dir = workspace("lsp-hover-id-scopes", &[("a.crod", text)]);
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "a.crod");
+    // In a template: a line for each place it is spread into, after what
+    // it names there.
+    let markdown = buffer.hover(&mut client, &mark(text, "[@filter]", "filter"));
+    assert_eq!(
+        markdown,
+        "**dashboard.filter**: `{p: 1}`\n\n**filter**: `0`\n\n\
+         the id `@filter` names `dashboard.filter`; scopes: `dashboard` (`#[scope]`, has \
+         `filter`), the root (has `filter`, shadowed)\n\n\
+         the id `@filter` names `filter`; scopes: the root (has `filter`)"
+    );
+    // A path id, on either key.
+    for word in ["dashboard", "filter"] {
+        let markdown = buffer.hover(&mut client, &mark(text, "@dashboard.filter", word));
+        assert_eq!(
+            markdown,
+            "**dashboard.filter**: `{p: 1}`\n\n\
+             the id `@dashboard.filter` names `dashboard.filter`; scopes: the root (has \
+             `dashboard`)",
+            "{word}"
+        );
+    }
+    // One that names nothing, and one from the root.
+    let markdown = buffer.hover(&mut client, &mark(text, "@nope", "nope"));
+    assert_eq!(
+        markdown,
+        "the id `@nope` names nothing; scopes: the root (no `nope`)"
+    );
+    let markdown = buffer.hover(&mut client, &mark(text, "@::filter", "filter"));
+    assert_eq!(
+        markdown,
+        "**filter**: `0`\n\nthe id `@::filter` names `filter`; scopes: the root (has `filter`)"
+    );
+    client.stop();
+}
+
+#[test]
+fn hover_on_an_id_key_shows_the_scopes_at_its_map() {
+    let text = "+armored: 0\n#[scope]\n+marine: { armored: 1, bonus: { @armored: 1.0, @::armored: 2.0 } }\n";
+    let dir = workspace("lsp-hover-id-key-scopes", &[("a.crod", text)]);
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "a.crod");
+    let markdown = buffer.hover(&mut client, &mark(text, "@armored: 1.0", "armored"));
+    assert!(
+        markdown.ends_with(
+            "the id `@armored` names `marine.armored`; scopes: `marine` (`#[scope]`, has \
+             `armored`), the root (has `armored`, shadowed)"
+        ),
+        "{markdown}"
+    );
+    let markdown = buffer.hover(&mut client, &mark(text, "@::armored", "armored"));
+    assert!(
+        markdown.ends_with(
+            "the id `@::armored` names `armored`; scopes: `marine` (`#[scope]`, passed by \
+             `::`), the root (has `armored`)"
+        ),
+        "{markdown}"
+    );
+    client.stop();
+}
+
+#[test]
+fn hover_on_an_id_says_when_the_schema_makes_the_scope() {
+    let schema = r#"Schema {
+    format: 1,
+    root: "app::Screens",
+    types: {
+        "app::Screens": Transparent {
+            name: "Screens",
+            source: ("src/lib.rs", 2),
+            inner: Map(String, Named("app::Screen")),
+            ..
+        },
+        "app::Screen": Struct {
+            name: "Screen",
+            source: ("src/lib.rs", 1),
+            fields: { layout: { ty: Any, .. }, filter: { ty: Any, .. } },
+            scope: true,
+            ..
+        },
+    },
+}"#;
+    let text = "+dashboard: Screen { layout: [@filter, @settings], filter: 1 }\n\
+                +settings: Screen { layout: [], filter: 2 }\n";
+    let dir = workspace(
+        "lsp-hover-id-schema-scope",
+        &[
+            (
+                "project.crol",
+                r#"Project { layers: List([{ name: "base", dir: "base", .. }]), schema: Some("crol::schema"), .. }"#,
+            ),
+            ("crol/schema.crol", schema),
+            ("base/a.crod", text),
+        ],
+    );
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "base/a.crod");
+    let markdown = buffer.hover(&mut client, &mark(text, "@filter", "filter"));
+    assert!(
+        markdown.ends_with(
+            "the id `@filter` names `dashboard.filter`; scopes: `dashboard` \
+             (`#[crol(scope)]`, has `filter`), the root (no `filter`)"
+        ),
+        "{markdown}"
+    );
+    let markdown = buffer.hover(&mut client, &mark(text, "@settings", "settings"));
+    assert!(
+        markdown.ends_with(
+            "the id `@settings` names `settings`; scopes: `dashboard` (`#[crol(scope)]`, no \
+             `settings`), the root (has `settings`)"
+        ),
+        "{markdown}"
+    );
+    client.stop();
+}
+
+#[test]
+fn scoped_ids_resolve_where_their_value_ends_up() {
+    let dir = workspace(
+        "lsp-scoped-ids",
+        &[
+            (
+                "project.crol",
+                r#"Project { layers: List([{ name: "base", dir: "base", .. }]), .. }"#,
+            ),
+            (
+                "base/a.crod",
+                "pane := { layout: [@filter] }\n#[scope]\n+dashboard: { ..&pane, +filter: { p: 1 } }\n#[scope]\n+settings: { ..&pane, +filter: { p: 2 } }\n+other: { see: @dashboard.filter, gone: @nope }",
+            ),
+        ],
+    );
+    let mut client = Client::start(&dir);
+    let base = uri(&dir.join("base/a.crod"));
+    let text = std::fs::read_to_string(dir.join("base/a.crod")).unwrap();
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": base, "languageId": "crol", "version": 1, "text": text } }),
+    );
+    // The id that names nothing is a warning.
+    let diagnostics = client.diagnostics_for(&base, |d| !d.is_empty());
+    let messages: Vec<&str> = diagnostics
+        .iter()
+        .map(|d| d["message"].as_str().unwrap())
+        .collect();
+    assert_eq!(messages, ["the id `@nope` names no root key"]);
+    let starts = |found: &Value| -> Vec<(u64, u64)> {
+        let list = match found {
+            Value::Array(list) => list.clone(),
+            other => vec![other.clone()],
+        };
+        let mut starts: Vec<_> = list
+            .iter()
+            .map(|l| {
+                (
+                    l["range"]["start"]["line"].as_u64().unwrap(),
+                    l["range"]["start"]["character"].as_u64().unwrap(),
+                )
+            })
+            .collect();
+        starts.sort();
+        starts
+    };
+
+    // In the template: each screen's own `filter`.
+    let found = client.request(
+        "textDocument/definition",
+        json!({ "textDocument": { "uri": base }, "position": { "line": 0, "character": 21 } }),
+    );
+    assert_eq!(starts(&found), [(2, 24), (4, 23)]);
+
+    // A path id, on its second key.
+    let found = client.request(
+        "textDocument/definition",
+        json!({ "textDocument": { "uri": base }, "position": { "line": 5, "character": 28 } }),
+    );
+    assert_eq!(starts(&found), [(2, 24)]);
+
+    // References of a screen's `filter`: the id in the template, which
+    // names it there, and the path id, with the declaration.
+    let found = client.request(
+        "textDocument/references",
+        json!({
+            "textDocument": { "uri": base }, "position": { "line": 2, "character": 25 },
+            "context": { "includeDeclaration": true },
+        }),
+    );
+    assert_eq!(starts(&found), [(0, 20), (2, 24), (5, 16)]);
+    // Of the other screen's: only the template's id.
+    let found = client.request(
+        "textDocument/references",
+        json!({
+            "textDocument": { "uri": base }, "position": { "line": 4, "character": 24 },
+            "context": { "includeDeclaration": false },
+        }),
+    );
+    assert_eq!(starts(&found), [(0, 20)]);
+
+    // After `@` in a screen: its own keys first, then the root's.
+    let typed = text.replace("+filter: { p: 1 } }", "+filter: { p: 1 }, x: @ }");
+    client.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": base, "version": 2 },
+            "contentChanges": [{ "text": typed }],
+        }),
+    );
+    let line = typed.lines().nth(2).unwrap();
+    let character = line.find('@').unwrap() + 1;
+    let items = client.request(
+        "textDocument/completion",
+        json!({ "textDocument": { "uri": base }, "position": { "line": 2, "character": character } }),
+    );
+    let labels: Vec<&str> = items
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["label"].as_str().unwrap())
+        .collect();
+    assert_eq!(labels[..3], ["layout", "filter", "dashboard"], "{labels:?}");
+
+    // Hover on the id in the template: what it names in each screen.
+    let hover = client.request(
+        "textDocument/hover",
+        json!({ "textDocument": { "uri": base }, "position": { "line": 0, "character": 21 } }),
+    );
+    let markdown = hover["contents"]["value"].as_str().unwrap();
+    assert!(
+        markdown.contains("**dashboard.filter**: `{p: 1}`"),
+        "{markdown}"
+    );
+    assert!(
+        markdown.contains("**settings.filter**: `{p: 2}`"),
+        "{markdown}"
+    );
+
+    // A misspelt id in a screen: the fix is the screen's key.
+    let typed = text.replace("+filter: { p: 1 } }", "+filter: { p: 1 }, x: @filtr }");
+    client.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": base, "version": 3 },
+            "contentChanges": [{ "text": typed }],
+        }),
+    );
+    let diagnostics = client.diagnostics_for(&base, |d| d.len() == 2);
+    let diagnostic = diagnostics
+        .iter()
+        .find(|d| d["message"].as_str().unwrap().contains("@filtr"))
+        .unwrap()
+        .clone();
+    assert_eq!(
+        diagnostic["message"],
+        "the id `@filtr` names nothing: no `filtr` in `dashboard` or the root"
+    );
+    let found = client.request(
+        "textDocument/codeAction",
+        json!({
+            "textDocument": { "uri": base },
+            "range": diagnostic["range"],
+            "context": { "diagnostics": [diagnostic], "triggerKind": 2 },
+        }),
+    );
+    let titles: Vec<&str> = found
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["title"].as_str().unwrap())
+        .collect();
+    assert!(titles.iter().any(|t| t.contains("`filter`")), "{titles:?}");
+    client.stop();
+}
+
+/// A workspace to rename in.
+struct Renames {
+    client: Client,
+    dir: PathBuf,
+}
+
+impl Renames {
+    fn start(name: &str, files: &[(&str, &str)]) -> Renames {
+        let dir = workspace(name, files);
+        let client = Client::start(&dir);
+        Renames { client, dir }
+    }
+
+    /// The position `offset` characters into the first `needle` of `file`.
+    fn position(&self, file: &str, needle: &str, offset: usize) -> Value {
+        let text = std::fs::read_to_string(self.dir.join(file)).unwrap();
+        let at = text.find(needle).unwrap() + offset;
+        let line = text[..at].matches('\n').count();
+        let character = at - text[..at].rfind('\n').map_or(0, |i| i + 1);
+        json!({
+            "textDocument": { "uri": uri(&self.dir.join(file)) },
+            "position": { "line": line, "character": character },
+        })
+    }
+
+    /// Renames what is `offset` characters into the first `needle` of
+    /// `file`: the files that change, as they are afterwards, or why not.
+    fn rename(
+        &mut self,
+        file: &str,
+        needle: &str,
+        offset: usize,
+        new: &str,
+    ) -> Result<Vec<(String, String)>, String> {
+        let mut params = self.position(file, needle, offset);
+        params["newName"] = json!(new);
+        // The first evaluation may not be there yet.
+        let mut tries = 0;
+        let edit = loop {
+            let edit = self
+                .client
+                .try_request("textDocument/rename", params.clone());
+            let waiting = matches!(&edit, Err(m) if m.contains("does not evaluate") || m.contains("last evaluated"));
+            if !waiting || tries == 500 {
+                break edit?;
+            }
+            tries += 1;
+            thread::sleep(Duration::from_millis(10));
+        };
+        let mut changed = Vec::new();
+        for (target, edits) in edit["changes"].as_object().into_iter().flatten() {
+            let path = std::fs::read_dir(&self.dir)
+                .unwrap()
+                .flat_map(|entry| {
+                    let path = entry.unwrap().path();
+                    match path.is_dir() {
+                        true => std::fs::read_dir(&path)
+                            .unwrap()
+                            .map(|entry| entry.unwrap().path())
+                            .collect(),
+                        false => vec![path],
+                    }
+                })
+                .find(|path| uri(path) == *target)
+                .unwrap();
+            let text = std::fs::read_to_string(&path).unwrap();
+            let name = path.strip_prefix(&self.dir).unwrap().to_string_lossy();
+            changed.push((
+                name.replace('\\', "/"),
+                apply(&text, edits.as_array().unwrap()),
+            ));
+        }
+        changed.sort();
+        Ok(changed)
+    }
+
+    /// [`rename`](Self::rename), for a rename that is refused.
+    fn refusal(&mut self, file: &str, needle: &str, offset: usize, new: &str) -> String {
+        self.rename(file, needle, offset, new).unwrap_err()
+    }
+}
+
+fn changed(files: &[(&str, &str)]) -> Result<Vec<(String, String)>, String> {
+    Ok(files
+        .iter()
+        .map(|(path, text)| ((*path).to_owned(), (*text).to_owned()))
+        .collect())
+}
+
+const TWO_LAYERS: &str = r#"Project { layers: List([{ name: "base", dir: "base", .. }, { name: "local", dir: "local", .. }]), .. }"#;
+
+#[test]
+fn renaming_a_key_renames_it_in_every_layer() {
+    let mut renames = Renames::start(
+        "lsp-rename-layers",
+        &[
+            ("project.crol", TWO_LAYERS),
+            (
+                "base/a.crod",
+                "+web: { port: 80, url: \"x:\" + &self.port }\n+db: { host: \"h\", of: @web }\n",
+            ),
+            (
+                "local/a.crod",
+                "web.port: 8080\n+see: [@web, @::web]\n+m: &root.web.url\n<prod> { web.port: 443 }\n<prod> { -?db.host }\n",
+            ),
+        ],
+    );
+    // A root key, from a patch of it: its definition, the patches in every
+    // layer and context, the reference and the ids.
+    assert_eq!(
+        renames.rename("local/a.crod", "web.port", 1, "site"),
+        changed(&[
+            (
+                "base/a.crod",
+                "+site: { port: 80, url: \"x:\" + &self.port }\n+db: { host: \"h\", of: @site }\n",
+            ),
+            (
+                "local/a.crod",
+                "site.port: 8080\n+see: [@site, @::site]\n+m: &root.site.url\n<prod> { site.port: 443 }\n<prod> { -?db.host }\n",
+            ),
+        ])
+    );
+    // The same from an id that names it, and from a reference to it.
+    let from_key = renames.rename("local/a.crod", "web.port", 1, "site");
+    assert_eq!(renames.rename("base/a.crod", "@web", 1, "site"), from_key);
+    assert_eq!(
+        renames.rename("local/a.crod", "@::web", 3, "site"),
+        from_key
+    );
+    assert_eq!(
+        renames.rename("local/a.crod", "root.web", 5, "site"),
+        from_key
+    );
+    // A key inside a value: the references through it too.
+    assert_eq!(
+        renames.rename("local/a.crod", "port", 0, "http"),
+        changed(&[
+            (
+                "base/a.crod",
+                "+web: { http: 80, url: \"x:\" + &self.http }\n+db: { host: \"h\", of: @web }\n",
+            ),
+            (
+                "local/a.crod",
+                "web.http: 8080\n+see: [@web, @::web]\n+m: &root.web.url\n<prod> { web.http: 443 }\n<prod> { -?db.host }\n",
+            ),
+        ])
+    );
+    // A name that is no identifier is written as a string, and after a
+    // `.` as an accessor.
+    assert_eq!(
+        renames.rename("local/a.crod", "web.port", 1, "odd id"),
+        changed(&[
+            (
+                "base/a.crod",
+                "+\"odd id\": { port: 80, url: \"x:\" + &self.port }\n+db: { host: \"h\", of: @\"odd id\" }\n",
+            ),
+            (
+                "local/a.crod",
+                "\"odd id\".port: 8080\n+see: [@\"odd id\", @::\"odd id\"]\n+m: &root[\"odd id\"].url\n<prod> { \"odd id\".port: 443 }\n<prod> { -?db.host }\n",
+            ),
+        ])
+    );
+    assert_eq!(
+        renames.rename("base/a.crod", "port", 0, "\"a b\""),
+        changed(&[
+            (
+                "base/a.crod",
+                "+web: { \"a b\": 80, url: \"x:\" + &self[\"a b\"] }\n+db: { host: \"h\", of: @web }\n",
+            ),
+            (
+                "local/a.crod",
+                "web[\"a b\"]: 8080\n+see: [@web, @::web]\n+m: &root.web.url\n<prod> { web[\"a b\"]: 443 }\n<prod> { -?db.host }\n",
+            ),
+        ])
+    );
+    // A key that a context removes is renamed there too.
+    assert_eq!(
+        renames.rename("base/a.crod", "host", 0, "name"),
+        changed(&[
+            (
+                "base/a.crod",
+                "+web: { port: 80, url: \"x:\" + &self.port }\n+db: { name: \"h\", of: @web }\n",
+            ),
+            (
+                "local/a.crod",
+                "web.port: 8080\n+see: [@web, @::web]\n+m: &root.web.url\n<prod> { web.port: 443 }\n<prod> { -?db.name }\n",
+            ),
+        ])
+    );
+
+    // The range to rename is the key under the cursor.
+    let range = renames.client.request(
+        "textDocument/prepareRename",
+        renames.position("local/a.crod", "web.port", 4),
+    );
+    assert_eq!(range["start"], json!({ "line": 0, "character": 4 }));
+    assert_eq!(range["end"], json!({ "line": 0, "character": 8 }));
+    let range = renames.client.request(
+        "textDocument/prepareRename",
+        renames.position("local/a.crod", "@::web", 3),
+    );
+    assert_eq!(range["start"], json!({ "line": 1, "character": 16 }));
+    // A number, a type name and a value are no keys.
+    let range = renames.client.request(
+        "textDocument/prepareRename",
+        renames.position("local/a.crod", "8080", 1),
+    );
+    assert_eq!(range, Value::Null);
+
+    // The new name is taken.
+    assert_eq!(
+        renames.refusal("base/a.crod", "+web", 1, "db"),
+        "the root already has a key `db`"
+    );
+    assert_eq!(
+        renames.refusal("base/a.crod", "port", 0, "url"),
+        "`web` already has a key `url`"
+    );
+    renames.client.stop();
+}
+
+const ONE_LAYER: &str = r#"Project { layers: List([{ name: "base", dir: "base", .. }]), .. }"#;
+
+#[test]
+fn renaming_a_key_renames_the_ids_that_resolve_to_it() {
+    let text = "\
+#[scope]
++dashboard: { layout: [@filter, @list], +filter: { p: 1 }, +list: {}, up: @other }
+#[scope]
++settings: { layout: [@filter], +filter: { p: 2 } }
++filter: { p: 0 }
++other: { see: @dashboard.filter, top: @filter, abs: @::filter, far: @::dashboard.list }
+";
+    let mut renames = Renames::start(
+        "lsp-rename-scopes",
+        &[("project.crol", ONE_LAYER), ("base/a.crod", text)],
+    );
+    let with = |changes: &[(&str, &str)]| {
+        let mut text = text.to_owned();
+        for (from, to) in changes {
+            assert!(text.contains(from), "{from}");
+            text = text.replacen(from, to, 1);
+        }
+        changed(&[("base/a.crod", &text)])
+    };
+    // A screen's own `filter`: the ids in that screen, and the path id's
+    // second key. The other screen's and the root's stay.
+    let expected = with(&[
+        ("[@filter, @list]", "[@query, @list]"),
+        ("+filter: { p: 1 }", "+query: { p: 1 }"),
+        ("@dashboard.filter", "@dashboard.query"),
+    ]);
+    assert_eq!(
+        renames.rename("base/a.crod", "+filter: { p: 1 }", 1, "query"),
+        expected
+    );
+    // From an id that names it, in the scope and through a path.
+    assert_eq!(
+        renames.rename("base/a.crod", "@filter, @list", 1, "query"),
+        expected
+    );
+    assert_eq!(
+        renames.rename("base/a.crod", "@dashboard.filter", 11, "query"),
+        expected
+    );
+    // The root's: the ids outside the screens, and the one from the root.
+    assert_eq!(
+        renames.rename("base/a.crod", "+filter: { p: 0 }", 1, "search"),
+        with(&[
+            ("+filter: { p: 0 }", "+search: { p: 0 }"),
+            ("top: @filter", "top: @search"),
+            ("@::filter", "@::search"),
+        ])
+    );
+    // A scope: only the key of a path id that names it changes.
+    assert_eq!(
+        renames.rename("base/a.crod", "@dashboard.filter", 1, "home"),
+        with(&[
+            ("+dashboard", "+home"),
+            ("@dashboard.filter", "@home.filter"),
+            ("@::dashboard.list", "@::home.list"),
+        ])
+    );
+    // A key that is no identifier, in each form of an id.
+    assert_eq!(
+        renames.rename("base/a.crod", "+list", 1, "the list"),
+        with(&[
+            ("@filter, @list", "@filter, @\"the list\""),
+            ("+list", "+\"the list\""),
+            ("@::dashboard.list", "@::dashboard[\"the list\"]"),
+        ])
+    );
+
+    // The new name is a key of a scope nearer to an id that is renamed:
+    // the id would name that one.
+    assert_eq!(
+        renames.refusal("base/a.crod", "+other", 1, "list"),
+        "renaming `other` to `list` would make `@other` at a.crod:2:75 name `dashboard.list` \
+         as `@list`, not `list`: a nearer scope has a key of the new name, which shadows it"
+    );
+    // The new name is one an id finds further out now: the id would name
+    // the renamed key instead.
+    assert_eq!(
+        renames.refusal("base/a.crod", "+list", 1, "other"),
+        "renaming `dashboard.list` to `other` would make `@other` at a.crod:2:75 name \
+         `dashboard.other` instead of `other`: the new name would shadow the key it names"
+    );
+    // The new name is a key there already.
+    assert_eq!(
+        renames.refusal("base/a.crod", "+settings", 1, "filter"),
+        "the root already has a key `filter`"
+    );
+    renames.client.stop();
+}
+
+#[test]
+fn renaming_is_refused_where_an_id_names_several_keys() {
+    let text = "\
+pane := { layout: [@filter], +inner: { p: 0 } }
+#[scope]
++dashboard: { ..&pane, +filter: { p: 1 } }
+#[scope]
++settings: { ..&pane, +filter: { p: 2 }, inner.p: 3 }
++other: { see: @dashboard.filter, in: @dashboard.inner, gone: @nope }
++copy: &root.other
+";
+    let mut renames = Renames::start(
+        "lsp-rename-templates",
+        &[("project.crol", ONE_LAYER), ("base/a.crod", text)],
+    );
+    // The id in the template names a key in each screen.
+    assert_eq!(
+        renames.refusal("base/a.crod", "+filter: { p: 1 }", 1, "query"),
+        "`@filter` at a.crod:1:20 names `dashboard.filter` and also `settings.filter`: it is \
+         written once, so renaming `dashboard.filter` would break the others"
+    );
+    assert_eq!(
+        renames.refusal("base/a.crod", "@dashboard.filter", 11, "query"),
+        "`@filter` at a.crod:1:20 names `dashboard.filter` and also `settings.filter`: it is \
+         written once, so renaming `dashboard.filter` would break the others"
+    );
+    assert_eq!(
+        renames.refusal("base/a.crod", "@filter", 1, "query"),
+        "`@filter` is written once and names `dashboard.filter` and `settings.filter`: \
+         renaming it for one would break the others"
+    );
+    // A key in a template has no place of its own, and one that a template
+    // brings in is not written at its place.
+    assert_eq!(
+        renames.refusal("base/a.crod", "+inner", 1, "core"),
+        "`inner` is written where it has no place of its own, as in a template or under a key \
+         that is an id: rename the key where the value ends up"
+    );
+    assert_eq!(
+        renames.refusal("base/a.crod", "@dashboard.inner", 11, "core"),
+        "no entry writes `dashboard.inner` at its own place"
+    );
+    assert_eq!(
+        renames.refusal("base/a.crod", "inner.p", 1, "core"),
+        "`settings.inner` is written at a.crod:1:31, not at its own place, as what a template, \
+         a spread or a reference brings in is: renaming it there would rename it wherever that \
+         value goes"
+    );
+    // So is one that a reference brings in.
+    assert_eq!(
+        renames.refusal("base/a.crod", "see:", 0, "look"),
+        "renaming `other.see` to `look` would change `copy` as well: the key is not only \
+         written at its own place"
+    );
+    // An id that names nothing names no key to rename.
+    assert_eq!(
+        renames.refusal("base/a.crod", "@nope", 1, "none"),
+        "`@nope` names nothing"
+    );
+    // A scope that the template is spread into can be renamed: the id in
+    // the template is not written with its name.
+    assert_eq!(
+        renames.rename("base/a.crod", "+settings", 1, "prefs"),
+        changed(&[("base/a.crod", &text.replace("+settings", "+prefs"))])
+    );
+    renames.client.stop();
+}
+
+#[test]
+fn renaming_in_documents_on_their_own() {
+    // A value document: the keys of its value.
+    let value =
+        "{\n    #[scope]\n    a: { x: 1, r: @x, s: &self.x },\n    x: 2,\n    t: [@x, @a.x],\n}\n";
+    let data = "+web: { port: 80 }\n+link: @web\n";
+    let refs = "+web: { port: 80, tls: { on: &parent.port, up: &top.port + 1 }, alt: &root.web.port }\nweb.port: & + 1\n";
+    let mut renames = Renames::start(
+        "lsp-rename-alone",
+        &[
+            ("value.crol", value),
+            ("data.crod", data),
+            ("refs.crod", refs),
+        ],
+    );
+    for (file, text) in [
+        ("value.crol", value),
+        ("data.crod", data),
+        ("refs.crod", refs),
+    ] {
+        renames.client.notify(
+            "textDocument/didOpen",
+            json!({ "textDocument": {
+                "uri": uri(&renames.dir.join(file)), "languageId": "crol", "version": 1, "text": text,
+            } }),
+        );
+    }
+    assert_eq!(
+        renames.rename("value.crol", "x: 1", 0, "y"),
+        changed(&[(
+            "value.crol",
+            "{\n    #[scope]\n    a: { y: 1, r: @y, s: &self.y },\n    x: 2,\n    t: [@x, @a.y],\n}\n",
+        )])
+    );
+    assert_eq!(
+        renames.rename("value.crol", "@x, @a.x", 1, "z"),
+        changed(&[(
+            "value.crol",
+            "{\n    #[scope]\n    a: { x: 1, r: @x, s: &self.x },\n    z: 2,\n    t: [@z, @a.x],\n}\n",
+        )])
+    );
+    assert_eq!(
+        renames.rename("data.crod", "@web", 1, "site"),
+        changed(&[("data.crod", "+site: { port: 80 }\n+link: @site\n")])
+    );
+    // References from the blocks around, and from the root entry.
+    assert_eq!(
+        renames.rename("refs.crod", "port", 0, "http"),
+        changed(&[(
+            "refs.crod",
+            "+web: { http: 80, tls: { on: &parent.http, up: &top.http + 1 }, alt: &root.web.http }\nweb.http: & + 1\n",
+        )])
+    );
+    // A document that changed since it was evaluated is not edited.
+    renames.client.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": uri(&renames.dir.join("data.crod")), "version": 2 },
+            "contentChanges": [{ "text": "+web: {\n" }],
+        }),
+    );
+    let mut params = renames.position("data.crod", "+web", 1);
+    params["newName"] = json!("site");
+    let refused = renames.client.try_request("textDocument/rename", params);
+    assert!(refused.unwrap_err().contains("evaluate"));
+    renames.client.stop();
+}
+
+#[test]
+fn id_keys_resolve_at_the_value_they_are_keys_of() {
+    let text = "+is_biological: Tag {}\n+armored: Tag {}\n#[scope]\n+marine: { armored: Tag {}, bonus: { @armored: 1.0, @::armored: 2.0 } }\n+grenade: { bonus: { @is_biological: 47.0 } }\n";
+    let top = "grenade.bonus.@::is_biological: 50.0\ngrenade.bonus[@armored]: 3.0\n";
+    let dir = workspace(
+        "lsp-id-keys",
+        &[
+            (
+                "project.crol",
+                r#"Project { layers: List([{ name: "base", dir: "base", .. }, { name: "top", dir: "top", .. }]), .. }"#,
+            ),
+            ("base/a.crod", text),
+            ("top/a.crod", top),
+        ],
+    );
+    let mut client = Client::start(&dir);
+    let base = uri(&dir.join("base/a.crod"));
+    let above = uri(&dir.join("top/a.crod"));
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": base, "languageId": "crol", "version": 1, "text": text } }),
+    );
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": above, "languageId": "crol", "version": 1, "text": top } }),
+    );
+    let position = |text: &str, line: usize, word: &str| {
+        let character = text.lines().nth(line).unwrap().find(word).unwrap() + 1;
+        json!({ "line": line, "character": character })
+    };
+    let starts = |found: &Value| -> Vec<(String, u64, u64)> {
+        let list = match found {
+            Value::Array(list) => list.clone(),
+            other => vec![other.clone()],
+        };
+        let mut starts: Vec<_> = list
+            .iter()
+            .map(|l| {
+                let file = l["uri"].as_str().unwrap();
+                (
+                    file.rsplit('/').nth(1).unwrap().to_owned(),
+                    l["range"]["start"]["line"].as_u64().unwrap(),
+                    l["range"]["start"]["character"].as_u64().unwrap(),
+                )
+            })
+            .collect();
+        starts.sort();
+        starts
+    };
+    let at = |layer: &str, line: u64, character: u64| (layer.to_owned(), line, character);
+
+    // In the scope, `@armored` is its own tag, and `@::armored` the root's.
+    let found = client.request(
+        "textDocument/definition",
+        json!({ "textDocument": { "uri": base }, "position": position(text, 3, "@armored") }),
+    );
+    assert_eq!(starts(&found), [at("base", 3, 11)]);
+    let found = client.request(
+        "textDocument/definition",
+        json!({ "textDocument": { "uri": base }, "position": position(text, 3, "@::armored") }),
+    );
+    assert_eq!(starts(&found), [at("base", 1, 1)]);
+    // In a path entry of the layer above, after a dot and in brackets.
+    let found = client.request(
+        "textDocument/definition",
+        json!({ "textDocument": { "uri": above }, "position": position(top, 0, "@::is_bio") }),
+    );
+    assert_eq!(starts(&found), [at("base", 0, 1)]);
+    let found = client.request(
+        "textDocument/definition",
+        json!({ "textDocument": { "uri": above }, "position": position(top, 1, "@armored") }),
+    );
+    assert_eq!(starts(&found), [at("base", 1, 1)]);
+
+    // Hover says what the key names.
+    let hover = client.request(
+        "textDocument/hover",
+        json!({ "textDocument": { "uri": base }, "position": position(text, 3, "@armored") }),
+    );
+    let markdown = hover["contents"]["value"].as_str().unwrap();
+    assert!(markdown.contains("**marine.armored**"), "{markdown}");
+
+    // References of the root's `armored`: the keys that name it, as the
+    // data has them. The entry the layer above adds is under its own id.
+    let found = client.request(
+        "textDocument/references",
+        json!({
+            "textDocument": { "uri": base }, "position": { "line": 1, "character": 3 },
+            "context": { "includeDeclaration": false },
+        }),
+    );
+    let found = starts(&found);
+    assert!(found.contains(&at("base", 3, 55)), "{found:?}");
+    assert!(found.contains(&at("top", 1, 15)), "{found:?}");
+    assert!(!found.contains(&at("base", 3, 38)), "{found:?}");
+
+    // After `@` where a key goes: what the scopes around the map have.
+    let typed = text.replace("@is_biological: 47.0 }", "@is_biological: 47.0, @ }");
+    client.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": base, "version": 2 },
+            "contentChanges": [{ "text": typed }],
+        }),
+    );
+    let character = typed.lines().nth(4).unwrap().rfind('@').unwrap() + 1;
+    let items = client.request(
+        "textDocument/completion",
+        json!({ "textDocument": { "uri": base }, "position": { "line": 4, "character": character } }),
+    );
+    let labels: Vec<&str> = items
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["label"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        labels,
+        ["is_biological", "armored", "marine", "grenade"],
+        "{labels:?}"
+    );
+    // In the scope: its own keys first.
+    let typed = text.replace("@::armored: 2.0 }", "@::armored: 2.0, @ }");
+    client.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": base, "version": 3 },
+            "contentChanges": [{ "text": typed }],
+        }),
+    );
+    let character = typed.lines().nth(3).unwrap().rfind('@').unwrap() + 1;
+    let items = client.request(
+        "textDocument/completion",
+        json!({ "textDocument": { "uri": base }, "position": { "line": 3, "character": character } }),
+    );
+    let labels: Vec<&str> = items
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["label"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        labels[..3],
+        ["armored", "bonus", "is_biological"],
+        "{labels:?}"
+    );
+
+    // A key that names nothing is an error, on the key.
+    let typed = text.replace("@is_biological: 47.0 }", "@is_biologcal: 47.0 }");
+    client.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": base, "version": 4 },
+            "contentChanges": [{ "text": typed }],
+        }),
+    );
+    let diagnostics = client.diagnostics_for(&base, |d| says(d, "@is_biologcal"));
+    let diagnostic = diagnostics
+        .iter()
+        .find(|d| d["message"].as_str().unwrap().contains("@is_biologcal"))
+        .unwrap()
+        .clone();
+    assert_eq!(
+        diagnostic["message"],
+        "the id key `@is_biologcal` names no root key; an id key has to name an entry, and a key \
+         that names nothing is written as a string\n(while evaluating grenade.bonus)"
+    );
+    assert_eq!(diagnostic["severity"], 1, "{diagnostic:?}");
+    assert_eq!(
+        diagnostic["range"]["start"]["character"], 21,
+        "{diagnostic:?}"
+    );
+    // And the fix is a key the scopes around it have.
+    let found = client.request(
+        "textDocument/codeAction",
+        json!({
+            "textDocument": { "uri": base },
+            "range": diagnostic["range"],
+            "context": { "diagnostics": [diagnostic], "triggerKind": 2 },
+        }),
+    );
+    let titles: Vec<&str> = found
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["title"].as_str().unwrap())
+        .collect();
+    assert!(
+        titles.iter().any(|t| t.contains("`is_biological`")),
+        "{titles:?}"
+    );
+    client.stop();
+}
+
+#[test]
+fn renaming_is_refused_for_keys_that_are_ids() {
+    let text = "+is_biological: Tag {}\n+armored: Tag {}\n#[scope]\n+marine: { armored: Tag {}, bonus: { @armored: 1.0 } }\n+grenade: { bonus: { @is_biological: 47.0 }, damage: 5 }\n";
+    let top = "grenade.bonus.@::is_biological: 50.0\ngrenade.damage: 6\n";
+    let mut renames = Renames::start(
+        "lsp-rename-id-keys",
+        &[
+            (
+                "project.crol",
+                r#"Project { layers: List([{ name: "base", dir: "base", .. }, { name: "top", dir: "top", .. }]), .. }"#,
+            ),
+            ("base/a.crod", text),
+            ("top/a.crod", top),
+        ],
+    );
+    // An id key itself, written as a key or as a step of a path.
+    assert_eq!(
+        renames.refusal("base/a.crod", "@armored: 1.0", 1, "plated"),
+        "`@armored` is a key that is an id: renaming keys that are ids is not supported"
+    );
+    assert_eq!(
+        renames.refusal("top/a.crod", "@::is_biological", 3, "organic"),
+        "`@::is_biological` is a key that is an id: renaming keys that are ids is not supported"
+    );
+    // A key that an id key names: the key of the scope, and the root's.
+    assert_eq!(
+        renames.refusal("base/a.crod", "armored: Tag {}, bonus", 0, "plated"),
+        "`@armored`, a key of `marine.bonus` at a.crod:4:39, is an id that names \
+         `marine.armored`: renaming keys that are ids, and so what they name, is not supported"
+    );
+    assert!(
+        renames
+            .refusal("base/a.crod", "+is_biological", 1, "organic")
+            .contains("is an id that names `is_biological`")
+    );
+    // What no id key names is renamed, in a target with an id key too.
+    assert_eq!(
+        renames.rename("base/a.crod", "+grenade", 1, "shell"),
+        changed(&[
+            ("base/a.crod", &text.replace("+grenade", "+shell")),
+            (
+                "top/a.crod",
+                "shell.bonus.@::is_biological: 50.0\nshell.damage: 6\n",
+            ),
+        ])
+    );
+    renames.client.stop();
 }

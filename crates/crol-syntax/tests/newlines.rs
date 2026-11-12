@@ -239,3 +239,16 @@ fn an_error_stays_on_its_line() {
         .count();
     assert_eq!(entries, 3);
 }
+
+#[test]
+fn an_id_key_starts_an_entry_on_its_line() {
+    // As any key does: a line break separates the entries (`SPEC.md` 5.3).
+    same("a: 1\n@b: 2\n@::c.d: 3", "a: 1, @b: 2, @::c.d: 3");
+    same("a: &x\n-@b\n+@c: 1", "a: &x, -@b, +@c: 1");
+    same(
+        "m: {\n    @a: 1\n    [@b].c: 2\n}",
+        "m: { @a: 1, [@b].c: 2 }",
+    );
+    // An id that is no key is a value out of place, with one error.
+    assert_eq!(errors("a: 1\n@b\nc: 2").len(), 1);
+}

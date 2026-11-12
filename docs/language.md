@@ -153,7 +153,7 @@ error rather than a different document: after `a: 1 +`, the line `b: 2` gives
 | keyed      | `{ port: 80 }`, `Service { port: 80 }`                      |
 | unit name  | `None`, `Red`: a unit enum variant or unit struct           |
 | named tuple | `Some(1)`, `Rgb(1, 2, 3)`: a tuple variant or tuple struct |
-| id         | `@web`, `@"odd id"`                                         |
+| id         | `@web`, `@"odd id"`, `@settings.filter`, `@::web`            |
 
 Numbers have no suffixes (`1u8` is an error), and floats need a digit on both
 sides of the dot. Strings can span several lines.
@@ -177,10 +177,13 @@ The name before the braces is the _type name_. It is optional, but when you
 write it, it has to match the Rust type. Writing `Limits` on a `Service` field
 is an error, so the name acts as a check and tells readers what they are
 looking at. It also decides which variant of an enum a value is, as the next
-section shows.
+section shows. A value that is a plain map has no type name, and with a
+[schema](schemas.md) a name written on one gets a warning.
 
 Keys are identifiers, quoted strings (for anything that is not an identifier)
 or integers. `port` and `"port"` are the same key; `12` and `"12"` are not.
+A key can also be an [id](#ids-as-keys), `@web: 1`, in a map whose keys name
+other entries.
 
 ## Enums and options
 
@@ -665,7 +668,7 @@ list, are still reported.
 
 ## Ids
 
-An id, written `@web`, is a value that names a root key. Use one wherever one
+An id, written `@web`, is a value that names a key. Use one wherever one
 definition points at another:
 
 ```crol
@@ -675,9 +678,105 @@ definition points at another:
 ```
 
 An id is not a lookup: it evaluates to the name, and your program decides what
-to do with it. What ids buy you is checking. Declare the field as
-[`crol::Id`](rust.md#ids), and a [schema](schemas.md) makes `crol check` and
-your editor report ids that name nothing.
+to do with it. What ids buy you is checking: `crol check`, your editor and your
+program report ids that name nothing. Declare the field as
+[`crol::Id`](rust.md#ids), which takes only an id.
+
+### Scopes
+
+Without anything else, an id names a root key. Data that is grouped can make a
+block a **scope**: inside it, `@db` names the block's own `db` if it has one,
+and otherwise looks further out, up to the root.
+
+```crol
+// services.crod
+db: { host: "prod-db" }
+environments: {
+    #[scope]
+    staging: {
+        db: { host: "staging-db" },
+        web: { depends_on: [@db] },    // staging's db
+    },
+    prod: {
+        web: { depends_on: [@db] },    // the root's db
+    },
+}
+```
+
+`#[scope]` goes before an entry or a template. A template marked `#[scope]`
+makes a scope of every block it is spread into. Your program can also mark a
+type as a scope, so that every value of it is one, with
+[`#[crol(scope)]`](schemas.md#attributes): then every `Screen` in a file is
+a scope, without writing `#[scope]` on each.
+
+An id resolves where its value ends up. An id in a template names something in
+each block the template is spread into:
+
+```crol
+// screens.crod
+pane := { layout: [@filter] }
+#[scope]
+dashboard: { ..&pane, filter: { placeholder: "Filter workers" } }
+#[scope]
+settings: { ..&pane, filter: { placeholder: "Search settings" } }
+```
+
+Here the `@filter` written once names `dashboard.filter` in one place and
+`settings.filter` in the other.
+
+An id can also reach into a scope, or skip the scopes around it:
+
+| Id                   | Names                                                     |
+| -------------------- | --------------------------------------------------------- |
+| `@filter`            | `filter` in the innermost scope that has one, else the root's |
+| `@settings.filter`   | `settings`, found the same way, then its key `filter`    |
+| `@::filter`          | the root key `filter`, whatever the scopes around say    |
+
+An id names keys only: `@items[0]` and `@pair.0` are errors.
+
+### Ids as keys
+
+A map whose keys name other entries has ids as its keys:
+
+```crol
+// units.crod
++is_biological: Tag {}
++armored: Tag {}
+
++toxin_grenade: Weapon {
+    damage: {
+        amount: 23.0,
+        bonus: { @is_biological: 47.0, @armored: 5.0 },
+    },
+}
+```
+
+`bonus` is a `HashMap<crol::Id, f64>` in Rust: a map keyed by
+[`crol::Id`](rust.md#ids) takes only id keys, so that `is_biological: 47.0`
+there is an error, and no other map takes them. An id key has every form an
+id has, `@a.b: 1` and `@::a: 1` too, and names things the same way, through
+the scopes around the map it is in.
+
+Two id keys are the same key when they name the same entry, however they are
+written. A later layer changes the bonus above with any of these:
+
+```crol
+// balance.crod
+toxin_grenade.damage.bonus.@is_biological: 50.0
+toxin_grenade.damage.bonus[@::is_biological]: 50.0
+toxin_grenade: & ~ { damage: { bonus: { @::is_biological: 50.0 } } }
+```
+
+In a path, an id key goes after a dot or in brackets. The steps after an id
+without brackets belong to the id, `@a.b` being one id, so write the brackets
+to go on below it: `bonus[@armored].factor: 2`. A reference reads an entry the
+same way, `&root.toxin_grenade.damage.bonus[@armored]`.
+
+Since keys are compared by what they name, an id key has to name something:
+one that names nothing is an error, where an id value that names nothing is a
+warning. If the keys of a map can name things that are not in the data, make
+them strings. In a scope, `@armored` and `@::armored` are two keys when the
+scope has an `armored` of its own, and one key when it has not.
 
 ## Attributes
 
@@ -691,8 +790,10 @@ whole:
 | `#![use(path as Alias)]`        | which type a name means                      | [Schemas](schemas.md#types-with-the-same-name) |
 | `#![type(Name)]`                | the type of a whole value-mode document      | [Modes](modes.md)                              |
 
-One attribute goes on a value bind instead of a document: `#[type(...)]`, which
-gives a template its type (see [Giving a template a type](#giving-a-template-a-type)).
+Two attributes go on an entry instead of a document: `#[type(...)]`, which
+gives a template its type (see [Giving a template a type](#giving-a-template-a-type)),
+and `#[scope]`, which makes the entry's value a scope for ids (see
+[Scopes](#scopes)).
 
 ## What is not in the language
 

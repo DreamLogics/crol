@@ -328,6 +328,7 @@ pub mod project;
 mod raw;
 #[cfg(feature = "_remote")]
 mod remote;
+mod resolve;
 pub mod schema;
 mod ser;
 pub mod typed;
@@ -337,7 +338,7 @@ mod writer;
 use crol_eval::evaluate_value;
 use serde::{Deserialize, Serialize};
 
-pub use check::{CheckOptions, DataView, check, check_value, check_view, value_type};
+pub use check::{CheckOptions, DataView, check, check_ids, check_value, check_view, value_type};
 pub use compose::{
     CrolComposer, CrolConfig, CrolContext, CrolData, CrolLayer, CrolVariants, DocumentChange,
     ExtendsLoad, KeyChange, LayerSource, Reloaded, Variant, VariantName, changed_keys,
@@ -359,6 +360,7 @@ pub use loader::{
 };
 pub use mode::Mode;
 pub use raw::RawValue;
+pub use resolve::{DataPath, DataStep, IdResolver, IdScope, ResolvedId, ScopeChain, ScopeKind};
 pub use schema::Schema;
 
 #[cfg(feature = "derive")]
@@ -422,7 +424,9 @@ fn from_text<T: for<'de> Deserialize<'de>>(
     let Some(value) = evaluation.value else {
         return Err(Error::from_diagnostics(&sources, &evaluation.diagnostics));
     };
-    deserialize(&value, &sources, options, None)
+    // A value document has no schema, so only `#[scope]` makes scopes.
+    let resolver = resolve::Resolver::new(&value, None);
+    deserialize_resolved(&value, &sources, options, None, Some(resolver))
 }
 
 /// Deserializes an evaluated value as `T`. `sources` are the files the
@@ -454,10 +458,37 @@ pub(crate) fn deserialize<T: for<'de> Deserialize<'de>>(
     options: de::Options,
     key: Option<&str>,
 ) -> Result<(T, Vec<IdUse>)> {
+    deserialize_resolved(value, sources, options, key, None)
+}
+
+/// [`deserialize`], with what ids resolve against.
+pub(crate) fn deserialize_resolved<'a, T: for<'de> Deserialize<'de>>(
+    value: &'a Value,
+    sources: &'a Sources,
+    options: de::Options,
+    key: Option<&str>,
+    resolver: Option<resolve::Resolver<'a>>,
+) -> Result<(T, Vec<IdUse>)> {
+    deserialize_typed(value, sources, options, key, resolver, None)
+}
+
+/// [`deserialize_resolved`], with what the schema says the type at each
+/// place is, for the type names of blocks (`SPEC.md` 10.2): the data and its
+/// types, and how many steps of a place come before the root of that data.
+pub(crate) fn deserialize_typed<'a, T: for<'de> Deserialize<'de>>(
+    value: &'a Value,
+    sources: &'a Sources,
+    options: de::Options,
+    key: Option<&str>,
+    resolver: Option<resolve::Resolver<'a>>,
+    typed: Option<(resolve::Resolver<'a>, usize)>,
+) -> Result<(T, Vec<IdUse>)> {
     let context = de::Context {
         sources,
         options,
         ids: Default::default(),
+        resolver,
+        typed,
     };
     let deserializer = match key {
         Some(key) => de::ValueDeserializer::at_key(value, &context, key),

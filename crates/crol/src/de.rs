@@ -11,11 +11,12 @@ use serde::de::{
     Visitor,
 };
 
-use crol_eval::{Key, Keyed, Sources, Value, ValueKind};
+use crol_eval::{IdPath, Key, Keyed, Sources, Value, ValueKind};
 
 use crate::error::Error;
-use crate::id::{ID_TOKEN, IdUse};
+use crate::id::{ID_TOKEN, Id, IdUse};
 use crate::raw::RAW_TOKEN;
+use crate::resolve::{DataPath, DataStep, Resolver};
 use crate::schema::{Field, SchemaFile, TypeDef, VariantShape};
 
 /// Options of the deserializer (`SPEC.md` 10.7's `CrolConfig` fields).
@@ -118,11 +119,123 @@ impl Structs {
     }
 }
 
+/// What names the type of a keyed value, from where its type is known down
+/// to the value itself (`SPEC.md` 10.2): the newtype variant it is the
+/// payload of, and the newtypes and transparent structs around it. The
+/// deserializer gathers these from serde, and `crol::check` and the
+/// resolver from the schema.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct TypeNames<'n> {
+    /// The newtype variant whose payload the value is: `V { ... }`
+    /// deserializes as a newtype variant whose payload accepts the name `V`.
+    variant: Option<&'n str>,
+    /// The outermost newtype or transparent struct around the value.
+    wrapper: Option<&'n str>,
+    /// Whether one of those wrappers has the name the value is written with.
+    fits: bool,
+}
+
+/// Whether the type name a keyed value is written with fits its type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum NameFit {
+    /// It is the type's name, a wrapper's, or the newtype variant's.
+    Fits,
+    /// It is another name than the type's: an error, with its message.
+    Mismatch(String),
+    /// Nothing names the type: the value is a map and no more.
+    Unnamed,
+    /// The type is not known, or not one a block's name is checked against.
+    Unknown,
+}
+
+impl<'n> TypeNames<'n> {
+    /// The payload of the newtype variant `variant`.
+    pub(crate) fn variant(variant: &'n str) -> Self {
+        Self {
+            variant: Some(variant),
+            ..Self::default()
+        }
+    }
+
+    /// Inside the newtype or transparent struct `name`, around a value
+    /// written with the type name `written`. A wrapper with an empty name
+    /// is one data never writes (`SPEC.md` 10.9).
+    pub(crate) fn wrap(self, name: &'n str, written: Option<&str>) -> Self {
+        if name.is_empty() {
+            return self;
+        }
+        Self {
+            wrapper: self.wrapper.or(Some(name)),
+            fits: self.fits || written == Some(name),
+            ..self
+        }
+    }
+
+    fn accepts(&self, written: &str) -> bool {
+        self.fits || self.variant == Some(written)
+    }
+
+    /// For a struct, or a variant with named fields, of the name `name`.
+    pub(crate) fn of_struct(&self, name: &str, written: &str) -> NameFit {
+        if written == name || self.accepts(written) {
+            NameFit::Fits
+        } else {
+            NameFit::Mismatch(format!("expected a `{name}`, found a `{written}`"))
+        }
+    }
+
+    /// For a map.
+    pub(crate) fn of_map(&self, written: &str) -> NameFit {
+        match self.wrapper {
+            _ if self.accepts(written) => NameFit::Fits,
+            Some(wrapper) => {
+                NameFit::Mismatch(format!("`{written} {{ ... }}` is not a `{wrapper}`"))
+            }
+            None => NameFit::Unnamed,
+        }
+    }
+}
+
+/// What a type name on a map that nothing names is told (`SPEC.md` 10.2).
+pub(crate) fn unnamed_map(written: &str) -> String {
+    format!(
+        "the type name `{written}` names nothing: this is a map, which has no type name; \
+         write `{{ ... }}`"
+    )
+}
+
 /// What every deserializer of one value shares.
 pub(crate) struct Context<'a> {
     pub(crate) sources: &'a Sources,
     pub(crate) options: Options,
     pub(crate) ids: RefCell<Vec<IdUse>>,
+    /// What ids resolve against (`SPEC.md` 10.5); without it, no id
+    /// resolves.
+    pub(crate) resolver: Option<Resolver<'a>>,
+    /// What the schema says the type at each place is, for the type names
+    /// serde does not give (`SPEC.md` 10.2): the data and its types, and how
+    /// many steps of a place come before the root of that data.
+    pub(crate) typed: Option<(Resolver<'a>, usize)>,
+}
+
+/// Where in the data we are, which a wrapper such as `Some(x)` adds a step
+/// to, though the Rust path stays: `web.depends_on[0]`.
+enum Place {
+    Root,
+    Step(Rc<Place>, DataStep),
+}
+
+impl Place {
+    fn to_path(&self) -> DataPath {
+        let mut steps = Vec::new();
+        let mut node = self;
+        while let Place::Step(parent, step) = node {
+            steps.push(step.clone());
+            node = parent;
+        }
+        steps.reverse();
+        DataPath::new(steps)
+    }
 }
 
 /// Where in the Rust value we are: `web.depends_on[0]`.
@@ -163,9 +276,9 @@ pub(crate) struct ValueDeserializer<'a> {
     value: &'a Value,
     context: &'a Context<'a>,
     path: Rc<PathNode>,
-    /// The name of the newtype variant whose payload this is: `V { ... }`
-    /// deserializes as a newtype variant whose struct accepts the name `V`.
-    variant: Option<&'a str>,
+    place: Rc<Place>,
+    /// What names this value's type so far (`SPEC.md` 10.2).
+    names: TypeNames<'a>,
 }
 
 impl<'a> ValueDeserializer<'a> {
@@ -174,7 +287,8 @@ impl<'a> ValueDeserializer<'a> {
             value,
             context,
             path: Rc::new(PathNode::Root),
-            variant: None,
+            place: Rc::new(Place::Root),
+            names: TypeNames::default(),
         }
     }
 
@@ -184,16 +298,29 @@ impl<'a> ValueDeserializer<'a> {
             value,
             context,
             path: Rc::new(PathNode::Key(Rc::new(PathNode::Root), Key::Str(key.into()))),
-            variant: None,
+            place: Rc::new(Place::Step(
+                Rc::new(Place::Root),
+                DataStep::Key(Key::Str(key.into())),
+            )),
+            names: TypeNames::default(),
         }
     }
 
+    /// A deserializer for what `path` reaches in this value: a key, an
+    /// element, or with `PathNode::Root`, a wrapper's single element.
     fn child(&self, value: &'a Value, path: PathNode) -> ValueDeserializer<'a> {
+        let step = match (&path, &self.value.kind) {
+            (PathNode::Key(_, key), _) => DataStep::Key(key.clone()),
+            (PathNode::Index(_, i), ValueKind::List(_)) => DataStep::Index(*i),
+            (PathNode::Index(_, i), _) => DataStep::Element(*i),
+            (PathNode::Root, _) => DataStep::Element(0),
+        };
         ValueDeserializer {
             value,
             context: self.context,
             path: Rc::new(path),
-            variant: None,
+            place: Rc::new(Place::Step(self.place.clone(), step)),
+            names: TypeNames::default(),
         }
     }
 
@@ -224,15 +351,43 @@ impl<'a> ValueDeserializer<'a> {
         }
     }
 
+    /// The text of the id this is, without `@`, for a hint.
+    fn id_text(&self) -> String {
+        match &self.value.kind {
+            ValueKind::Id(id) => id.keys().join("."),
+            _ => String::new(),
+        }
+    }
+
     fn expected(&self, what: &str) -> Error {
         self.error(format!("expected {what}, found {}", self.found()))
     }
 
-    fn record_id(&self, id: &str) {
+    /// Records an id this value is.
+    fn record_id(&self, id: &IdPath) {
+        self.record_id_at(id, self.place.to_path());
+    }
+
+    /// Records an id that is the key of this value, an entry of a map. A key
+    /// resolves at the map's place (`SPEC.md` 10.5).
+    fn record_key_id(&self, id: &IdPath) {
+        let place = match &*self.place {
+            Place::Step(map, _) => map.to_path(),
+            Place::Root => DataPath::root(),
+        };
+        self.record_id_at(id, place);
+    }
+
+    fn record_id_at(&self, id: &IdPath, place: DataPath) {
+        let target = self
+            .context
+            .resolver
+            .and_then(|resolver| resolver.resolve(id, &place));
         self.context.ids.borrow_mut().push(IdUse {
-            id: id.to_owned(),
+            id: Id::from_path(id),
             span: self.value.span,
             rust_path: describe(&self.path),
+            target,
         });
     }
 
@@ -268,13 +423,56 @@ impl<'a> ValueDeserializer<'a> {
         visitor.visit_map(&mut access).map_err(|e| self.attach(e))
     }
 
+    /// The type name this value is written with, if it is a keyed value.
+    fn written(&self) -> Option<&'a str> {
+        match &self.value.kind {
+            ValueKind::Keyed(keyed) => keyed.name.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// The type name check of a keyed value that serde asks for as a map
+    /// (`SPEC.md` 10.2): what it is inside a newtype, a transparent struct,
+    /// or a struct with a flattened field. Serde names only the newtypes, so
+    /// with a schema, the type the schema gives the place decides.
+    fn check_map(&self, keyed: &Keyed) -> Result<(), Error> {
+        let Some(written) = keyed.name.as_deref() else {
+            return Ok(());
+        };
+        let fit = match self.names.of_map(written) {
+            NameFit::Fits => NameFit::Fits,
+            serde => match self.schema_name() {
+                NameFit::Unknown => serde,
+                schema => schema,
+            },
+        };
+        match fit {
+            NameFit::Mismatch(message) => Err(self.error(message)),
+            // A name on a plain map is a warning, which the composer and
+            // `crol::check` give: the deserializer has only errors.
+            NameFit::Fits | NameFit::Unnamed | NameFit::Unknown => Ok(()),
+        }
+    }
+
+    /// Whether this keyed value's type name fits the type the schema gives
+    /// its place, if there is a schema that says.
+    fn schema_name(&self) -> NameFit {
+        let Some((typed, skip)) = &self.context.typed else {
+            return NameFit::Unknown;
+        };
+        let place = self.place.to_path();
+        typed.block_name(&DataPath::new(place.steps().iter().skip(*skip).cloned()))
+    }
+
     /// The struct checks of `SPEC.md` 10.2.
     fn check_struct(&self, keyed: &Keyed, name: &str, fields: &[&str]) -> Result<(), Error> {
         if let Some(written) = &keyed.name
-            && &**written != name
-            && Some(&**written) != self.variant
+            && let NameFit::Mismatch(message) = self.names.of_struct(name, written)
+            // It may be the name of a transparent struct around this one,
+            // which only the schema knows.
+            && self.schema_name() != NameFit::Fits
         {
-            return Err(self.error(format!("expected a `{name}`, found a `{written}`")));
+            return Err(self.error(message));
         }
         for (key, value) in &keyed.entries {
             let field = match key {
@@ -283,6 +481,14 @@ impl<'a> ValueDeserializer<'a> {
                     return Err(self
                         .child(value, PathNode::Key(self.path.clone(), key.clone()))
                         .error(format!("`{name}` has named fields; the key {i} is not one")));
+                }
+                Key::Id(id) => {
+                    return Err(self
+                        .child(value, PathNode::Key(self.path.clone(), key.clone()))
+                        .error(format!(
+                            "`{name}` has named fields; the id key `{id}` is not one: only a \
+                             map keyed by `crol::Id` takes id keys"
+                        )));
                 }
             };
             if !self.context.options.allow_unknown_fields && !fields.contains(&field.as_ref()) {
@@ -356,9 +562,10 @@ impl<'a> de::Deserializer<'a> for ValueDeserializer<'a> {
             ValueKind::Float(f) => visitor.visit_f64(*f),
             ValueKind::Char(c) => visitor.visit_char(*c),
             ValueKind::String(s) => visitor.visit_borrowed_str(s),
+            // As its text, `@` included (`SPEC.md` 10.1, 10.5).
             ValueKind::Id(id) => {
                 self.record_id(id);
-                visitor.visit_borrowed_str(id)
+                visitor.visit_string(id.to_string())
             }
             ValueKind::UnitName(name) => visitor.visit_borrowed_str(name),
             ValueKind::List(elements) | ValueKind::Tuple(elements) => {
@@ -425,9 +632,13 @@ impl<'a> de::Deserializer<'a> for ValueDeserializer<'a> {
     fn deserialize_str<V: Visitor<'a>>(self, visitor: V) -> Result<V::Value, Error> {
         match &self.value.kind {
             ValueKind::String(s) => visitor.visit_borrowed_str(s),
-            ValueKind::Id(id) => {
-                self.record_id(id);
-                visitor.visit_borrowed_str(id)
+            // A string field takes no id (`SPEC.md` 10.1).
+            ValueKind::Id(_) => {
+                return Err(self.error(format!(
+                    "expected a string, found an id; a field that takes ids is a `crol::Id`, \
+                     and a string is written `\"{}\"`",
+                    self.id_text()
+                )));
             }
             _ => return Err(self.expected("a string")),
         }
@@ -472,7 +683,8 @@ impl<'a> de::Deserializer<'a> for ValueDeserializer<'a> {
                     value: self.value,
                     context: self.context,
                     path: self.path.clone(),
-                    variant: None,
+                    place: self.place.clone(),
+                    names: self.names,
                 };
                 visitor.visit_some(inner)
             }
@@ -520,8 +732,8 @@ impl<'a> de::Deserializer<'a> for ValueDeserializer<'a> {
                 return Err(self.expected("an id (`@name`)"));
             };
             self.record_id(id);
-            let inner: de::value::BorrowedStrDeserializer<'a, Error> =
-                de::value::BorrowedStrDeserializer::new(id);
+            let inner: de::value::StringDeserializer<Error> =
+                de::value::StringDeserializer::new(id.to_string());
             return visitor
                 .visit_newtype_struct(inner)
                 .map_err(|e| self.attach(e));
@@ -536,12 +748,15 @@ impl<'a> de::Deserializer<'a> for ValueDeserializer<'a> {
                 };
                 visitor.visit_newtype_struct(inner)
             }
+            // The value itself: a type name on it may be the newtype's
+            // (`SPEC.md` 10.2).
             _ => {
                 let inner = ValueDeserializer {
                     value: self.value,
                     context: self.context,
                     path: self.path.clone(),
-                    variant: None,
+                    place: self.place.clone(),
+                    names: self.names.wrap(name, self.written()),
                 };
                 visitor.visit_newtype_struct(inner)
             }
@@ -583,7 +798,10 @@ impl<'a> de::Deserializer<'a> for ValueDeserializer<'a> {
 
     fn deserialize_map<V: Visitor<'a>>(self, visitor: V) -> Result<V::Value, Error> {
         match &self.value.kind {
-            ValueKind::Keyed(keyed) => self.map(keyed, visitor),
+            ValueKind::Keyed(keyed) => {
+                self.check_map(keyed)?;
+                self.map(keyed, visitor)
+            }
             _ => Err(self.expected("a keyed value `{ ... }`")),
         }
     }
@@ -744,7 +962,8 @@ impl<'a> MapAccess<'a> for NamedTupleMap<'_, 'a> {
 }
 
 /// A key of a keyed value (`SPEC.md` 10.1): string keys deserialize into
-/// strings, unit enum variants and `crol::Id`; integer keys into integers.
+/// strings and unit enum variants, integer keys into integers, and id keys
+/// into `crol::Id`, which takes no other key (`SPEC.md` 10.5).
 struct KeyDeserializer<'p, 'a> {
     key: &'a Key,
     /// The entry's value, for spans and paths in errors and id uses.
@@ -764,6 +983,9 @@ macro_rules! key_int {
                         "expected an integer key, found the string key {}",
                         crol_eval::quote(s)
                     ))),
+                    Key::Id(id) => Err(Error::new(format!(
+                        "expected an integer key, found the id key `{id}`"
+                    ))),
                 }
             }
         )*
@@ -780,7 +1002,24 @@ impl<'a> de::Deserializer<'a> for KeyDeserializer<'_, 'a> {
                 Ok(i) => visitor.visit_i64(i),
                 Err(_) => visitor.visit_i128(*i),
             },
+            // As its text, `@` included, like an id value (`SPEC.md` 10.5).
+            Key::Id(id) => {
+                self.at.record_key_id(id);
+                visitor.visit_string(id.to_string())
+            }
         }
+    }
+
+    fn deserialize_str<V: Visitor<'a>>(self, visitor: V) -> Result<V::Value, Error> {
+        match self.key {
+            // Only where the type is not known is an id key its text.
+            Key::Id(id) => Err(self.no_id_key("a string key", id)),
+            _ => self.deserialize_any(visitor),
+        }
+    }
+
+    fn deserialize_string<V: Visitor<'a>>(self, visitor: V) -> Result<V::Value, Error> {
+        self.deserialize_str(visitor)
     }
 
     key_int! {
@@ -802,13 +1041,28 @@ impl<'a> de::Deserializer<'a> for KeyDeserializer<'_, 'a> {
         visitor: V,
     ) -> Result<V::Value, Error> {
         match self.key {
+            // `Id` takes an id key, as its text with the `@`, and no other
+            // key (`SPEC.md` 10.5).
+            Key::Id(id) if name == ID_TOKEN => {
+                self.at.record_key_id(id);
+                visitor.visit_newtype_struct(de::value::StringDeserializer::<Error>::new(
+                    id.to_string(),
+                ))
+            }
+            Key::Str(s) if name == ID_TOKEN => {
+                let hint = IdPath::key(s.clone());
+                Err(Error::new(format!(
+                    "expected an id key, found the string key {}; write `{hint}`",
+                    Key::Str(s.clone())
+                )))
+            }
+            Key::Int(i) if name == ID_TOKEN => Err(Error::new(format!(
+                "expected an id key, found the integer key {i}"
+            ))),
             Key::Str(s) => {
-                if name == ID_TOKEN {
-                    self.at.record_id(s);
-                }
                 visitor.visit_newtype_struct(de::value::BorrowedStrDeserializer::<Error>::new(s))
             }
-            Key::Int(_) => visitor.visit_newtype_struct(self),
+            Key::Int(_) | Key::Id(_) => visitor.visit_newtype_struct(self),
         }
     }
 
@@ -825,6 +1079,7 @@ impl<'a> de::Deserializer<'a> for KeyDeserializer<'_, 'a> {
             Key::Int(i) => Err(Error::new(format!(
                 "expected a `{name}` variant as the key, found {i}"
             ))),
+            Key::Id(id) => Err(self.no_id_key(&format!("a `{name}` variant as the key"), id)),
         }
     }
 
@@ -834,8 +1089,18 @@ impl<'a> de::Deserializer<'a> for KeyDeserializer<'_, 'a> {
 
     serde::forward_to_deserialize_any! {
         <W: Visitor<'a>>
-        bool f32 f64 char str string bytes byte_buf unit unit_struct seq tuple
+        bool f32 f64 char bytes byte_buf unit unit_struct seq tuple
         tuple_struct map struct identifier ignored_any
+    }
+}
+
+impl KeyDeserializer<'_, '_> {
+    /// The error for an id key where the type takes another kind of key.
+    fn no_id_key(&self, expected: &str, id: &IdPath) -> Error {
+        Error::new(format!(
+            "expected {expected}, found the id key `{id}`; only a map keyed by `crol::Id` takes \
+             id keys"
+        ))
     }
 }
 
@@ -883,7 +1148,8 @@ impl<'a> VariantAccess<'a> for EnumDeserializer<'_, 'a> {
                 value: parent.value,
                 context: parent.context,
                 path: parent.path.clone(),
-                variant: Some(self.variant),
+                place: parent.place.clone(),
+                names: TypeNames::variant(self.variant),
             }),
             _ => Err(parent.expected(&format!("`{}(...)` with one element", self.variant))),
         }

@@ -157,8 +157,41 @@ impl Document<'_> {
                     vec![(reference.syntax().text_range(), format!("&self.{name}"))],
                 ));
             }
-        } else if message.contains("names no root key") {
-            // A misspelt id.
+        } else if message.contains("names no root key") || message.contains("` names nothing") {
+            // A misspelt id: the keys the scopes around it have.
+            let id_node = node
+                .ancestors()
+                .chain(node.descendants())
+                .find(|n| n.kind() == SyntaxKind::ID_EXPR);
+            // An id key that names nothing is an error, so the data is that
+            // of the last evaluation that gave any.
+            let of_key = match (self.snapshot, self.file, &id_node) {
+                (Some(snapshot), Some(file), Some(id_node)) => crate::features::key_id(id_node)
+                    .and_then(|(_, steps)| {
+                        let evaluation = crate::features::evaluation_for(snapshot, Some(file));
+                        let root = evaluation.value.as_ref()?;
+                        let place = crate::features::data_path_lenient(root, &steps);
+                        Some(snapshot.id_resolver_in(file, root).visible(&place))
+                    }),
+                _ => None,
+            };
+            let candidates = match (self.snapshot, self.file, &id_node) {
+                _ if of_key.is_some() => of_key.unwrap_or_default(),
+                (Some(snapshot), Some(file), Some(id_node)) => {
+                    let node = id_node
+                        .parent()
+                        .filter(|p| p.kind() == SyntaxKind::PATH_EXPR)
+                        .unwrap_or_else(|| id_node.clone());
+                    let span = crol_eval::Span::new(file, node.text_range());
+                    let keys = snapshot.visible_keys(span);
+                    if keys.is_empty() {
+                        self.root_keys()
+                    } else {
+                        keys
+                    }
+                }
+                _ => self.root_keys(),
+            };
             let id = node
                 .ancestors()
                 .chain(node.descendants())
@@ -170,7 +203,7 @@ impl Document<'_> {
                 });
             if let Some(token) = id {
                 let name = token.text().trim_matches('"');
-                for key in closest(name, &self.root_keys()) {
+                for key in closest(name, &candidates) {
                     out.push(self.rename_to(&token, &key, diagnostic));
                 }
             }

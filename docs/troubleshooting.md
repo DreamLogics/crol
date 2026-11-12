@@ -142,10 +142,37 @@ The schema's root type is an enum, so it is the type of each root value, and thi
 one is not a value of it. If the root keys are meant to be fields, build the schema
 from the struct. See [which type a document has](schemas.md#which-type-a-document-has).
 
+**`` `Scren { ... }` is not a `Screen` ``**
+
+The block goes where a `Screen` is expected, a newtype or transparent struct
+around a map, and has another type name. Fix the name, or leave it out. See
+[type names on maps and wrappers](rust.md#type-names-on-maps-and-wrappers).
+
+**`` the type name `Stats` names nothing: this is a map, which has no type name; write `{ ... }` ``**
+
+A warning: the value is a plain map, such as a `BTreeMap` field, and no type has
+that name there. The data loads. Remove the name, or make the field a type of
+its own if you want one checked.
+
 **`` ~: cannot merge `Service` with `Limits` ``**
 
 The two sides of `~` have different type names. To change a value to another
 type or enum variant, replace it with `:` instead.
+
+**`` expected an id key, found the string key web; write `@web` ``**
+
+The map is keyed by `crol::Id`, and such a map takes only
+[id keys](language.md#ids-as-keys): write `@web: 1`. The other way round,
+`` expected a string key, found the id key `@web` ``, the map has another
+key type, or the value is a struct: only a map keyed by `crol::Id` takes id
+keys.
+
+**`` the id key `@web` names no root key; an id key has to name an entry, and a key that names nothing is written as a string ``**
+
+Id keys are compared by what they name, so each has to name something in the
+data, through the [scopes](language.md#scopes) around its map. Check the
+spelling, or reach it with a path, `@group.web`. If the keys name things that
+are not in the data, the map wants `String` keys.
 
 **`+: cannot add an integer to a list`**
 

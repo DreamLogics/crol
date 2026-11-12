@@ -1,0 +1,20 @@
+// The flag on an entry's block, on a template, through a spread and `~`.
+#[scope]
++staging: { db: { host: "staging-db" }, web: { depends_on: [@db] } }
+group := { name: "g" }
+#[scope]
+template := { members: [] }
++spread: { ..&template, extra: 1 }
++merged: { a: 1 } ~ &template
++copied: &template
++gained: { x: 1 }
+#[scope]
++replaced: { x: 1 }
+#[scope]
++kept: { x: 1 }
++in_variant: { x: 1 }
++nested: {
+    #[scope]
+    inner: { y: 1 },
+    other: { ..&group },
+}

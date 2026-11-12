@@ -224,7 +224,9 @@ impl<'c> ser::Serializer for ValueSerializer<'c> {
         }
         if name == ID_TOKEN {
             return match inner.kind {
-                ValueKind::String(id) => Ok(value(ValueKind::Id(id))),
+                ValueKind::String(text) => crol_eval::IdPath::parse(&text)
+                    .map(|id| value(ValueKind::Id(id)))
+                    .map_err(Error::new),
                 _ => Err(Error::new("an id must be a string")),
             };
         }
@@ -430,6 +432,7 @@ impl<'c> MapSerializer<'c> {
             entries: self.entries,
             defaults: self.defaults,
             defaulted: Default::default(),
+            scope: false,
         })))
     }
 }
@@ -504,12 +507,13 @@ impl ser::SerializeStructVariant for MapSerializer<'_> {
     }
 }
 
-/// Map keys: strings, integers and unit variants (`SPEC.md` 3.1, 10.8).
+/// Map keys: strings, integers, unit variants and ids (`SPEC.md` 3.1,
+/// 10.8).
 struct KeySerializer;
 
 fn bad_key(kind: &str) -> Error {
     Error::new(format!(
-        "map keys must be strings, integers or unit variants; {kind} cannot be a key"
+        "map keys must be strings, integers, unit variants or ids; {kind} cannot be a key"
     ))
 }
 
@@ -617,9 +621,17 @@ impl ser::Serializer for KeySerializer {
 
     fn serialize_newtype_struct<T: Serialize + ?Sized>(
         self,
-        _: &'static str,
+        name: &'static str,
         v: &T,
     ) -> Result<Key, Error> {
+        // An `Id` is an id key, a path id as well (`SPEC.md` 10.5).
+        if name == ID_TOKEN {
+            let Key::Str(text) = v.serialize(self)? else {
+                return Err(Error::new("an id must be a string"));
+            };
+            let id = crol_eval::IdPath::parse(&text).map_err(Error::new)?;
+            return Ok(Key::Id(id));
+        }
         v.serialize(self)
     }
 

@@ -420,3 +420,59 @@ fn the_variant_of_a_root_value_comes_from_its_evaluated_value() {
     };
     assert_eq!(use_warnings(&schema, text, root), Vec::<String>::new());
 }
+
+/// A newtype around a map: its name fits a block that is one.
+#[derive(Deserialize, Serialize, Schema)]
+pub struct Counts(BTreeMap<String, u8>);
+
+/// A transparent struct around a struct.
+#[derive(Deserialize, Serialize, Schema)]
+#[serde(transparent)]
+pub struct Budget(Limits);
+
+#[derive(Deserialize, Serialize, Schema)]
+pub struct Wrapped {
+    pub counts: Counts,
+    pub budget: Budget,
+    pub plain: BTreeMap<String, u8>,
+}
+
+/// Type names through newtypes and transparent structs (`SPEC.md` 10.2).
+#[test]
+fn a_block_has_the_names_of_what_wraps_it() {
+    let schema = schema::build::<Wrapped>();
+    let problems = |text: &str| -> Vec<String> {
+        let parse = crol_syntax::parse(text);
+        assert!(parse.errors().is_empty(), "{:?}", parse.errors());
+        let mut sources = crol_eval::Sources::new();
+        let file: FileId = sources.add("a.crod", text);
+        typed::check_document(file, &parse.document(), &schema, &CheckOptions::default())
+            .into_iter()
+            .map(|d| d.message)
+            .collect()
+    };
+    let none = Vec::<String>::new();
+    assert_eq!(problems("#[type(Counts)] x := Counts { a: 1 }"), none);
+    assert_eq!(problems("#[type(Counts)] x := { a: 1 }"), none);
+    assert_eq!(
+        problems("#[type(Counts)] x := Count { a: 1 }"),
+        ["`Count { ... }` is not a `Counts`"]
+    );
+    assert_eq!(
+        problems("#[type(Counts)] x := Counts { a: -1 }"),
+        ["expected u8, found -1"]
+    );
+    assert_eq!(problems("#[type(Budget)] x := Budget { cpu: 1.0 }"), none);
+    assert_eq!(problems("#[type(Budget)] x := Limits { cpu: 1.0 }"), none);
+    assert_eq!(
+        problems("#[type(Budget)] x := Budgte { cpu: 1.0 }"),
+        ["expected a `Limits`, found a `Budgte`"]
+    );
+    // A name on a map that nothing names is a warning where the value is
+    // used, and its entries are checked all the same.
+    assert_eq!(problems("#[type(Wrapped.plain)] x := Plain { a: 1 }"), none);
+    assert_eq!(
+        problems("#[type(Wrapped.plain)] x := Plain { a: -1 }"),
+        ["expected u8, found -1"]
+    );
+}

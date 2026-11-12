@@ -16,18 +16,28 @@ finds your [project file](projects.md#how-it-is-found) by itself.
   every layer, lowest first, then the doc comment of the field, then its
   type. A struct type shows its fields, as Rust writes it. A reference shows the comments of what it names. A value inside a list or `Some(...)` has the field's doc too, and an enum
   variant has its own. A key that several operations touched lists them, with
-  their layers, below that, and a reference adds what it refers to. Without a
+  their layers, below that, and a reference adds what it refers to. An id adds
+  what it names and the scopes around it, as
+  [`crol explain`](cli.md#crol-explain) prints them. Without a
   schema, there is mostly nothing to say, and no hover. On a built-in macro, how a
   call is written and what it does.
 - **Completion**: field names, enum variants, type names, ids, variants, and
   keys after `&root.`, `&self.` and the like. It knows the type at the cursor at
   any depth: through nested blocks, lists, `Some(...)`, dotted keys and variant
   blocks.
+  After `#[` it offers `scope` and `type`, and after `#![` the document
+  attributes, each with what it does, and only those that fit there: no `type`
+  before an entry that is no value bind, no `extends` in a `.crol` file, no second
+  `schema`.
 - **Go to definition**: on keys, references, binds and ids. On a bare `&`, it
   takes you to the value below.
 - **Find references**: every operation on a key, in every layer, and every
   reference and id that names it.
-- **Rename** of binds.
+- **Rename** of binds, and of keys at any depth: every operation on the key in every
+  layer, and every reference and id that names it. Ids are found by what they
+  resolve to, so `@filter` in another [scope](language.md#scopes) stays. It is refused,
+  with the reason, where it would change what an id names, and where one id written
+  in a template names several keys.
 - **Outline and workspace symbols**.
 - **Code actions**: add missing fields, or `..`, write the values below as
   comments, and quick fixes for misspelt names.

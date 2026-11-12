@@ -1187,7 +1187,140 @@ fn entry_attribute_errors() {
             error 11..11: expected a value bind after `#[type(...)]`: `name := value`
             error 28..28: expected a field, an index or `[]` after `.`
             error 31..32: a value bind takes one `#[type(...)]`
-            error 52..57: unknown entry attribute `serde`; the only one is `type`, before a value bind
+            error 52..57: unknown entry attribute `serde`; there are `type`, before a value bind, and `scope`
         "##]],
+    );
+}
+
+#[test]
+fn id_keys() {
+    // An id as a key, in brackets, and after a dot (`SPEC.md` 3.1, 5.1).
+    check(
+        "a: { @x: 1, [@::a.b].c: 2 }\na.@x: 3",
+        expect![[r#"
+        DOCUMENT@0..35
+          ENTRY@0..27
+            TARGET@0..1
+              KEY@0..1
+                IDENT@0..1 "a"
+            COLON@1..2 ":"
+            WHITESPACE@2..3 " "
+            BLOCK@3..27
+              L_BRACE@3..4 "{"
+              WHITESPACE@4..5 " "
+              ENTRY@5..10
+                TARGET@5..7
+                  KEY@5..7
+                    ID_EXPR@5..7
+                      AT@5..6 "@"
+                      IDENT@6..7 "x"
+                COLON@7..8 ":"
+                WHITESPACE@8..9 " "
+                LITERAL@9..10
+                  INT@9..10 "1"
+              COMMA@10..11 ","
+              WHITESPACE@11..12 " "
+              ENTRY@12..25
+                TARGET@12..22
+                  KEY@12..20
+                    ACCESSOR@12..20
+                      L_BRACK@12..13 "["
+                      ID_EXPR@13..17
+                        AT@13..14 "@"
+                        COLON2@14..16 "::"
+                        IDENT@16..17 "a"
+                      FIELD_SELECTOR@17..19
+                        DOT@17..18 "."
+                        IDENT@18..19 "b"
+                      R_BRACK@19..20 "]"
+                  FIELD_SELECTOR@20..22
+                    DOT@20..21 "."
+                    IDENT@21..22 "c"
+                COLON@22..23 ":"
+                WHITESPACE@23..24 " "
+                LITERAL@24..25
+                  INT@24..25 "2"
+              WHITESPACE@25..26 " "
+              R_BRACE@26..27 "}"
+          WHITESPACE@27..28 "\n"
+          ENTRY@28..35
+            TARGET@28..32
+              KEY@28..29
+                IDENT@28..29 "a"
+              FIELD_SELECTOR@29..32
+                DOT@29..30 "."
+                ID_EXPR@30..32
+                  AT@30..31 "@"
+                  IDENT@31..32 "x"
+            COLON@32..33 ":"
+            WHITESPACE@33..34 " "
+            LITERAL@34..35
+              INT@34..35 "3"
+    "#]],
+    );
+}
+
+#[test]
+fn an_id_key_has_a_name_and_only_keys() {
+    check(
+        "a: { @: 1 }",
+        expect![[r#"
+        DOCUMENT@0..11
+          ENTRY@0..11
+            TARGET@0..1
+              KEY@0..1
+                IDENT@0..1 "a"
+            COLON@1..2 ":"
+            WHITESPACE@2..3 " "
+            BLOCK@3..11
+              L_BRACE@3..4 "{"
+              WHITESPACE@4..5 " "
+              ENTRY@5..9
+                TARGET@5..6
+                  KEY@5..6
+                    ID_EXPR@5..6
+                      AT@5..6 "@"
+                COLON@6..7 ":"
+                WHITESPACE@7..8 " "
+                LITERAL@8..9
+                  INT@8..9 "1"
+              WHITESPACE@9..10 " "
+              R_BRACE@10..11 "}"
+        error 6..6: expected a name or string after `@`
+    "#]],
+    );
+    check(
+        "a: { [@x.0]: 1 }",
+        expect![[r#"
+        DOCUMENT@0..16
+          ENTRY@0..16
+            TARGET@0..1
+              KEY@0..1
+                IDENT@0..1 "a"
+            COLON@1..2 ":"
+            WHITESPACE@2..3 " "
+            BLOCK@3..16
+              L_BRACE@3..4 "{"
+              WHITESPACE@4..5 " "
+              ENTRY@5..14
+                TARGET@5..11
+                  KEY@5..11
+                    ACCESSOR@5..11
+                      L_BRACK@5..6 "["
+                      ID_EXPR@6..8
+                        AT@6..7 "@"
+                        IDENT@7..8 "x"
+                      ERROR@8..10
+                        DOT@8..9 "."
+                        INT@9..10 "0"
+                      R_BRACK@10..11 "]"
+                COLON@11..12 ":"
+                WHITESPACE@12..13 " "
+                LITERAL@13..14
+                  INT@13..14 "1"
+              WHITESPACE@14..15 " "
+              R_BRACE@15..16 "}"
+        error 8..9: unexpected `.`
+    "#]],
     );
 }

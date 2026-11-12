@@ -20,12 +20,12 @@ use crate::cond::Cond;
 use crate::ir::*;
 use crate::lower::LoweredData;
 use crate::source::{FileId, Sources, Span};
-use crate::value::Key;
+use crate::value::{IdPath, Key};
 
 const MAGIC: &[u8; 4] = b"CROB";
 
 /// The version of the format: files of another are refused, and made again.
-pub const FORMAT: u32 = 6;
+pub const FORMAT: u32 = 8;
 
 /// The magic, the format, the hash of the rest of the file, the hash of the
 /// documents and the size of what is compressed.
@@ -127,6 +127,19 @@ impl Writer<'_> {
                 self.out.push(1);
                 self.string(s);
             }
+            Key::Id(id) => {
+                self.out.push(2);
+                self.id_path(id);
+            }
+        }
+    }
+
+    /// An id as written: whether it starts from the root, and its keys.
+    fn id_path(&mut self, id: &IdPath) {
+        self.flag(id.is_rooted());
+        self.uint(id.keys().len() as u64);
+        for key in id.keys() {
+            self.string(key);
         }
     }
 
@@ -144,6 +157,10 @@ impl Writer<'_> {
             SelectorKind::Accessor(i) => {
                 self.out.push(2);
                 self.int(*i);
+            }
+            SelectorKind::Id(id) => {
+                self.out.push(4);
+                self.id_path(id);
             }
             SelectorKind::Context(changes) => {
                 self.out.push(3);
@@ -225,9 +242,9 @@ impl Writer<'_> {
                 self.out.push(5);
                 self.string(s);
             }
-            ExprKind::Id(s) => {
+            ExprKind::Id(id) => {
                 self.out.push(6);
-                self.string(s);
+                self.id_path(id);
             }
             ExprKind::Ref(kind) => {
                 self.out.push(7);
@@ -265,6 +282,10 @@ impl Writer<'_> {
             }
             ExprKind::Not(operand) => {
                 self.out.push(18);
+                self.id(*operand);
+            }
+            ExprKind::Scope(operand) => {
+                self.out.push(19);
                 self.id(*operand);
             }
             ExprKind::Binary(op, lhs, rhs) => {
@@ -314,6 +335,7 @@ impl Writer<'_> {
         self.ids(&block.spreads);
         self.list(&block.entries, Self::entry);
         self.flag(block.defaults);
+        self.flag(block.scope);
         self.ids(&block.value_binds);
     }
 
@@ -368,9 +390,12 @@ pub(crate) fn write_lowered(lowered: &LoweredData, files: &[FileId]) -> Vec<u8> 
         strings: IndexSet::new(),
         files: &index,
     };
-    w.list(&lowered.ir.exprs, Writer::expr);
-    w.list(&lowered.ir.blocks, Writer::block);
-    w.list(&lowered.ir.value_binds, |w, bind| {
+    let exprs: Vec<&Expr> = lowered.ir.exprs.iter().collect();
+    w.list(&exprs, |w, expr| w.expr(expr));
+    let blocks: Vec<&Block> = lowered.ir.blocks.iter().collect();
+    w.list(&blocks, |w, block| w.block(block));
+    let binds: Vec<&ValueBind> = lowered.ir.value_binds.iter().collect();
+    w.list(&binds, |w, bind| {
         w.string(&bind.name);
         w.id(bind.expr);
     });
@@ -514,6 +539,7 @@ pub fn read_layer(bytes: &[u8]) -> Result<BinaryLayer, String> {
 }
 
 /// What a layer lowered ahead of time adds to the IR.
+#[derive(Debug, Clone)]
 pub(crate) struct Part {
     pub(crate) ops: Vec<RootOp>,
     pub(crate) templates: Vec<BindId>,
@@ -639,8 +665,18 @@ impl Reader<'_> {
         match self.byte()? {
             0 => self.int().map(Key::Int),
             1 => self.string().map(Key::Str),
+            2 => self.id_path().map(Key::Id),
             _ => Err(Corrupt),
         }
+    }
+
+    fn id_path(&mut self) -> Read<IdPath> {
+        let rooted = self.flag()?;
+        let count = self.count()?;
+        let keys = (0..count)
+            .map(|_| self.string())
+            .collect::<Read<Vec<_>>>()?;
+        IdPath::new(rooted, keys).ok_or(Corrupt)
     }
 
     fn selector(&mut self) -> Read<Selector> {
@@ -650,6 +686,7 @@ impl Reader<'_> {
             1 => SelectorKind::Element(self.id()?),
             2 => SelectorKind::Accessor(self.int()?),
             3 => SelectorKind::Context(self.list(|r| Ok((r.string()?, r.flag()?, r.span()?)))?),
+            4 => SelectorKind::Id(self.id_path()?),
             _ => return Err(Corrupt),
         };
         Ok(Selector {
@@ -721,7 +758,7 @@ impl Reader<'_> {
                 ExprKind::Char(char::from_u32(c).ok_or(Corrupt)?)
             }
             5 => ExprKind::Str(self.string()?),
-            6 => ExprKind::Id(self.string()?),
+            6 => ExprKind::Id(self.id_path()?),
             7 => ExprKind::Ref(self.reference()?),
             8 => ExprKind::Block(self.id()?.saturating_add(self.blocks)),
             9 => ExprKind::List(self.expr_ids()?),
@@ -761,6 +798,7 @@ impl Reader<'_> {
             }
             17 => ExprKind::Error,
             18 => ExprKind::Not(self.expr_id()?),
+            19 => ExprKind::Scope(self.expr_id()?),
             _ => return Err(Corrupt),
         };
         Ok(Expr {
@@ -798,6 +836,7 @@ impl Reader<'_> {
             spreads: self.expr_ids()?,
             entries: self.list(Self::entry)?,
             defaults: self.flag()?,
+            scope: self.flag()?,
             value_binds: self.list(Self::bind_id)?,
         })
     }
@@ -971,9 +1010,10 @@ fn check(ir: &Ir, first_expr: usize, first_block: usize, first_bind: usize) -> R
                     holds(item)?;
                 }
             }
-            ExprKind::Path(child, _) | ExprKind::Neg(child) | ExprKind::Not(child) => {
-                holds(*child)?
-            }
+            ExprKind::Path(child, _)
+            | ExprKind::Neg(child)
+            | ExprKind::Not(child)
+            | ExprKind::Scope(child) => holds(*child)?,
             ExprKind::Binary(_, lhs, rhs) => {
                 holds(*lhs)?;
                 holds(*rhs)?;
@@ -991,7 +1031,7 @@ fn check(ir: &Ir, first_expr: usize, first_block: usize, first_bind: usize) -> R
         }
         depths[id - first_expr] = depth;
     }
-    for bind in &ir.value_binds[first_bind..] {
+    for bind in ir.value_binds.iter().skip(first_bind) {
         if !(first_expr..ir.exprs.len()).contains(&bind.expr) {
             return Err(Corrupt);
         }
