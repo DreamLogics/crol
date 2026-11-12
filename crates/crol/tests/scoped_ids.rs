@@ -370,7 +370,7 @@ struct NewtypeScreen(BTreeMap<String, Node>);
 #[test]
 fn newtypes_and_transparent_structs_can_be_scopes() {
     let text = r#"
-        dashboard: Screen {
+        dashboard: NodeScreen {
             layout: Stack { children: [(Length(1), @filter), (Fill(1), @list)] },
             +filter: TextInput { placeholder: "Filter workers" },
             +list: List { vim_keys: true },
@@ -398,5 +398,198 @@ fn newtypes_and_transparent_structs_can_be_scopes() {
         assert_eq!(targets(&ids), ["@filter -> settings.filter"]);
     }
     check::<NodeScreen>(text);
-    check::<NewtypeScreen>(&text.replace("Screen {", "NewtypeScreen {"));
+    check::<NewtypeScreen>(&text.replace("NodeScreen {", "NewtypeScreen {"));
+}
+
+// ---- The scopes an id is looked up in (`IdResolver::scopes`) ----
+
+/// The root that `text`, a data document, evaluates to.
+fn evaluate(text: &str) -> crol_eval::Value {
+    let mut sources = crol_eval::Sources::new();
+    let file = sources.add("a.crod".to_owned(), text);
+    let layers = [crol_eval::Layer {
+        name: "base".to_owned(),
+        documents: vec![("a.crod".to_owned(), file)],
+    }];
+    let evaluation = crol_eval::evaluate_data(&sources, &layers, &Default::default());
+    assert!(!evaluation.has_errors(), "{:?}", evaluation.diagnostics);
+    evaluation.value.unwrap()
+}
+
+/// A line for each chain: where the id is, then the chain as text.
+fn lines(chains: &[crol::ScopeChain]) -> String {
+    chains
+        .iter()
+        .map(|chain| format!("{}: {chain}\n", chain.place()))
+        .collect()
+}
+
+fn key(name: &str) -> crol::DataStep {
+    crol::DataStep::Key(crol_eval::Key::Str(name.into()))
+}
+
+const NESTED: &str = r#"
++filter: 1,
++web: { port: 80 },
+#[scope]
++dashboard: {
+    filter: 2,
+    list: 3,
+    #[scope]
+    panel: { filter: 4, ids: [@filter, @list, @web, @nope] },
+    paths: (@web.port, @web.nope, @::filter, @::nope, @::dashboard.panel.filter, @"odd key"),
+},
+"#;
+
+#[test]
+fn the_scopes_of_an_id_innermost_first() {
+    let root = evaluate(NESTED);
+    let resolver = crol::IdResolver::new(&root);
+    let location = DataPath::new([
+        key("dashboard"),
+        key("panel"),
+        key("ids"),
+        crol::DataStep::Index(0),
+    ]);
+    let chain = resolver.scopes(&Id::key("filter"), &location);
+    assert_eq!(
+        chain.target,
+        resolver.resolve(&Id::key("filter"), &location)
+    );
+    assert_eq!(
+        chain.target.as_ref().unwrap().to_string(),
+        "dashboard.panel.filter"
+    );
+    assert_eq!(chain.problem, None);
+    let scopes: Vec<_> = chain
+        .scopes
+        .iter()
+        .map(|scope| (scope.path.to_string(), scope.kind, scope.has_key))
+        .collect();
+    assert_eq!(
+        scopes,
+        [
+            ("dashboard.panel".to_owned(), crol::ScopeKind::Flag, true),
+            ("dashboard".to_owned(), crol::ScopeKind::Flag, true),
+            (String::new(), crol::ScopeKind::Root, true),
+        ]
+    );
+    assert_eq!(chain.found, Some(0));
+    assert_eq!(chain.found().unwrap().path.to_string(), "dashboard.panel");
+
+    // One that only the outer scope has, and one that none has.
+    let chain = resolver.scopes(&Id::key("list"), &location);
+    assert_eq!(chain.found, Some(1));
+    let chain = resolver.scopes(&Id::key("nope"), &location);
+    assert_eq!((chain.found, chain.target.clone()), (None, None));
+    assert!(chain.problem.is_some());
+    assert!(chain.scopes.iter().all(|scope| !scope.has_key));
+
+    // From the root, only the root is asked.
+    let rooted: Id = "@::filter".parse().unwrap();
+    let chain = resolver.scopes(&rooted, &location);
+    assert_eq!(chain.found, Some(2));
+    assert_eq!(chain.target.unwrap().to_string(), "filter");
+}
+
+#[test]
+fn shadowing_unresolved_and_path_ids_as_text() {
+    let root = evaluate(NESTED);
+    let chains = crol::IdResolver::new(&root).chains();
+    expect_test::expect![[r#"
+        dashboard.panel.ids[0]: the id `@filter` names `dashboard.panel.filter`; scopes: `dashboard.panel` (`#[scope]`, has `filter`), `dashboard` (`#[scope]`, has `filter`, shadowed), the root (has `filter`, shadowed)
+        dashboard.panel.ids[1]: the id `@list` names `dashboard.list`; scopes: `dashboard.panel` (`#[scope]`, no `list`), `dashboard` (`#[scope]`, has `list`), the root (no `list`)
+        dashboard.panel.ids[2]: the id `@web` names `web`; scopes: `dashboard.panel` (`#[scope]`, no `web`), `dashboard` (`#[scope]`, no `web`), the root (has `web`)
+        dashboard.panel.ids[3]: the id `@nope` names nothing; scopes: `dashboard.panel` (`#[scope]`, no `nope`), `dashboard` (`#[scope]`, no `nope`), the root (no `nope`)
+        dashboard.paths.0: the id `@web.port` names `web.port`; scopes: `dashboard` (`#[scope]`, no `web`), the root (has `web`)
+        dashboard.paths.1: the id `@web.nope` names nothing: `web` has no key `nope`; scopes: `dashboard` (`#[scope]`, no `web`), the root (has `web`)
+        dashboard.paths.2: the id `@::filter` names `filter`; scopes: `dashboard` (`#[scope]`, passed by `::`), the root (has `filter`)
+        dashboard.paths.3: the id `@::nope` names nothing; scopes: `dashboard` (`#[scope]`, passed by `::`), the root (no `nope`)
+        dashboard.paths.4: the id `@::dashboard.panel.filter` names `dashboard.panel.filter`; scopes: `dashboard` (`#[scope]`, passed by `::`), the root (has `dashboard`)
+        dashboard.paths.5: the id `@"odd key"` names nothing; scopes: `dashboard` (`#[scope]`, no `"odd key"`), the root (no `"odd key"`)
+    "#]].assert_eq(&lines(&chains));
+}
+
+#[test]
+fn the_ids_within_a_place() {
+    let root = evaluate(NESTED);
+    let resolver = crol::IdResolver::new(&root);
+    let place = DataPath::new([key("dashboard"), key("panel")]);
+    let within = resolver.within(&place);
+    let ids: Vec<String> = within.ids().iter().map(|id| id.id.to_string()).collect();
+    assert_eq!(ids, ["@filter", "@list", "@web", "@nope"]);
+    assert_eq!(within.chains().len(), 4);
+    // The place itself, when it is an id; `linked` only starts alike.
+    let root = evaluate("+web: 1,\n+link: @web,\n+linked: @web,\n");
+    let place = DataPath::new([key("link")]);
+    let chains = crol::IdResolver::new(&root).within(&place).chains();
+    expect_test::expect![[r#"
+        link: the id `@web` names `web`; scopes: the root (has `web`)
+    "#]]
+    .assert_eq(&lines(&chains));
+}
+
+#[test]
+fn a_scope_says_whether_the_data_or_the_schema_makes_it_one() {
+    // `settings` has the flag as well, which is what counts: a loader needs
+    // no schema for it. Without the schema, `dashboard` is no scope.
+    let text = r#"
+        +filter: { placeholder: "root" },
+        dashboard: Screen {
+            layout: Stack { children: [(Length(1), @filter), (Fill(1), @list)] },
+            +filter: TextInput { placeholder: "Filter" },
+        }
+        #[scope]
+        settings: Screen {
+            layout: Stack { children: [(Length(1), @filter)] },
+            +filter: TextInput { placeholder: "Search" },
+        }
+    "#;
+    let root = evaluate(text);
+    let schema = crol::schema::build::<BTreeMap<String, Screen>>();
+    let typed = crol::IdResolver::new(&root).schema(&schema).chains();
+    expect_test::expect![[r#"
+        dashboard.layout.children[0].1: the id `@filter` names `dashboard.filter`; scopes: `dashboard` (`#[crol(scope)]`, has `filter`), the root (has `filter`, shadowed)
+        dashboard.layout.children[1].1: the id `@list` names nothing; scopes: `dashboard` (`#[crol(scope)]`, no `list`), the root (no `list`)
+        settings.layout.children[0].1: the id `@filter` names `settings.filter`; scopes: `settings` (`#[scope]`, has `filter`), the root (has `filter`, shadowed)
+    "#]].assert_eq(&lines(&typed));
+    let plain = crol::IdResolver::new(&root).chains();
+    expect_test::expect![[r#"
+        dashboard.layout.children[0].1: the id `@filter` names `filter`; scopes: the root (has `filter`)
+        dashboard.layout.children[1].1: the id `@list` names nothing; scopes: the root (no `list`)
+        settings.layout.children[0].1: the id `@filter` names `settings.filter`; scopes: `settings` (`#[scope]`, has `filter`), the root (has `filter`, shadowed)
+    "#]].assert_eq(&lines(&plain));
+}
+
+#[test]
+fn id_keys_have_their_scopes_at_the_map() {
+    // An id key resolves at its map's place, and is written at its entry's.
+    let text = r#"
++db: 0,
+#[scope]
++screen: {
+    db: 1,
+    weights: { @db: 2, @::db: 3, inner: [@db] },
+},
+"#;
+    let root = evaluate(text);
+    let chains = crol::IdResolver::new(&root).chains();
+    expect_test::expect![[r#"
+        screen.weights[@db]: the id `@db` names `screen.db`; scopes: `screen` (`#[scope]`, has `db`), the root (has `db`, shadowed)
+        screen.weights[@::db]: the id `@::db` names `db`; scopes: `screen` (`#[scope]`, passed by `::`), the root (has `db`)
+        screen.weights.inner[0]: the id `@db` names `screen.db`; scopes: `screen` (`#[scope]`, has `db`), the root (has `db`, shadowed)
+    "#]].assert_eq(&lines(&chains));
+    assert_eq!(
+        chains.iter().map(|chain| chain.is_key).collect::<Vec<_>>(),
+        [true, true, false]
+    );
+    // Within the map, its keys; within one entry, its key only.
+    let resolver = crol::IdResolver::new(&root);
+    let map = DataPath::new([key("screen"), key("weights")]);
+    assert_eq!(resolver.within(&map).chains().len(), 3);
+    let entry = chains[0].place();
+    let found = resolver.within(&entry).chains();
+    expect_test::expect![[r#"
+        screen.weights[@db]: the id `@db` names `screen.db`; scopes: `screen` (`#[scope]`, has `db`), the root (has `db`, shadowed)
+    "#]].assert_eq(&lines(&found));
 }

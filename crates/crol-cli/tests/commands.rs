@@ -404,6 +404,61 @@ fn warnings_do_not_fail_a_command() {
     assert!(stdout(&output).contains("replicas: 3"), "{output:?}");
 }
 
+/// Type names where serde gives the loader none (`SPEC.md` 10.2): a
+/// transparent struct around a map has its name, and a map has none.
+#[test]
+fn check_reports_type_names_on_maps() {
+    let schema = r#"Schema {
+        format: 1,
+        root: "app::App",
+        types: {
+            "app::App": Struct {
+                name: "App",
+                source: ("src/lib.rs", 1),
+                fields: {
+                    screen: { ty: Named("app::Screen"), .. },
+                    stats: { ty: Map(String, U32), .. },
+                },
+                ..
+            },
+            "app::Screen": Transparent {
+                name: "Screen",
+                source: ("src/lib.rs", 2),
+                inner: Map(String, U32),
+                ..
+            },
+        },
+    }"#;
+    let dir = tree(
+        "type-names-on-maps",
+        &[
+            ("schema.crol", schema),
+            ("good.crod", "screen: Screen { a: 1 }\nstats: { a: 1 }\n"),
+            ("bad.crod", "screen: Scren { a: 1 }\nstats: { a: 1 }\n"),
+            (
+                "warned.crod",
+                "screen: Screen { a: 1 }\nstats: Stats { a: 1 }\n",
+            ),
+        ],
+    );
+    let check = |file| crol(&dir, &["check", file, "--schema", "schema.crol"]);
+    let output = check("good.crod");
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(stderr(&output), "");
+    let output = check("bad.crod");
+    assert!(failed(&output), "{output:?}");
+    assert!(
+        stderr(&output).contains("error: `Scren { ... }` is not a `Screen`"),
+        "{output:?}"
+    );
+    let output = check("warned.crod");
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        stderr(&output).contains("warning: the type name `Stats` names nothing"),
+        "{output:?}"
+    );
+}
+
 // ---- Layers and keys (`SPEC.md` 11) ----
 
 const PROJECT: &str = "Project { layers: List([{ name: \"base\", dir: \"data\", .. }]), .. }";
@@ -561,4 +616,144 @@ fn check_reports_what_does_not_fit_a_type_attribute() {
     // Without a schema, the attribute changes nothing.
     let output = crol(&dir, &["check", "bad.crod"]);
     assert!(output.status.success(), "{output:?}");
+}
+
+// ---- `explain` and the scopes of ids (`SPEC.md` 3.2, 11) ----
+
+const SCREEN_SCHEMA: &str = r#"Schema {
+    format: 1,
+    root: "app::Screens",
+    types: {
+        "app::Screens": Transparent {
+            name: "Screens",
+            source: ("src/lib.rs", 2),
+            inner: Map(String, Named("app::Screen")),
+            ..
+        },
+        "app::Screen": Struct {
+            name: "Screen",
+            source: ("src/lib.rs", 1),
+            fields: { layout: { ty: Any, .. }, filter: { ty: Any, .. } },
+            scope: true,
+            ..
+        },
+    },
+}"#;
+
+const SCREENS: &str = r#"+filter: Screen { layout: [], filter: 0 },
++dashboard: Screen {
+    layout: [@filter, @nope, @::filter, @settings.filter, @settings.nope],
+    filter: 1,
+},
+#[scope]
++settings: {
+    layout: { first: @filter, second: @dashboard },
+    filter: @::settings,
+},
+settings<prod>.filter: @dashboard.filter,
++port: 80,
+"#;
+
+#[test]
+fn explain_says_which_scope_an_id_resolved_in() {
+    let dir = tree(
+        "explain-ids",
+        &[
+            ("schema.crol", SCREEN_SCHEMA),
+            ("ui.crod", SCREENS),
+            (
+                "keys.crod",
+                "+armored: 0\n#[scope]\n+marine: { armored: 1, bonus: { @armored: 1.0, @::armored: 2.0 } }\n",
+            ),
+        ],
+    );
+    let explain = |arguments: &[&str]| {
+        let output = crol(
+            &dir,
+            &[&["explain", "--group", "dev,prod"], arguments].concat(),
+        );
+        assert!(output.status.success(), "{arguments:?}: {output:?}");
+        stdout(&output)
+    };
+
+    // A value that holds several ids: one line for each, with the scopes
+    // innermost first. Without the schema, only `#[scope]` makes one.
+    expect_test::expect![[r#"
+        dashboard.layout:
+          ui.crod:2:2  +dashboard  definition  [@filter, @nope, @::filter, @settings.filter, @settings.nope]
+        ids:
+          dashboard.layout[0]  the id `@filter` names `filter`; scopes: the root (has `filter`)
+          dashboard.layout[1]  the id `@nope` names nothing; scopes: the root (no `nope`)
+          dashboard.layout[2]  the id `@::filter` names `filter`; scopes: the root (has `filter`)
+          dashboard.layout[3]  the id `@settings.filter` names `settings.filter`; scopes: the root (has `settings`)
+          dashboard.layout[4]  the id `@settings.nope` names nothing: `settings` has no key `nope`; scopes: the root (has `settings`)
+    "#]].assert_eq(&explain(&["ui.crod", "dashboard.layout"]));
+    // With it, a `Screen` is one too.
+    expect_test::expect![[r#"
+        dashboard.layout:
+          ui.crod:2:2  +dashboard  definition  [@filter, @nope, @::filter, @settings.filter, @settings.nope]
+        ids:
+          dashboard.layout[0]  the id `@filter` names `dashboard.filter`; scopes: `dashboard` (`#[crol(scope)]`, has `filter`), the root (has `filter`, shadowed)
+          dashboard.layout[1]  the id `@nope` names nothing; scopes: `dashboard` (`#[crol(scope)]`, no `nope`), the root (no `nope`)
+          dashboard.layout[2]  the id `@::filter` names `filter`; scopes: `dashboard` (`#[crol(scope)]`, passed by `::`), the root (has `filter`)
+          dashboard.layout[3]  the id `@settings.filter` names `settings.filter`; scopes: `dashboard` (`#[crol(scope)]`, no `settings`), the root (has `settings`)
+          dashboard.layout[4]  the id `@settings.nope` names nothing: `settings` has no key `nope`; scopes: `dashboard` (`#[crol(scope)]`, no `settings`), the root (has `settings`)
+    "#]].assert_eq(&explain(&[
+        "--schema",
+        "schema.crol",
+        "ui.crod",
+        "dashboard.layout",
+    ]));
+    // One element of it.
+    expect_test::expect![[r#"
+        dashboard.layout[1]:
+          ui.crod:2:2  +dashboard  definition  @nope
+        ids:
+          dashboard.layout[1]  the id `@nope` names nothing; scopes: `dashboard` (`#[crol(scope)]`, no `nope`), the root (no `nope`)
+    "#]].assert_eq(&explain(&[
+        "--schema",
+        "schema.crol",
+        "ui.crod",
+        "dashboard.layout[1]",
+    ]));
+    // A scope from `#[scope]`, and a value that is an id, in each context.
+    expect_test::expect![[r#"
+        settings.layout:
+          ui.crod:7:2  +settings  definition  {first: @filter, second: @dashboard}
+        ids:
+          settings.layout.first   the id `@filter` names `settings.filter`; scopes: `settings` (`#[scope]`, has `filter`), the root (has `filter`, shadowed)
+          settings.layout.second  the id `@dashboard` names `dashboard`; scopes: `settings` (`#[scope]`, no `dashboard`), the root (has `dashboard`)
+    "#]].assert_eq(&explain(&["ui.crod", "settings.layout"]));
+    expect_test::expect![[r#"
+        settings.filter:
+          ui.crod:7:2  +settings  definition  @::settings
+        ids:
+          settings.filter  the id `@::settings` names `settings`; scopes: `settings` (`#[scope]`, passed by `::`), the root (has `settings`)
+    "#]].assert_eq(&explain(&["ui.crod", "settings.filter"]));
+    expect_test::expect![[r#"
+        settings.filter in {prod}:
+          ui.crod:7:2   +settings              definition  @::settings
+          ui.crod:11:1  settings<prod>.filter  patch       @dashboard.filter
+        ids:
+          settings.filter  the id `@dashboard.filter` names `dashboard.filter`; scopes: `settings` (`#[scope]`, no `dashboard`), the root (has `dashboard`)
+    "#]].assert_eq(&explain(&[
+        "--context",
+        "prod",
+        "ui.crod",
+        "settings.filter",
+    ]));
+    // Id keys, at their entries, resolved at their map.
+    expect_test::expect![[r#"
+        marine.bonus:
+          keys.crod:3:2  +marine  definition  {@armored: 1.0, @::armored: 2.0}
+        ids:
+          marine.bonus[@armored]    the id `@armored` names `marine.armored`; scopes: `marine` (`#[scope]`, has `armored`), the root (has `armored`, shadowed)
+          marine.bonus[@::armored]  the id `@::armored` names `armored`; scopes: `marine` (`#[scope]`, passed by `::`), the root (has `armored`)
+    "#]].assert_eq(&explain(&["keys.crod", "marine.bonus"]));
+    // Nothing more where there is no id.
+    expect_test::expect![[r#"
+        port:
+          ui.crod:12:2  +port  definition  80
+    "#]]
+    .assert_eq(&explain(&["ui.crod", "port"]));
 }

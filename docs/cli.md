@@ -225,6 +225,29 @@ web.replicas in {prod}:
 `--context a,b` chooses the context. In a project the layers can be left out, as
 for `crol eval`: `crol explain web.port`. The key is required.
 
+An [id](language.md#scopes) has no operations of its own to show. What you want
+to know of one is which scope it resolved in, as an inner key may shadow an outer
+one. So where the value is an id, or holds ids, `crol explain` adds a line for
+each:
+
+```console
+$ crol explain ui.crod dashboard.layout
+dashboard.layout:
+  ui.crod:3:2  +dashboard  definition  [@filter, @sidebar, @nope]
+ids:
+  dashboard.layout[0]  the id `@filter` names `dashboard.filter`; scopes: `dashboard` (`#[scope]`, has `filter`), the root (has `filter`, shadowed)
+  dashboard.layout[1]  the id `@sidebar` names `sidebar`; scopes: `dashboard` (`#[scope]`, no `sidebar`), the root (has `sidebar`)
+  dashboard.layout[2]  the id `@nope` names nothing; scopes: `dashboard` (`#[scope]`, no `nope`), the root (no `nope`)
+```
+
+Each line says where the id is and what it names, then the scopes around it, from
+the innermost to the root. The first scope that has the key is the one the id
+resolved in, and an outer one that has it too is `shadowed`. A scope is marked
+`#[scope]` when the data makes it one, and `#[crol(scope)]` when its type in the
+schema does. `crol explain` reads the schema for this only, and checks nothing
+against it. For `@::filter`, which asks the root only, the other scopes say
+`passed by ::`.
+
 ## `crol fingerprint`
 
 Prints a hash of all evaluated data, in every context:

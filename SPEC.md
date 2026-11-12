@@ -2289,11 +2289,11 @@ and a `Serializer` that writes plain value documents.
 | `option` | `None` → none; `Some(x)` → some(`x`); any other value → some(value) if `implicit_some` (default on) |
 | `unit` | `()` |
 | `unit_struct` | the struct's name, or `()` |
-| `newtype_struct` | `Name(x)` or `x` |
+| `newtype_struct` | `Name(x)` or `x`; a keyed `x` may have the type name `Name` (section 10.2) |
 | `seq` | list |
 | `tuple` | tuple |
 | `tuple_struct` | `Name(a, b)` or `(a, b)` |
-| `map` | keyed value. String keys deserialize into strings, unit enum variants (by name) and newtypes of these; integer keys into integer types; id keys into `crol::Id` and newtypes of it, which take no other key (section 10.5) |
+| `map` | keyed value. String keys deserialize into strings, unit enum variants (by name) and newtypes of these; integer keys into integer types; id keys into `crol::Id` and newtypes of it, which take no other key (section 10.5). A type name on it is checked against what wraps it (section 10.2) |
 | `struct` | keyed value whose keys are all strings (section 10.2) |
 | `enum` | `V`, `V(x)`, `V(a, b)`, `V { ... }` (section 10.4) |
 | `identifier` | field and variant names |
@@ -2305,8 +2305,9 @@ and a `Serializer` that writes plain value documents.
 For `deserialize_struct(name, fields, visitor)` the deserializer checks:
 
 - **Type name.** If the keyed value has one, it must equal `name` (the
-  Rust name after `#[serde(rename)]`), or the enclosing newtype
-  variant's name (section 10.4).
+  Rust name after `#[serde(rename)]`), the enclosing newtype variant's
+  name (section 10.4), or the name of a newtype or transparent struct
+  around the struct (below).
 - **String keys.** An integer key is an error.
 - **Unknown fields.** A key not in `fields` is an error, unless
   `CrolConfig::allow_unknown_fields`.
@@ -2327,7 +2328,59 @@ whatever it does not change.
 
 `#[serde(flatten)]` makes serde request a map instead of a struct. This
 works, since every keyed value deserializes as a map, but the struct
-checks above then do not apply to that struct.
+checks above then do not apply to that struct, except, with a schema, the
+one of its type name (below).
+
+**Type names on other keyed values.** A keyed value also becomes a map, a
+newtype around one or a `#[serde(transparent)]` struct around one, and a
+struct may be inside such wrappers. Its type name, if it has one, must be
+one of the names its type has at that place: the names of the newtypes and
+transparent structs around it, each the Rust name after `#[serde(rename)]`,
+and for a struct its own. In `Name(x)` the newtype is written out, and `x`
+is what it wraps, with the names that has. What can be checked depends on
+what serde tells the deserializer:
+
+| Rust type | serde gives | A type name is checked |
+|---|---|---|
+| struct, struct variant | the struct's name | always (above) |
+| newtype `struct N(T)` | `deserialize_newtype_struct("N")` | always: `N`, or a name `T` has |
+| `#[serde(transparent)] struct N(T)` | nothing: it forwards to `T` | with a schema: `N`, or a name `T` has. Without one, as for `T` alone |
+| `BTreeMap`, `HashMap`, other maps | nothing | with a schema, where nothing around it names it either: a warning |
+
+```rust
+#[derive(Deserialize, crol::Schema)]
+struct NodeScreen(BTreeMap<String, Node>);
+```
+
+```rust
+dashboard: NodeScreen { +filter: TextInput { placeholder: "Filter" } },
+settings: { +filter: TextInput { placeholder: "Search" } },   // the name is optional
+dashbaord: Scren { +list: List { vim_keys: true } },   // error: `Scren { ... }` is not a `NodeScreen`
+```
+
+- **A newtype** needs no schema. A name that is not the newtype's goes on
+  to what it wraps: a struct checks it as its own name, and for a map it is
+  the error above. Serde asks for a struct with `#[serde(flatten)]` as a
+  map too, so without a schema such a struct inside a newtype takes the
+  newtype's name only.
+- **With a schema** given to the composer (`CrolComposer::schema`, section
+  10.9), the deserializer knows the type at every place of the data it
+  loads from that composer (`compose`, `get`, `get_in`, `get_with_ids`,
+  `deserialize_root`), counted from the schema's root type as for scopes
+  (sections 4.1, 10.5), and compares
+  a block's type name with the type there, through `Option`, newtypes and
+  transparent structs. This is how the name of a transparent struct is
+  checked, and that of a struct with a flattened field. An enum's variants
+  name its values, and are checked as section 10.4 says. `crol::check`
+  and tools check the same with the schema alone, and report the same
+  errors.
+- **A map that nothing names**, such as a field `stats: BTreeMap<String,
+  u32>` written `stats: Stats { ... }`: the name names no type. It loads,
+  and with a schema it is a warning, "the type name `Stats` names nothing:
+  this is a map, which has no type name", in `CrolData::warnings()`, from
+  `crol::check` and in tools. Without a schema nothing tells a map from a
+  transparent struct around one, and nothing is said. A later version may
+  make this an error.
 
 **A struct at the root.** The root of layered data deserialized as a struct,
 with `compose::<T>()` or `deserialize_root`, is a keyed value with no type
@@ -2557,7 +2610,15 @@ the first id that resolves only through such a type.
 
 **For tools,** `crol::IdResolver::new(&root).schema(&schema)` resolves the
 ids of evaluated data as the loader does, and `crol::check_ids` reports
-them.
+them. `.within(&path)` keeps to the ids at a place or in what is there.
+`scopes(&id, &location)` returns a `ScopeChain`: what the id names, and
+each `IdScope` around it, innermost first, with its place, whether it has
+the id's first key, and its `ScopeKind`: `Root`, `Flag` for `#[scope]`,
+or `Type` for a `#[crol(scope)]` type, where a value with both is a
+`Flag`. `found` is the scope the id resolved in. `chains()` returns this
+for every id, as `ids()` finds them; `is_key` and `place()` tell an id
+key, which is within its map and its entry. As text, a `ScopeChain` is the line
+that `crol explain` prints (section 11).
 
 ### 10.6 Errors from deserialization
 
@@ -2813,7 +2874,8 @@ what it means is up to the document it lands in.
 
 Evaluation and deserialization need no schema, except `&default`
 (section 6.1.3), which reads defaults from it, and what serde does not
-tell the deserializer: aliases (section 10.2), `explicit_defaults`
+tell the deserializer: aliases and the type names of transparent structs
+(section 10.2), `explicit_defaults`
 (section 10.3), constraints and sealed fields (sections 10.12, 10.13). Tools do: a language
 server cannot complete field names, show docs or check types without
 knowing the Rust types. The schema describes them; it is built from the
@@ -3394,7 +3456,7 @@ has to load it.
 | `crol check [<layer>...]` | read and evaluate the layers (each `name=source` or a source, named after it, where a source is a module path (section 4.2) or a file system path, the module path if both name something; without any, those of the project file, section 12.4), or one value document (below); check them against the schema if one is given or configured; print diagnostics; exit 1 on errors |
 | `crol eval [<layer>...] [--context a,b] [key[.path]]` | print evaluated data as a plain data-mode document (or one value); with a schema, struct fields that take their defaults are written out with the defaults the schema records, each marked `// default` (`--no-defaults` leaves them as the data does) |
 | `crol eval [<layer>...] --all-contexts` | print the base data, then for every other evaluated context a block `<a & b & !c & ...> { ... }` whose condition holds in that context only, with the keys whose value differs (`key: value`) or that are missing (`-key`). A `..` at the root is written in the base, or in the block of a context that has it where the base does not; for a root struct, a removed field as `key: (), -key`. The output is valid CROL and evaluates back to the same data |
-| `crol explain [<layer>...] [--context a,b] key[.path]` | print the operations that produced a value (section 12.3) |
+| `crol explain [<layer>...] [--context a,b] key[.path]` | print the operations that produced a value (section 12.3), and for each id in it the scope it resolved in (below) |
 | `crol compile <layer> [-o <file>]` | write a layer as a `.crob` file (section 7.8), by default beside it |
 | `crol fmt [--check] <file>...` | format `.crod` and `.crol` files in place (or check). Formatting does not depend on the mode (section 12.2). It takes files, so a directory is an error |
 | `crol fingerprint [<layer>...]` | print the fingerprint in hex |
@@ -3415,6 +3477,32 @@ fingerprint, since neither would be fit to use. With `--message-format
 json`, standard output then holds the diagnostics only. Warnings change
 none of this. `explain` shows how a value came about, which may be how to
 find a mistake, so it does not check the schema.
+
+**Ids in `explain`.** Nothing evaluates through an id, so the operations
+do not say what one names; what is worth seeing is the scope it resolved
+in, since shadowing is intended (section 3.2). Where the value at the path
+is an id or holds ids, `explain` prints `ids:` after the operations, and
+a line for each id in the data of the context, in the order of the data:
+the place of the id (for an id key, that of its entry, `bonus[@armored]`,
+though it resolves at its map's), then
+
+```text
+the id `@filter` names `dashboard.filter`; scopes: `dashboard` (`#[crol(scope)]`, has `filter`), the root (has `filter`, shadowed)
+```
+
+- First what it names, as a path of the data (section 10.5), or that it
+  names nothing; for a path id that stops at a key, at which.
+- Then the scopes around it, innermost first, ending at the root. Each
+  says what makes it a scope, `#[scope]` or `#[crol(scope)]` (the flag,
+  for a value with both, since that needs no schema), and whether it has
+  the id's first key: `has`, or `no`. The first that has it is the one
+  the id resolved in. Those after it that have it too say `shadowed`.
+- An id from the root, `@::x`, asks the root only, so the other scopes say
+  `passed by ::`.
+
+The schema is read for its `#[crol(scope)]` types and for nothing else.
+A value without ids has no such lines. `crol::IdResolver::scopes` returns
+the same as a `crol::ScopeChain`, whose text is the line (section 10.5).
 
 **Layers and keys.** `eval` and `explain` take a key after the layers, so
 their last argument is told apart by its form alone, never by what exists
@@ -3761,7 +3849,10 @@ definition's, and a reference shows the docs of what it names.
   spread into (section 3.2): each is shown. An id key names what it resolves
   to at the value it is a key of, whichever id the data has its entry under.
   Other paths have no step for an id key, so hover says nothing of the
-  values in an entry with one.
+  values in an entry with one. On an id, then the line that
+  `crol explain` has for it (section 11): what it names, or that it names
+  nothing, and the scopes around it, with what makes each a scope and which
+  has the key. In a template, a line for each place that says something else.
 - In data, on a key or value that more than one operation has touched, in the
   context chosen with the `context` setting: below a rule, each operation with
   its value, file, line and layer. One operation adds nothing to the document.
@@ -4067,7 +4158,8 @@ where a `String` is; a string or integer key in a map keyed by `crol::Id`,
 and an id key anywhere else (10.5); with `strict_ids`, an id that names
 nothing; variant key rules (8.5). And the application's own checks.
 
-**Warnings**: an id that names nothing (10.5), in `CrolData::warnings()`
+**Warnings**: an id that names nothing (10.5), and with a schema a type
+name on a map that nothing names (10.2), in `CrolData::warnings()`
 and in tools. In tools: a document whose `schema` differs from the
 project's; an `extends` naming something that is neither a lower layer
 nor in the document's own layer; and an id that names something only

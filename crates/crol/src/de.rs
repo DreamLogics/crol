@@ -119,6 +119,91 @@ impl Structs {
     }
 }
 
+/// What names the type of a keyed value, from where its type is known down
+/// to the value itself (`SPEC.md` 10.2): the newtype variant it is the
+/// payload of, and the newtypes and transparent structs around it. The
+/// deserializer gathers these from serde, and `crol::check` and the
+/// resolver from the schema.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct TypeNames<'n> {
+    /// The newtype variant whose payload the value is: `V { ... }`
+    /// deserializes as a newtype variant whose payload accepts the name `V`.
+    variant: Option<&'n str>,
+    /// The outermost newtype or transparent struct around the value.
+    wrapper: Option<&'n str>,
+    /// Whether one of those wrappers has the name the value is written with.
+    fits: bool,
+}
+
+/// Whether the type name a keyed value is written with fits its type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum NameFit {
+    /// It is the type's name, a wrapper's, or the newtype variant's.
+    Fits,
+    /// It is another name than the type's: an error, with its message.
+    Mismatch(String),
+    /// Nothing names the type: the value is a map and no more.
+    Unnamed,
+    /// The type is not known, or not one a block's name is checked against.
+    Unknown,
+}
+
+impl<'n> TypeNames<'n> {
+    /// The payload of the newtype variant `variant`.
+    pub(crate) fn variant(variant: &'n str) -> Self {
+        Self {
+            variant: Some(variant),
+            ..Self::default()
+        }
+    }
+
+    /// Inside the newtype or transparent struct `name`, around a value
+    /// written with the type name `written`. A wrapper with an empty name
+    /// is one data never writes (`SPEC.md` 10.9).
+    pub(crate) fn wrap(self, name: &'n str, written: Option<&str>) -> Self {
+        if name.is_empty() {
+            return self;
+        }
+        Self {
+            wrapper: self.wrapper.or(Some(name)),
+            fits: self.fits || written == Some(name),
+            ..self
+        }
+    }
+
+    fn accepts(&self, written: &str) -> bool {
+        self.fits || self.variant == Some(written)
+    }
+
+    /// For a struct, or a variant with named fields, of the name `name`.
+    pub(crate) fn of_struct(&self, name: &str, written: &str) -> NameFit {
+        if written == name || self.accepts(written) {
+            NameFit::Fits
+        } else {
+            NameFit::Mismatch(format!("expected a `{name}`, found a `{written}`"))
+        }
+    }
+
+    /// For a map.
+    pub(crate) fn of_map(&self, written: &str) -> NameFit {
+        match self.wrapper {
+            _ if self.accepts(written) => NameFit::Fits,
+            Some(wrapper) => {
+                NameFit::Mismatch(format!("`{written} {{ ... }}` is not a `{wrapper}`"))
+            }
+            None => NameFit::Unnamed,
+        }
+    }
+}
+
+/// What a type name on a map that nothing names is told (`SPEC.md` 10.2).
+pub(crate) fn unnamed_map(written: &str) -> String {
+    format!(
+        "the type name `{written}` names nothing: this is a map, which has no type name; \
+         write `{{ ... }}`"
+    )
+}
+
 /// What every deserializer of one value shares.
 pub(crate) struct Context<'a> {
     pub(crate) sources: &'a Sources,
@@ -127,6 +212,10 @@ pub(crate) struct Context<'a> {
     /// What ids resolve against (`SPEC.md` 10.5); without it, no id
     /// resolves.
     pub(crate) resolver: Option<Resolver<'a>>,
+    /// What the schema says the type at each place is, for the type names
+    /// serde does not give (`SPEC.md` 10.2): the data and its types, and how
+    /// many steps of a place come before the root of that data.
+    pub(crate) typed: Option<(Resolver<'a>, usize)>,
 }
 
 /// Where in the data we are, which a wrapper such as `Some(x)` adds a step
@@ -188,9 +277,8 @@ pub(crate) struct ValueDeserializer<'a> {
     context: &'a Context<'a>,
     path: Rc<PathNode>,
     place: Rc<Place>,
-    /// The name of the newtype variant whose payload this is: `V { ... }`
-    /// deserializes as a newtype variant whose struct accepts the name `V`.
-    variant: Option<&'a str>,
+    /// What names this value's type so far (`SPEC.md` 10.2).
+    names: TypeNames<'a>,
 }
 
 impl<'a> ValueDeserializer<'a> {
@@ -200,7 +288,7 @@ impl<'a> ValueDeserializer<'a> {
             context,
             path: Rc::new(PathNode::Root),
             place: Rc::new(Place::Root),
-            variant: None,
+            names: TypeNames::default(),
         }
     }
 
@@ -214,7 +302,7 @@ impl<'a> ValueDeserializer<'a> {
                 Rc::new(Place::Root),
                 DataStep::Key(Key::Str(key.into())),
             )),
-            variant: None,
+            names: TypeNames::default(),
         }
     }
 
@@ -232,7 +320,7 @@ impl<'a> ValueDeserializer<'a> {
             context: self.context,
             path: Rc::new(path),
             place: Rc::new(Place::Step(self.place.clone(), step)),
-            variant: None,
+            names: TypeNames::default(),
         }
     }
 
@@ -335,13 +423,56 @@ impl<'a> ValueDeserializer<'a> {
         visitor.visit_map(&mut access).map_err(|e| self.attach(e))
     }
 
+    /// The type name this value is written with, if it is a keyed value.
+    fn written(&self) -> Option<&'a str> {
+        match &self.value.kind {
+            ValueKind::Keyed(keyed) => keyed.name.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// The type name check of a keyed value that serde asks for as a map
+    /// (`SPEC.md` 10.2): what it is inside a newtype, a transparent struct,
+    /// or a struct with a flattened field. Serde names only the newtypes, so
+    /// with a schema, the type the schema gives the place decides.
+    fn check_map(&self, keyed: &Keyed) -> Result<(), Error> {
+        let Some(written) = keyed.name.as_deref() else {
+            return Ok(());
+        };
+        let fit = match self.names.of_map(written) {
+            NameFit::Fits => NameFit::Fits,
+            serde => match self.schema_name() {
+                NameFit::Unknown => serde,
+                schema => schema,
+            },
+        };
+        match fit {
+            NameFit::Mismatch(message) => Err(self.error(message)),
+            // A name on a plain map is a warning, which the composer and
+            // `crol::check` give: the deserializer has only errors.
+            NameFit::Fits | NameFit::Unnamed | NameFit::Unknown => Ok(()),
+        }
+    }
+
+    /// Whether this keyed value's type name fits the type the schema gives
+    /// its place, if there is a schema that says.
+    fn schema_name(&self) -> NameFit {
+        let Some((typed, skip)) = &self.context.typed else {
+            return NameFit::Unknown;
+        };
+        let place = self.place.to_path();
+        typed.block_name(&DataPath::new(place.steps().iter().skip(*skip).cloned()))
+    }
+
     /// The struct checks of `SPEC.md` 10.2.
     fn check_struct(&self, keyed: &Keyed, name: &str, fields: &[&str]) -> Result<(), Error> {
         if let Some(written) = &keyed.name
-            && &**written != name
-            && Some(&**written) != self.variant
+            && let NameFit::Mismatch(message) = self.names.of_struct(name, written)
+            // It may be the name of a transparent struct around this one,
+            // which only the schema knows.
+            && self.schema_name() != NameFit::Fits
         {
-            return Err(self.error(format!("expected a `{name}`, found a `{written}`")));
+            return Err(self.error(message));
         }
         for (key, value) in &keyed.entries {
             let field = match key {
@@ -553,7 +684,7 @@ impl<'a> de::Deserializer<'a> for ValueDeserializer<'a> {
                     context: self.context,
                     path: self.path.clone(),
                     place: self.place.clone(),
-                    variant: None,
+                    names: self.names,
                 };
                 visitor.visit_some(inner)
             }
@@ -617,13 +748,15 @@ impl<'a> de::Deserializer<'a> for ValueDeserializer<'a> {
                 };
                 visitor.visit_newtype_struct(inner)
             }
+            // The value itself: a type name on it may be the newtype's
+            // (`SPEC.md` 10.2).
             _ => {
                 let inner = ValueDeserializer {
                     value: self.value,
                     context: self.context,
                     path: self.path.clone(),
                     place: self.place.clone(),
-                    variant: None,
+                    names: self.names.wrap(name, self.written()),
                 };
                 visitor.visit_newtype_struct(inner)
             }
@@ -665,7 +798,10 @@ impl<'a> de::Deserializer<'a> for ValueDeserializer<'a> {
 
     fn deserialize_map<V: Visitor<'a>>(self, visitor: V) -> Result<V::Value, Error> {
         match &self.value.kind {
-            ValueKind::Keyed(keyed) => self.map(keyed, visitor),
+            ValueKind::Keyed(keyed) => {
+                self.check_map(keyed)?;
+                self.map(keyed, visitor)
+            }
             _ => Err(self.expected("a keyed value `{ ... }`")),
         }
     }
@@ -1013,7 +1149,7 @@ impl<'a> VariantAccess<'a> for EnumDeserializer<'_, 'a> {
                 context: parent.context,
                 path: parent.path.clone(),
                 place: parent.place.clone(),
-                variant: Some(self.variant),
+                names: TypeNames::variant(self.variant),
             }),
             _ => Err(parent.expected(&format!("`{}(...)` with one element", self.variant))),
         }

@@ -4,7 +4,8 @@
 use std::fmt::Write as _;
 use std::io::Write;
 
-use crol_eval::{StepKind, print};
+use crol::{DataPath, DataStep};
+use crol_eval::{Key, PathStep, StepKind, Value, ValueKind, print};
 
 use crate::diagnostics::Reporter;
 
@@ -99,9 +100,79 @@ pub(crate) fn run(args: &Args, reporter: &mut Reporter) -> bool {
             step.entry
         );
     }
+    // What the ids there name, and in which scope (`SPEC.md` 3.2).
+    if !steps.is_empty() {
+        out.push_str(&ids(&inputs, path, &context));
+    }
     if let Err(error) = std::io::stdout().lock().write_all(out.as_bytes()) {
         reporter.error(&format!("cannot write the output: {error}"));
         return false;
     }
     true
+}
+
+/// A line for each id at `path` or in the value there, in the data of the
+/// context: where it is, what it names, and the scopes around it. Nothing
+/// where there is no id.
+fn ids(inputs: &crate::layers::Inputs, path: &str, context: &[String]) -> String {
+    let evaluation = crol_eval::evaluate_data(&inputs.sources, &inputs.layers, &inputs.options);
+    let Some(base) = evaluation.value else {
+        return String::new();
+    };
+    // With a context, the one evaluated besides the base.
+    let root = match evaluation.contexts.first() {
+        Some(data) if !context.is_empty() => data.root(&base),
+        _ => base,
+    };
+    let Some(place) = data_path(&root, path) else {
+        return String::new();
+    };
+    let mut resolver = crol::IdResolver::new(&root).within(&place);
+    // The schema is for its `#[crol(scope)]` types only; nothing is checked.
+    if let Some(schema) = &inputs.schema {
+        resolver = resolver.schema(schema);
+        if let Some(root) = &inputs.root {
+            resolver = resolver.root_type(root);
+        }
+    }
+    let chains = resolver.chains();
+    if chains.is_empty() {
+        return String::new();
+    }
+    let locations: Vec<String> = chains.iter().map(|c| c.place().to_string()).collect();
+    let width = locations.iter().map(String::len).max().unwrap_or(0);
+    let mut out = String::from("ids:\n");
+    for (chain, location) in chains.iter().zip(&locations) {
+        let _ = writeln!(out, "  {location:<width$}  {chain}");
+    }
+    out
+}
+
+/// The place `path` (`web.tags[0]`) reaches in the root: `[0]` is an index
+/// of a list and a key elsewhere, and a field of what `Some(...)` holds is
+/// in its payload.
+fn data_path(root: &Value, path: &str) -> Option<DataPath> {
+    let (key, steps) = crol_eval::parse_path(path).ok()?;
+    let mut out = vec![DataStep::Key(Key::Str(key.as_str().into()))];
+    let mut value = DataPath::new(out.clone()).value_in(root)?;
+    for step in &steps {
+        if matches!(step, PathStep::Field(_) | PathStep::Accessor(_))
+            && let ValueKind::NamedTuple(_, items) = &value.kind
+            && let [payload] = items.as_slice()
+        {
+            out.push(DataStep::Element(0));
+            value = payload;
+        }
+        let next = match (step, &value.kind) {
+            (PathStep::Field(name), _) => DataStep::Key(Key::Str(name.as_str().into())),
+            (PathStep::Element(i), _) => DataStep::Element(*i),
+            (PathStep::Accessor(i), ValueKind::List(_)) => {
+                DataStep::Index(usize::try_from(*i).ok()?)
+            }
+            (PathStep::Accessor(i), _) => DataStep::Key(Key::Int(*i)),
+        };
+        value = DataPath::new([next.clone()]).value_in(value)?;
+        out.push(next);
+    }
+    Some(DataPath::new(out))
 }

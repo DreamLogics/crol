@@ -971,6 +971,78 @@ fn diagnostics_follow_a_types_explicit_defaults() {
     client.stop();
 }
 
+/// Type names where serde gives the loader none (`SPEC.md` 10.2): an error
+/// on a transparent struct around a map, a warning on a map.
+#[test]
+fn type_names_on_maps_are_checked() {
+    let dir = workspace(
+        "lsp-type-names-on-maps",
+        &[
+            (
+                "schema.crol",
+                r#"Schema {
+                    format: 1,
+                    root: "app::App",
+                    types: {
+                        "app::App": Struct {
+                            name: "App",
+                            source: ("src/lib.rs", 1),
+                            fields: {
+                                screen: { ty: Named("app::Screen"), .. },
+                                stats: { ty: Map(String, U32), .. },
+                            },
+                            ..
+                        },
+                        "app::Screen": Transparent {
+                            name: "Screen",
+                            source: ("src/lib.rs", 2),
+                            inner: Map(String, U32),
+                            ..
+                        },
+                    },
+                }"#,
+            ),
+            ("config.crol", ""),
+        ],
+    );
+    let client = Client::start(&dir);
+    let config = uri(&dir.join("config.crol"));
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": config, "languageId": "crol", "version": 1, "text": "#![schema(::schema)]\n\nApp { screen: Scren { a: 1 }, stats: Stats { a: 1 } }" } }),
+    );
+    let diagnostics = client.diagnostics_for(&config, |d| !d.is_empty());
+    let found: Vec<(u64, &str)> = diagnostics
+        .iter()
+        .map(|d| {
+            (
+                d["severity"].as_u64().unwrap(),
+                // Without the path below it.
+                d["message"].as_str().unwrap().lines().next().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        found,
+        [
+            (1, "`Scren { ... }` is not a `Screen`"),
+            (
+                2,
+                "the type name `Stats` names nothing: this is a map, which has no type name; write `{ ... }`"
+            ),
+        ]
+    );
+    client.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": config, "version": 2 },
+            "contentChanges": [{ "text": "#![schema(::schema)]\n\nApp { screen: Screen { a: 1 }, stats: { a: 1 } }" }],
+        }),
+    );
+    client.diagnostics_for(&config, <[Value]>::is_empty);
+    client.stop();
+}
+
 #[test]
 fn the_project_file_is_checked_against_its_schema() {
     let project = r#"Project { layers: List([{ name: "base", dir: "base", .. }]), .. }"#;
@@ -4645,6 +4717,129 @@ fn templates_used_where_another_type_goes_get_a_warning() {
     // A warning, on `&s` of `backend`.
     assert_eq!(warnings[0]["severity"], 2, "{diagnostics:?}");
     assert_eq!(warnings[0]["range"]["start"]["line"], 7, "{diagnostics:?}");
+    client.stop();
+}
+
+#[test]
+fn hover_on_an_id_shows_the_scopes_around_it() {
+    let text = "pane := { layout: [@filter] }\n#[scope]\n+dashboard: { ..&pane, +filter: { p: 1 } }\n\
+                +settings: { ..&pane, +filter: { p: 2 } }\n+filter: 0\n\
+                +other: { see: @dashboard.filter, gone: @nope, top: @::filter }\n";
+    let dir = workspace("lsp-hover-id-scopes", &[("a.crod", text)]);
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "a.crod");
+    // In a template: a line for each place it is spread into, after what
+    // it names there.
+    let markdown = buffer.hover(&mut client, &mark(text, "[@filter]", "filter"));
+    assert_eq!(
+        markdown,
+        "**dashboard.filter**: `{p: 1}`\n\n**filter**: `0`\n\n\
+         the id `@filter` names `dashboard.filter`; scopes: `dashboard` (`#[scope]`, has \
+         `filter`), the root (has `filter`, shadowed)\n\n\
+         the id `@filter` names `filter`; scopes: the root (has `filter`)"
+    );
+    // A path id, on either key.
+    for word in ["dashboard", "filter"] {
+        let markdown = buffer.hover(&mut client, &mark(text, "@dashboard.filter", word));
+        assert_eq!(
+            markdown,
+            "**dashboard.filter**: `{p: 1}`\n\n\
+             the id `@dashboard.filter` names `dashboard.filter`; scopes: the root (has \
+             `dashboard`)",
+            "{word}"
+        );
+    }
+    // One that names nothing, and one from the root.
+    let markdown = buffer.hover(&mut client, &mark(text, "@nope", "nope"));
+    assert_eq!(
+        markdown,
+        "the id `@nope` names nothing; scopes: the root (no `nope`)"
+    );
+    let markdown = buffer.hover(&mut client, &mark(text, "@::filter", "filter"));
+    assert_eq!(
+        markdown,
+        "**filter**: `0`\n\nthe id `@::filter` names `filter`; scopes: the root (has `filter`)"
+    );
+    client.stop();
+}
+
+#[test]
+fn hover_on_an_id_key_shows_the_scopes_at_its_map() {
+    let text = "+armored: 0\n#[scope]\n+marine: { armored: 1, bonus: { @armored: 1.0, @::armored: 2.0 } }\n";
+    let dir = workspace("lsp-hover-id-key-scopes", &[("a.crod", text)]);
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "a.crod");
+    let markdown = buffer.hover(&mut client, &mark(text, "@armored: 1.0", "armored"));
+    assert!(
+        markdown.ends_with(
+            "the id `@armored` names `marine.armored`; scopes: `marine` (`#[scope]`, has \
+             `armored`), the root (has `armored`, shadowed)"
+        ),
+        "{markdown}"
+    );
+    let markdown = buffer.hover(&mut client, &mark(text, "@::armored", "armored"));
+    assert!(
+        markdown.ends_with(
+            "the id `@::armored` names `armored`; scopes: `marine` (`#[scope]`, passed by \
+             `::`), the root (has `armored`)"
+        ),
+        "{markdown}"
+    );
+    client.stop();
+}
+
+#[test]
+fn hover_on_an_id_says_when_the_schema_makes_the_scope() {
+    let schema = r#"Schema {
+    format: 1,
+    root: "app::Screens",
+    types: {
+        "app::Screens": Transparent {
+            name: "Screens",
+            source: ("src/lib.rs", 2),
+            inner: Map(String, Named("app::Screen")),
+            ..
+        },
+        "app::Screen": Struct {
+            name: "Screen",
+            source: ("src/lib.rs", 1),
+            fields: { layout: { ty: Any, .. }, filter: { ty: Any, .. } },
+            scope: true,
+            ..
+        },
+    },
+}"#;
+    let text = "+dashboard: Screen { layout: [@filter, @settings], filter: 1 }\n\
+                +settings: Screen { layout: [], filter: 2 }\n";
+    let dir = workspace(
+        "lsp-hover-id-schema-scope",
+        &[
+            (
+                "project.crol",
+                r#"Project { layers: List([{ name: "base", dir: "base", .. }]), schema: Some("crol::schema"), .. }"#,
+            ),
+            ("crol/schema.crol", schema),
+            ("base/a.crod", text),
+        ],
+    );
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "base/a.crod");
+    let markdown = buffer.hover(&mut client, &mark(text, "@filter", "filter"));
+    assert!(
+        markdown.ends_with(
+            "the id `@filter` names `dashboard.filter`; scopes: `dashboard` \
+             (`#[crol(scope)]`, has `filter`), the root (no `filter`)"
+        ),
+        "{markdown}"
+    );
+    let markdown = buffer.hover(&mut client, &mark(text, "@settings", "settings"));
+    assert!(
+        markdown.ends_with(
+            "the id `@settings` names `settings`; scopes: `dashboard` (`#[crol(scope)]`, no \
+             `settings`), the root (has `settings`)"
+        ),
+        "{markdown}"
+    );
     client.stop();
 }
 
