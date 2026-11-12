@@ -147,6 +147,21 @@ from the struct. See [which type a document has](schemas.md#which-type-a-documen
 The two sides of `~` have different type names. To change a value to another
 type or enum variant, replace it with `:` instead.
 
+**`` expected an id key, found the string key web; write `@web` ``**
+
+The map is keyed by `crol::Id`, and such a map takes only
+[id keys](language.md#ids-as-keys): write `@web: 1`. The other way round,
+`` expected a string key, found the id key `@web` ``, the map has another
+key type, or the value is a struct: only a map keyed by `crol::Id` takes id
+keys.
+
+**`` the id key `@web` names no root key; an id key has to name an entry, and a key that names nothing is written as a string ``**
+
+Id keys are compared by what they name, so each has to name something in the
+data, through the [scopes](language.md#scopes) around its map. Check the
+spelling, or reach it with a path, `@group.web`. If the keys name things that
+are not in the data, the map wants `String` keys.
+
 **`+: cannot add an integer to a list`**
 
 Lists only combine with lists: `tags: & + ["x"]`, not `tags: & + "x"`.
