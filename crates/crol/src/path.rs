@@ -195,6 +195,19 @@ impl PathKey for &String {
     }
 }
 
+/// An id key, of a map keyed by ids (`SPEC.md` 3.1).
+impl PathKey for &crate::Id {
+    fn key(self) -> Key {
+        Key::Id(self.to_path())
+    }
+}
+
+impl PathKey for crate::Id {
+    fn key(self) -> Key {
+        Key::Id(self.to_path())
+    }
+}
+
 macro_rules! integer_keys {
     ($($ty:ty),*) => {$(
         impl PathKey for $ty {
@@ -400,6 +413,7 @@ fn write_steps(steps: &[Step], mut root: bool) -> Option<String> {
             }
             _ if root => return None,
             Step::Key(Key::Int(i)) => text.push_str(&format!("[{i}]")),
+            Step::Key(Key::Id(id)) => text.push_str(&format!("[{id}]")),
             Step::Index(i) => text.push_str(&format!("[{i}]")),
             Step::Element(i) => text.push_str(&format!(".{i}")),
         }

@@ -977,6 +977,20 @@ impl crol_eval::DefaultsProvider for SchemaDefaults {
         self.schema.data_root(self.root.as_deref()) == DataRoot::Document
     }
 
+    fn has_scopes(&self) -> bool {
+        self.schema.types.values().any(|def| match def {
+            TypeDef::Struct { scope, .. }
+            | TypeDef::Newtype { scope, .. }
+            | TypeDef::Transparent { scope, .. } => *scope,
+            TypeDef::Enum { variants, .. } => variants.values().any(|variant| variant.scope),
+            _ => false,
+        })
+    }
+
+    fn scopes_on(&self, values: &[crate::Value], steps: &[crol_eval::ScopeStep]) -> Vec<bool> {
+        crate::resolve::scopes_on(&self.schema, self.root.as_deref(), values, steps)
+    }
+
     fn has_constraints(&self) -> bool {
         self.any_constraints()
     }
