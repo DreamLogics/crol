@@ -1,0 +1,8 @@
+// An id cannot be a root key (SPEC.md 3.1).
++tag: Tag {}
++@tag: 1
+<prod> { @tag: 2 }
+
+// Only keys are in an id (SPEC.md 5.1).
++elements: { @tag[0]: 1, [@tag].x: 2 }
++read: &root.elements.@tag.0

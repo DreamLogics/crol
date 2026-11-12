@@ -1,0 +1,8 @@
+1-base/a.crod:3:16: the id key `@nothing` names no root key; an id key has to name an entry, and a key that names nothing is written as a string
+1-base/a.crod:3:29: the id key `@::nothing` names no root key; an id key has to name an entry, and a key that names nothing is written as a string
+1-base/a.crod:3:44: the id key `@tag.nothing` names nothing: `tag` has no key `nothing`; an id key has to name an entry, and a key that names nothing is written as a string
+1-base/a.crod:5:21: the id key `@nothing` names nothing: no `nothing` in `scoped` or the root; an id key has to name an entry, and a key that names nothing is written as a string
+1-base/a.crod:8:21: +: `@tag` is already set
+1-base/a.crod:9:11: -: `@tag` is not set
+1-base/a.crod:14:43: the keys `@tag` and `@::tag` name the same entry here, `tag`: id keys are compared by what they name, so this value would have the key twice
+1-base/a.crod:20:13: cycle: this value depends on itself

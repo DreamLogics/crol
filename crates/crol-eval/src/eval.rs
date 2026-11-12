@@ -185,6 +185,123 @@ struct KeyedShape {
     defaulted: BTreeSet<Key>,
     /// `#[scope]` (`SPEC.md` 6.1.2).
     scope: bool,
+    /// What the id keys name, for a value that has any (`SPEC.md` 3.1).
+    ids: Option<Rc<IdKeys>>,
+}
+
+/// What an id key names (`SPEC.md` 3.2): id keys that name the same entry
+/// are the same key.
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum Named {
+    /// The place of the entry it names, from the root.
+    At(Rc<[Step]>),
+    /// The id as written, where it cannot be resolved: in a template, or in a
+    /// value that has no place.
+    Written(IdPath),
+}
+
+/// The id keys of a keyed value at one place: what each names there, and
+/// the key the slots have that entry under, the id first written for it.
+#[derive(Clone)]
+struct IdKeys {
+    /// Where the keys were resolved. A value copied elsewhere resolves them
+    /// again there.
+    home: Option<Location>,
+    named: FastMap<Named, (Key, Span)>,
+}
+
+/// A scope around a place (`SPEC.md` 3.2).
+struct Scope {
+    /// Where it is, from the root.
+    path: Vec<Step>,
+    value: Rc<Shaped>,
+    /// Keys that path entries still being applied set in it and remove from
+    /// it, which its value does not show yet.
+    added: Vec<Arc<str>>,
+    removed: Vec<Arc<str>>,
+}
+
+impl Scope {
+    fn has(&self, name: &str) -> bool {
+        let held = matches!(&self.value.shape, Shape::Keyed(keyed) if keyed.slots.contains_key(&KeyRef::Str(name)));
+        (held && !self.removed.iter().any(|key| &**key == name))
+            || self.added.iter().any(|key| &**key == name)
+    }
+}
+
+/// An operation still being applied to a value that a scope is looked for
+/// in, which the value does not show yet.
+enum Pending {
+    /// A path entry, and how many of its steps lead to where the search is.
+    Path(Rc<PathRecipe>, usize),
+    /// An expression that merges a block with the value below it.
+    Block(ExprId),
+}
+
+/// The scopes around a place, as they were last found.
+struct ScopeCache {
+    steps: u64,
+    depth: usize,
+    place: Location,
+    inside: bool,
+    scopes: Rc<Vec<Scope>>,
+}
+
+/// Whether two places are the same one.
+fn same_place(a: &Option<Location>, b: &Option<Location>) -> bool {
+    let (a, b) = match (a, b) {
+        (None, None) => return true,
+        (Some(a), Some(b)) => (a, b),
+        _ => return false,
+    };
+    if a.anchor != b.anchor || !Weak::ptr_eq(&a.base, &b.base) {
+        return false;
+    }
+    let (mut a, mut b) = (a.path.as_ref(), b.path.as_ref());
+    loop {
+        match (a, b) {
+            (None, None) => return true,
+            (Some(x), Some(y)) => {
+                if Rc::ptr_eq(x, y) {
+                    return true;
+                }
+                if x.step != y.step {
+                    return false;
+                }
+                a = x.parent.as_ref();
+                b = y.parent.as_ref();
+            }
+            _ => return false,
+        }
+    }
+}
+
+/// A value on the way to a place, without what it holds: its kind and type
+/// name, for [`DefaultsProvider::scopes_on`].
+fn outline(shaped: &Shaped) -> Value {
+    let kind = match &shaped.shape {
+        Shape::Keyed(keyed) => ValueKind::Keyed(Box::new(Keyed {
+            name: keyed.name.clone(),
+            ..Keyed::default()
+        })),
+        Shape::Named(name, _) => ValueKind::NamedTuple(name.clone(), Vec::new()),
+        Shape::List(_) => ValueKind::List(Vec::new()),
+        Shape::Tuple(_) => ValueKind::Tuple(Vec::new()),
+        _ => ValueKind::Unit,
+    };
+    Value::new(kind, shaped.span)
+}
+
+/// A step from a value to one it holds, on the way to a place
+/// ([`DefaultsProvider::scopes_on`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScopeStep {
+    /// A field, or a map's key.
+    Key(Key),
+    /// An element of a list.
+    Index(usize),
+    /// An element of a tuple, or of a named tuple's payload.
+    Element(usize),
 }
 
 #[derive(Clone)]
@@ -351,7 +468,7 @@ struct PathLink {
     parent: Option<Rc<PathLink>>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 enum Step {
     Key(Key),
     Index(usize),
@@ -391,11 +508,10 @@ fn some_payload(value: &Shaped) -> Option<&Lazy> {
 /// `Some({ x: 1 }).x` is `1`.
 fn single_payload<'a>(value: &'a Shaped, selector: &Selector) -> Option<&'a Lazy> {
     match (&value.shape, &selector.kind) {
-        (Shape::Named(_, items), SelectorKind::Field(_) | SelectorKind::Accessor(_))
-            if items.len() == 1 =>
-        {
-            Some(&items[0])
-        }
+        (
+            Shape::Named(_, items),
+            SelectorKind::Field(_) | SelectorKind::Accessor(_) | SelectorKind::Id(_),
+        ) if items.len() == 1 => Some(&items[0]),
         _ => None,
     }
 }
@@ -406,11 +522,23 @@ fn selector_step(selector: &Selector) -> Option<Step> {
         SelectorKind::Field(name) => Some(Step::Key(Key::Str(name.clone()))),
         SelectorKind::Element(i) => Some(Step::Index(*i)),
         SelectorKind::Accessor(i) => Some(Step::Accessor(*i)),
+        SelectorKind::Id(id) => Some(Step::Key(Key::Id(id.clone()))),
         SelectorKind::Context(_) => None,
     }
 }
 
 impl Location {
+    /// The location one step up; `None` at the base itself.
+    fn parent(&self) -> Option<Location> {
+        let link = self.path.as_ref()?;
+        Some(Location {
+            base: self.base.clone(),
+            anchor: self.anchor,
+            name: self.name.clone(),
+            path: link.parent.clone(),
+        })
+    }
+
     fn child(&self, step: Step) -> Location {
         Location {
             base: self.base.clone(),
@@ -472,6 +600,9 @@ impl Location {
                 Step::Key(Key::Int(i)) => {
                     let _ = write!(out, "[{i}]");
                 }
+                Step::Key(Key::Id(id)) => {
+                    let _ = write!(out, "[{id}]");
+                }
                 Step::Index(i) => {
                     let _ = write!(out, "[{i}]");
                 }
@@ -508,6 +639,7 @@ fn key_selector(key: &Key, span: Span) -> Selector {
     let kind = match key {
         Key::Str(s) => SelectorKind::Field(s.clone()),
         Key::Int(i) => SelectorKind::Accessor(*i),
+        Key::Id(id) => SelectorKind::Id(id.clone()),
     };
     Selector {
         kind,
@@ -570,6 +702,7 @@ fn describe_selector(selector: &Selector) -> String {
         SelectorKind::Field(name) => format!("[{}]{mark}", crate::value::quote(name)),
         SelectorKind::Element(i) => format!(".{i}{mark}"),
         SelectorKind::Accessor(i) => format!("[{i}]{mark}"),
+        SelectorKind::Id(id) => format!("[{id}]{mark}"),
         SelectorKind::Context(_) => "<...>".to_owned(),
     }
 }
@@ -616,6 +749,13 @@ pub(crate) struct Evaluator<'ir> {
     /// Whether an older cell was computed meanwhile: what it holds outlives
     /// the key, and may hold cells made meanwhile.
     window_escaped: bool,
+    /// The path entries being applied: the cell each is computing, the value
+    /// it started from and what it does. An id key in what it goes through
+    /// resolves against that value while the cell is not computed.
+    bases: Vec<(*const Cell, Lazy, Rc<PathRecipe>)>,
+    /// Whether any value has an id key, so that they are checked in the end.
+    id_keys: bool,
+    scope_cache: Option<ScopeCache>,
 }
 
 impl Drop for Evaluator<'_> {
@@ -735,6 +875,20 @@ pub trait DefaultsProvider: std::fmt::Debug + Send + Sync {
         Vec::new()
     }
 
+    /// Whether any type is a scope for ids (`#[crol(scope)]`, `SPEC.md`
+    /// 3.2).
+    fn has_scopes(&self) -> bool {
+        false
+    }
+
+    /// Which of the values on the way from the root to a place are scopes by
+    /// their type: `values[0]` is the root, and `steps[i]` leads from
+    /// `values[i]` to `values[i + 1]`. The values are given without what
+    /// they hold: only their kind and type name. One answer per value.
+    fn scopes_on(&self, values: &[Value], _steps: &[ScopeStep]) -> Vec<bool> {
+        vec![false; values.len()]
+    }
+
     /// Whether the root type is the whole of a data-mode document, so that a
     /// root key is the first step of a path from it, rather than the type
     /// of each root value (`SPEC.md` 4.1).
@@ -764,6 +918,26 @@ fn shaped_from_value(value: &Value) -> Rc<Shaped> {
         ValueKind::Tuple(items) => Shape::Tuple(cells(items)),
         ValueKind::NamedTuple(n, items) => Shape::Named(n.clone(), cells(items)),
         ValueKind::Keyed(keyed) => Shape::Keyed(Box::new(KeyedShape {
+            // A value from outside has no place: its id keys are as written.
+            ids: keyed
+                .entries
+                .keys()
+                .any(|key| matches!(key, Key::Id(_)))
+                .then(|| {
+                    Rc::new(IdKeys {
+                        home: None,
+                        named: keyed
+                            .entries
+                            .keys()
+                            .filter_map(|key| match key {
+                                Key::Id(id) => {
+                                    Some((Named::Written(id.clone()), (key.clone(), value.span)))
+                                }
+                                _ => None,
+                            })
+                            .collect(),
+                    })
+                }),
             name: keyed.name.clone(),
             slots: keyed
                 .entries
@@ -825,6 +999,9 @@ pub(crate) fn evaluate(ir: &Ir, root: ExprId) -> (Option<Value>, Vec<Diagnostic>
         window_cell: std::ptr::null(),
         window_escaped: false,
         lazy_base: None,
+        bases: Vec::new(),
+        id_keys: false,
+        scope_cache: None,
     };
     let root_cell = Rc::new(Cell {
         state: RefCell::new(State::Running),
@@ -857,6 +1034,8 @@ pub(crate) fn evaluate(ir: &Ir, root: ExprId) -> (Option<Value>, Vec<Diagnostic>
     });
     let span = ir.exprs[root].span;
     let value = evaluator.full_value(&root_cell, span, &mut Vec::new()).ok();
+    let place = evaluator.contexts[0].root.clone();
+    evaluator.check_id_keys(&root_cell, &place, 0);
     (value, std::mem::take(&mut evaluator.diagnostics))
 }
 
@@ -1051,6 +1230,8 @@ fn collect_reads(
             {
                 out.switch = true;
             }
+            // An id in a path resolves against the scopes around it.
+            out.whole |= has_id(selectors);
             let root_reference = match &ir.exprs[*base].kind {
                 ExprKind::Ref(RefKind::Root) => Some(None),
                 ExprKind::Ref(RefKind::SelfValue) if at_root(0) => Some(None),
@@ -1069,6 +1250,12 @@ fn collect_reads(
         ExprKind::Block(block) => {
             let block = &ir.blocks[*block];
             out.copies |= !block.spreads.is_empty();
+            // What an id key names depends on the keys of the scopes around
+            // it, the root's among them (`SPEC.md` 3.2).
+            out.whole |= block
+                .entries
+                .iter()
+                .any(|entry| matches!(entry.key, Key::Id(_)) || has_id(&entry.path));
             for &spread in &block.spreads {
                 collect_reads(ir, spread, depth + 1, templates, out);
             }
@@ -1106,6 +1293,11 @@ fn collect_reads(
         }
         _ => {}
     }
+}
+
+/// Whether a path has an id key in it.
+fn has_id(path: &[Selector]) -> bool {
+    path.iter().any(|s| matches!(s.kind, SelectorKind::Id(_)))
 }
 
 /// What each template reads, computed once.
@@ -1431,6 +1623,9 @@ fn evaluate_raw(
         window_cell: std::ptr::null(),
         window_escaped: false,
         lazy_base: None,
+        bases: Vec::new(),
+        id_keys: false,
+        scope_cache: None,
     };
     // Errors in the static structure of the chains are reported once.
     evaluator.check_chains(input, &planned, None);
@@ -1515,7 +1710,10 @@ fn evaluate_raw(
         let mut visiting = vec![(Rc::as_ptr(&root_cell), None)];
         for (key, slot) in evaluated.into_iter().filter_map(|i| slots.get_index(i)) {
             let base_value = base_keyed.entries.get_full(key);
-            match evaluator.full_value(&slot.value, Span::detached(), &mut visiting) {
+            let value = evaluator.full_value(&slot.value, Span::detached(), &mut visiting);
+            let place = evaluator.contexts[id].root.child(Step::Key(key.clone()));
+            evaluator.check_id_keys(&slot.value, &place, 0);
+            match value {
                 Ok(value) => match base_value {
                     Some((_, _, base)) if base.identical(&value) => {}
                     Some((position, ..)) => in_base.push((position, key.clone(), Some(value))),
@@ -1658,6 +1856,9 @@ pub(crate) fn evaluate_again(
         window_cell: std::ptr::null(),
         window_escaped: false,
         lazy_base: Some(&lazy),
+        bases: Vec::new(),
+        id_keys: false,
+        scope_cache: None,
     };
     // The chains of the other keys are as they were, and had no errors.
     evaluator.check_chains(input, &planned, Some(dirty));
@@ -1677,6 +1878,10 @@ pub(crate) fn evaluate_again(
             let value = evaluator
                 .full_value(&slot.value, Span::detached(), &mut visiting)
                 .ok()?;
+            let place = evaluator.contexts[base_id]
+                .root
+                .child(Step::Key(key.clone()));
+            evaluator.check_id_keys(&slot.value, &place, 0);
             values.insert(key.clone(), value);
         }
     }
@@ -1716,6 +1921,8 @@ pub(crate) fn evaluate_again(
                     let value = evaluator
                         .full_value(&slot.value, Span::detached(), &mut visiting)
                         .ok()?;
+                    let place = evaluator.contexts[id].root.child(Step::Key(key.clone()));
+                    evaluator.check_id_keys(&slot.value, &place, 0);
                     if in_base.is_none_or(|base| !base.identical(&value)) {
                         fresh.push((key, Some(value)));
                     }
@@ -1731,7 +1938,7 @@ pub(crate) fn evaluate_again(
         // order, as `evaluate_raw` has them.
         let kept = data.changes.iter().filter(|(key, _)| match key {
             Key::Str(name) => !affected.contains(name),
-            Key::Int(_) => true,
+            Key::Int(_) | Key::Id(_) => true,
         });
         let mut in_base = Vec::new();
         let mut own = Vec::new();
@@ -1817,7 +2024,7 @@ impl PathStep {
             SelectorKind::Field(name) => Some(PathStep::Field(name.to_string())),
             SelectorKind::Element(i) => Some(PathStep::Element(*i)),
             SelectorKind::Accessor(i) => Some(PathStep::Accessor(*i)),
-            SelectorKind::Context(_) => None,
+            SelectorKind::Id(_) | SelectorKind::Context(_) => None,
         }
     }
 }
@@ -1936,6 +2143,9 @@ pub(crate) fn explain_planned(
         window_cell: std::ptr::null(),
         window_escaped: false,
         lazy_base: None,
+        bases: Vec::new(),
+        id_keys: false,
+        scope_cache: None,
     };
     let id = evaluator.context_state(&context);
     Ok(requests
@@ -2121,6 +2331,7 @@ impl<'a> DataPlan<'a> {
         for (key, list) in indices {
             let mut reads = Reads::default();
             for &i in &list {
+                reads.whole |= has_id(&input.ops[i].path);
                 if let Some(value) = input.ops[i].value {
                     collect_reads(
                         ir,
@@ -2769,7 +2980,10 @@ impl Evaluator<'_> {
     /// matter of memory: a key read after all is computed again.
     fn full_base(&mut self, root: &Lazy) -> Result<Value, Poisoned> {
         if !self.evict {
-            return self.full_value(root, Span::detached(), &mut Vec::new());
+            let value = self.full_value(root, Span::detached(), &mut Vec::new());
+            // Also where a key failed: the others are checked all the same.
+            self.check_id_keys(root, &root_location(root), 0);
+            return value;
         }
         let shaped = self.force(root, Span::detached()).map_err(|_| Poisoned)?;
         let Shape::Keyed(keyed) = &shaped.shape else {
@@ -2786,7 +3000,11 @@ impl Evaluator<'_> {
             self.window_cell = Rc::as_ptr(&slot.value);
             self.window_escaped = false;
             match self.full_value(&slot.value, shaped.span, &mut visiting) {
-                Ok(value) => values.push(value),
+                Ok(value) => {
+                    let place = root_location(root).child(Step::Key(key.clone()));
+                    self.check_id_keys(&slot.value, &place, 0);
+                    values.push(value);
+                }
                 Err(_) => failed = true,
             }
             let Key::Str(name) = key else {
@@ -3286,26 +3504,16 @@ impl Evaluator<'_> {
                 here,
                 context,
             } => {
-                let mut shaped = self.force(&base, recipe.span)?;
-                let mut at = Below::Value(base);
-                if recipe.key_optional {
-                    let below = DefaultedBelow {
-                        below: at,
-                        chain: chain.clone(),
-                        here: here.clone(),
-                    };
-                    if is_none(&shaped) {
-                        let start = self.start_or_empty(&below, recipe.span);
-                        shaped = self.force(&start, recipe.span)?;
-                    }
-                    at = Below::Optional(Rc::new(below));
-                }
-                let path = &recipe.path;
-                let into = PathInto {
-                    at: &at,
-                    optional: recipe.key_optional,
-                };
-                self.descend(&shaped, into, path, &recipe, &chain, here, context)
+                // While this is computed, what is in it resolves id keys
+                // against what it started from.
+                let me = self
+                    .stack
+                    .last()
+                    .map_or(std::ptr::null(), |(cell, _)| Rc::as_ptr(cell));
+                self.bases.push((me, base.clone(), recipe.clone()));
+                let result = self.run_path(base, &recipe, &chain, here, context);
+                self.bases.pop();
+                result
             }
             Job::Merge {
                 left,
@@ -3314,39 +3522,82 @@ impl Evaluator<'_> {
                 here,
                 context,
                 span,
-            } => {
-                let new = self.force(&right, span)?;
-                let old = match self.force(&left, span) {
-                    Ok(old) => old,
-                    Err(Fail::Missing(..)) => return Ok(new),
-                    Err(fail) => return Err(fail),
-                };
-                match (&old.shape, &new.shape) {
-                    (Shape::Keyed(a), Shape::Keyed(b)) if names_agree(&a.name, &b.name) => {
-                        let copy = CopyTo {
-                            chain: &chain,
-                            location: &here,
-                            context,
-                            deep: true,
-                            outer_below: &Below::Missing,
-                            span,
-                        };
-                        self.merge_keyed(a, b, &copy)
-                    }
-                    (Shape::Named(x, a), Shape::Named(y, b)) if x == y => {
-                        let copy = CopyTo {
-                            chain: &chain,
-                            location: &here,
-                            context,
-                            deep: true,
-                            outer_below: &Below::Missing,
-                            span,
-                        };
-                        Ok(self.merge_named(x, a, b, new.span, &copy))
-                    }
-                    _ => Ok(new),
-                }
+            } => self.run_merge(left, right, chain, here, context, span),
+        }
+    }
+
+    /// A path entry applied to `base` (`Job::Path`).
+    fn run_path(
+        &mut self,
+        base: Lazy,
+        recipe: &Rc<PathRecipe>,
+        chain: &Chain,
+        here: Option<Location>,
+        context: usize,
+    ) -> Eval<Rc<Shaped>> {
+        let chain = chain.clone();
+        let mut shaped = self.force(&base, recipe.span)?;
+        let mut at = Below::Value(base);
+        if recipe.key_optional {
+            let below = DefaultedBelow {
+                below: at,
+                chain: chain.clone(),
+                here: here.clone(),
+            };
+            if is_none(&shaped) {
+                let start = self.start_or_empty(&below, recipe.span);
+                shaped = self.force(&start, recipe.span)?;
             }
+            at = Below::Optional(Rc::new(below));
+        }
+        let path = &recipe.path;
+        let into = PathInto {
+            at: &at,
+            optional: recipe.key_optional,
+        };
+        self.descend(&shaped, into, path, recipe, &chain, here, context)
+    }
+
+    /// Two copies of a value at one place (`Job::Merge`).
+    fn run_merge(
+        &mut self,
+        left: Lazy,
+        right: Lazy,
+        chain: Chain,
+        here: Option<Location>,
+        context: usize,
+        span: Span,
+    ) -> Eval<Rc<Shaped>> {
+        let new = self.force(&right, span)?;
+        let old = match self.force(&left, span) {
+            Ok(old) => old,
+            Err(Fail::Missing(..)) => return Ok(new),
+            Err(fail) => return Err(fail),
+        };
+        match (&old.shape, &new.shape) {
+            (Shape::Keyed(a), Shape::Keyed(b)) if names_agree(&a.name, &b.name) => {
+                let copy = CopyTo {
+                    chain: &chain,
+                    location: &here,
+                    context,
+                    deep: true,
+                    outer_below: &Below::Missing,
+                    span,
+                };
+                self.merge_keyed(a, b, &copy)
+            }
+            (Shape::Named(x, a), Shape::Named(y, b)) if x == y => {
+                let copy = CopyTo {
+                    chain: &chain,
+                    location: &here,
+                    context,
+                    deep: true,
+                    outer_below: &Below::Missing,
+                    span,
+                };
+                Ok(self.merge_named(x, a, b, new.span, &copy))
+            }
+            _ => Ok(new),
         }
     }
 
@@ -3465,8 +3716,15 @@ impl Evaluator<'_> {
             }
             ExprKind::Path(base, selectors) => {
                 let mut value = self.eval(*base, &Self::detached(env))?;
+                // An id in the path resolves where it is written, as an id
+                // value there would (`SPEC.md` 5.1).
+                let site = has_id(selectors).then(|| match &env.here {
+                    Some(here) => (Some(here.clone()), false),
+                    None => (env.chain.as_ref().and_then(|c| c.location.clone()), true),
+                });
                 for selector in selectors {
-                    let cell = self.select(&value, selector)?;
+                    let site = site.as_ref().map(|(place, inside)| (place, *inside));
+                    let cell = self.select_at(&value, selector, site)?;
                     value = self.force(&cell, selector.span)?;
                 }
                 Ok(value)
@@ -3719,6 +3977,9 @@ impl Evaluator<'_> {
         let mut value = self.force(&base, span)?;
         for step in location.step_refs() {
             let cell = match (&value.shape, step) {
+                (Shape::Keyed(keyed), Step::Key(Key::Id(id))) => {
+                    self.id_slot(keyed, id, None, span)?.map(|(_, cell)| cell)
+                }
                 (Shape::Keyed(keyed), Step::Key(key)) => {
                     keyed.slots.get(key).map(|s| s.value.clone())
                 }
@@ -3982,13 +4243,29 @@ impl Evaluator<'_> {
     /// The cell a selector names in a value. Missing keys and elements are
     /// missing; selectors that do not apply to the value are errors.
     fn select(&mut self, value: &Shaped, selector: &Selector) -> Eval<Lazy> {
+        self.select_at(value, selector, None)
+    }
+
+    /// [`select`](Self::select), with where an id in the selector resolves:
+    /// `site` is where a reference has it, and whether that place is itself
+    /// around it. Without one it is a key of the value it selects in, and
+    /// resolves at that value's place.
+    fn select_at(
+        &mut self,
+        value: &Shaped,
+        selector: &Selector,
+        site: Option<(&Option<Location>, bool)>,
+    ) -> Eval<Lazy> {
         let span = selector.span;
         if let Some(payload) = single_payload(value, selector) {
             let payload = payload.clone();
             let inner = self.force(&payload, span)?;
-            return self.select(&inner, selector);
+            return self.select_at(&inner, selector, site);
         }
         let found = match (&value.shape, &selector.kind) {
+            (Shape::Keyed(keyed), SelectorKind::Id(id)) => {
+                self.id_slot(keyed, id, site, span)?.map(|(_, cell)| cell)
+            }
             (Shape::Keyed(keyed), SelectorKind::Field(name)) => {
                 keyed.slots.get(&KeyRef::Str(name)).map(|s| s.value.clone())
             }
@@ -4078,6 +4355,8 @@ impl Evaluator<'_> {
         }
 
         let location = env.here.clone();
+        // What the block starts from may come from another place.
+        self.settle_ids(&mut keyed, &location, span)?;
         let bind_root = location
             .as_ref()
             .is_some_and(|l| !l.name.is_empty() && l.path.is_none());
@@ -4157,6 +4436,11 @@ impl Evaluator<'_> {
     /// target's location, and passes on its defaults (`SPEC.md` 5.2).
     fn copy_entries(&mut self, source: &KeyedShape, target: &mut KeyedShape, copy: &CopyTo<'_>) {
         for (key, slot) in &source.slots {
+            // An id key is the key that names the same entry here.
+            let Ok(key) = self.slot_key(key, target, copy.location, copy.span) else {
+                continue;
+            };
+            let key = &key;
             let here = child_location(copy.location, Step::Key(key.clone()));
             let recipe = self.landed(key, slot, target.slots.get(key), copy);
             let value =
@@ -4243,7 +4527,11 @@ impl Evaluator<'_> {
             context,
         } = scope;
         let context = *context;
-        let key = &entry.key;
+        // An id key is the key that names the same entry (`SPEC.md` 3.1).
+        let Ok(key) = self.slot_key(&entry.key, keyed, location, entry.span) else {
+            return;
+        };
+        let key = &key;
         let existing = keyed.slots.get(key).cloned();
         let here = child_location(location, Step::Key(key.clone()));
         if !entry.path.is_empty() {
@@ -4411,6 +4699,12 @@ impl Evaluator<'_> {
         let step = match (&value.shape, &selector.kind) {
             (Shape::Keyed(_), SelectorKind::Field(name)) => Step::Key(Key::Str(name.clone())),
             (Shape::Keyed(_), SelectorKind::Accessor(i)) => Step::Key(Key::Int(*i)),
+            // The key the value has the entry under, if it has it.
+            (Shape::Keyed(keyed), SelectorKind::Id(id)) => {
+                let found = self.id_slot(keyed, id, None, selector.span)?;
+                Step::Key(found.map_or_else(|| Key::Id(id.clone()), |(key, _)| key))
+            }
+            (_, SelectorKind::Id(id)) => Step::Key(Key::Id(id.clone())),
             (_, SelectorKind::Accessor(i)) => {
                 Step::Index(usize::try_from(*i).unwrap_or(usize::MAX))
             }
@@ -4519,13 +4813,21 @@ impl Evaluator<'_> {
             })
         };
         match (&value.shape, &selector.kind) {
-            (Shape::Keyed(keyed), SelectorKind::Field(_) | SelectorKind::Accessor(_)) => {
+            (
+                Shape::Keyed(keyed),
+                SelectorKind::Field(_) | SelectorKind::Accessor(_) | SelectorKind::Id(_),
+            ) => {
+                let mut keyed = keyed.clone();
                 let key = match &selector.kind {
                     SelectorKind::Field(name) => Key::Str(name.clone()),
                     SelectorKind::Accessor(i) => Key::Int(*i),
+                    // A key of the value the path ends in, at its place.
+                    SelectorKind::Id(id) => {
+                        let place = here.as_ref().and_then(Location::parent);
+                        self.slot_key(&Key::Id(id.clone()), &mut keyed, &place, span)?
+                    }
                     SelectorKind::Element(_) | SelectorKind::Context(_) => unreachable!(),
                 };
-                let mut keyed = keyed.clone();
                 let exists = keyed.slots.contains_key(&key);
                 match recipe.op {
                     None if !exists && !recipe.if_set => {
@@ -4618,18 +4920,25 @@ impl Evaluator<'_> {
     }
 
     /// `value` with the child that `selector` names replaced.
-    fn with_child(&self, value: &Shaped, selector: &Selector, child: Lazy) -> Rc<Shaped> {
+    fn with_child(&mut self, value: &Shaped, selector: &Selector, child: Lazy) -> Rc<Shaped> {
         let shape = match (&value.shape, &selector.kind) {
             (Shape::Keyed(keyed), kind) => {
+                let mut keyed = keyed.clone();
                 let key = match kind {
                     SelectorKind::Field(name) => Key::Str(name.clone()),
                     SelectorKind::Accessor(i) => Key::Int(*i),
                     SelectorKind::Element(i) => Key::Int(*i as i128),
+                    // The key the value has the entry under, or a new one.
+                    SelectorKind::Id(id) => {
+                        let home = keyed.ids.as_ref().and_then(|ids| ids.home.clone());
+                        let key = Key::Id(id.clone());
+                        self.slot_key(&key, &mut keyed, &home, selector.span)
+                            .unwrap_or(key)
+                    }
                     SelectorKind::Context(_) => {
                         unreachable!("with_child follows a successful select")
                     }
                 };
-                let mut keyed = keyed.clone();
                 keyed.defaulted.remove(&key);
                 keyed.slots.insert(
                     key,
@@ -4737,6 +5046,7 @@ impl Evaluator<'_> {
         if keyed.name.is_none() {
             keyed.name = b.name.clone();
         }
+        self.settle_ids(&mut keyed, copy.location, copy.span)?;
         let chain = Some(Rc::new(ChainLink {
             location: copy.location.clone(),
             bind_root: false,
@@ -5139,4 +5449,606 @@ impl Evaluator<'_> {
         }
         if failed { Err(Poisoned) } else { Ok(values) }
     }
+}
+
+// ---- Id keys (`SPEC.md` 3.1, 3.2) ----
+
+impl Evaluator<'_> {
+    /// A failure that is reported: one that nothing here can catch.
+    fn reported<T>(&mut self, result: Eval<T>) -> Eval<T> {
+        result.map_err(|fail| match fail {
+            Fail::Missing(span, message) => self.fail(span, message),
+            Fail::Poison => Fail::Poison,
+        })
+    }
+
+    /// The shape of `cell`. While it is being computed from an earlier value
+    /// at its place, which is how the scopes around an id key are met when a
+    /// later operation reaches into them, it is the shape of that value: a
+    /// path entry's base, or the value below that a merge is reading. What
+    /// the operations met do to the keys is added to `pending`, latest
+    /// first. A cell that is computed from anything else is a cycle.
+    fn settled(&mut self, cell: &Lazy, span: Span, pending: &mut Vec<Pending>) -> Eval<Rc<Shaped>> {
+        let mut cell = cell.clone();
+        loop {
+            if !matches!(&*cell.state.borrow(), State::Running) {
+                let result = self.force(&cell, span);
+                return self.reported(result);
+            }
+            let ptr = Rc::as_ptr(&cell);
+            if let Some((_, base, recipe)) = self.bases.iter().rev().find(|(c, ..)| *c == ptr) {
+                pending.push(Pending::Path(recipe.clone(), 0));
+                cell = base.clone();
+                continue;
+            }
+            // What it is computing now, if that is at its own place.
+            let next = self
+                .stack
+                .iter()
+                .position(|(c, _)| Rc::ptr_eq(c, &cell))
+                .and_then(|at| self.stack.get(at + 1))
+                .map(|(next, _)| next.clone())
+                .filter(|next| {
+                    cell.location.is_some() && same_place(&cell.location, &next.location)
+                });
+            let Some(next) = next else {
+                return Err(self.cycle(&cell, span));
+            };
+            if let Some(expr) = cell.expr {
+                pending.push(Pending::Block(expr));
+            }
+            cell = next;
+        }
+    }
+
+    /// The keys that the entries of a block set and remove, for a block that
+    /// merges with the value below it: `{ ... }` or `& ~ { ... }`.
+    fn block_keys(&self, expr: ExprId, added: &mut Vec<Arc<str>>, removed: &mut Vec<Arc<str>>) {
+        let block = match &self.ir.exprs[expr].kind {
+            ExprKind::Block(block) => *block,
+            ExprKind::Binary(BinOp::Merge | BinOp::MergeShallow, _, rhs) => {
+                match &self.ir.exprs[*rhs].kind {
+                    ExprKind::Block(block) => *block,
+                    _ => return,
+                }
+            }
+            ExprKind::Scope(inner) => return self.block_keys(*inner, added, removed),
+            _ => return,
+        };
+        for entry in &self.ir.blocks[block].entries {
+            let Key::Str(name) = &entry.key else { continue };
+            if !entry.path.is_empty() {
+                continue;
+            }
+            let (to, from) = match entry.op {
+                Some(_) => (&mut *added, &mut *removed),
+                None => (&mut *removed, &mut *added),
+            };
+            from.retain(|key| key != name);
+            to.push(name.clone());
+        }
+    }
+
+    /// What the operations in `pending` that end at the value reached do to
+    /// its keys: those they set, and those they remove.
+    fn pending_keys(&self, pending: &[Pending]) -> (Vec<Arc<str>>, Vec<Arc<str>>) {
+        let (mut added, mut removed) = (Vec::new(), Vec::new());
+        // Earliest first, so that the last one decides.
+        for pending in pending.iter().rev() {
+            match pending {
+                Pending::Block(expr) => self.block_keys(*expr, &mut added, &mut removed),
+                Pending::Path(recipe, matched) => {
+                    if *matched + 1 != recipe.path.len() {
+                        continue;
+                    }
+                    let Some(SelectorKind::Field(name)) = recipe.path.last().map(|s| &s.kind)
+                    else {
+                        continue;
+                    };
+                    let (to, from) = match recipe.op {
+                        Some(_) => (&mut added, &mut removed),
+                        None => (&mut removed, &mut added),
+                    };
+                    from.retain(|key: &Arc<str>| key != name);
+                    to.push(name.clone());
+                }
+            }
+        }
+        (added, removed)
+    }
+
+    /// The scopes around `place`, outermost first: the root, and each keyed
+    /// value on the way that is a scope, by its flag or by its type
+    /// (`SPEC.md` 3.2). The value at `place` is among them only if `inside`.
+    fn scopes_around(
+        &mut self,
+        place: &Location,
+        inside: bool,
+        span: Span,
+    ) -> Eval<Rc<Vec<Scope>>> {
+        if let Some(cache) = &self.scope_cache
+            && cache.steps == self.steps
+            && cache.depth == self.stack.len()
+            && cache.inside == inside
+            && same_place(&Some(cache.place.clone()), &Some(place.clone()))
+        {
+            return Ok(cache.scopes.clone());
+        }
+        let scopes = Rc::new(self.find_scopes(place, inside, span)?);
+        self.scope_cache = Some(ScopeCache {
+            steps: self.steps,
+            depth: self.stack.len(),
+            place: place.clone(),
+            inside,
+            scopes: scopes.clone(),
+        });
+        Ok(scopes)
+    }
+
+    fn find_scopes(&mut self, place: &Location, inside: bool, span: Span) -> Eval<Vec<Scope>> {
+        let Some(base) = place.base.upgrade() else {
+            return Ok(Vec::new());
+        };
+        let steps = place.steps();
+        let around = match (inside, steps.len()) {
+            (true, all) => all,
+            (false, 0) => return Ok(Vec::new()),
+            (false, all) => all - 1,
+        };
+        // The operations still being applied to a value on the way.
+        let mut pending: Vec<Pending> = Vec::new();
+        let mut value = self.settled(&base, span, &mut pending)?;
+        let mut path: Vec<Step> = Vec::new();
+        let mut walk: Vec<ScopeStep> = Vec::new();
+        let mut found = vec![Scope {
+            path: Vec::new(),
+            value: value.clone(),
+            added: Vec::new(),
+            removed: Vec::new(),
+        }];
+        (found[0].added, found[0].removed) = self.pending_keys(&pending);
+        for step in &steps[..around] {
+            // A key goes into a named tuple of one element (`SPEC.md` 5.1).
+            while let (Step::Key(_) | Step::Accessor(_), Shape::Named(_, items)) =
+                (step, &value.shape)
+                && let [item] = items.as_slice()
+            {
+                let item = item.clone();
+                path.push(Step::Index(0));
+                walk.push(ScopeStep::Element(0));
+                pending.clear();
+                value = self.settled(&item, span, &mut pending)?;
+                found.push(Scope {
+                    path: path.clone(),
+                    value: value.clone(),
+                    added: Vec::new(),
+                    removed: Vec::new(),
+                });
+            }
+            let next = match (&value.shape, step) {
+                (Shape::Keyed(keyed), Step::Key(Key::Id(id))) => self
+                    .id_slot(keyed, id, None, span)?
+                    .map(|(key, cell)| (cell, Step::Key(key.clone()), ScopeStep::Key(key))),
+                (Shape::Keyed(keyed), Step::Key(key)) => keyed.slots.get(key).map(|slot| {
+                    (
+                        slot.value.clone(),
+                        Step::Key(key.clone()),
+                        ScopeStep::Key(key.clone()),
+                    )
+                }),
+                (Shape::Keyed(keyed), Step::Accessor(i)) => {
+                    let key = Key::Int(*i);
+                    keyed.slots.get(&key).map(|slot| {
+                        (
+                            slot.value.clone(),
+                            Step::Key(key.clone()),
+                            ScopeStep::Key(key.clone()),
+                        )
+                    })
+                }
+                (Shape::List(items), Step::Index(i)) => items
+                    .get(*i)
+                    .map(|cell| (cell.clone(), Step::Index(*i), ScopeStep::Index(*i))),
+                (Shape::List(items), Step::Accessor(i)) => usize::try_from(*i).ok().and_then(|i| {
+                    Some((items.get(i)?.clone(), Step::Index(i), ScopeStep::Index(i)))
+                }),
+                (Shape::Tuple(items) | Shape::Named(_, items), Step::Index(i)) => items
+                    .get(*i)
+                    .map(|cell| (cell.clone(), Step::Index(*i), ScopeStep::Element(*i))),
+                _ => None,
+            };
+            let Some((cell, taken, walked)) = next else {
+                break;
+            };
+            // The path entries that go on through this step.
+            pending.retain_mut(|pending| {
+                // A block's entries are keys of the value it is at.
+                let Pending::Path(recipe, matched) = pending else {
+                    return false;
+                };
+                let same = match (recipe.path.get(*matched).map(|s| &s.kind), &taken) {
+                    (Some(SelectorKind::Field(name)), Step::Key(Key::Str(key))) => name == key,
+                    (Some(SelectorKind::Accessor(i)), Step::Key(Key::Int(key))) => i == key,
+                    (Some(SelectorKind::Accessor(i)), Step::Index(index)) => {
+                        usize::try_from(*i).is_ok_and(|i| i == *index)
+                    }
+                    (Some(SelectorKind::Element(i)), Step::Index(index)) => i == index,
+                    (Some(SelectorKind::Id(id)), Step::Key(Key::Id(key))) => id == key,
+                    _ => false,
+                };
+                *matched += 1;
+                same
+            });
+            path.push(taken);
+            walk.push(walked);
+            value = self.settled(&cell, span, &mut pending)?;
+            let (added, removed) = self.pending_keys(&pending);
+            found.push(Scope {
+                path: path.clone(),
+                value: value.clone(),
+                added,
+                removed,
+            });
+        }
+        let is_keyed = |scope: &Scope| matches!(scope.value.shape, Shape::Keyed(_));
+        let flagged =
+            |scope: &Scope| matches!(&scope.value.shape, Shape::Keyed(keyed) if keyed.scope);
+        let typed = match self.defaults {
+            Some(defaults)
+                if defaults.has_scopes()
+                    && found[1..]
+                        .iter()
+                        .any(|scope| is_keyed(scope) && !flagged(scope)) =>
+            {
+                let values: Vec<Value> = found.iter().map(|scope| outline(&scope.value)).collect();
+                defaults.scopes_on(&values, &walk)
+            }
+            _ => Vec::new(),
+        };
+        Ok(found
+            .into_iter()
+            .enumerate()
+            .filter(|(i, scope)| {
+                is_keyed(scope) && (*i == 0 || flagged(scope) || typed.get(*i) == Some(&true))
+            })
+            .map(|(_, scope)| scope)
+            .collect())
+    }
+
+    /// What the id key `id` names at `place` (`SPEC.md` 3.2): the scopes are
+    /// those around the place, and the place itself if `inside`. An id that
+    /// names nothing is an error if `report`, and is then what is written,
+    /// as is one where there is no place to resolve it at.
+    fn name_id(
+        &mut self,
+        id: &IdPath,
+        place: &Option<Location>,
+        inside: bool,
+        span: Span,
+        report: bool,
+    ) -> Eval<Named> {
+        let Some(location) = place.as_ref().filter(|l| l.anchor == Anchor::Root) else {
+            return Ok(Named::Written(id.clone()));
+        };
+        // The root's own id keys name its other keys: there is nothing
+        // around it. While it is put together, they are taken at their
+        // word, and checked once it is whole.
+        let mut inside = inside;
+        if location.path.is_none() && !inside {
+            let whole = location
+                .base
+                .upgrade()
+                .is_some_and(|root| matches!(&*root.state.borrow(), State::Done(_)));
+            if !whole {
+                let path: Vec<Step> = id
+                    .keys()
+                    .iter()
+                    .map(|key| Step::Key(Key::Str(key.clone())))
+                    .collect();
+                return Ok(Named::At(path.into()));
+            }
+            inside = true;
+        }
+        let scopes = self.scopes_around(location, inside, span)?;
+        let [first, rest @ ..] = id.keys() else {
+            return Ok(Named::Written(id.clone()));
+        };
+        let scope = if id.is_rooted() {
+            scopes.first().filter(|scope| scope.has(first))
+        } else {
+            scopes.iter().rev().find(|scope| scope.has(first))
+        };
+        let mut stopped_at = None;
+        if let Some(scope) = scope {
+            let mut path = scope.path.clone();
+            path.push(Step::Key(Key::Str(first.clone())));
+            let mut cell = match &scope.value.shape {
+                Shape::Keyed(keyed) => keyed
+                    .slots
+                    .get(&KeyRef::Str(first))
+                    .map(|s| s.value.clone()),
+                _ => None,
+            };
+            for (i, key) in rest.iter().enumerate() {
+                let value = match &cell {
+                    Some(cell) => Some(self.settled(cell, span, &mut Vec::new())?),
+                    None => None,
+                };
+                cell = match value.as_ref().map(|value| &value.shape) {
+                    Some(Shape::Keyed(keyed)) => {
+                        keyed.slots.get(&KeyRef::Str(key)).map(|s| s.value.clone())
+                    }
+                    _ => None,
+                };
+                if cell.is_none() {
+                    stopped_at = Some(i);
+                    break;
+                }
+                path.push(Step::Key(Key::Str(key.clone())));
+            }
+            if stopped_at.is_none() {
+                return Ok(Named::At(path.into()));
+            }
+        }
+        if report {
+            let message = match stopped_at {
+                Some(i) => {
+                    let reached: Vec<&str> = id.keys()[..=i].iter().map(|key| &**key).collect();
+                    format!(
+                        "the id key `{id}` names nothing: `{}` has no key `{}`",
+                        reached.join("."),
+                        rest[i]
+                    )
+                }
+                None if id.is_rooted() || scopes.len() <= 1 => {
+                    format!("the id key `{id}` names no root key")
+                }
+                None => {
+                    let inner: Vec<String> = scopes[1..]
+                        .iter()
+                        .rev()
+                        .take(3)
+                        .map(|scope| format!("`{}`", describe_steps(&scope.path)))
+                        .collect();
+                    format!(
+                        "the id key `{id}` names nothing: no `{first}` in {} or the root",
+                        inner.join(", ")
+                    )
+                }
+            };
+            let message = format!(
+                "{message}; an id key has to name an entry, and a key that names nothing is \
+                 written as a string"
+            );
+            // A key is resolved again wherever its value is looked at.
+            if !self
+                .diagnostics
+                .iter()
+                .any(|d| d.span == span && d.message == message)
+            {
+                self.report_at(span, message, place);
+            }
+        }
+        Ok(Named::Written(id.clone()))
+    }
+
+    /// Makes `keyed`'s id keys those of `place`: a value that comes from
+    /// another place has them resolved again here, and two that name the
+    /// same entry here are an error.
+    fn settle_ids(
+        &mut self,
+        keyed: &mut KeyedShape,
+        place: &Option<Location>,
+        span: Span,
+    ) -> Eval<()> {
+        let Some(ids) = &keyed.ids else {
+            return Ok(());
+        };
+        if same_place(&ids.home, place) {
+            return Ok(());
+        }
+        let old = ids.clone();
+        let spans: std::collections::HashMap<&Key, Span> =
+            old.named.values().map(|(key, span)| (key, *span)).collect();
+        let mut named: FastMap<Named, (Key, Span)> = FastMap::default();
+        for key in keyed.slots.keys() {
+            let Key::Id(id) = key else { continue };
+            let key_span = spans.get(key).copied().unwrap_or(span);
+            let names = self.name_id(id, place, false, key_span, true)?;
+            match named.get(&names) {
+                Some((other, _)) => {
+                    let message = same_entry(other, key, &names);
+                    self.report(Diagnostic::error(span, message));
+                }
+                None => {
+                    named.insert(names, (key.clone(), key_span));
+                }
+            }
+        }
+        keyed.ids = Some(Rc::new(IdKeys {
+            home: place.clone(),
+            named,
+        }));
+        Ok(())
+    }
+
+    /// The key that `keyed`, at `place`, has the entry of `key` under: for
+    /// an id key, the one there already that names the same entry, and else
+    /// the key itself (`SPEC.md` 3.1).
+    fn slot_key(
+        &mut self,
+        key: &Key,
+        keyed: &mut KeyedShape,
+        place: &Option<Location>,
+        span: Span,
+    ) -> Eval<Key> {
+        let Key::Id(id) = key else {
+            return Ok(key.clone());
+        };
+        self.id_keys = true;
+        self.settle_ids(keyed, place, span)?;
+        let names = self.name_id(id, place, false, span, true)?;
+        let ids = keyed.ids.get_or_insert_with(|| {
+            Rc::new(IdKeys {
+                home: place.clone(),
+                named: FastMap::default(),
+            })
+        });
+        if let Some((found, _)) = ids.named.get(&names) {
+            return Ok(found.clone());
+        }
+        Rc::make_mut(ids).named.insert(names, (key.clone(), span));
+        Ok(key.clone())
+    }
+
+    /// The entry of `keyed` that the id `id` selects: its key and value.
+    /// `site` is where a reference has the id, and whether that place is
+    /// itself around it; without one the id is a key of `keyed`, and
+    /// resolves at its place.
+    fn id_slot(
+        &mut self,
+        keyed: &KeyedShape,
+        id: &IdPath,
+        site: Option<(&Option<Location>, bool)>,
+        span: Span,
+    ) -> Eval<Option<(Key, Lazy)>> {
+        let Some(ids) = &keyed.ids else {
+            return Ok(None);
+        };
+        let names = match site {
+            None => {
+                // As written here, it is the key that names the same.
+                let key = Key::Id(id.clone());
+                if let Some(slot) = keyed.slots.get(&key) {
+                    return Ok(Some((key, slot.value.clone())));
+                }
+                let home = ids.home.clone();
+                self.name_id(id, &home, false, span, false)?
+            }
+            Some((place, inside)) => self.name_id(id, place, inside, span, false)?,
+        };
+        // A value with no place has its keys as written.
+        let found = ids
+            .named
+            .get(&names)
+            .or_else(|| ids.named.get(&Named::Written(id.clone())));
+        Ok(found.and_then(|(key, _)| Some((key.clone(), keyed.slots.get(key)?.value.clone()))))
+    }
+
+    /// Checks the id keys of a computed value against where it ended up, at
+    /// `place`: each has to name an entry, no two the same one, and none
+    /// another than it did while its value was put together.
+    fn check_id_keys(&mut self, cell: &Lazy, place: &Location, depth: usize) {
+        if !self.id_keys || depth > MAX_VALUE_DEPTH {
+            return;
+        }
+        let Some(shaped) = done_shape(cell) else {
+            return;
+        };
+        match &shaped.shape {
+            Shape::Keyed(keyed) => {
+                if let Some(ids) = &keyed.ids {
+                    self.check_keyed(keyed, ids, place, shaped.span);
+                }
+                for (key, slot) in &keyed.slots {
+                    let place = place.child(Step::Key(key.clone()));
+                    self.check_id_keys(&slot.value, &place, depth + 1);
+                }
+            }
+            Shape::List(items) | Shape::Tuple(items) | Shape::Named(_, items) => {
+                for (i, item) in items.iter().enumerate() {
+                    self.check_id_keys(item, &place.child(Step::Index(i)), depth + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn check_keyed(&mut self, keyed: &KeyedShape, ids: &IdKeys, place: &Location, span: Span) {
+        let place = Some(place.clone());
+        let at_home = same_place(&ids.home, &place);
+        let before: std::collections::HashMap<&Key, (&Named, Span)> = ids
+            .named
+            .iter()
+            .map(|(names, (key, span))| (key, (names, *span)))
+            .collect();
+        let mut seen: FastMap<Named, Key> = FastMap::default();
+        for key in keyed.slots.keys() {
+            let Key::Id(id) = key else { continue };
+            let (was, key_span) = match before.get(key) {
+                Some((names, span)) => (Some(*names), *span),
+                None => (None, span),
+            };
+            let Ok(now) = self.name_id(id, &place, false, key_span, true) else {
+                continue;
+            };
+            let Named::At(target) = &now else {
+                continue;
+            };
+            if let Some(other) = seen.get(&now) {
+                let message = same_entry(other, key, &now);
+                self.report_at(key_span, message, &place);
+                continue;
+            }
+            if at_home
+                && let Some(Named::At(was)) = was
+                && was != target
+            {
+                let message = format!(
+                    "the id key `{key}` named `{}` while its value was put together, and names \
+                     `{}` in the end: a later operation on a scope around it changed what it names; \
+                     write the key from the root, as `@::name`, or as a path id",
+                    describe_steps(was),
+                    describe_steps(target),
+                );
+                self.report_at(key_span, message, &place);
+            }
+            seen.insert(now, key.clone());
+        }
+    }
+
+    fn report_at(&mut self, span: Span, message: String, place: &Option<Location>) {
+        let mut diagnostic = Diagnostic::error(span, message);
+        // The root has no name to say.
+        diagnostic.context = place
+            .as_ref()
+            .map(Location::describe)
+            .filter(|place| !place.is_empty());
+        self.diagnostics.push(diagnostic);
+    }
+}
+
+/// The error for two id keys of one value that name the same entry.
+fn same_entry(first: &Key, second: &Key, names: &Named) -> String {
+    let entry = match names {
+        Named::At(path) => format!(", `{}`", describe_steps(path)),
+        Named::Written(_) => String::new(),
+    };
+    format!(
+        "the keys `{first}` and `{second}` name the same entry here{entry}: id keys are compared \
+         by what they name, so this value would have the key twice"
+    )
+}
+
+/// A place from the root, as a path: `screens[0].filter`.
+fn describe_steps(steps: &[Step]) -> String {
+    let mut out = String::new();
+    for step in steps {
+        match step {
+            Step::Key(Key::Str(name)) if crate::value::is_identifier(name) => {
+                if !out.is_empty() {
+                    out.push('.');
+                }
+                out.push_str(name);
+            }
+            Step::Key(key) => out.push_str(&key.as_step()),
+            Step::Index(i) => {
+                let _ = write!(out, "[{i}]");
+            }
+            Step::Accessor(i) => {
+                let _ = write!(out, "[{i}]");
+            }
+        }
+    }
+    out
 }
