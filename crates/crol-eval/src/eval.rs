@@ -5616,7 +5616,6 @@ impl Evaluator<'_> {
                 let item = item.clone();
                 path.push(Step::Index(0));
                 walk.push(ScopeStep::Element(0));
-                pending.clear();
                 value = self.settled(&item, span, &mut pending)?;
                 found.push(Scope {
                     path: path.clone(),

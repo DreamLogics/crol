@@ -6,3 +6,4 @@
 1-base/a.crod:9:11: -: `@tag` is not set
 1-base/a.crod:14:43: the keys `@tag` and `@::tag` name the same entry here, `tag`: id keys are compared by what they name, so this value would have the key twice
 1-base/a.crod:20:13: cycle: this value depends on itself
+1-base/a.crod:24:30: the id key `@tag` named `tag` while its value was put together, and names `moved.tag` in the end: a later operation on a scope around it changed what it names; write the key from the root, as `@::name`, or as a path id

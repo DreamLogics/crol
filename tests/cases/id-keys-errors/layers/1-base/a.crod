@@ -18,3 +18,8 @@
 // ancestor's: a cycle.
 #[scope]
 +cycle: { ..&self.inner, inner: { @tag: 1 } }
+
+// See the layer above.
+#[scope]
++moved: { weapon: { bonus: { @tag: 1.0 } } }
++patch: { tag: Tag {} }

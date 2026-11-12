@@ -442,3 +442,32 @@ fn reload_resolves_keys_again() {
         BTreeMap::from([(Id::key("armored"), 2.0)])
     );
 }
+
+#[test]
+fn typed_paths_take_id_keys() {
+    use crol::{CrolDb, Navigable as _};
+    use crol_derive::Navigable;
+
+    #[derive(Debug, Deserialize, Serialize, Navigable)]
+    struct Game {
+        armored: BTreeMap<String, u8>,
+        light: BTreeMap<String, u8>,
+        bonus: BTreeMap<Id, f64>,
+    }
+    let layer = CrolLayer::from_sources(
+        "base",
+        [(
+            "a.crod",
+            "+armored: {}\n+light: {}\n+bonus: { @armored: 1.0 }",
+        )],
+    );
+    let mut db: CrolDb<Game> = CrolComposer::new().load_layer(layer).compose_db().unwrap();
+    let armored = || Game::path().bonus().key(Id::key("armored"));
+    let light_id = Id::key("light");
+    let light = || Game::path().bonus().key(&light_id);
+    assert_eq!(db.select().get(armored()).unwrap(), 1.0);
+    let tx = db.transaction().at(armored()).set(2.0).unwrap();
+    tx.at(light()).set(3.0).unwrap().commit().unwrap();
+    assert_eq!(db.select().get(armored()).unwrap(), 2.0);
+    assert_eq!(db.select().get(light()).unwrap(), 3.0);
+}
