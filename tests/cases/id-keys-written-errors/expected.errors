@@ -1,0 +1,4 @@
+1-base/a.crod:3:2: `@tag` cannot be a root key: root keys are what ids name, and an id key is a key of a map inside the data (`SPEC.md` 3.1)
+1-base/a.crod:4:10: `@tag` cannot be a root key: root keys are what ids name, and an id key is a key of a map inside the data (`SPEC.md` 3.1)
+1-base/a.crod:7:18: an id names keys, written `.name` or `["key"]`: not list elements, tuple elements, integer keys or conditions
+1-base/a.crod:8:27: an id names keys, written `.name` or `["key"]`: not list elements, tuple elements, integer keys or conditions

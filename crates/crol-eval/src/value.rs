@@ -8,8 +8,9 @@ use indexmap::IndexMap;
 
 use crate::source::Span;
 
-/// A key of a keyed value: a string or an integer (`SPEC.md` 3.1). Integer
-/// keys sort before string keys, as in the canonical encoding.
+/// A key of a keyed value: a string, an integer or an id (`SPEC.md` 3.1).
+/// Integer keys sort before string keys, and those before id keys, as in the
+/// canonical encoding.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Key {
     /// An integer key: `12: "a"`, `[-3]: "a"`.
@@ -17,6 +18,11 @@ pub enum Key {
     /// A string key: `port: 80`, `"cache url": 1`. Values with the same
     /// field share its name.
     Str(Arc<str>),
+    /// An id key: `@web: 1`, `@::a.b: 1`. It is the id as written, and is
+    /// never equal to a string key. While a value is evaluated, id keys are
+    /// compared by what they name (`SPEC.md` 3.1), so an evaluated value
+    /// holds each entry once, under the id first written for it.
+    Id(IdPath),
 }
 
 /// A borrowed [`Key`], for looking up entries without allocating. It hashes
@@ -43,7 +49,26 @@ impl Key {
     pub fn is_identifier(&self) -> bool {
         match self {
             Key::Str(s) => is_identifier(s),
-            Key::Int(_) => false,
+            Key::Int(_) | Key::Id(_) => false,
+        }
+    }
+
+    /// The id of an id key.
+    pub fn as_id(&self) -> Option<&IdPath> {
+        match self {
+            Key::Id(id) => Some(id),
+            _ => None,
+        }
+    }
+
+    /// The key as a step of a path: `.port`, `["cache url"]`, `[12]`,
+    /// `[@web]`.
+    pub fn as_step(&self) -> String {
+        match self {
+            Key::Str(s) if is_identifier(s) => format!(".{s}"),
+            Key::Str(s) => format!("[{}]", quote(s)),
+            Key::Int(i) => format!("[{i}]"),
+            Key::Id(id) => format!("[{id}]"),
         }
     }
 }
@@ -58,7 +83,8 @@ pub fn is_identifier(text: &str) -> bool {
         && !matches!(text, "_" | "true" | "false")
 }
 
-/// Displays a key as an entry key: `port`, `"cache url"`, `12`, `[-3]`.
+/// Displays a key as an entry key: `port`, `"cache url"`, `12`, `[-3]`,
+/// `@web`.
 impl fmt::Display for Key {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -66,6 +92,7 @@ impl fmt::Display for Key {
             Key::Str(s) => write!(f, "{}", quote(s)),
             Key::Int(i) if *i < 0 => write!(f, "[{i}]"),
             Key::Int(i) => write!(f, "{i}"),
+            Key::Id(id) => write!(f, "{id}"),
         }
     }
 }
@@ -431,5 +458,10 @@ mod tests {
         assert_eq!(Key::Int(12).to_string(), "12");
         assert_eq!(Key::Int(-3).to_string(), "[-3]");
         assert!(Key::Int(1) < Key::Str("a".into()));
+        let id = Key::Id(IdPath::parse("@::a.b").unwrap());
+        assert_eq!(id.to_string(), "@::a.b");
+        assert_eq!(id.as_step(), "[@::a.b]");
+        assert!(Key::Str("z".into()) < id);
+        assert_ne!(Key::Id(IdPath::key("a")), Key::Str("a".into()));
     }
 }

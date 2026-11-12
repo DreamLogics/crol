@@ -163,7 +163,20 @@ impl Document<'_> {
                 .ancestors()
                 .chain(node.descendants())
                 .find(|n| n.kind() == SyntaxKind::ID_EXPR);
+            // An id key that names nothing is an error, so the data is that
+            // of the last evaluation that gave any.
+            let of_key = match (self.snapshot, self.file, &id_node) {
+                (Some(snapshot), Some(file), Some(id_node)) => crate::features::key_id(id_node)
+                    .and_then(|(_, steps)| {
+                        let evaluation = crate::features::evaluation_for(snapshot, Some(file));
+                        let root = evaluation.value.as_ref()?;
+                        let place = crate::features::data_path_lenient(root, &steps);
+                        Some(snapshot.id_resolver_in(file, root).visible(&place))
+                    }),
+                _ => None,
+            };
             let candidates = match (self.snapshot, self.file, &id_node) {
+                _ if of_key.is_some() => of_key.unwrap_or_default(),
                 (Some(snapshot), Some(file), Some(id_node)) => {
                     let node = id_node
                         .parent()

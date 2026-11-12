@@ -261,7 +261,7 @@ Structs and maps are the same thing in CROL: one notation, one kind of
 value. Whether a keyed value becomes a struct or a map is the Rust
 type's business (section 10).
 
-**Keys** are strings or integers.
+**Keys** are strings, integers or ids.
 
 | Key | In an entry | In a path |
 |---|---|---|
@@ -269,16 +269,45 @@ type's business (section 10).
 | any other string | `"cache url": 1` | `["cache url"]` |
 | a non-negative integer | `12: "a"` | `[12]` |
 | a negative integer | `[-3]: "a"` (section 5.1) | `[-3]` |
+| an id | `@web: 1`, `@a.b: 1`, `@::web: 1` | `.@web` or `[@web]` (section 5.1) |
 
 `port`, `"port"`, `.port` and `["port"]` all name the same key. A string
 key and an integer key are never equal: `"12"` and `12` are different
 keys. The formatter writes string keys bare when they are identifiers,
 and paths with `.name` when it can.
 
+**Id keys.** A key can be an id, with every form an id value has (section
+3.2): `@web`, `@"odd id"`, `@settings.filter`, `@::web`. It says that the
+key names another entry of the data, as the ids in a list of tags do:
+
+```rust
++is_biological: Tag {}
++toxin_grenade: Weapon {
+    damage: { amount: 23.0, bonus: { @is_biological: 47.0 } },
+}
+```
+
+- An id key is never equal to a string or integer key: `@web` and `web`
+  are different keys, and a value may hold both.
+- **Two id keys are the same key when they name the same entry.** `@x` and
+  `@::x` are one key where `@x` names the root's `x`, and two keys in a
+  scope that has an `x` of its own. Setting, declaring, removing and
+  merging all go by what a key names, at the place the keyed value ends up
+  (section 3.2): a later layer's `bonus.@::is_biological: 50.0` sets the
+  entry written above. A value holds each entry once, under the id first
+  written for it, and that is the key it deserializes to, is printed with
+  and is fingerprinted by (appendix B).
+- **An id key has to name an entry.** One that names nothing is an error,
+  where an id value that names nothing is a warning (section 10.5), since
+  keys cannot be compared without what they name. A map whose keys may
+  name things outside the data has string keys.
+- **A value takes id keys or it does not.** A map keyed by `crol::Id`
+  takes only id keys, and any other map, and every struct, refuses them
+  (section 10.5). Root keys are no ids: they are what ids name.
+
 Map keys of other Rust types are written as strings or integers: a unit
-enum variant by its name (`Red: 1` for a `HashMap<Color, _>`), an id as
-its text (section 10.5). Boolean, char, tuple and other keys are not
-supported.
+enum variant by its name (`Red: 1` for a `HashMap<Color, _>`). Boolean,
+char, tuple and other keys are not supported.
 
 ### 3.2 Ids
 
@@ -297,10 +326,11 @@ key, as an id written `@::x` always does.
 **Resolution.** An id is resolved against the evaluated data of a
 context, at the place its value ends up, not where it was written: a
 template or spread copies an id into another block, and it resolves
-there.
+there. An id key's place is that of the keyed value it is a key of.
 
 1. Take the scopes around the id's place, innermost first, ending at
-   the root. The value at the id's place itself is not one of them.
+   the root. The value at the id's place itself is not one of them; the
+   id keys of a value document's own root name its other keys.
 2. `@x` names `x` in the first of these scopes that has the key `x`.
    `@::x` names the root key `x`.
 3. In `@a.b`, `a` is found so, and `b` is a key of what `a` holds; every
@@ -325,9 +355,37 @@ settings: Screen {
 with `Screen` marked `#[crol(scope)]`. Nothing evaluates through an id,
 so resolution has none of the order dependence that section 6.1 rules
 out for references: "there is no implicit lookup" is about `&`, which
-reads values while they are evaluated. Ids are resolved after
+reads values while they are evaluated. Ids in values are resolved after
 evaluation, and change no value. Every id is reported with what it
 resolved to (section 10.5).
+
+**Ids in keys are resolved during evaluation**, since they decide which
+entries a value has (section 3.1): they are part of its shape (section
+7.5).
+
+- Resolving a key needs the keys of the scopes around its value, not
+  their contents, nor the value itself. As a late reference does (section
+  7.3), it sees the final data: a key can name a key declared later, or in
+  a later layer.
+- Keys resolve where their value ends up. A template's keys are as
+  written until it is spread; a spread or `~` resolves the keys it copies
+  at the place it copies them to, and sets the entries they name there. A
+  value that is at another place than where it was put together, as one a
+  reference reads whole, has its keys resolved again there, and two of
+  them that name one entry there are an error.
+- A scope whose shape needs the value's own keys, such as one around it
+  that spreads it, is a cycle (section 7.5). A scope that a later
+  operation is still being applied to is no cycle where that operation
+  starts from the scope's earlier value: a path entry, or a block or
+  `& ~ { ... }` that merges with the value below. Its keys are then those
+  of the earlier value with what the operation's own entries set and
+  remove. When the data is whole, every key is checked against it: one
+  that then names another entry than it did while its value was put
+  together is an error, which says to write the key from the root or as a
+  path id.
+- The scopes are those of the data, `#[scope]`, and with a schema those
+  of its `#[crol(scope)]` types (section 10.5). A value document has only
+  the first.
 
 ### 3.3 Equality
 
@@ -336,7 +394,9 @@ Integers and floats are never equal to each other. Floats compare as
 IEEE numbers (`0.0 == -0.0`). Keyed values are equal when their type
 names and entries (as sets of key and value) are equal; entry
 order, the defaults and scope flags and defaulted fields are ignored.
-Ids are equal when they are written alike: `@x` and `@::x` are not. This
+Ids are equal when they are written alike: `@x` and `@::x` are not. So
+are the id keys of two values that are compared: each value has its
+entries under the ids first written for them (section 3.1). This
 equality is what list `-` uses.
 
 **Identity** is stricter: values are identical when they are equal and
@@ -715,6 +775,8 @@ A target is a key (section 3.1) followed by **selectors**:
   non-negative integer). Whether `[3]` is a key or an index depends on
   the value it is applied to. An identifier in brackets (`[port]`) is
   an error, since a bare identifier is never a lookup: write `.port`;
+- `.@id` and `[@id]` — an id key (section 3.1): `bonus.@is_biological`,
+  `bonus[@::is_biological]`;
 - on a named tuple of one element (`Some(x)`, `Trooper({ ... })`), `.name`
   and `[key]` go into that element: `w.damage` with `w: Some({ damage: 5 })`
   is `5`, the same as `w.0.damage`. In a target, the result stays in the
@@ -737,6 +799,21 @@ after it, as keys of its own (section 3.2): `@settings.filter`,
 `[3]`, `.0` and `<c>` after an id are errors, since an id names a key, not a
 list element that moves when the list changes. `@::` is written with no
 space after `@`.
+
+**Id keys in paths.** The same holds for an id that is a key: in
+`@a.b: 1` and in `m.@a.b: 1` the key is the id `@a.b`. An id in brackets
+is whole, so a path goes on after it: `[@a.b].c: 1` sets `c` in the entry
+of `@a.b`, and `m[@a].b` reads `b` in the entry of `@a`. A condition or a
+`?` ends an id's own keys too: `@a<prod>: 1`.
+
+- In a target, the id is a key of the value the path has reached, and
+  resolves at that value's place (section 3.2): `bonus.@::x: 50` sets the
+  entry of `bonus` that names the root's `x`, whichever id it was written
+  with.
+- In a reference, `&bonus[@is_biological]`, the id resolves where it is
+  written, as an id value there would, and the entry is then looked up by
+  what it names. Where the value has no such entry it is missing (section
+  6.5).
 
 **Path entries.** For a target with selectors, every step but the last
 must exist; a missing step is an error naming it. The operation then
@@ -1652,7 +1729,8 @@ Each value has two levels:
 
 - its **shape**: its kind, type name and, for keyed values, its keys,
   defaults flag and defaulted fields; for lists and tuples, their
-  length;
+  length. Id keys are in it as what they name (section 3.2), so the shape
+  of a value with id keys needs the shapes of the scopes around it;
 - its **contents**: the values of its entries and elements, each lazy
   in turn.
 
@@ -1787,8 +1865,8 @@ is an error, like a `.crol` file there (section 4).
   span is in its document, so that no file can make loading panic or loop.
 
 A file keeps ids as written, with every key and whether they start from the
-root, and the scope flags `#[scope]` gives (section 6.1.2): ids are resolved
-when the data is loaded, not when it is compiled.
+root, id keys among them, and the scope flags `#[scope]` gives (section
+6.1.2): ids are resolved when the data is loaded, not when it is compiled.
 
 The format is not stable before 1.0. A file says its version, `binary::FORMAT`, and
 is compiled again when that changes.
@@ -2117,9 +2195,10 @@ entry        ::= "-" "?"? target
                | ".." postfix?
 target       ::= key "?"? step*
 step         ::= selector "?"?          (a "?" not after a variant, and not last)
-key          ::= identifier | string | integer | accessor
-accessor     ::= "[" ( string | "-"? integer ) "]"
-selector     ::= "." identifier | "." tuple_index | accessor | variant
+key          ::= identifier | string | integer | accessor | id
+accessor     ::= "[" ( string | "-"? integer | id id_key* ) "]"
+id_key       ::= "." identifier | "[" string "]"          (* section 5.1 *)
+selector     ::= "." identifier | "." tuple_index | "." id | accessor | variant
 variant      ::= "<" condition ( "+" condition )* ">"
 condition    ::= cond_xor ( "|" cond_xor )*
 cond_xor     ::= cond_and ( "^" cond_and )*
@@ -2181,7 +2260,11 @@ Notes:
   line break between them ends nothing.
 - In `postfix`, the selectors after an `id` are the id's own keys
   (section 5.1): `@a.b` is one id. Only `.` identifier and an accessor with
-  a string are allowed there.
+  a string are allowed there. The same holds after an `id` that is a
+  `key`, or a `selector` after a `.`, up to a `?` or a `variant`; in an
+  `accessor` they are the `id_key`s inside the brackets.
+- An `@` starts an entry only as its key, with its `:` on the same line;
+  anywhere else among entries it is a value out of place.
 - `line_break` is no token: it stands where section 5.3 says a line
   break ends an entry. That rule also decides, where `expr` or `target`
   could go on, whether they stop there.
@@ -2210,11 +2293,11 @@ and a `Serializer` that writes plain value documents.
 | `seq` | list |
 | `tuple` | tuple |
 | `tuple_struct` | `Name(a, b)` or `(a, b)` |
-| `map` | keyed value. String keys deserialize into strings, unit enum variants (by name), `crol::Id` (section 10.5) and newtypes of these; integer keys into integer types. A type name on it is checked against what wraps it (section 10.2) |
+| `map` | keyed value. String keys deserialize into strings, unit enum variants (by name) and newtypes of these; integer keys into integer types; id keys into `crol::Id` and newtypes of it, which take no other key (section 10.5). A type name on it is checked against what wraps it (section 10.2) |
 | `struct` | keyed value whose keys are all strings (section 10.2) |
 | `enum` | `V`, `V(x)`, `V(a, b)`, `V { ... }` (section 10.4) |
 | `identifier` | field and variant names |
-| `any` | the value's natural form: keyed values as maps (type name dropped), named tuples as single-entry maps from name to payload, ids as their text with `@` (`"@web"`, section 10.5) |
+| `any` | the value's natural form: keyed values as maps (type name dropped), named tuples as single-entry maps from name to payload, ids as their text with `@` (`"@web"`, section 10.5), also as keys |
 | `ignored_any` | anything |
 
 ### 10.2 Structs
@@ -2446,9 +2529,16 @@ Internally tagged, adjacently tagged and untagged enums go through
 `crol::Id` holds an id as written: its keys and whether it starts from the
 root. It accepts only an id (`@web`), not a string, and a `String` accepts
 only a string: `@web` there is an error, "expected a string, found an id;
-a field that takes ids is a `crol::Id`". As a map key, `crol::Id` accepts a
-string key, since keys cannot be written with `@` (`HashMap<crol::Id, u32>`
-is written `{ web: 1 }`); a path id cannot be a key.
+a field that takes ids is a `crol::Id`".
+
+**As a map key** it is the same: `HashMap<crol::Id, u32>` is written
+`{ @web: 1 }`, with any id as a key, a path id or one from the root as
+well (section 3.1). A string key there is an error, "expected an id key,
+found the string key web; write `@web`", and so is an integer key. Any
+other map refuses an id key, "expected a string key, found the id key
+`@web`; only a map keyed by `crol::Id` takes id keys", and so does a
+struct: a value takes id keys or it does not. The `Id` a key gives is the
+id first written for its entry (section 3.1).
 
 ```rust
 pub struct Id { /* keys, rooted */ }
@@ -2467,47 +2557,54 @@ in other formats (`"@web"` in JSON), and what an id is through `any`: in
 `#[serde(flatten)]`, `#[serde(untagged)]` and `serde_json::Value`. An `Id`
 accepts text only if it starts with `@`, so it tells an id from a string
 also where serde buffers the value. There a `String` gets the text,
-`"@web"`, since serde reads the value before it knows the type. Ids are
+`"@web"`, since serde reads the value before it knows the type. An id key
+is the same text through `any`, so a flattened map keyed by `Id` reads its
+keys, and one keyed by `String` gets `"@web"`. Ids are
 equal when written alike: `@x` and `@::x` are different ids.
 
 **Reported uses.** Every id the deserializer produces is recorded as an
-`IdUse`, returned beside the value, with what it resolved to (section 3.2):
+`IdUse`, returned beside the value, with what it resolved to (section 3.2),
+an id key as well, also in a value document:
 
 ```rust
 #[non_exhaustive]
 pub struct IdUse {
     pub id: Id,
-    pub span: Span,                  // where it was written
-    pub rust_path: String,           // web.depends_on[0]
+    pub span: Span,                  // where it was written; for a key, its entry's value
+    pub rust_path: String,           // web.depends_on[0]; for a key, grenade.bonus[@is_biological]
     pub target: Option<DataPath>,    // where it resolved to; None: nothing
 }
 let (svc, ids): (Service, Vec<IdUse>) = data.get_with_ids("web")?;
 ```
 
 A `DataPath` is a place in the data from the root, of steps
-`DataStep::Key` (a string or integer key), `Index` (of a list) and
+`DataStep::Key` (a string, integer or id key), `Index` (of a list) and
 `Element` (of a tuple or a named tuple's payload), and is written as a
-path: `dashboard.filter`, `screens[0].list`. `CrolData::contains_path` and
-`CrolData::type_name_at` look one up. A map key resolves at the map's
-place. An id is recorded also where serde buffers values, since the
-deserializer records it before.
+path: `dashboard.filter`, `screens[0].list`, `grenade.bonus[@armored]`.
+`CrolData::contains_path` and `CrolData::type_name_at` look one up. An id
+key resolves at the map's place. An id is recorded also where serde
+buffers values, since the deserializer records it before.
 
 **What is checked.** After evaluating, the loader resolves every id of
-the composed context: ids in values, and where the schema types a map's
-keys as `Id`, those keys. One that names nothing is a warning in
-`CrolData::warnings()`, since ids may name things outside the data;
-`CrolConfig::strict_ids` makes it an error, and a reload that fails so
-keeps the last good data. These are found after evaluating and are not
-the evaluator's (section 7.9). Where the schema types a field
-`Id([types])` (section 10.10), `crol::check` also says when what an id
-names is of no such type, in every evaluated context. Value documents
-(`crol::from_str_with_ids`) have no schema, so there only `#[scope]` makes
-scopes, and ids are reported only through `IdUse`.
+the composed context, in values and in keys. An id value that names
+nothing is a warning in `CrolData::warnings()`, since ids may name things
+outside the data; `CrolConfig::strict_ids` makes it an error, and a reload
+that fails so keeps the last good data. These are found after evaluating
+and are not the evaluator's (section 7.9). An id key that names nothing is
+the evaluator's error (section 3.2), with or without `strict_ids`. Where
+the schema types a field `Id([types])` (section 10.10), `crol::check` also
+says when what an id names is of no such type, in every evaluated
+context; a map typed `Map(Id([types]), _)` has its keys checked the same
+way, and `crol::check` says where a map has a key its type does not take,
+as the deserializer would. Value documents (`crol::from_str_with_ids`)
+have no schema, so there only `#[scope]` makes scopes, and id values are
+reported only through `IdUse`.
 
 **The loader needs the schema** for scopes of `#[crol(scope)]` types:
 `CrolComposer::schema(...)`, as for `&default` (section 6.1.3), since the
 loader does not read `#![schema]`. Without it, the same data resolves as if
-there were none of those scopes. The loader cannot see this by itself;
+there were none of those scopes, and its id keys are compared so too: the
+evaluator has the scope types from the same schema (section 3.2). The loader cannot see this by itself;
 `crol check` and the language server, which have the schema, say so at
 the first id that resolves only through such a type.
 
@@ -2728,14 +2825,15 @@ any `Serialize` value: structs as `Name { field: ... }` (type names
 optional, on by default), maps as `{ key: ... }` with keys written as
 section 3.1 shows, `Option` as `Some(x)`/`None` (or bare `x` with
 `implicit_some`), floats with section 6.6's formatting, strings with
-escapes. Map keys that are not strings, integers or unit variants are an
-error. A struct whose serialization leaves fields out with
+escapes. Map keys that are not strings, integers, unit variants or ids are
+an error. A struct whose serialization leaves fields out with
 `skip_serializing_if` gets `..`. serde does not tell the serializer about
 `#[serde(skip_serializing)]`, so a struct with such a field reads back
 only if it has `explicit_defaults = false` (section 10.3). A `crol::Id` is
-written as an id, `@web`, `@settings.filter` or `@::web`, and as a map key as
-the bare key; a path id as a key is an error. The output has no operators; it is
-plain data that reads back to the same value.
+written as an id, `@web`, `@settings.filter` or `@::web`, as a map key too:
+`{@web: 1}`. The output has no operators; it is plain data that reads back
+to the same value, where its id keys name entries of the document it is
+read in (section 3.1).
 
 `CrolData::reload(changes)` is for a program watching its files: each
 `DocumentChange` gives a layer, a path and the document's new text (`None`
@@ -3004,7 +3102,7 @@ its default, unless `explicit_defaults` says otherwise (section 10.3).
 | `List(ty)`, `Set(ty)` | `Vec`, `VecDeque`, slices; `HashSet`, `BTreeSet` (elements unique) |
 | `Array(ty, n)` | `[T; n]` (a tuple of `n` in serde) |
 | `Tuple([ty, ...])` | tuples |
-| `Map(key, value)` | `HashMap`, `BTreeMap`, `IndexMap` |
+| `Map(key, value)` | `HashMap`, `BTreeMap`, `IndexMap`; with `Id([...])` as the key, a map that takes id keys, whose keys are checked as ids are |
 | `Named("path")` | a type in `types` |
 | `Any` | anything; not checked |
 
@@ -3474,7 +3572,10 @@ tree.
 - blank lines between entries are kept, but at most one;
 - a `..` marker is moved to the end of its block, and duplicates are
   removed;
-- the outer braces of a document written as one untyped block are removed.
+- the outer braces of a document written as one untyped block are removed;
+- string keys that are identifiers are written bare, and `["name"]` in a
+  path as `.name` (section 3.1). An id key is written as it is, brackets
+  included, since `[@a].b` and `@a.b` are different paths (section 5.1).
 
 Nothing here depends on the mode, which is why `crol fmt` needs no more
 than the file: in both modes such braces mean nothing, and a typed block is
@@ -3635,7 +3736,8 @@ diagnostics of its own unless it is open, and has a warning on the
 **Diagnostics.** Everything `crol check` reports, on the spot: syntax,
 reading and evaluation errors, schema errors on final values (unknown
 fields, wrong kinds, missing fields, type names), ids that name nothing
-or the wrong type, and warnings. An error that occurs only in some
+or the wrong type, id keys that name nothing (an error, section 3.1),
+and warnings. An error that occurs only in some
 contexts says in which (`in {prod_eu, cache}: ...`), listing at most a
 few and a count. Fields left out of a patch block or path entry are never an error, since
 only final values are checked. For the same reason a document of a layered
@@ -3710,7 +3812,10 @@ definition's, and a reference shows the docs of what it names.
 - On a reference or id, after those: what it names, and its value if that fits
   on a line, since that cannot be read off the document as a written value can.
   An id written in a template names something in each place the template is
-  spread into (section 3.2): each is shown.
+  spread into (section 3.2): each is shown. An id key names what it resolves
+  to at the value it is a key of, whichever id the data has its entry under.
+  Other paths have no step for an id key, so hover says nothing of the
+  values in an entry with one.
 - In data, on a key or value that more than one operation has touched, in the
   context chosen with the `context` setting: below a rule, each operation with
   its value, file, line and layer. One operation adds nothing to the document.
@@ -3751,7 +3856,8 @@ trigger completion, as do `.`, `&`, `<` and `@`.
   type names that fit the type there;
   `true`/`false`; after `@`, the keys of the scopes around the cursor,
   innermost first (section 3.2), filtered by `#[crol(refers(...))]`;
-  `None`/`Some`.
+  `None`/`Some`. After `@` where a key goes, the same for the scopes around
+  the value the key is of.
   In a schema file (section 10.10), `root` and `Named(...)` offer the paths in
   its `types`, as a string or inside the quotes of one, the only place in a
   string where anything is offered.
@@ -3763,6 +3869,14 @@ trigger completion, as do `.`, `&`, `<` and `@`.
 - In `#[type(...)]` (section 6.1.2): the Rust names and schema type names;
   after a `.`, the steps the type there has: its fields, tuple indices and
   `[]`.
+- After `#[` where an entry starts (section 6.1.2): `scope`, before an entry
+  that sets a value, a value bind, or nothing yet, and `type`, before a value
+  bind or nothing yet, and not in a variant block. After `#![` (section 4.1):
+  `use`, `schema`, and for the document's mode `type`, or `extends` and
+  `variant`; only before the first entry or expression, and `type` only for a
+  document that can have one. Each has its doc, and neither list has an
+  attribute that would be an error there, such as one the entry or document
+  already has and takes once. The closing `]` need not be written yet.
 - After `..&root.`: root keys whose value is keyed.
 - Hover on a template use shows the template and where it is defined;
   go to definition jumps there.
@@ -3773,14 +3887,15 @@ trigger completion, as do `.`, `&`, `<` and `@`.
   layer below or at the cursor (with every layer's as alternatives); on
   a bind, the bound entry; on an id, the definition of what it names
   where its value ends up, which for an id in a template is one in each
-  place it is spread into; on a
+  place it is spread into; on an id key, of what it names at the value it
+  is a key of; on a
   reference path, the entry that set the final value there.
 - "Go to value below": the operation that produced `&` at the cursor,
   through go to definition on a bare `&`.
 - Find references: for a root key, every operation on it in every
   layer, every reference to it, and every id that resolves to it; for a
   key inside a root value, or an id, every id that resolves to that
-  place; for a bind, its uses.
+  place, id keys as the data has them; for a bind, its uses.
 - Document symbols (the outline): root entries with their entry kind
   and type name (`+web: Service`, `<prod> › web.replicas`), nested
   blocks as children. Workspace symbols: every root key.
@@ -3913,8 +4028,8 @@ two visible binds with one name, or a bind named like a template or
 inside a variant block; `#[type(...)]` on anything but a value bind,
 twice on one, or another entry attribute; `#[scope]` twice on an entry, or
 before a remove, spread or variant block; selectors after an id other than
-`.name` and `["key"]` (5.1); an entry bind at the top level of a data-mode
-document; a bind on a remove, variant block,
+`.name` and `["key"]` (5.1); an id as a root key (3.1); an entry bind at the
+top level of a data-mode document; a bind on a remove, variant block,
 spread, `..`, variant entry or inside a variant block; a variant
 selector on `&` or `&default`.
 
@@ -3925,7 +4040,10 @@ outside `??`, or spread; `&default` without a schema; operators on the wrong kin
 division by zero; a non-finite float; `~` on lists, scalars, different
 type names; `.0` on a keyed value; an
 integer key at the root; a spread of something that is not keyed;
-`#[scope]` on a value that is not keyed; `&self`, `&parent`, `&top` or a bind in a block
+`#[scope]` on a value that is not keyed; an id key that names nothing, two
+id keys of a value that name one entry where it ends up, or one that names
+another entry in the end than while its value was put together (3.2);
+`&self`, `&parent`, `&top` or a bind in a block
 without a location; `&parent` above the top level; `&top` at the top level or
 in a value bind's own block; a cycle.
 
@@ -3940,8 +4058,9 @@ of another kind or group.
 unknown fields; missing
 fields, of a root struct on the composed root (4.1); a type name that does not match; a value of the wrong kind or
 out of range; a plain string where `crol::Id` is required, and an id
-where a `String` is; with `strict_ids`, an id that names nothing; variant
-key rules (8.5). And the application's own checks.
+where a `String` is; a string or integer key in a map keyed by `crol::Id`,
+and an id key anywhere else (10.5); with `strict_ids`, an id that names
+nothing; variant key rules (8.5). And the application's own checks.
 
 **Warnings**: an id that names nothing (10.5), and with a schema a type
 name on a map that nothing names (10.2), in `CrolData::warnings()`
@@ -4211,11 +4330,12 @@ unsigned LEB128. Each value is a tag byte and a payload:
 | `0x08` | tuple | count, values |
 | `0x09` | unit name | name |
 | `0x0A` | named tuple | name, count, values |
-| `0x0B` | keyed value | name (empty for none), flag byte (bit 0 the defaults flag, bit 1 the scope flag), count of defaulted keys and the keys (integers ascending, then strings in byte order), count of entries, then per entry its key and value in insertion order |
+| `0x0B` | keyed value | name (empty for none), flag byte (bit 0 the defaults flag, bit 1 the scope flag), count of defaulted keys and the keys (integers ascending, then strings in byte order, then ids, those not from the root first, by their keys), count of entries, then per entry its key and value in insertion order |
 | `0x0C` | any other id (`@a.b`, `@::a`) | `0x01` if from the root else `0x00`, count of keys, then each key as a name |
 
 A name is a length and UTF-8 bytes. A key is encoded as a value (tag
-`0x02` or `0x05`). The data is encoded as: the byte string `CROL1`; the
+`0x02` or `0x05`, and for an id key `0x06` or `0x0C`, the id as the value
+has it: section 3.1). The data is encoded as: the byte string `CROL1`; the
 count of root keys, then each key (as a string) and value in root order;
 the count of evaluated non-base contexts, then for each context, ordered
 by its sorted list of chosen variant names (ancestors left out): that

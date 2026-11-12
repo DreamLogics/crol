@@ -89,6 +89,7 @@ impl fmt::Display for DataPath {
                 }
                 DataStep::Key(Key::Str(key)) => write!(f, "[{}]", crol_eval::quote(key))?,
                 DataStep::Key(Key::Int(key)) => write!(f, "[{key}]")?,
+                DataStep::Key(Key::Id(key)) => write!(f, "[{key}]")?,
                 DataStep::Index(index) => write!(f, "[{index}]")?,
                 DataStep::Element(index) => write!(f, ".{index}")?,
             }
@@ -114,6 +115,47 @@ pub(crate) struct Types<'a> {
     schema: &'a SchemaFile,
 }
 
+impl<'a> Types<'a> {
+    pub(crate) fn new(schema: &'a SchemaFile) -> Self {
+        Types { schema }
+    }
+}
+
+/// Which of the values on the way from the root to a place are scopes by
+/// their type, for the evaluator, which resolves id keys as it goes
+/// (`crol_eval::DefaultsProvider::scopes_on`): `values[0]` is the root, of
+/// the type at `root_type` (`None`: the schema's root type), and `steps[i]`
+/// leads from `values[i]` to `values[i + 1]`. The values need only their
+/// kind and type name.
+pub(crate) fn scopes_on(
+    schema: &SchemaFile,
+    root_type: Option<&str>,
+    values: &[Value],
+    steps: &[crol_eval::ScopeStep],
+) -> Vec<bool> {
+    let mut scopes = vec![false; values.len()];
+    let Some(root) = values.first() else {
+        return scopes;
+    };
+    let resolver = Resolver::with_root_type(root, Some(schema), root_type);
+    let types = Types { schema };
+    let mut ty = resolver.root_type();
+    for (i, step) in steps.iter().enumerate() {
+        let (Some(value), Some(next)) = (values.get(i), values.get(i + 1)) else {
+            break;
+        };
+        let step = match step {
+            crol_eval::ScopeStep::Key(key) => DataStep::Key(key.clone()),
+            crol_eval::ScopeStep::Index(index) => DataStep::Index(*index),
+            crol_eval::ScopeStep::Element(index) => DataStep::Element(*index),
+        };
+        ty = ty.and_then(|ty| types.child(&ty, value, &step));
+        scopes[i + 1] = matches!(next.kind, ValueKind::Keyed(_))
+            && ty.as_ref().is_some_and(|ty| types.is_scope(ty, next));
+    }
+    scopes
+}
+
 /// The data and types ids resolve against.
 #[derive(Clone, Copy)]
 pub(crate) struct Resolver<'a> {
@@ -127,12 +169,14 @@ pub(crate) struct Resolver<'a> {
 
 /// An id met in the data, and what it names.
 pub(crate) struct Resolved<'a> {
-    /// The id value, or for a map key, the map.
+    /// The id value, or for an id key, the value of its entry.
     pub(crate) value: &'a Value,
     pub(crate) id: IdPath,
-    /// Where it is: the id's place, or for a map key, the map's.
+    /// Where it is: the id's place, or for an id key, the map's.
     pub(crate) location: DataPath,
     pub(crate) target: Option<DataPath>,
+    /// Whether it is a key.
+    pub(crate) key: bool,
 }
 
 impl<'a> Resolver<'a> {
@@ -298,8 +342,8 @@ impl<'a> Resolver<'a> {
         format!("the id `{id}` names nothing")
     }
 
-    /// Every id in the data, and what it names: id values, and with a
-    /// schema, the keys of maps it types as keyed by ids (`SPEC.md` 10.5).
+    /// Every id in the data, and what it names: id values and id keys
+    /// (`SPEC.md` 10.5).
     pub(crate) fn all(&self) -> Vec<Resolved<'a>> {
         let mut found = Vec::new();
         let ty = self.root_type();
@@ -355,6 +399,7 @@ impl<'a> Resolver<'a> {
                     id: id.clone(),
                     location: location.clone(),
                     target,
+                    key: false,
                 });
             }
             ValueKind::Keyed(keyed) => {
@@ -364,20 +409,16 @@ impl<'a> Resolver<'a> {
                 {
                     unnamed.push(value);
                 }
-                let id_keys = match (&ty, self.types) {
-                    (Some(ty), Some(types)) => types.keys_are_ids(ty),
-                    _ => false,
-                };
                 for (key, entry) in &keyed.entries {
-                    if id_keys && let Key::Str(name) = key {
-                        let id = IdPath::key(name.clone());
+                    if let Key::Id(id) = key {
                         // A key resolves at the map's place.
-                        let target = self.resolve(&id, location);
+                        let target = self.resolve(id, location);
                         found.push(Resolved {
-                            value,
-                            id,
+                            value: entry,
+                            id: id.clone(),
                             location: location.clone(),
                             target,
+                            key: true,
                         });
                     }
                     let step = DataStep::Key(key.clone());
@@ -549,23 +590,23 @@ impl<'a> Types<'a> {
         NameFit::Unknown
     }
 
-    /// Whether a value of type `ty` is a map keyed by ids.
-    fn keys_are_ids(&self, ty: &TypeExpr) -> bool {
-        let mut ty = ty.clone();
+    /// The types an id of type `ty` may name, if `ty` is an id, through
+    /// newtypes and transparent structs around one.
+    pub(crate) fn id_type(&self, ty: &'a TypeExpr) -> Option<&'a [String]> {
+        let mut ty = ty;
         for _ in 0..MAX_WRAPPERS {
             match ty {
-                TypeExpr::Map(key, _) => return matches!(*key, TypeExpr::Id(_)),
-                TypeExpr::Option(inner) => ty = *inner,
-                TypeExpr::Named(ref path) => match self.schema.get(path) {
+                TypeExpr::Id(refers) => return Some(refers),
+                TypeExpr::Named(path) => match self.schema.get(path) {
                     Some(TypeDef::Newtype { inner, .. } | TypeDef::Transparent { inner, .. }) => {
-                        ty = inner.clone();
+                        ty = inner;
                     }
-                    _ => return false,
+                    _ => return None,
                 },
-                _ => return false,
+                _ => return None,
             }
         }
-        false
+        None
     }
 
     /// The type of what `step` reaches in `value`, of type `ty`.
@@ -718,8 +759,11 @@ pub struct ResolvedId {
     /// Where it was written: one id written in a template is met at each
     /// place the template is copied to, with the same span.
     pub span: Span,
-    /// Where it is in the data; for a map key, the map's place.
+    /// Where it is in the data; for an id key, the map's place.
     pub location: DataPath,
+    /// Whether it is a key of a map rather than a value: `@name: value`.
+    /// Its span is then that of the entry's value.
+    pub is_key: bool,
     /// Where it resolved to, or `None` if it names nothing.
     pub target: Option<DataPath>,
     /// Why it names nothing, as a diagnostic says it.
@@ -784,8 +828,7 @@ impl<'a> IdResolver<'a> {
         self.inner().visible(location)
     }
 
-    /// Every id in the data and what it names: id values, and with a
-    /// schema, the keys of maps it types as keyed by ids.
+    /// Every id in the data and what it names: id values and id keys.
     pub fn ids(&self) -> Vec<ResolvedId> {
         let resolver = self.inner();
         resolver
@@ -794,6 +837,7 @@ impl<'a> IdResolver<'a> {
             .map(|resolved| ResolvedId {
                 id: crate::Id::from_path(&resolved.id),
                 span: span_of(&resolved),
+                is_key: resolved.key,
                 problem: resolved
                     .target
                     .is_none()

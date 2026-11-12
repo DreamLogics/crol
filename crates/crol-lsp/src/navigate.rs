@@ -295,12 +295,20 @@ pub(crate) fn references(
         && !places.is_empty()
     {
         for id in snapshot.resolved_ids(file) {
-            if id
+            if !id
                 .target
                 .as_ref()
                 .is_some_and(|target| places.contains(target))
-                && let Some(location) =
-                    span_location(snapshot, id_name_span(snapshot, id.span), encoding)
+            {
+                continue;
+            }
+            // A key has the span of its entry's value: the key is beside it.
+            let span = if id.is_key {
+                crate::features::id_key_span(snapshot, id.span, &id.id)
+            } else {
+                Some(id_name_span(snapshot, id.span))
+            };
+            if let Some(location) = span.and_then(|span| span_location(snapshot, span, encoding))
                 && !out.contains(&location)
             {
                 out.push(location);

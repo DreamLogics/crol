@@ -352,3 +352,85 @@ fn check_value_checks_the_names() {
         ["error: `Windw { ... }` is not a `Window`"]
     );
 }
+
+/// A newtype around a map keyed by ids.
+#[derive(Debug, Deserialize, Schema)]
+struct Bonus(BTreeMap<crol::Id, u8>);
+
+/// A transparent struct around one.
+#[derive(Debug, Deserialize, Schema)]
+#[serde(transparent)]
+struct Links(BTreeMap<crol::Id, u8>);
+
+#[derive(Debug, Deserialize, Schema)]
+struct Keyed {
+    bonus: Bonus,
+    links: Links,
+    plain: BTreeMap<crol::Id, u8>,
+}
+
+/// Maps keyed by ids have the names of what wraps them, and their keys are
+/// checked as ids all the same (`SPEC.md` 10.2, 10.5).
+#[test]
+fn maps_keyed_by_ids_have_the_names_of_what_wraps_them() {
+    let schema = crol::schema::build::<Keyed>();
+    let check = |text: &str| -> Vec<String> {
+        let value: crol::RawValue = crol::from_str(text).unwrap();
+        crol::check_value(&value.0, &schema, None, &Default::default())
+            .into_iter()
+            .map(|d| {
+                let severity = if d.is_error() { "error" } else { "warning" };
+                format!("{severity}: {}", d.message)
+            })
+            .collect()
+    };
+    let good =
+        "Keyed { bonus: Bonus { @bonus: 1 }, links: Links { @links: 2 }, plain: { @plain: 3 } }";
+    assert_eq!(check(good), [""; 0]);
+    crol::from_str_with_schema::<Keyed>(good, &schema).unwrap();
+    // A name on the plain map is a warning, and the data loads.
+    let named = good.replace("plain: {", "plain: Plain {");
+    assert_eq!(
+        check(&named),
+        [
+            "warning: the type name `Plain` names nothing: this is a map, which has no type name; write `{ ... }`"
+        ]
+    );
+    crol::from_str::<Keyed>(&named).unwrap();
+    // A wrong name on a wrapper is an error, the newtype's without a schema.
+    let wrong = good
+        .replace("Bonus {", "Bonsu {")
+        .replace("Links {", "Linsk {");
+    assert_eq!(
+        check(&wrong),
+        [
+            "error: `Bonsu { ... }` is not a `Bonus`",
+            "error: `Linsk { ... }` is not a `Links`",
+        ]
+    );
+    expect!["`Bonsu { ... }` is not a `Bonus` (<string>:1:16, while deserializing bonus)"]
+        .assert_eq(&err::<Keyed>(&wrong));
+    // A key of the wrong kind is reported under a good name as well.
+    let string_key = good.replace("@links: 2", "links: 2");
+    let found = check(&string_key);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].starts_with("error: "), "{found:?}");
+    assert!(!found[0].contains("is not a"), "{found:?}");
+
+    // In layered data the loader has the schema, and with it the name of
+    // the transparent struct, as `crol::check` does.
+    let layered = "bonus: Bonus { @bonus: 1 }\nlinks: Linsk { @links: 2 }\nplain: { @plain: 3 }\n";
+    let layer = CrolLayer::from_sources("base", [("a.crod", layered)]);
+    let data = CrolComposer::new()
+        .schema(crol::schema::build::<Keyed>())
+        .load_layer(layer)
+        .compose_data()
+        .unwrap();
+    let error = data.deserialize_root::<Keyed>(None).unwrap_err();
+    let found = crol::check(&data, &schema, None, &Default::default());
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].message, error.message());
+    assert_eq!(Some(found[0].span), error.span());
+    expect!["`Linsk { ... }` is not a `Links` (base/a.crod:2:8, while deserializing links)"]
+        .assert_eq(&error.to_string());
+}

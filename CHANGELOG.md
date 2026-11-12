@@ -10,7 +10,7 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 ## [Unreleased]
 
 This release changes the format in ways that break documents and programs written for
-0.3.0 (#11):
+0.3.0 (#11, #19):
 
 - A `String` field no longer accepts an id: `name: @web` there is an error. Use
   `crol::Id` for a field that takes ids, or write a string.
@@ -19,9 +19,14 @@ This release changes the format in ways that break documents and programs writte
   key of `@web`, and `From<String>` and `From<&str>` are gone. As text it has its `@`:
   `Display` writes `@web`, `FromStr` reads it, other serde formats see `"@web"`, and so
   does `deserialize_any`, as in `#[serde(flatten)]` and `#[serde(untagged)]`.
+- A map keyed by `crol::Id` takes only id keys: `{ web: 1 }` for a `HashMap<Id, u32>`
+  is an error, "expected an id key, found the string key web; write `@web`". Write
+  `{ @web: 1 }`. `to_string` writes the keys of such a map as ids, and an id key that
+  names nothing is an error, not a warning.
 - `IdUse.id` is an `Id`, and `IdUse` is `#[non_exhaustive]`.
 - `crol_eval::ValueKind::Id` holds a `crol_eval::IdPath`, and `crol_eval::Keyed` has a
   `scope` field.
+- `crol_eval::Key` has a third kind of key, `Id`.
 - `crol_syntax::SyntaxKind` has a new kind, `SCOPE_KW`, which renumbers the kinds after
   it.
 - `.crob` files have a new format: compile layers again.
@@ -33,6 +38,22 @@ This release changes the format in ways that break documents and programs writte
 
 ### Added
 
+- Ids as map keys: `@name: value`, with every form an id has, `@a.b: 1` and `@::a: 1`
+  too, for a map whose keys name other entries, such as a `HashMap<crol::Id, f64>` of
+  damage bonuses by tag. An id key is no string key, and names things as an id value
+  does, through the scopes around its map. Two id keys are the same key when they name
+  the same entry, so a later layer's `bonus.@::is_biological: 50.0` sets what
+  `@is_biological: 47.0` wrote; a path takes an id after a dot or in brackets,
+  `bonus[@armored].factor`, and a reference reads one, `&bonus[@armored]`. An id key
+  is reported as an `IdUse`, also in a value document, and `crol::check` checks what a
+  key of a map typed `Map(Id([types]), _)` names. A map that takes id keys takes no
+  others, and no other map takes them; through `any` an id key is its text, `"@web"`.
+- The language server goes to what an id key names and shows it on hover, lists id keys
+  among the references of what they name, completes `@` where a key goes, and suggests
+  a key for one that names nothing. The tree-sitter grammar has id keys.
+- `ResolvedId::is_key` tells an id key from an id value, a typed path's `.key(...)` takes
+  an `Id`, and `crol_eval::DefaultsProvider` has `has_scopes` and `scopes_on`, through
+  which the evaluator learns the scopes of `#[crol(scope)]` types.
 - Scoped ids. An id names a key of the innermost scope around the place its value ends
   up, falling back to the root, so that grouped data need not have global names: two
   screens can each have a `filter`, and `@filter` in each names its own. A block is a
@@ -60,6 +81,9 @@ This release changes the format in ways that break documents and programs writte
 - A type name on a plain map, where nothing names the type, is a warning when there is
   a schema: in `CrolData::warnings()`, from `crol::check` and `crol check`, and in the
   language server. The data loads as before.
+- The language server completes attributes: after `#[`, `scope` and `type`, where the
+  entry after it can have them and has not; after `#![`, the document attributes that
+  fit the document and its mode. Each comes with its doc (#16).
 
 ### Changed
 

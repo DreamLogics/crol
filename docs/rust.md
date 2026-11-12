@@ -34,7 +34,7 @@ with any format, with a few CROL rules on top.
 | `()`                           | `()`                                                   |
 | `Vec<T>`, sets                 | a list                                                 |
 | tuples, arrays                 | a tuple                                                |
-| maps                           | a keyed value; keys are strings, integers, unit enum variants or `crol::Id` |
+| maps                           | a keyed value; keys are strings, integers or unit enum variants, and for a map keyed by `crol::Id`, [ids](#ids) |
 | structs                        | a keyed value, with the checks below                   |
 | `struct N(T)`                  | `N(x)` or `x`; a block `x` may be written `N { ... }`  |
 | `struct P(A, B)`               | `P(a, b)` or `(a, b)`                                  |
@@ -355,6 +355,72 @@ true, .. }` it is an error that stops the data from loading.
 
 As text, an id is written as in a file, with its `@`: `id.to_string()` is
 `"@web"`, `"@web".parse::<Id>()` reads one, and in JSON an `Id` is `"@web"`.
+
+A map keyed by `Id` takes [id keys](language.md#ids-as-keys), and only those:
+
+```rust
+// src/main.rs
+use std::collections::BTreeMap;
+
+use crol::{CrolComposer, CrolLayer, Id, IdUse};
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct Weapon {
+    bonus: BTreeMap<Id, f64>,
+}
+
+fn main() -> Result<(), crol::Error> {
+    let base = CrolLayer::from_sources(
+        "base",
+        [(
+            "a.crod",
+            "+is_biological: {}\n+armored: {}\n\
+             +grenade: { bonus: { @is_biological: 47.0, @armored: 5.0 } }",
+        )],
+    );
+    // Another id for the same entry sets it.
+    let balance = CrolLayer::from_sources(
+        "balance",
+        [("a.crod", "grenade.bonus.@::is_biological: 50.0")],
+    );
+    let data = CrolComposer::new()
+        .load_layer(base)
+        .load_layer(balance)
+        .compose_data()?;
+
+    let (grenade, ids): (Weapon, Vec<IdUse>) = data.get_with_ids("grenade")?;
+    for (tag, bonus) in &grenade.bonus {
+        println!("{tag}: {bonus}");
+    }
+    for id in ids {
+        println!("{} names {}", id.rust_path, id.target.unwrap());
+    }
+    Ok(())
+}
+```
+
+```console
+$ cargo run
+@armored: 5
+@is_biological: 50
+grenade.bonus[@is_biological] names is_biological
+grenade.bonus[@armored] names armored
+```
+
+Keys are compared by what they name, so the map has each entry once, under the
+id first written for it, and each key is reported as an `IdUse` like any other
+id. A key that names nothing does not load: it is an error, with or without
+`strict_ids`. A string key in such a map is an error too, "expected an id key,
+found the string key web; write `@web`", and so is an id key in any other map
+or in a struct. Where serde reads a value before it knows its type, as under
+`#[serde(flatten)]`, an id key is its text, `"@web"`, as an id value is.
+
+`crol::to_string` writes the keys of such a map as ids, `{@web: 1}`. That reads
+back in a document where the keys name something; a map on its own, with
+nothing for its keys to name, does not.
+
+In a [typed path](#paths), `.key(&id)` takes an `Id` for a map keyed by ids.
 
 With a [schema](schemas.md), `#[crol(refers(...))]` and `crol::check` check the
 type of what an id names too.

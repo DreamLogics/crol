@@ -2397,6 +2397,228 @@ fn completion_answers_at_the_end_of_every_prefix() {
     client.stop();
 }
 
+/// A completion case: the text, and every label wanted, in order.
+type Exact<'a> = (&'a str, &'a [&'a str]);
+
+/// Runs completion on each case, and reports every one that fails at once.
+fn check_exact_completions(client: &mut Client, buffer: &mut Buffer, cases: &[Exact<'_>]) {
+    let mut failures = Vec::new();
+    for (marked, wanted) in cases {
+        let items = buffer.complete(client, marked);
+        let found = labels(&items);
+        if found != *wanted {
+            failures.push(format!("{marked:?}: wanted {wanted:?}, got {found:?}"));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} of {} cases:\n{}",
+        failures.len(),
+        cases.len(),
+        failures.join("\n")
+    );
+}
+
+#[test]
+fn completion_of_entry_attributes() {
+    let (mut client, mut buffer) = nested_document("lsp-entry-attributes");
+    let both: &[&str] = &["scope", "type"];
+    let scope: &[&str] = &["scope"];
+    let ty: &[&str] = &["type"];
+    let cases: &[Exact<'_>] = &[
+        // Nothing after it yet, closed or not, with a part of the name or not.
+        ("#[|", both),
+        ("#[|]", both),
+        ("#[sc|", both),
+        ("#[sc|]", both),
+        ("#[ty|]", both),
+        ("#[ |", both),
+        ("#![schema(schema)]\n\n#[|", both),
+        ("{\n  #[|]\n}", both),
+        ("{\n  #[|\n}", both),
+        ("{ name: \"x\", #[|] }", both),
+        ("{\n  name: \"x\"\n  #[|]\n}", both),
+        // A name alone can still become a value bind.
+        ("#[|] t", both),
+        // Before a value bind.
+        ("#[|]\nt := { a: 1 }", both),
+        ("#[|\nt := { a: 1 }", both),
+        ("#[sc|\nt := { a: 1 }", both),
+        ("#[|] t := { a: 1 }", both),
+        ("{\n  #[|]\n  t := { a: 1 },\n  name: \"x\",\n}", both),
+        // Before an entry that sets a value, there is no `type`.
+        ("#[|] web: { }", scope),
+        ("#[|]\nweb: { }", scope),
+        ("#[|\nweb: { }", scope),
+        ("#[sc|\nweb: { }", scope),
+        ("#[|]\n+web: { }", scope),
+        ("#[|]\n?web: { }", scope),
+        ("#[|]\n^web: { }", scope),
+        ("#[|]\nweb.limits: { }", scope),
+        ("#[|]\n\"a key\": { }", scope),
+        ("{\n  #[|]\n  server: { },\n}", scope),
+        // Not the one the entry has, before or after the cursor.
+        ("#[scope] #[|] t := { }", ty),
+        ("#[scope]\n#[|]\nt := { }", ty),
+        ("#[scope]\n#[|", ty),
+        ("#[|] #[scope]\nt := { }", ty),
+        ("#[|\n#[scope]\nt := { }", ty),
+        ("#[type(u8)]\n#[|]\nt := 1", scope),
+        ("#[|]\n#[type(Vec<u8>)]\nt := [1]", scope),
+        ("#[type(Foo.items.[])]\n#[|", scope),
+        ("#[scope]\n#[type(u8)]\n#[|]\nt := 1", &[]),
+        ("#[scope]\n#[|]\nweb: { }", &[]),
+        // The attribute at the cursor is not one the entry has.
+        ("#[sc|ope]\nweb: { }", scope),
+        ("#[ty|pe(u8)]\nt := 1", both),
+        ("#[scope]\n#[ty|pe(u8)]\nt := 1", ty),
+        // The attributes of the entry before are its own.
+        ("#[scope]\nweb: { }\n#[|]\nt := { }", both),
+        // Before what takes no attribute.
+        ("#[|] -web", &[]),
+        ("#[|]\n..&t", &[]),
+        ("#[|]\n..", &[]),
+        ("#[|]\n<prod> { web: { } }", &[]),
+        ("#[|]\nb = web: { }", &[]),
+        // Only where an entry starts.
+        ("{ name: #[| }", &[]),
+        ("{ name: \"x\" #[| }", &[]),
+        ("[#[|]]", &[]),
+        // Not in a string or a comment.
+        ("// #[|", &[]),
+        ("{ name: \"#[|\" }", &[]),
+    ];
+    check_exact_completions(&mut client, &mut buffer, cases);
+
+    // Each has its doc, and `type` its parentheses unless they are there.
+    let items = buffer.complete(&mut client, "#[|]\nt := 1");
+    let texts: Vec<_> = items.iter().map(|i| &i["textEdit"]["newText"]).collect();
+    assert_eq!(texts, ["scope", "type()"], "{items:?}");
+    let details: Vec<_> = items.iter().map(|i| &i["detail"]).collect();
+    assert_eq!(details, ["#[scope]", "#[type(...)]"], "{items:?}");
+    let doc = |item: &Value| item["documentation"]["value"].as_str().unwrap().to_owned();
+    assert!(doc(&items[0]).contains("scope for ids"), "{items:?}");
+    assert!(doc(&items[1]).contains("value bind"), "{items:?}");
+    let items = buffer.complete(&mut client, "#[t|(u8)]\nt := 1");
+    assert_eq!(items[1]["textEdit"]["newText"], "type", "{items:?}");
+    // The word at the cursor is what an item replaces.
+    let items = buffer.complete(&mut client, "#[sc|op]\nweb: { }");
+    assert_eq!(
+        items[0]["textEdit"]["range"],
+        json!({ "start": { "line": 0, "character": 2 }, "end": { "line": 0, "character": 6 } }),
+        "{items:?}"
+    );
+    client.stop();
+}
+
+#[test]
+fn completion_of_entry_attributes_in_data() {
+    let dir = workspace("lsp-entry-attributes-data", &[("data.crod", "+web: { }\n")]);
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "data.crod");
+    let both: &[&str] = &["scope", "type"];
+    let scope: &[&str] = &["scope"];
+    let cases: &[Exact<'_>] = &[
+        ("+web: { }\n#[|", both),
+        ("#[|]\ntemplate := { }\n+web: { ..&template }", both),
+        ("#[|]\n+web: { }", scope),
+        ("+web: {\n  #[|]\n}", both),
+        // A variant block has no value binds.
+        ("+web: { }\n<prod> {\n  #[|]\n}", scope),
+        ("+web: { }\n<prod> {\n  #[|]\n  web: { }\n}", scope),
+        ("+web: { }\n<prod> {\n  web: {\n    #[|]\n  }\n}", both),
+        ("+web: { }\n#[|]\n-web", &[]),
+    ];
+    check_exact_completions(&mut client, &mut buffer, cases);
+    client.stop();
+}
+
+#[test]
+fn completion_of_document_attributes() {
+    let dir = workspace(
+        "lsp-document-attributes",
+        &[
+            ("schema.crol", NESTED_SCHEMA),
+            ("config.crol", "{ name: \"x\" }"),
+            ("data.crod", "+web: { }\n"),
+        ],
+    );
+    let mut client = Client::start(&dir);
+    let mut value = Buffer::open(&client, &dir, "config.crol");
+    let all: &[&str] = &["use", "schema", "type"];
+    let cases: &[Exact<'_>] = &[
+        // Closed or not, with a part of the name or not.
+        ("#![|", all),
+        ("#![|]", all),
+        ("#![sch|", all),
+        ("#![sch|]", all),
+        ("// A comment.\n#![|]\n\nname: \"x\"", all),
+        ("#![|\nname: \"x\"", all),
+        // Several `use`s, one `schema` and one `type`.
+        ("#![use(app::Config)]\n#![|]", all),
+        ("#![schema(schema)]\n#![|]", &["use", "type"]),
+        (
+            "#![|]\n#![schema(schema)]\n\n{ name: \"x\" }",
+            &["use", "type"],
+        ),
+        ("#![type(Config)]\n#![|", &["use", "schema"]),
+        ("#![schema(schema)]\n#![type(Config)]\n#![|]", &["use"]),
+        // The attribute at the cursor is not one the document has.
+        ("#![sch|ema(schema)]\n#![type(Config)]", &["use", "schema"]),
+        // `type` names a document written as entries, which has no name.
+        ("#![|]\n{ name: \"x\" }", all),
+        ("#![|]\nConfig { name: \"x\" }", &["use", "schema"]),
+        ("#![|]\n[1, 2]", &["use", "schema"]),
+        ("#![|]\n\"text\"", &["use", "schema"]),
+        // Only before the first entry or expression.
+        ("name: \"x\"\n#![|]", &[]),
+        ("{ #![|] }", &[]),
+        ("#[scope]\n#![|]\nweb: { }", &[]),
+    ];
+    check_exact_completions(&mut client, &mut value, cases);
+
+    // Each has its doc, and its parentheses unless they are there.
+    let items = value.complete(&mut client, "#![|]");
+    let texts: Vec<_> = items.iter().map(|i| &i["textEdit"]["newText"]).collect();
+    assert_eq!(texts, ["use()", "schema()", "type()"], "{items:?}");
+    let details: Vec<_> = items.iter().map(|i| &i["detail"]).collect();
+    assert_eq!(
+        details,
+        ["#![use(...)]", "#![schema(...)]", "#![type(...)]"],
+        "{items:?}"
+    );
+    for item in &items {
+        let doc = item["documentation"]["value"].as_str().unwrap();
+        assert!(doc.contains("#!["), "{item:?}");
+    }
+    let items = value.complete(&mut client, "#![sch|(schema)]");
+    assert_eq!(items[1]["textEdit"]["newText"], "schema", "{items:?}");
+
+    // Data has layers and variants, and no type of its own (`SPEC.md` 4.1).
+    let mut data = Buffer::open(&client, &dir, "data.crod");
+    let all: &[&str] = &["use", "schema", "extends", "variant"];
+    let cases: &[Exact<'_>] = &[
+        ("#![|", all),
+        ("#![ex|]\n\n+web: { }", all),
+        (
+            "#![extends(base)]\n#![variant(env: prod)]\n#![|]\n+web: { }",
+            all,
+        ),
+        (
+            "#![schema(schema)]\n#![|]\n+web: { }",
+            &["use", "extends", "variant"],
+        ),
+        ("+web: { }\n#![|]", &[]),
+    ];
+    check_exact_completions(&mut client, &mut data, cases);
+    let items = data.complete(&mut client, "#![|]");
+    for item in &items {
+        let doc = item["documentation"]["value"].as_str().unwrap();
+        assert!(doc.contains("#!["), "{item:?}");
+    }
+    client.stop();
+}
+
 #[test]
 fn a_document_just_opened_is_answered_at_once() {
     let dir = workspace(
@@ -4646,5 +4868,199 @@ fn scoped_ids_resolve_where_their_value_ends_up() {
         .map(|a| a["title"].as_str().unwrap())
         .collect();
     assert!(titles.iter().any(|t| t.contains("`filter`")), "{titles:?}");
+    client.stop();
+}
+
+#[test]
+fn id_keys_resolve_at_the_value_they_are_keys_of() {
+    let text = "+is_biological: Tag {}\n+armored: Tag {}\n#[scope]\n+marine: { armored: Tag {}, bonus: { @armored: 1.0, @::armored: 2.0 } }\n+grenade: { bonus: { @is_biological: 47.0 } }\n";
+    let top = "grenade.bonus.@::is_biological: 50.0\ngrenade.bonus[@armored]: 3.0\n";
+    let dir = workspace(
+        "lsp-id-keys",
+        &[
+            (
+                "project.crol",
+                r#"Project { layers: List([{ name: "base", dir: "base", .. }, { name: "top", dir: "top", .. }]), .. }"#,
+            ),
+            ("base/a.crod", text),
+            ("top/a.crod", top),
+        ],
+    );
+    let mut client = Client::start(&dir);
+    let base = uri(&dir.join("base/a.crod"));
+    let above = uri(&dir.join("top/a.crod"));
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": base, "languageId": "crol", "version": 1, "text": text } }),
+    );
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": above, "languageId": "crol", "version": 1, "text": top } }),
+    );
+    let position = |text: &str, line: usize, word: &str| {
+        let character = text.lines().nth(line).unwrap().find(word).unwrap() + 1;
+        json!({ "line": line, "character": character })
+    };
+    let starts = |found: &Value| -> Vec<(String, u64, u64)> {
+        let list = match found {
+            Value::Array(list) => list.clone(),
+            other => vec![other.clone()],
+        };
+        let mut starts: Vec<_> = list
+            .iter()
+            .map(|l| {
+                let file = l["uri"].as_str().unwrap();
+                (
+                    file.rsplit('/').nth(1).unwrap().to_owned(),
+                    l["range"]["start"]["line"].as_u64().unwrap(),
+                    l["range"]["start"]["character"].as_u64().unwrap(),
+                )
+            })
+            .collect();
+        starts.sort();
+        starts
+    };
+    let at = |layer: &str, line: u64, character: u64| (layer.to_owned(), line, character);
+
+    // In the scope, `@armored` is its own tag, and `@::armored` the root's.
+    let found = client.request(
+        "textDocument/definition",
+        json!({ "textDocument": { "uri": base }, "position": position(text, 3, "@armored") }),
+    );
+    assert_eq!(starts(&found), [at("base", 3, 11)]);
+    let found = client.request(
+        "textDocument/definition",
+        json!({ "textDocument": { "uri": base }, "position": position(text, 3, "@::armored") }),
+    );
+    assert_eq!(starts(&found), [at("base", 1, 1)]);
+    // In a path entry of the layer above, after a dot and in brackets.
+    let found = client.request(
+        "textDocument/definition",
+        json!({ "textDocument": { "uri": above }, "position": position(top, 0, "@::is_bio") }),
+    );
+    assert_eq!(starts(&found), [at("base", 0, 1)]);
+    let found = client.request(
+        "textDocument/definition",
+        json!({ "textDocument": { "uri": above }, "position": position(top, 1, "@armored") }),
+    );
+    assert_eq!(starts(&found), [at("base", 1, 1)]);
+
+    // Hover says what the key names.
+    let hover = client.request(
+        "textDocument/hover",
+        json!({ "textDocument": { "uri": base }, "position": position(text, 3, "@armored") }),
+    );
+    let markdown = hover["contents"]["value"].as_str().unwrap();
+    assert!(markdown.contains("**marine.armored**"), "{markdown}");
+
+    // References of the root's `armored`: the keys that name it, as the
+    // data has them. The entry the layer above adds is under its own id.
+    let found = client.request(
+        "textDocument/references",
+        json!({
+            "textDocument": { "uri": base }, "position": { "line": 1, "character": 3 },
+            "context": { "includeDeclaration": false },
+        }),
+    );
+    let found = starts(&found);
+    assert!(found.contains(&at("base", 3, 55)), "{found:?}");
+    assert!(found.contains(&at("top", 1, 15)), "{found:?}");
+    assert!(!found.contains(&at("base", 3, 38)), "{found:?}");
+
+    // After `@` where a key goes: what the scopes around the map have.
+    let typed = text.replace("@is_biological: 47.0 }", "@is_biological: 47.0, @ }");
+    client.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": base, "version": 2 },
+            "contentChanges": [{ "text": typed }],
+        }),
+    );
+    let character = typed.lines().nth(4).unwrap().rfind('@').unwrap() + 1;
+    let items = client.request(
+        "textDocument/completion",
+        json!({ "textDocument": { "uri": base }, "position": { "line": 4, "character": character } }),
+    );
+    let labels: Vec<&str> = items
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["label"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        labels,
+        ["is_biological", "armored", "marine", "grenade"],
+        "{labels:?}"
+    );
+    // In the scope: its own keys first.
+    let typed = text.replace("@::armored: 2.0 }", "@::armored: 2.0, @ }");
+    client.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": base, "version": 3 },
+            "contentChanges": [{ "text": typed }],
+        }),
+    );
+    let character = typed.lines().nth(3).unwrap().rfind('@').unwrap() + 1;
+    let items = client.request(
+        "textDocument/completion",
+        json!({ "textDocument": { "uri": base }, "position": { "line": 3, "character": character } }),
+    );
+    let labels: Vec<&str> = items
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["label"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        labels[..3],
+        ["armored", "bonus", "is_biological"],
+        "{labels:?}"
+    );
+
+    // A key that names nothing is an error, on the key.
+    let typed = text.replace("@is_biological: 47.0 }", "@is_biologcal: 47.0 }");
+    client.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": base, "version": 4 },
+            "contentChanges": [{ "text": typed }],
+        }),
+    );
+    let diagnostics = client.diagnostics_for(&base, |d| says(d, "@is_biologcal"));
+    let diagnostic = diagnostics
+        .iter()
+        .find(|d| d["message"].as_str().unwrap().contains("@is_biologcal"))
+        .unwrap()
+        .clone();
+    assert_eq!(
+        diagnostic["message"],
+        "the id key `@is_biologcal` names no root key; an id key has to name an entry, and a key \
+         that names nothing is written as a string\n(while evaluating grenade.bonus)"
+    );
+    assert_eq!(diagnostic["severity"], 1, "{diagnostic:?}");
+    assert_eq!(
+        diagnostic["range"]["start"]["character"], 21,
+        "{diagnostic:?}"
+    );
+    // And the fix is a key the scopes around it have.
+    let found = client.request(
+        "textDocument/codeAction",
+        json!({
+            "textDocument": { "uri": base },
+            "range": diagnostic["range"],
+            "context": { "diagnostics": [diagnostic], "triggerKind": 2 },
+        }),
+    );
+    let titles: Vec<&str> = found
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["title"].as_str().unwrap())
+        .collect();
+    assert!(
+        titles.iter().any(|t| t.contains("`is_biological`")),
+        "{titles:?}"
+    );
     client.stop();
 }

@@ -140,7 +140,7 @@ Serde's attributes are understood: `rename`, `rename_all`, `alias`, `default`,
 | `#[crol(defaults)]`              | a type     | record default values, for `&default` and tools             |
 | `#[crol(explicit_defaults)]`     | a type     | [fields left out always need `..`](#types-that-decide-about-)  |
 | `#[crol(explicit_defaults = false)]` | a type | [fields left out take their defaults, without `..`](#types-that-decide-about-) |
-| `#[crol(refers(Service, Volume))]` | an id field | which root types its ids may name, also in lists, options and maps |
+| `#[crol(refers(Service, Volume))]` | an id field | which root types its ids may name, also in lists, options and maps, and as the [keys of a map](language.md#ids-as-keys) |
 | `#[crol(schema = OtherType)]`    | a field    | describe it as a type with the same serialized shape        |
 | `#[crol(schema = any)]`          | a field    | accept anything here, unchecked                             |
 | `#[crol(constraint = "name")]`   | a field, newtype | [the constraint on its value](#constraints)           |

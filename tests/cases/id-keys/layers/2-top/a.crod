@@ -1,0 +1,20 @@
+// A later layer sets the entry an earlier one wrote with another id, adds
+// one, and removes one.
+grenade.bonus.@::is_biological: 50.0
+grenade.bonus[@armored]: 3.0
+-grenade.bonus.@::"odd id"
+grenade.bonus: & ~ { @::late: 9.0 }
+nested[@::late].amount: 30
+
+<prod> {
+    in_variant.@::armored: 2
+    in_variant.@late: 3
+}
+
+// `@marine.light` is the scope's `light`; `heavy` is a key that a path
+// entry adds to the scope.
+marine.weapon.bonus.@marine.light: 5.0
+marine.weapon.bonus[@armored]: 6.0
+marine.heavy: Tag {}
+marine.weapon.bonus.@heavy: 7.0
+marine.squad[0].bonus.@::marine.light: 8.0

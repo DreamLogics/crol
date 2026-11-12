@@ -1464,7 +1464,7 @@ impl<T: VariantName> CrolData<T> {
                 .keys()
                 .filter_map(|k| match k {
                     Key::Str(s) => Some(s.to_string()),
-                    Key::Int(_) => None,
+                    Key::Int(_) | Key::Id(_) => None,
                 })
                 .collect(),
             _ => Vec::new(),

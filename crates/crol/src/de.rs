@@ -363,9 +363,22 @@ impl<'a> ValueDeserializer<'a> {
         self.error(format!("expected {what}, found {}", self.found()))
     }
 
-    /// Records an id this value is, or for a map key, holds as a key.
+    /// Records an id this value is.
     fn record_id(&self, id: &IdPath) {
-        let place = self.place.to_path();
+        self.record_id_at(id, self.place.to_path());
+    }
+
+    /// Records an id that is the key of this value, an entry of a map. A key
+    /// resolves at the map's place (`SPEC.md` 10.5).
+    fn record_key_id(&self, id: &IdPath) {
+        let place = match &*self.place {
+            Place::Step(map, _) => map.to_path(),
+            Place::Root => DataPath::root(),
+        };
+        self.record_id_at(id, place);
+    }
+
+    fn record_id_at(&self, id: &IdPath, place: DataPath) {
         let target = self
             .context
             .resolver
@@ -468,6 +481,14 @@ impl<'a> ValueDeserializer<'a> {
                     return Err(self
                         .child(value, PathNode::Key(self.path.clone(), key.clone()))
                         .error(format!("`{name}` has named fields; the key {i} is not one")));
+                }
+                Key::Id(id) => {
+                    return Err(self
+                        .child(value, PathNode::Key(self.path.clone(), key.clone()))
+                        .error(format!(
+                            "`{name}` has named fields; the id key `{id}` is not one: only a \
+                             map keyed by `crol::Id` takes id keys"
+                        )));
                 }
             };
             if !self.context.options.allow_unknown_fields && !fields.contains(&field.as_ref()) {
@@ -941,7 +962,8 @@ impl<'a> MapAccess<'a> for NamedTupleMap<'_, 'a> {
 }
 
 /// A key of a keyed value (`SPEC.md` 10.1): string keys deserialize into
-/// strings, unit enum variants and `crol::Id`; integer keys into integers.
+/// strings and unit enum variants, integer keys into integers, and id keys
+/// into `crol::Id`, which takes no other key (`SPEC.md` 10.5).
 struct KeyDeserializer<'p, 'a> {
     key: &'a Key,
     /// The entry's value, for spans and paths in errors and id uses.
@@ -961,6 +983,9 @@ macro_rules! key_int {
                         "expected an integer key, found the string key {}",
                         crol_eval::quote(s)
                     ))),
+                    Key::Id(id) => Err(Error::new(format!(
+                        "expected an integer key, found the id key `{id}`"
+                    ))),
                 }
             }
         )*
@@ -977,7 +1002,24 @@ impl<'a> de::Deserializer<'a> for KeyDeserializer<'_, 'a> {
                 Ok(i) => visitor.visit_i64(i),
                 Err(_) => visitor.visit_i128(*i),
             },
+            // As its text, `@` included, like an id value (`SPEC.md` 10.5).
+            Key::Id(id) => {
+                self.at.record_key_id(id);
+                visitor.visit_string(id.to_string())
+            }
         }
+    }
+
+    fn deserialize_str<V: Visitor<'a>>(self, visitor: V) -> Result<V::Value, Error> {
+        match self.key {
+            // Only where the type is not known is an id key its text.
+            Key::Id(id) => Err(self.no_id_key("a string key", id)),
+            _ => self.deserialize_any(visitor),
+        }
+    }
+
+    fn deserialize_string<V: Visitor<'a>>(self, visitor: V) -> Result<V::Value, Error> {
+        self.deserialize_str(visitor)
     }
 
     key_int! {
@@ -999,19 +1041,28 @@ impl<'a> de::Deserializer<'a> for KeyDeserializer<'_, 'a> {
         visitor: V,
     ) -> Result<V::Value, Error> {
         match self.key {
+            // `Id` takes an id key, as its text with the `@`, and no other
+            // key (`SPEC.md` 10.5).
+            Key::Id(id) if name == ID_TOKEN => {
+                self.at.record_key_id(id);
+                visitor.visit_newtype_struct(de::value::StringDeserializer::<Error>::new(
+                    id.to_string(),
+                ))
+            }
+            Key::Str(s) if name == ID_TOKEN => {
+                let hint = IdPath::key(s.clone());
+                Err(Error::new(format!(
+                    "expected an id key, found the string key {}; write `{hint}`",
+                    Key::Str(s.clone())
+                )))
+            }
+            Key::Int(i) if name == ID_TOKEN => Err(Error::new(format!(
+                "expected an id key, found the integer key {i}"
+            ))),
             Key::Str(s) => {
-                if name == ID_TOKEN {
-                    // A key is written without `@`; `Id` takes its text with
-                    // one (`SPEC.md` 10.5).
-                    let id = IdPath::key(s.clone());
-                    self.at.record_id(&id);
-                    return visitor.visit_newtype_struct(
-                        de::value::StringDeserializer::<Error>::new(id.to_string()),
-                    );
-                }
                 visitor.visit_newtype_struct(de::value::BorrowedStrDeserializer::<Error>::new(s))
             }
-            Key::Int(_) => visitor.visit_newtype_struct(self),
+            Key::Int(_) | Key::Id(_) => visitor.visit_newtype_struct(self),
         }
     }
 
@@ -1028,6 +1079,7 @@ impl<'a> de::Deserializer<'a> for KeyDeserializer<'_, 'a> {
             Key::Int(i) => Err(Error::new(format!(
                 "expected a `{name}` variant as the key, found {i}"
             ))),
+            Key::Id(id) => Err(self.no_id_key(&format!("a `{name}` variant as the key"), id)),
         }
     }
 
@@ -1037,8 +1089,18 @@ impl<'a> de::Deserializer<'a> for KeyDeserializer<'_, 'a> {
 
     serde::forward_to_deserialize_any! {
         <W: Visitor<'a>>
-        bool f32 f64 char str string bytes byte_buf unit unit_struct seq tuple
+        bool f32 f64 char bytes byte_buf unit unit_struct seq tuple
         tuple_struct map struct identifier ignored_any
+    }
+}
+
+impl KeyDeserializer<'_, '_> {
+    /// The error for an id key where the type takes another kind of key.
+    fn no_id_key(&self, expected: &str, id: &IdPath) -> Error {
+        Error::new(format!(
+            "expected {expected}, found the id key `{id}`; only a map keyed by `crol::Id` takes \
+             id keys"
+        ))
     }
 }
 

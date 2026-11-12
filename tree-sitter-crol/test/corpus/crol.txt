@@ -311,3 +311,65 @@ web.limits: { cpu: &top.port, a: &super.&parent.x, topic: &topic }
             (identifier)))
         (reference
           (bind_name))))))
+
+==================
+Id keys
+==================
+
+m: { @a: 1, [@::b.c].d: 2, -@a }
+m.@a: 3
+r: &root.m[@a]
+
+---
+
+(document
+  (entry
+    (target
+      (key
+        (identifier)))
+    (block
+      (entry
+        (target
+          (key
+            (id_expr
+              (id))))
+        (literal
+          (integer)))
+      (entry
+        (target
+          (key
+            (accessor
+              (id_expr
+                (id))
+              (field_selector
+                (identifier))))
+          (field_selector
+            (identifier)))
+        (literal
+          (integer)))
+      (remove_entry
+        (target
+          (key
+            (id_expr
+              (id)))))))
+  (entry
+    (target
+      (key
+        (identifier))
+      (field_selector
+        (id_expr
+          (id))))
+    (literal
+      (integer)))
+  (entry
+    (target
+      (key
+        (identifier)))
+    (path_expr
+      (reference
+        (root))
+      (field_selector
+        (identifier))
+      (accessor
+        (id_expr
+          (id))))))
