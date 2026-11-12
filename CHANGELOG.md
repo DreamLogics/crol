@@ -30,6 +30,11 @@ This release changes the format in ways that break documents and programs writte
 - `crol_syntax::SyntaxKind` has a new kind, `SCOPE_KW`, which renumbers the kinds after
   it.
 - `.crob` files have a new format: compile layers again.
+- A type name on a block that loads into a newtype around a map must be the newtype's
+  serde name: `Scren { ... }` for a `struct Screen(BTreeMap<..>)` was accepted, and is
+  now an error, "`Scren { ... }` is not a `Screen`" (#17). With a schema, the same
+  holds for a `#[serde(transparent)]` struct, and for a struct with a
+  `#[serde(flatten)]` field.
 
 ### Added
 
@@ -67,6 +72,15 @@ This release changes the format in ways that break documents and programs writte
   scopes around the cursor, and suggests them for a misspelt id.
 - `crol::IdResolver` and `crol::check_ids` resolve and check the ids of evaluated data,
   for tools.
+- Type names are checked on blocks that become maps, newtypes and transparent structs
+  (#17). A newtype's name is checked always. With `CrolComposer::schema`, the loader
+  compares a block's type name with the schema type at its place, through `Option`,
+  newtypes and transparent structs, and `crol::check`, `crol check` and the language
+  server report the same errors. A wrapper's name is also accepted on the struct it
+  wraps: `Quota { ... }` for a `struct Quota(Limits)`.
+- A type name on a plain map, where nothing names the type, is a warning when there is
+  a schema: in `CrolData::warnings()`, from `crol::check` and `crol check`, and in the
+  language server. The data loads as before.
 - The language server completes attributes: after `#[`, `scope` and `type`, where the
   entry after it can have them and has not; after `#![`, the document attributes that
   fit the document and its mode. Each comes with its doc (#16).

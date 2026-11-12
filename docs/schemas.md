@@ -357,7 +357,11 @@ enable [a `remote-schemas` feature](rust.md#cargo-features), and use
 
 A schema makes tools apply the same rules as your program:
 
-- type names, and values of the wrong kind or out of range;
+- type names, and values of the wrong kind or out of range. This includes the
+  names serde does not give your program: `Scren { ... }` where a
+  `#[serde(transparent)]` struct `Screen` goes is an error, and a name on a
+  plain map is a warning
+  ([type names on maps and wrappers](rust.md#type-names-on-maps-and-wrappers));
 - unknown fields;
 - missing fields, on final values only, so a patch can leave out what it does
   not change;

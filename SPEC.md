@@ -2289,11 +2289,11 @@ and a `Serializer` that writes plain value documents.
 | `option` | `None` → none; `Some(x)` → some(`x`); any other value → some(value) if `implicit_some` (default on) |
 | `unit` | `()` |
 | `unit_struct` | the struct's name, or `()` |
-| `newtype_struct` | `Name(x)` or `x` |
+| `newtype_struct` | `Name(x)` or `x`; a keyed `x` may have the type name `Name` (section 10.2) |
 | `seq` | list |
 | `tuple` | tuple |
 | `tuple_struct` | `Name(a, b)` or `(a, b)` |
-| `map` | keyed value. String keys deserialize into strings, unit enum variants (by name) and newtypes of these; integer keys into integer types; id keys into `crol::Id` and newtypes of it, which take no other key (section 10.5) |
+| `map` | keyed value. String keys deserialize into strings, unit enum variants (by name) and newtypes of these; integer keys into integer types; id keys into `crol::Id` and newtypes of it, which take no other key (section 10.5). A type name on it is checked against what wraps it (section 10.2) |
 | `struct` | keyed value whose keys are all strings (section 10.2) |
 | `enum` | `V`, `V(x)`, `V(a, b)`, `V { ... }` (section 10.4) |
 | `identifier` | field and variant names |
@@ -2305,8 +2305,9 @@ and a `Serializer` that writes plain value documents.
 For `deserialize_struct(name, fields, visitor)` the deserializer checks:
 
 - **Type name.** If the keyed value has one, it must equal `name` (the
-  Rust name after `#[serde(rename)]`), or the enclosing newtype
-  variant's name (section 10.4).
+  Rust name after `#[serde(rename)]`), the enclosing newtype variant's
+  name (section 10.4), or the name of a newtype or transparent struct
+  around the struct (below).
 - **String keys.** An integer key is an error.
 - **Unknown fields.** A key not in `fields` is an error, unless
   `CrolConfig::allow_unknown_fields`.
@@ -2327,7 +2328,59 @@ whatever it does not change.
 
 `#[serde(flatten)]` makes serde request a map instead of a struct. This
 works, since every keyed value deserializes as a map, but the struct
-checks above then do not apply to that struct.
+checks above then do not apply to that struct, except, with a schema, the
+one of its type name (below).
+
+**Type names on other keyed values.** A keyed value also becomes a map, a
+newtype around one or a `#[serde(transparent)]` struct around one, and a
+struct may be inside such wrappers. Its type name, if it has one, must be
+one of the names its type has at that place: the names of the newtypes and
+transparent structs around it, each the Rust name after `#[serde(rename)]`,
+and for a struct its own. In `Name(x)` the newtype is written out, and `x`
+is what it wraps, with the names that has. What can be checked depends on
+what serde tells the deserializer:
+
+| Rust type | serde gives | A type name is checked |
+|---|---|---|
+| struct, struct variant | the struct's name | always (above) |
+| newtype `struct N(T)` | `deserialize_newtype_struct("N")` | always: `N`, or a name `T` has |
+| `#[serde(transparent)] struct N(T)` | nothing: it forwards to `T` | with a schema: `N`, or a name `T` has. Without one, as for `T` alone |
+| `BTreeMap`, `HashMap`, other maps | nothing | with a schema, where nothing around it names it either: a warning |
+
+```rust
+#[derive(Deserialize, crol::Schema)]
+struct NodeScreen(BTreeMap<String, Node>);
+```
+
+```rust
+dashboard: NodeScreen { +filter: TextInput { placeholder: "Filter" } },
+settings: { +filter: TextInput { placeholder: "Search" } },   // the name is optional
+dashbaord: Scren { +list: List { vim_keys: true } },   // error: `Scren { ... }` is not a `NodeScreen`
+```
+
+- **A newtype** needs no schema. A name that is not the newtype's goes on
+  to what it wraps: a struct checks it as its own name, and for a map it is
+  the error above. Serde asks for a struct with `#[serde(flatten)]` as a
+  map too, so without a schema such a struct inside a newtype takes the
+  newtype's name only.
+- **With a schema** given to the composer (`CrolComposer::schema`, section
+  10.9), the deserializer knows the type at every place of the data it
+  loads from that composer (`compose`, `get`, `get_in`, `get_with_ids`,
+  `deserialize_root`), counted from the schema's root type as for scopes
+  (sections 4.1, 10.5), and compares
+  a block's type name with the type there, through `Option`, newtypes and
+  transparent structs. This is how the name of a transparent struct is
+  checked, and that of a struct with a flattened field. An enum's variants
+  name its values, and are checked as section 10.4 says. `crol::check`
+  and tools check the same with the schema alone, and report the same
+  errors.
+- **A map that nothing names**, such as a field `stats: BTreeMap<String,
+  u32>` written `stats: Stats { ... }`: the name names no type. It loads,
+  and with a schema it is a warning, "the type name `Stats` names nothing:
+  this is a map, which has no type name", in `CrolData::warnings()`, from
+  `crol::check` and in tools. Without a schema nothing tells a map from a
+  transparent struct around one, and nothing is said. A later version may
+  make this an error.
 
 **A struct at the root.** The root of layered data deserialized as a struct,
 with `compose::<T>()` or `deserialize_root`, is a keyed value with no type
@@ -2821,7 +2874,8 @@ what it means is up to the document it lands in.
 
 Evaluation and deserialization need no schema, except `&default`
 (section 6.1.3), which reads defaults from it, and what serde does not
-tell the deserializer: aliases (section 10.2), `explicit_defaults`
+tell the deserializer: aliases and the type names of transparent structs
+(section 10.2), `explicit_defaults`
 (section 10.3), constraints and sealed fields (sections 10.12, 10.13). Tools do: a language
 server cannot complete field names, show docs or check types without
 knowing the Rust types. The schema describes them; it is built from the
@@ -4045,7 +4099,8 @@ where a `String` is; a string or integer key in a map keyed by `crol::Id`,
 and an id key anywhere else (10.5); with `strict_ids`, an id that names
 nothing; variant key rules (8.5). And the application's own checks.
 
-**Warnings**: an id that names nothing (10.5), in `CrolData::warnings()`
+**Warnings**: an id that names nothing (10.5), and with a schema a type
+name on a map that nothing names (10.2), in `CrolData::warnings()`
 and in tools. In tools: a document whose `schema` differs from the
 project's; an `extends` naming something that is neither a lower layer
 nor in the document's own layer; and an id that names something only
