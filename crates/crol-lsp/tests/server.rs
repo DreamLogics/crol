@@ -1340,6 +1340,8 @@ const NESTED_SCHEMA: &str = r#"Schema {
                 fallback_mode: { ty: Option(Named("app::Mode")), .. },
                 wrapped: { ty: Named("app::Wrapper"), .. },
                 pair: { ty: Tuple([String, Named("app::Retry")]), .. },
+                peer: { ty: IdOr(["app::Config"], Named("app::Server")), .. },
+                primary: { ty: IdOr([], Named("app::Backend")), .. },
                 extra: { ty: Named("app::Retry"), flatten: true, .. },
             },
             ..
@@ -1946,6 +1948,12 @@ fn completion_from_the_project_at_any_depth() {
         // Ids, in a list in a list.
         ("prod.services[0].depends_on: [@|", &["prod"], tls),
         ("prod: { services: [{ depends_on: [@|] }] }", &["prod"], tls),
+        // An id or a value written in place: ids of what it refers to after
+        // `@`, the value's fields and variants otherwise.
+        ("prod.peer: @|", &["prod"], tls),
+        ("prod: { peer: { tls: { | } } }", tls, cert),
+        ("prod.peer.tls.|", tls, cert),
+        ("prod.primary: |", &["Local", "Remote"], tls),
     ];
     check_completions(&mut client, &mut local, "", cases);
 

@@ -473,6 +473,9 @@ fn builtin(
     let scalar = |ty: TypeExpr, name: &str| arity(0, name).map(|()| Some(ty));
     match names {
         ["crol", "Id"] => scalar(TypeExpr::Id(Vec::new()), "crol::Id"),
+        ["crol", "IdOr"] => {
+            arity(1, "crol::IdOr").map(|()| Some(TypeExpr::IdOr(Vec::new(), arg(0))))
+        }
         ["crol", "Value"] => scalar(TypeExpr::Any, "crol::Value"),
         [name] => {
             let name = *name;

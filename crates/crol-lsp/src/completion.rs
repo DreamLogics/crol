@@ -395,6 +395,7 @@ const RUST_TYPE_NAMES: &[&str] = &[
     "IndexMap",
     "Box",
     "crol::Id",
+    "crol::IdOr",
     "crol::Value",
 ];
 
@@ -873,11 +874,11 @@ impl Completer<'_> {
     }
 }
 
-/// The types ids of a type may refer to: for `Id`, or ids in an option,
-/// list or set.
+/// The types ids of a type may refer to: for `Id` and `IdOr`, or ids in an
+/// option, list or set.
 fn refers_of(ty: &TypeExpr) -> Option<Vec<String>> {
     match ty {
-        TypeExpr::Id(refers) => Some(refers.clone()),
+        TypeExpr::Id(refers) | TypeExpr::IdOr(refers, _) => Some(refers.clone()),
         TypeExpr::Option(inner)
         | TypeExpr::List(inner)
         | TypeExpr::Set(inner)
@@ -916,6 +917,8 @@ fn value_items(schema: &SchemaFile, ty: &TypeExpr, out: &mut Vec<CompletionItem>
             ));
             value_items(schema, inner, out, depth + 1);
         }
+        // The values of the type written in place; ids come after `@`.
+        TypeExpr::IdOr(_, inner) => value_items(schema, inner, out, depth + 1),
         TypeExpr::Named(path) => match schema.get(path) {
             Some(TypeDef::Enum { variants, .. }) => {
                 for (name, variant) in variants {

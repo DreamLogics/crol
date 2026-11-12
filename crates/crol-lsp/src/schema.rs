@@ -228,7 +228,9 @@ fn named_in<'a>(
         return None;
     }
     match ty {
-        TypeExpr::Option(inner) => named_in(schema, inner, name, depth + 1),
+        TypeExpr::Option(inner) | TypeExpr::IdOr(_, inner) => {
+            named_in(schema, inner, name, depth + 1)
+        }
         TypeExpr::Named(path) => match schema.get(path)? {
             TypeDef::Enum { variants, .. } => match &variant(variants, name)?.shape {
                 VariantShape::Struct(fields) => Some(Shape::Fields(fields)),
@@ -285,7 +287,9 @@ fn payload_in(
     }
     match ty {
         TypeExpr::Option(inner) if name == "Some" => (index == 0).then(|| (**inner).clone()),
-        TypeExpr::Option(inner) => payload_in(schema, inner, name, index, depth + 1),
+        TypeExpr::Option(inner) | TypeExpr::IdOr(_, inner) => {
+            payload_in(schema, inner, name, index, depth + 1)
+        }
         TypeExpr::Named(path) => match schema.get(path)? {
             TypeDef::Enum { variants, .. } => match &variant(variants, name)?.shape {
                 VariantShape::Newtype(inner) if index == 0 => Some(inner.clone()),
@@ -323,7 +327,9 @@ pub(crate) fn is_tuple(schema: &SchemaFile, shape: &Shape<'_>) -> bool {
     };
     match ty {
         TypeExpr::Tuple(_) => true,
-        TypeExpr::Option(inner) => is_tuple(schema, &Shape::Type((**inner).clone())),
+        TypeExpr::Option(inner) | TypeExpr::IdOr(_, inner) => {
+            is_tuple(schema, &Shape::Type((**inner).clone()))
+        }
         _ => matches!(named_def(schema, ty), Some(TypeDef::TupleStruct { .. })),
     }
 }
@@ -405,10 +411,11 @@ fn flatten_into<'a>(
     }
 }
 
-/// The definition of a named type, through options.
+/// The definition of a named type, through options and the value side of
+/// `IdOr`.
 pub(crate) fn named_def<'a>(schema: &'a SchemaFile, ty: &TypeExpr) -> Option<&'a TypeDef> {
     match ty {
-        TypeExpr::Option(inner) => named_def(schema, inner),
+        TypeExpr::Option(inner) | TypeExpr::IdOr(_, inner) => named_def(schema, inner),
         TypeExpr::Named(path) => schema.get(path),
         _ => None,
     }
@@ -433,7 +440,7 @@ pub(crate) fn rust_type(schema: &SchemaFile, ty: &TypeExpr) -> String {
 /// `/* … */`.
 pub(crate) fn struct_definition(schema: &SchemaFile, ty: &TypeExpr) -> Option<String> {
     let mut ty = ty;
-    while let TypeExpr::Option(inner) = ty {
+    while let TypeExpr::Option(inner) | TypeExpr::IdOr(_, inner) = ty {
         ty = inner;
     }
     let TypeExpr::Named(path) = ty else {
@@ -498,7 +505,10 @@ fn step(
         return None;
     }
     match (ty, step) {
-        (TypeExpr::Option(inner), _) => self::step(schema, inner, step, depth + 1),
+        // A path goes into a value written in place, never through an id.
+        (TypeExpr::Option(inner) | TypeExpr::IdOr(_, inner), _) => {
+            self::step(schema, inner, step, depth + 1)
+        }
         (TypeExpr::Named(path), _) => match schema.get(path)? {
             TypeDef::Struct { fields, .. } => match step {
                 PathStep::Field(name) => field_step(schema, fields, name, step, depth),
@@ -541,7 +551,7 @@ pub(crate) fn struct_of<'a>(
     ty: &TypeExpr,
 ) -> Option<(&'a str, &'a IndexMap<String, Field>)> {
     match ty {
-        TypeExpr::Option(inner) => struct_of(schema, inner),
+        TypeExpr::Option(inner) | TypeExpr::IdOr(_, inner) => struct_of(schema, inner),
         TypeExpr::Named(path) => match schema.get(path)? {
             TypeDef::Struct { name, fields, .. } => Some((name, fields)),
             TypeDef::Newtype { inner, .. } | TypeDef::Transparent { inner, .. } => {
