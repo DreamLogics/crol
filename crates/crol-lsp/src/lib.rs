@@ -24,6 +24,7 @@ mod hints;
 mod navigate;
 mod place;
 mod remote;
+mod rename;
 mod schema;
 mod tokens;
 mod worker;
@@ -715,6 +716,7 @@ impl Server {
                             &text,
                             p.text_document_position.position,
                             &p.new_name,
+                            &|uri| self.text(uri),
                             encoding,
                         ))
                     });

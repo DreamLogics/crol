@@ -46,6 +46,12 @@ This release changes the format in ways that break documents and programs writte
   scopes around the cursor, and suggests them for a misspelt id.
 - `crol::IdResolver` and `crol::check_ids` resolve and check the ids of evaluated data,
   for tools.
+- The language server renames keys, at any depth, from the key or from an id or
+  reference that names it: every operation on the key in every layer, the references
+  through it, and the ids that resolve to it, of which a path id changes only the key
+  that names it. It refuses, and says why, where an id written once names other keys
+  too, where the new name would change what an id names, where the name is taken, and
+  where the key is written in a template (#14).
 
 ### Changed
 

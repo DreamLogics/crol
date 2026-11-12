@@ -66,6 +66,11 @@ impl Client {
     }
 
     fn request(&mut self, method: &str, params: Value) -> Value {
+        self.try_request(method, params).unwrap_or(Value::Null)
+    }
+
+    /// The result of a request, or the message of the error it got.
+    fn try_request(&mut self, method: &str, params: Value) -> Result<Value, String> {
         self.next_id += 1;
         let id = RequestId::from(self.next_id);
         self.connection
@@ -84,7 +89,7 @@ impl Client {
                 .unwrap()
             {
                 Message::Response(response) if response.id == id => {
-                    return response.response_result.unwrap_or(Value::Null);
+                    return response.response_result.map_err(|error| error.message);
                 }
                 _ => {}
             }
@@ -364,10 +369,10 @@ fn references_rename_and_workspace_symbols() {
     assert_eq!(changes[&local].as_array().unwrap().len(), 1, "{edit}");
     assert_eq!(changes[&local][0]["newText"], "port");
 
-    // Not a bind, and not a name a bind can have.
+    // Not a bind or a key, and not a name a bind can have.
     let range = client.request(
         "textDocument/prepareRename",
-        json!({ "textDocument": { "uri": local }, "position": { "line": 0, "character": 1 } }),
+        json!({ "textDocument": { "uri": local }, "position": { "line": 0, "character": 11 } }),
     );
     assert_eq!(range, Value::Null);
     let edit = client.request(
@@ -4575,4 +4580,455 @@ fn scoped_ids_resolve_where_their_value_ends_up() {
         .collect();
     assert!(titles.iter().any(|t| t.contains("`filter`")), "{titles:?}");
     client.stop();
+}
+
+/// A workspace to rename in.
+struct Renames {
+    client: Client,
+    dir: PathBuf,
+}
+
+impl Renames {
+    fn start(name: &str, files: &[(&str, &str)]) -> Renames {
+        let dir = workspace(name, files);
+        let client = Client::start(&dir);
+        Renames { client, dir }
+    }
+
+    /// The position `offset` characters into the first `needle` of `file`.
+    fn position(&self, file: &str, needle: &str, offset: usize) -> Value {
+        let text = std::fs::read_to_string(self.dir.join(file)).unwrap();
+        let at = text.find(needle).unwrap() + offset;
+        let line = text[..at].matches('\n').count();
+        let character = at - text[..at].rfind('\n').map_or(0, |i| i + 1);
+        json!({
+            "textDocument": { "uri": uri(&self.dir.join(file)) },
+            "position": { "line": line, "character": character },
+        })
+    }
+
+    /// Renames what is `offset` characters into the first `needle` of
+    /// `file`: the files that change, as they are afterwards, or why not.
+    fn rename(
+        &mut self,
+        file: &str,
+        needle: &str,
+        offset: usize,
+        new: &str,
+    ) -> Result<Vec<(String, String)>, String> {
+        let mut params = self.position(file, needle, offset);
+        params["newName"] = json!(new);
+        // The first evaluation may not be there yet.
+        let mut tries = 0;
+        let edit = loop {
+            let edit = self
+                .client
+                .try_request("textDocument/rename", params.clone());
+            let waiting = matches!(&edit, Err(m) if m.contains("does not evaluate") || m.contains("last evaluated"));
+            if !waiting || tries == 500 {
+                break edit?;
+            }
+            tries += 1;
+            thread::sleep(Duration::from_millis(10));
+        };
+        let mut changed = Vec::new();
+        for (target, edits) in edit["changes"].as_object().into_iter().flatten() {
+            let path = std::fs::read_dir(&self.dir)
+                .unwrap()
+                .flat_map(|entry| {
+                    let path = entry.unwrap().path();
+                    match path.is_dir() {
+                        true => std::fs::read_dir(&path)
+                            .unwrap()
+                            .map(|entry| entry.unwrap().path())
+                            .collect(),
+                        false => vec![path],
+                    }
+                })
+                .find(|path| uri(path) == *target)
+                .unwrap();
+            let text = std::fs::read_to_string(&path).unwrap();
+            let name = path.strip_prefix(&self.dir).unwrap().to_string_lossy();
+            changed.push((
+                name.replace('\\', "/"),
+                apply(&text, edits.as_array().unwrap()),
+            ));
+        }
+        changed.sort();
+        Ok(changed)
+    }
+
+    /// [`rename`](Self::rename), for a rename that is refused.
+    fn refusal(&mut self, file: &str, needle: &str, offset: usize, new: &str) -> String {
+        self.rename(file, needle, offset, new).unwrap_err()
+    }
+}
+
+fn changed(files: &[(&str, &str)]) -> Result<Vec<(String, String)>, String> {
+    Ok(files
+        .iter()
+        .map(|(path, text)| ((*path).to_owned(), (*text).to_owned()))
+        .collect())
+}
+
+const TWO_LAYERS: &str = r#"Project { layers: List([{ name: "base", dir: "base", .. }, { name: "local", dir: "local", .. }]), .. }"#;
+
+#[test]
+fn renaming_a_key_renames_it_in_every_layer() {
+    let mut renames = Renames::start(
+        "lsp-rename-layers",
+        &[
+            ("project.crol", TWO_LAYERS),
+            (
+                "base/a.crod",
+                "+web: { port: 80, url: \"x:\" + &self.port }\n+db: { host: \"h\", of: @web }\n",
+            ),
+            (
+                "local/a.crod",
+                "web.port: 8080\n+see: [@web, @::web]\n+m: &root.web.url\n<prod> { web.port: 443 }\n<prod> { -?db.host }\n",
+            ),
+        ],
+    );
+    // A root key, from a patch of it: its definition, the patches in every
+    // layer and context, the reference and the ids.
+    assert_eq!(
+        renames.rename("local/a.crod", "web.port", 1, "site"),
+        changed(&[
+            (
+                "base/a.crod",
+                "+site: { port: 80, url: \"x:\" + &self.port }\n+db: { host: \"h\", of: @site }\n",
+            ),
+            (
+                "local/a.crod",
+                "site.port: 8080\n+see: [@site, @::site]\n+m: &root.site.url\n<prod> { site.port: 443 }\n<prod> { -?db.host }\n",
+            ),
+        ])
+    );
+    // The same from an id that names it, and from a reference to it.
+    let from_key = renames.rename("local/a.crod", "web.port", 1, "site");
+    assert_eq!(renames.rename("base/a.crod", "@web", 1, "site"), from_key);
+    assert_eq!(
+        renames.rename("local/a.crod", "@::web", 3, "site"),
+        from_key
+    );
+    assert_eq!(
+        renames.rename("local/a.crod", "root.web", 5, "site"),
+        from_key
+    );
+    // A key inside a value: the references through it too.
+    assert_eq!(
+        renames.rename("local/a.crod", "port", 0, "http"),
+        changed(&[
+            (
+                "base/a.crod",
+                "+web: { http: 80, url: \"x:\" + &self.http }\n+db: { host: \"h\", of: @web }\n",
+            ),
+            (
+                "local/a.crod",
+                "web.http: 8080\n+see: [@web, @::web]\n+m: &root.web.url\n<prod> { web.http: 443 }\n<prod> { -?db.host }\n",
+            ),
+        ])
+    );
+    // A name that is no identifier is written as a string, and after a
+    // `.` as an accessor.
+    assert_eq!(
+        renames.rename("local/a.crod", "web.port", 1, "odd id"),
+        changed(&[
+            (
+                "base/a.crod",
+                "+\"odd id\": { port: 80, url: \"x:\" + &self.port }\n+db: { host: \"h\", of: @\"odd id\" }\n",
+            ),
+            (
+                "local/a.crod",
+                "\"odd id\".port: 8080\n+see: [@\"odd id\", @::\"odd id\"]\n+m: &root[\"odd id\"].url\n<prod> { \"odd id\".port: 443 }\n<prod> { -?db.host }\n",
+            ),
+        ])
+    );
+    assert_eq!(
+        renames.rename("base/a.crod", "port", 0, "\"a b\""),
+        changed(&[
+            (
+                "base/a.crod",
+                "+web: { \"a b\": 80, url: \"x:\" + &self[\"a b\"] }\n+db: { host: \"h\", of: @web }\n",
+            ),
+            (
+                "local/a.crod",
+                "web[\"a b\"]: 8080\n+see: [@web, @::web]\n+m: &root.web.url\n<prod> { web[\"a b\"]: 443 }\n<prod> { -?db.host }\n",
+            ),
+        ])
+    );
+    // A key that a context removes is renamed there too.
+    assert_eq!(
+        renames.rename("base/a.crod", "host", 0, "name"),
+        changed(&[
+            (
+                "base/a.crod",
+                "+web: { port: 80, url: \"x:\" + &self.port }\n+db: { name: \"h\", of: @web }\n",
+            ),
+            (
+                "local/a.crod",
+                "web.port: 8080\n+see: [@web, @::web]\n+m: &root.web.url\n<prod> { web.port: 443 }\n<prod> { -?db.name }\n",
+            ),
+        ])
+    );
+
+    // The range to rename is the key under the cursor.
+    let range = renames.client.request(
+        "textDocument/prepareRename",
+        renames.position("local/a.crod", "web.port", 4),
+    );
+    assert_eq!(range["start"], json!({ "line": 0, "character": 4 }));
+    assert_eq!(range["end"], json!({ "line": 0, "character": 8 }));
+    let range = renames.client.request(
+        "textDocument/prepareRename",
+        renames.position("local/a.crod", "@::web", 3),
+    );
+    assert_eq!(range["start"], json!({ "line": 1, "character": 16 }));
+    // A number, a type name and a value are no keys.
+    let range = renames.client.request(
+        "textDocument/prepareRename",
+        renames.position("local/a.crod", "8080", 1),
+    );
+    assert_eq!(range, Value::Null);
+
+    // The new name is taken.
+    assert_eq!(
+        renames.refusal("base/a.crod", "+web", 1, "db"),
+        "the root already has a key `db`"
+    );
+    assert_eq!(
+        renames.refusal("base/a.crod", "port", 0, "url"),
+        "`web` already has a key `url`"
+    );
+    renames.client.stop();
+}
+
+const ONE_LAYER: &str = r#"Project { layers: List([{ name: "base", dir: "base", .. }]), .. }"#;
+
+#[test]
+fn renaming_a_key_renames_the_ids_that_resolve_to_it() {
+    let text = "\
+#[scope]
++dashboard: { layout: [@filter, @list], +filter: { p: 1 }, +list: {}, up: @other }
+#[scope]
++settings: { layout: [@filter], +filter: { p: 2 } }
++filter: { p: 0 }
++other: { see: @dashboard.filter, top: @filter, abs: @::filter, far: @::dashboard.list }
+";
+    let mut renames = Renames::start(
+        "lsp-rename-scopes",
+        &[("project.crol", ONE_LAYER), ("base/a.crod", text)],
+    );
+    let with = |changes: &[(&str, &str)]| {
+        let mut text = text.to_owned();
+        for (from, to) in changes {
+            assert!(text.contains(from), "{from}");
+            text = text.replacen(from, to, 1);
+        }
+        changed(&[("base/a.crod", &text)])
+    };
+    // A screen's own `filter`: the ids in that screen, and the path id's
+    // second key. The other screen's and the root's stay.
+    let expected = with(&[
+        ("[@filter, @list]", "[@query, @list]"),
+        ("+filter: { p: 1 }", "+query: { p: 1 }"),
+        ("@dashboard.filter", "@dashboard.query"),
+    ]);
+    assert_eq!(
+        renames.rename("base/a.crod", "+filter: { p: 1 }", 1, "query"),
+        expected
+    );
+    // From an id that names it, in the scope and through a path.
+    assert_eq!(
+        renames.rename("base/a.crod", "@filter, @list", 1, "query"),
+        expected
+    );
+    assert_eq!(
+        renames.rename("base/a.crod", "@dashboard.filter", 11, "query"),
+        expected
+    );
+    // The root's: the ids outside the screens, and the one from the root.
+    assert_eq!(
+        renames.rename("base/a.crod", "+filter: { p: 0 }", 1, "search"),
+        with(&[
+            ("+filter: { p: 0 }", "+search: { p: 0 }"),
+            ("top: @filter", "top: @search"),
+            ("@::filter", "@::search"),
+        ])
+    );
+    // A scope: only the key of a path id that names it changes.
+    assert_eq!(
+        renames.rename("base/a.crod", "@dashboard.filter", 1, "home"),
+        with(&[
+            ("+dashboard", "+home"),
+            ("@dashboard.filter", "@home.filter"),
+            ("@::dashboard.list", "@::home.list"),
+        ])
+    );
+    // A key that is no identifier, in each form of an id.
+    assert_eq!(
+        renames.rename("base/a.crod", "+list", 1, "the list"),
+        with(&[
+            ("@filter, @list", "@filter, @\"the list\""),
+            ("+list", "+\"the list\""),
+            ("@::dashboard.list", "@::dashboard[\"the list\"]"),
+        ])
+    );
+
+    // The new name is a key of a scope nearer to an id that is renamed:
+    // the id would name that one.
+    assert_eq!(
+        renames.refusal("base/a.crod", "+other", 1, "list"),
+        "renaming `other` to `list` would make `@other` at a.crod:2:75 name `dashboard.list` \
+         as `@list`, not `list`: a nearer scope has a key of the new name, which shadows it"
+    );
+    // The new name is one an id finds further out now: the id would name
+    // the renamed key instead.
+    assert_eq!(
+        renames.refusal("base/a.crod", "+list", 1, "other"),
+        "renaming `dashboard.list` to `other` would make `@other` at a.crod:2:75 name \
+         `dashboard.other` instead of `other`: the new name would shadow the key it names"
+    );
+    // The new name is a key there already.
+    assert_eq!(
+        renames.refusal("base/a.crod", "+settings", 1, "filter"),
+        "the root already has a key `filter`"
+    );
+    renames.client.stop();
+}
+
+#[test]
+fn renaming_is_refused_where_an_id_names_several_keys() {
+    let text = "\
+pane := { layout: [@filter], +inner: { p: 0 } }
+#[scope]
++dashboard: { ..&pane, +filter: { p: 1 } }
+#[scope]
++settings: { ..&pane, +filter: { p: 2 }, inner.p: 3 }
++other: { see: @dashboard.filter, in: @dashboard.inner, gone: @nope }
++copy: &root.other
+";
+    let mut renames = Renames::start(
+        "lsp-rename-templates",
+        &[("project.crol", ONE_LAYER), ("base/a.crod", text)],
+    );
+    // The id in the template names a key in each screen.
+    assert_eq!(
+        renames.refusal("base/a.crod", "+filter: { p: 1 }", 1, "query"),
+        "`@filter` at a.crod:1:20 names `dashboard.filter` and also `settings.filter`: it is \
+         written once, so renaming `dashboard.filter` would break the others"
+    );
+    assert_eq!(
+        renames.refusal("base/a.crod", "@dashboard.filter", 11, "query"),
+        "`@filter` at a.crod:1:20 names `dashboard.filter` and also `settings.filter`: it is \
+         written once, so renaming `dashboard.filter` would break the others"
+    );
+    assert_eq!(
+        renames.refusal("base/a.crod", "@filter", 1, "query"),
+        "`@filter` is written once and names `dashboard.filter` and `settings.filter`: \
+         renaming it for one would break the others"
+    );
+    // A key in a template has no place of its own, and one that a template
+    // brings in is not written at its place.
+    assert_eq!(
+        renames.refusal("base/a.crod", "+inner", 1, "core"),
+        "`inner` is written where it has no place of its own, as in a template: rename the \
+         key where the value ends up"
+    );
+    assert_eq!(
+        renames.refusal("base/a.crod", "@dashboard.inner", 11, "core"),
+        "no entry writes `dashboard.inner` at its own place"
+    );
+    assert_eq!(
+        renames.refusal("base/a.crod", "inner.p", 1, "core"),
+        "`settings.inner` is written at a.crod:1:31, not at its own place, as what a template, \
+         a spread or a reference brings in is: renaming it there would rename it wherever that \
+         value goes"
+    );
+    // So is one that a reference brings in.
+    assert_eq!(
+        renames.refusal("base/a.crod", "see:", 0, "look"),
+        "renaming `other.see` to `look` would change `copy` as well: the key is not only \
+         written at its own place"
+    );
+    // An id that names nothing names no key to rename.
+    assert_eq!(
+        renames.refusal("base/a.crod", "@nope", 1, "none"),
+        "`@nope` names nothing"
+    );
+    // A scope that the template is spread into can be renamed: the id in
+    // the template is not written with its name.
+    assert_eq!(
+        renames.rename("base/a.crod", "+settings", 1, "prefs"),
+        changed(&[("base/a.crod", &text.replace("+settings", "+prefs"))])
+    );
+    renames.client.stop();
+}
+
+#[test]
+fn renaming_in_documents_on_their_own() {
+    // A value document: the keys of its value.
+    let value =
+        "{\n    #[scope]\n    a: { x: 1, r: @x, s: &self.x },\n    x: 2,\n    t: [@x, @a.x],\n}\n";
+    let data = "+web: { port: 80 }\n+link: @web\n";
+    let refs = "+web: { port: 80, tls: { on: &parent.port, up: &top.port + 1 }, alt: &root.web.port }\nweb.port: & + 1\n";
+    let mut renames = Renames::start(
+        "lsp-rename-alone",
+        &[
+            ("value.crol", value),
+            ("data.crod", data),
+            ("refs.crod", refs),
+        ],
+    );
+    for (file, text) in [
+        ("value.crol", value),
+        ("data.crod", data),
+        ("refs.crod", refs),
+    ] {
+        renames.client.notify(
+            "textDocument/didOpen",
+            json!({ "textDocument": {
+                "uri": uri(&renames.dir.join(file)), "languageId": "crol", "version": 1, "text": text,
+            } }),
+        );
+    }
+    assert_eq!(
+        renames.rename("value.crol", "x: 1", 0, "y"),
+        changed(&[(
+            "value.crol",
+            "{\n    #[scope]\n    a: { y: 1, r: @y, s: &self.y },\n    x: 2,\n    t: [@x, @a.y],\n}\n",
+        )])
+    );
+    assert_eq!(
+        renames.rename("value.crol", "@x, @a.x", 1, "z"),
+        changed(&[(
+            "value.crol",
+            "{\n    #[scope]\n    a: { x: 1, r: @x, s: &self.x },\n    z: 2,\n    t: [@z, @a.x],\n}\n",
+        )])
+    );
+    assert_eq!(
+        renames.rename("data.crod", "@web", 1, "site"),
+        changed(&[("data.crod", "+site: { port: 80 }\n+link: @site\n")])
+    );
+    // References from the blocks around, and from the root entry.
+    assert_eq!(
+        renames.rename("refs.crod", "port", 0, "http"),
+        changed(&[(
+            "refs.crod",
+            "+web: { http: 80, tls: { on: &parent.http, up: &top.http + 1 }, alt: &root.web.http }\nweb.http: & + 1\n",
+        )])
+    );
+    // A document that changed since it was evaluated is not edited.
+    renames.client.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": uri(&renames.dir.join("data.crod")), "version": 2 },
+            "contentChanges": [{ "text": "+web: {\n" }],
+        }),
+    );
+    let mut params = renames.position("data.crod", "+web", 1);
+    params["newName"] = json!("site");
+    let refused = renames.client.try_request("textDocument/rename", params);
+    assert!(refused.unwrap_err().contains("evaluate"));
+    renames.client.stop();
 }

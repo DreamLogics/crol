@@ -27,7 +27,11 @@ finds your [project file](projects.md#how-it-is-found) by itself.
   takes you to the value below.
 - **Find references**: every operation on a key, in every layer, and every
   reference and id that names it.
-- **Rename** of binds.
+- **Rename** of binds, and of keys at any depth: every operation on the key in every
+  layer, and every reference and id that names it. Ids are found by what they
+  resolve to, so `@filter` in another [scope](language.md#scopes) stays. It is refused,
+  with the reason, where it would change what an id names, and where one id written
+  in a template names several keys.
 - **Outline and workspace symbols**.
 - **Code actions**: add missing fields, or `..`, write the values below as
   comments, and quick fixes for misspelt names.

@@ -3745,9 +3745,67 @@ trigger completion, as do `.`, `&`, `<` and `@`.
 
 Nothing is written to a file unless the user accepts an action.
 
+**Rename.** Of a bind, within its scope: its declaration and every use,
+and for a template those in every document.
+
+Of a key, at any depth: from the key in a target, from a reference whose
+path goes through it, or from an id that names it. In a path, the key
+under the cursor is the one renamed: on `filter` in `@settings.filter`
+that is `settings.filter`, on `settings` it is `settings`. A key is a
+place in the evaluated data, and what names it is found by what resolves
+to that place, not by its text. The rename changes:
+
+- the key in the target of every operation on the place, in every layer
+  and every context: definitions, patches, removals, and path entries
+  that go through it;
+- the step that names it in every reference whose path can be read off
+  the document: `&root`, `&self`, `&parent`, `&top`, `&` and entry
+  binds, with their selectors;
+- the key that names it in every id that resolves to the place, where
+  the id's value ends up in the data of any context (section 3.2). In a
+  path id only that key changes: renaming `settings.filter` to `query`
+  makes `@settings.filter` `@settings.query`, and renaming `settings` to
+  `prefs` makes it `@prefs.filter`. A `@filter` that names another key,
+  as one in another scope does, stays.
+
+A new name that is not an identifier is written as a string (section
+3.1): `"odd id"` as a key, `@"odd id"` as an id, and `["odd id"]` where
+it follows a `.`. It may be given as a string literal, which is how the
+editor shows such a key.
+
+The rename is refused, changes nothing, and says what is in the way,
+when:
+
+- an id that names the key is written once and names another key
+  elsewhere, as an id in a template that is spread into two scopes does.
+  Its text cannot change for one and stay for the other. The message
+  names the id and the other keys;
+- it would change what an id names. An id that is renamed would find the
+  new name in a nearer scope, which shadows the renamed key; or an id
+  that is not renamed, and names a key of the new name further out, or
+  nothing, would find the renamed key first. The message names the id
+  and what it would name;
+- the keyed value has a key of the new name already, in any context;
+- the key is not written at its own place: it is written in a template,
+  or comes in through a spread or a reference, where renaming it would
+  rename it in every value that gets it;
+- the key is an id itself, as a key of a map keyed by ids (section 10.5),
+  or such a key names it;
+- a document to change is in a read-only layer, or has changed since the
+  last evaluation, or the data does not evaluate.
+
+Last, the server evaluates the documents as the rename would leave them,
+and refuses unless every context's data is what it was, but for the key
+and the ids that name it. What it cannot follow, as a reference through a
+computed value (`(& ~ &other).port`), is so refused rather than broken.
+The schema is not asked: a field's key is renamed in data when the Rust
+type changes too.
+
+An id that no context's data holds, as one that a higher layer replaces,
+is not found, and stays as it is.
+
 **Formatting** of a whole document, through the formatter (section
-12.2). **Rename** of binds (within their scope) in the first version;
-renaming root keys across files and layers comes later. **Semantic
+12.2). **Semantic
 tokens** tell apart what the grammar alone cannot: keys, type names and
 enum variants (from the schema), early and late references, binds, and
 operations that are definitions or patches.
