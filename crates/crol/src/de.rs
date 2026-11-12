@@ -15,6 +15,7 @@ use crol_eval::{IdPath, Key, Keyed, Sources, Value, ValueKind};
 
 use crate::error::Error;
 use crate::id::{ID_TOKEN, Id, IdUse};
+use crate::id_or::{ID_OR_KEY, ID_OR_TOKEN};
 use crate::raw::RAW_TOKEN;
 use crate::resolve::{DataPath, DataStep, Resolver};
 use crate::schema::{Field, SchemaFile, TypeDef, VariantShape};
@@ -727,6 +728,29 @@ impl<'a> de::Deserializer<'a> for ValueDeserializer<'a> {
                 .visit_newtype_struct(inner)
                 .map_err(|e| self.attach(e));
         }
+        if name == ID_OR_TOKEN {
+            // The value's kind decides (`SPEC.md` 10.5). An id goes as its
+            // text through `visit_newtype_struct`, which `IdOr` reads as the
+            // plain form; anything else through `visit_some`, which `IdOr`
+            // gives to `T` as it is. The reserved name is no type name, so
+            // the value keeps the names it has.
+            if let ValueKind::Id(id) = &self.value.kind {
+                self.record_id(id);
+                let inner: de::value::StringDeserializer<Error> =
+                    de::value::StringDeserializer::new(id.to_string());
+                return visitor
+                    .visit_newtype_struct(inner)
+                    .map_err(|e| self.attach(e));
+            }
+            let inner = ValueDeserializer {
+                value: self.value,
+                context: self.context,
+                path: self.path.clone(),
+                place: self.place.clone(),
+                names: self.names,
+            };
+            return visitor.visit_some(inner).map_err(|e| self.attach(e));
+        }
         if name == ID_TOKEN {
             let ValueKind::Id(id) = &self.value.kind else {
                 return Err(self.expected("an id (`@name`)"));
@@ -1040,6 +1064,9 @@ impl<'a> de::Deserializer<'a> for KeyDeserializer<'_, 'a> {
         name: &'static str,
         visitor: V,
     ) -> Result<V::Value, Error> {
+        if name == ID_OR_TOKEN {
+            return Err(Error::new(ID_OR_KEY));
+        }
         match self.key {
             // `Id` takes an id key, as its text with the `@`, and no other
             // key (`SPEC.md` 10.5).

@@ -320,6 +320,7 @@ mod error;
 mod expression;
 mod fill;
 mod id;
+mod id_or;
 mod loader;
 mod mode;
 mod module_path;
@@ -355,6 +356,7 @@ pub type CrolError = Error;
 pub use expression::__value_text;
 pub use expression::{Expression, IntoExpression};
 pub use id::{Id, IdUse};
+pub use id_or::IdOr;
 pub use loader::{
     FileLoader, FileLoaders, FsLoader, Loaded, LoaderError, ModulePath, ResolvedSource, SourceId,
 };
