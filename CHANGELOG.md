@@ -70,6 +70,15 @@ This release changes the format in ways that break documents and programs writte
 - The language server completes attributes: after `#[`, `scope` and `type`, where the
   entry after it can have them and has not; after `#![`, the document attributes that
   fit the document and its mode. Each comes with its doc (#16).
+- `crol explain` says which scope an id resolved in. For a value that is an id or holds
+  ids it adds a line for each: what the id names, or that it names nothing, and the
+  scopes around it, innermost first, with which of them has the key and whether
+  `#[scope]` or a `#[crol(scope)]` type makes each a scope. Hover on an id in the
+  language server shows the same line.
+- `IdResolver::scopes` and `IdResolver::chains` return that as a `crol::ScopeChain` of
+  `IdScope`s, each with a `ScopeKind`, and `IdResolver::within` keeps to the ids at a
+  place or in what is there. An id key is in both its map and its entry, and
+  `ScopeChain::place` is its entry's place. `DataPath::starts_with`.
 
 ### Changed
 

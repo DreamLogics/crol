@@ -16,7 +16,9 @@ finds your [project file](projects.md#how-it-is-found) by itself.
   every layer, lowest first, then the doc comment of the field, then its
   type. A struct type shows its fields, as Rust writes it. A reference shows the comments of what it names. A value inside a list or `Some(...)` has the field's doc too, and an enum
   variant has its own. A key that several operations touched lists them, with
-  their layers, below that, and a reference adds what it refers to. Without a
+  their layers, below that, and a reference adds what it refers to. An id adds
+  what it names and the scopes around it, as
+  [`crol explain`](cli.md#crol-explain) prints them. Without a
   schema, there is mostly nothing to say, and no hover. On a built-in macro, how a
   call is written and what it does.
 - **Completion**: field names, enum variants, type names, ids, variants, and

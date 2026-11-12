@@ -360,7 +360,7 @@ pub use loader::{
 };
 pub use mode::Mode;
 pub use raw::RawValue;
-pub use resolve::{DataPath, DataStep, IdResolver, ResolvedId};
+pub use resolve::{DataPath, DataStep, IdResolver, IdScope, ResolvedId, ScopeChain, ScopeKind};
 pub use schema::Schema;
 
 #[cfg(feature = "derive")]

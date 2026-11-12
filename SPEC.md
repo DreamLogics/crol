@@ -2557,7 +2557,15 @@ the first id that resolves only through such a type.
 
 **For tools,** `crol::IdResolver::new(&root).schema(&schema)` resolves the
 ids of evaluated data as the loader does, and `crol::check_ids` reports
-them.
+them. `.within(&path)` keeps to the ids at a place or in what is there.
+`scopes(&id, &location)` returns a `ScopeChain`: what the id names, and
+each `IdScope` around it, innermost first, with its place, whether it has
+the id's first key, and its `ScopeKind`: `Root`, `Flag` for `#[scope]`,
+or `Type` for a `#[crol(scope)]` type, where a value with both is a
+`Flag`. `found` is the scope the id resolved in. `chains()` returns this
+for every id, as `ids()` finds them; `is_key` and `place()` tell an id
+key, which is within its map and its entry. As text, a `ScopeChain` is the line
+that `crol explain` prints (section 11).
 
 ### 10.6 Errors from deserialization
 
@@ -3394,7 +3402,7 @@ has to load it.
 | `crol check [<layer>...]` | read and evaluate the layers (each `name=source` or a source, named after it, where a source is a module path (section 4.2) or a file system path, the module path if both name something; without any, those of the project file, section 12.4), or one value document (below); check them against the schema if one is given or configured; print diagnostics; exit 1 on errors |
 | `crol eval [<layer>...] [--context a,b] [key[.path]]` | print evaluated data as a plain data-mode document (or one value); with a schema, struct fields that take their defaults are written out with the defaults the schema records, each marked `// default` (`--no-defaults` leaves them as the data does) |
 | `crol eval [<layer>...] --all-contexts` | print the base data, then for every other evaluated context a block `<a & b & !c & ...> { ... }` whose condition holds in that context only, with the keys whose value differs (`key: value`) or that are missing (`-key`). A `..` at the root is written in the base, or in the block of a context that has it where the base does not; for a root struct, a removed field as `key: (), -key`. The output is valid CROL and evaluates back to the same data |
-| `crol explain [<layer>...] [--context a,b] key[.path]` | print the operations that produced a value (section 12.3) |
+| `crol explain [<layer>...] [--context a,b] key[.path]` | print the operations that produced a value (section 12.3), and for each id in it the scope it resolved in (below) |
 | `crol compile <layer> [-o <file>]` | write a layer as a `.crob` file (section 7.8), by default beside it |
 | `crol fmt [--check] <file>...` | format `.crod` and `.crol` files in place (or check). Formatting does not depend on the mode (section 12.2). It takes files, so a directory is an error |
 | `crol fingerprint [<layer>...]` | print the fingerprint in hex |
@@ -3415,6 +3423,32 @@ fingerprint, since neither would be fit to use. With `--message-format
 json`, standard output then holds the diagnostics only. Warnings change
 none of this. `explain` shows how a value came about, which may be how to
 find a mistake, so it does not check the schema.
+
+**Ids in `explain`.** Nothing evaluates through an id, so the operations
+do not say what one names; what is worth seeing is the scope it resolved
+in, since shadowing is intended (section 3.2). Where the value at the path
+is an id or holds ids, `explain` prints `ids:` after the operations, and
+a line for each id in the data of the context, in the order of the data:
+the place of the id (for an id key, that of its entry, `bonus[@armored]`,
+though it resolves at its map's), then
+
+```text
+the id `@filter` names `dashboard.filter`; scopes: `dashboard` (`#[crol(scope)]`, has `filter`), the root (has `filter`, shadowed)
+```
+
+- First what it names, as a path of the data (section 10.5), or that it
+  names nothing; for a path id that stops at a key, at which.
+- Then the scopes around it, innermost first, ending at the root. Each
+  says what makes it a scope, `#[scope]` or `#[crol(scope)]` (the flag,
+  for a value with both, since that needs no schema), and whether it has
+  the id's first key: `has`, or `no`. The first that has it is the one
+  the id resolved in. Those after it that have it too say `shadowed`.
+- An id from the root, `@::x`, asks the root only, so the other scopes say
+  `passed by ::`.
+
+The schema is read for its `#[crol(scope)]` types and for nothing else.
+A value without ids has no such lines. `crol::IdResolver::scopes` returns
+the same as a `crol::ScopeChain`, whose text is the line (section 10.5).
 
 **Layers and keys.** `eval` and `explain` take a key after the layers, so
 their last argument is told apart by its form alone, never by what exists
@@ -3761,7 +3795,10 @@ definition's, and a reference shows the docs of what it names.
   spread into (section 3.2): each is shown. An id key names what it resolves
   to at the value it is a key of, whichever id the data has its entry under.
   Other paths have no step for an id key, so hover says nothing of the
-  values in an entry with one.
+  values in an entry with one. On an id, then the line that
+  `crol explain` has for it (section 11): what it names, or that it names
+  nothing, and the scopes around it, with what makes each a scope and which
+  has the key. In a template, a line for each place that says something else.
 - In data, on a key or value that more than one operation has touched, in the
   context chosen with the `context` setting: below a rule, each operation with
   its value, file, line and layer. One operation adds nothing to the document.
