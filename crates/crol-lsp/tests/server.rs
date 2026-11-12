@@ -4576,3 +4576,197 @@ fn scoped_ids_resolve_where_their_value_ends_up() {
     assert!(titles.iter().any(|t| t.contains("`filter`")), "{titles:?}");
     client.stop();
 }
+
+#[test]
+fn id_keys_resolve_at_the_value_they_are_keys_of() {
+    let text = "+is_biological: Tag {}\n+armored: Tag {}\n#[scope]\n+marine: { armored: Tag {}, bonus: { @armored: 1.0, @::armored: 2.0 } }\n+grenade: { bonus: { @is_biological: 47.0 } }\n";
+    let top = "grenade.bonus.@::is_biological: 50.0\ngrenade.bonus[@armored]: 3.0\n";
+    let dir = workspace(
+        "lsp-id-keys",
+        &[
+            (
+                "project.crol",
+                r#"Project { layers: List([{ name: "base", dir: "base", .. }, { name: "top", dir: "top", .. }]), .. }"#,
+            ),
+            ("base/a.crod", text),
+            ("top/a.crod", top),
+        ],
+    );
+    let mut client = Client::start(&dir);
+    let base = uri(&dir.join("base/a.crod"));
+    let above = uri(&dir.join("top/a.crod"));
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": base, "languageId": "crol", "version": 1, "text": text } }),
+    );
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": above, "languageId": "crol", "version": 1, "text": top } }),
+    );
+    let position = |text: &str, line: usize, word: &str| {
+        let character = text.lines().nth(line).unwrap().find(word).unwrap() + 1;
+        json!({ "line": line, "character": character })
+    };
+    let starts = |found: &Value| -> Vec<(String, u64, u64)> {
+        let list = match found {
+            Value::Array(list) => list.clone(),
+            other => vec![other.clone()],
+        };
+        let mut starts: Vec<_> = list
+            .iter()
+            .map(|l| {
+                let file = l["uri"].as_str().unwrap();
+                (
+                    file.rsplit('/').nth(1).unwrap().to_owned(),
+                    l["range"]["start"]["line"].as_u64().unwrap(),
+                    l["range"]["start"]["character"].as_u64().unwrap(),
+                )
+            })
+            .collect();
+        starts.sort();
+        starts
+    };
+    let at = |layer: &str, line: u64, character: u64| (layer.to_owned(), line, character);
+
+    // In the scope, `@armored` is its own tag, and `@::armored` the root's.
+    let found = client.request(
+        "textDocument/definition",
+        json!({ "textDocument": { "uri": base }, "position": position(text, 3, "@armored") }),
+    );
+    assert_eq!(starts(&found), [at("base", 3, 11)]);
+    let found = client.request(
+        "textDocument/definition",
+        json!({ "textDocument": { "uri": base }, "position": position(text, 3, "@::armored") }),
+    );
+    assert_eq!(starts(&found), [at("base", 1, 1)]);
+    // In a path entry of the layer above, after a dot and in brackets.
+    let found = client.request(
+        "textDocument/definition",
+        json!({ "textDocument": { "uri": above }, "position": position(top, 0, "@::is_bio") }),
+    );
+    assert_eq!(starts(&found), [at("base", 0, 1)]);
+    let found = client.request(
+        "textDocument/definition",
+        json!({ "textDocument": { "uri": above }, "position": position(top, 1, "@armored") }),
+    );
+    assert_eq!(starts(&found), [at("base", 1, 1)]);
+
+    // Hover says what the key names.
+    let hover = client.request(
+        "textDocument/hover",
+        json!({ "textDocument": { "uri": base }, "position": position(text, 3, "@armored") }),
+    );
+    let markdown = hover["contents"]["value"].as_str().unwrap();
+    assert!(markdown.contains("**marine.armored**"), "{markdown}");
+
+    // References of the root's `armored`: the keys that name it, as the
+    // data has them. The entry the layer above adds is under its own id.
+    let found = client.request(
+        "textDocument/references",
+        json!({
+            "textDocument": { "uri": base }, "position": { "line": 1, "character": 3 },
+            "context": { "includeDeclaration": false },
+        }),
+    );
+    let found = starts(&found);
+    assert!(found.contains(&at("base", 3, 55)), "{found:?}");
+    assert!(found.contains(&at("top", 1, 15)), "{found:?}");
+    assert!(!found.contains(&at("base", 3, 38)), "{found:?}");
+
+    // After `@` where a key goes: what the scopes around the map have.
+    let typed = text.replace("@is_biological: 47.0 }", "@is_biological: 47.0, @ }");
+    client.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": base, "version": 2 },
+            "contentChanges": [{ "text": typed }],
+        }),
+    );
+    let character = typed.lines().nth(4).unwrap().rfind('@').unwrap() + 1;
+    let items = client.request(
+        "textDocument/completion",
+        json!({ "textDocument": { "uri": base }, "position": { "line": 4, "character": character } }),
+    );
+    let labels: Vec<&str> = items
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["label"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        labels,
+        ["is_biological", "armored", "marine", "grenade"],
+        "{labels:?}"
+    );
+    // In the scope: its own keys first.
+    let typed = text.replace("@::armored: 2.0 }", "@::armored: 2.0, @ }");
+    client.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": base, "version": 3 },
+            "contentChanges": [{ "text": typed }],
+        }),
+    );
+    let character = typed.lines().nth(3).unwrap().rfind('@').unwrap() + 1;
+    let items = client.request(
+        "textDocument/completion",
+        json!({ "textDocument": { "uri": base }, "position": { "line": 3, "character": character } }),
+    );
+    let labels: Vec<&str> = items
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["label"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        labels[..3],
+        ["armored", "bonus", "is_biological"],
+        "{labels:?}"
+    );
+
+    // A key that names nothing is an error, on the key.
+    let typed = text.replace("@is_biological: 47.0 }", "@is_biologcal: 47.0 }");
+    client.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": base, "version": 4 },
+            "contentChanges": [{ "text": typed }],
+        }),
+    );
+    let diagnostics = client.diagnostics_for(&base, |d| says(d, "@is_biologcal"));
+    let diagnostic = diagnostics
+        .iter()
+        .find(|d| d["message"].as_str().unwrap().contains("@is_biologcal"))
+        .unwrap()
+        .clone();
+    assert_eq!(
+        diagnostic["message"],
+        "the id key `@is_biologcal` names no root key; an id key has to name an entry, and a key \
+         that names nothing is written as a string\n(while evaluating grenade.bonus)"
+    );
+    assert_eq!(diagnostic["severity"], 1, "{diagnostic:?}");
+    assert_eq!(
+        diagnostic["range"]["start"]["character"], 21,
+        "{diagnostic:?}"
+    );
+    // And the fix is a key the scopes around it have.
+    let found = client.request(
+        "textDocument/codeAction",
+        json!({
+            "textDocument": { "uri": base },
+            "range": diagnostic["range"],
+            "context": { "diagnostics": [diagnostic], "triggerKind": 2 },
+        }),
+    );
+    let titles: Vec<&str> = found
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["title"].as_str().unwrap())
+        .collect();
+    assert!(
+        titles.iter().any(|t| t.contains("`is_biological`")),
+        "{titles:?}"
+    );
+    client.stop();
+}

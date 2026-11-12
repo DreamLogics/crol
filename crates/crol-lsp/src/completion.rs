@@ -666,12 +666,26 @@ impl Completer<'_> {
             return Vec::new();
         };
         let schema = self.snapshot.schema_for(self.file);
-        let place = self
-            .cursor
-            .value_or_root()
+        // An id key names what the scopes around the value it is a key of
+        // have (`SPEC.md` 3.2): the block the cursor is in, or what a path
+        // has reached.
+        let keyed = match self.cursor.slot {
+            Slot::Key => self.cursor.bracket(),
+            Slot::Path => self.cursor.current(),
+            _ => None,
+        };
+        let place = keyed
+            .or_else(|| self.cursor.value_or_root())
             .and_then(|place| place.path.as_deref())
             .map(|steps| features::data_path_lenient(root, steps));
-        let refers = self.value_type().and_then(|ty| refers_of(&ty));
+        let refers = match keyed {
+            // The types the keys of a map keyed by ids may name.
+            Some(place) => match &place.shape {
+                Some(Shape::Type(TypeExpr::Map(key, _))) => refers_of(key),
+                _ => None,
+            },
+            None => self.value_type().and_then(|ty| refers_of(&ty)),
+        };
         let names: Option<Vec<&str>> = refers.map(|paths| {
             let schema = self.snapshot.schema_for(self.file).map(|s| s.file);
             paths
