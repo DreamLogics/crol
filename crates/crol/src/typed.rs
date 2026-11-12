@@ -16,6 +16,7 @@ use crol_syntax::{SyntaxToken, TextRange};
 use indexmap::IndexMap;
 
 use crate::CheckOptions;
+use crate::de::{NameFit, TypeNames};
 use crate::schema::{Field, Repr, SchemaFile, TypeDef, TypeExpr, VariantShape};
 
 /// How deep to follow a type or a value; types can contain themselves.
@@ -193,6 +194,7 @@ pub fn check_document(
                         schema,
                         options,
                         problems: Vec::new(),
+                        names: TypeNames::default(),
                     };
                     checker.value(&value, &ty, 0);
                     out.extend(checker.problems);
@@ -674,6 +676,9 @@ struct ValueChecker<'s> {
     schema: &'s SchemaFile,
     options: &'s CheckOptions,
     problems: Vec<TypeProblem>,
+    /// What names the type of the value checked next: the newtypes and
+    /// transparent structs it was reached through (`SPEC.md` 10.2).
+    names: TypeNames<'s>,
 }
 
 /// What an expression is, as far as its text says.
@@ -753,7 +758,7 @@ fn found(w: &Written, expr: &ast::Expr) -> String {
     }
 }
 
-impl ValueChecker<'_> {
+impl<'s> ValueChecker<'s> {
     fn expected(&mut self, expr: &ast::Expr, w: &Written, what: &str) {
         self.problems.push(TypeProblem::new(
             expr.syntax().text_range(),
@@ -762,6 +767,8 @@ impl ValueChecker<'_> {
     }
 
     fn value(&mut self, expr: &ast::Expr, ty: &TypeExpr, depth: usize) {
+        // They name this value only.
+        let names = std::mem::take(&mut self.names);
         if depth > MAX_DEPTH {
             return;
         }
@@ -772,6 +779,7 @@ impl ValueChecker<'_> {
         if let ast::Expr::Paren(paren) = expr
             && let Some(inner) = paren.inner()
         {
+            self.names = names;
             return self.value(&inner, ty, depth + 1);
         }
         // An integer too long for an i128 is out of every range.
@@ -847,13 +855,23 @@ impl ValueChecker<'_> {
                 _ => false,
             },
             TypeExpr::Map(_, value) => match &w {
-                Written::Block(block) if block.type_name().is_none() => {
+                Written::Block(block) => {
+                    // A map has the names of what wraps it; a name that
+                    // names nothing is a warning where the value is used
+                    // (`SPEC.md` 10.2).
+                    if let Some(written) = block.type_name()
+                        && let NameFit::Mismatch(message) = names.of_map(written.text())
+                    {
+                        let range = written.text_range();
+                        self.problems.push(TypeProblem::new(range, message));
+                        return;
+                    }
                     self.map_entries(block.entries(), value, depth);
                     true
                 }
                 _ => false,
             },
-            TypeExpr::Named(path) => return self.named(expr, &w, path, depth),
+            TypeExpr::Named(path) => return self.named(expr, &w, path, depth, names),
         };
         if !ok {
             self.expected(expr, &w, &crate::check::describe(ty));
@@ -885,12 +903,29 @@ impl ValueChecker<'_> {
         }
     }
 
-    fn named(&mut self, expr: &ast::Expr, w: &Written, path: &str, depth: usize) {
+    fn named(
+        &mut self,
+        expr: &ast::Expr,
+        w: &Written,
+        path: &str,
+        depth: usize,
+        names: TypeNames<'s>,
+    ) {
         let Some(def) = self.schema.get(path) else {
             return;
         };
+        // The value itself in a newtype or transparent struct: a type name
+        // on it may be the wrapper's (`SPEC.md` 10.2).
+        let block_name = match w {
+            Written::Block(block) => block.type_name(),
+            _ => None,
+        };
+        let block_name = block_name.as_ref().map(SyntaxToken::text);
         match def {
-            TypeDef::Transparent { inner, .. } => self.value(expr, inner, depth + 1),
+            TypeDef::Transparent { name, inner, .. } => {
+                self.names = names.wrap(name, block_name);
+                self.value(expr, inner, depth + 1);
+            }
             TypeDef::Newtype { name, inner, .. } => match w {
                 // `N(x)`, or else `x` (`SPEC.md` 10.2).
                 Written::NamedTuple(t) if t.name().is_some_and(|n| n.text() == name) => {
@@ -899,17 +934,18 @@ impl ValueChecker<'_> {
                         self.value(item, inner, depth + 1);
                     }
                 }
-                _ => self.value(expr, inner, depth + 1),
+                _ => {
+                    self.names = names.wrap(name, block_name);
+                    self.value(expr, inner, depth + 1);
+                }
             },
             TypeDef::Struct { name, fields, .. } => match w {
                 Written::Block(block) => {
                     if let Some(written) = block.type_name()
-                        && written.text() != name
+                        && let NameFit::Mismatch(message) = names.of_struct(name, written.text())
                     {
-                        self.problems.push(TypeProblem::new(
-                            written.text_range(),
-                            format!("expected a `{name}`, found a `{}`", written.text()),
-                        ));
+                        let range = written.text_range();
+                        self.problems.push(TypeProblem::new(range, message));
                         return;
                     }
                     self.fields(block.entries(), name, fields, depth);

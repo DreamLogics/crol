@@ -367,7 +367,7 @@ struct NewtypeScreen(BTreeMap<String, Node>);
 #[test]
 fn newtypes_and_transparent_structs_can_be_scopes() {
     let text = r#"
-        dashboard: Screen {
+        dashboard: NodeScreen {
             layout: Stack { children: [(Length(1), @filter), (Fill(1), @list)] },
             +filter: TextInput { placeholder: "Filter workers" },
             +list: List { vim_keys: true },
@@ -395,5 +395,5 @@ fn newtypes_and_transparent_structs_can_be_scopes() {
         assert_eq!(targets(&ids), ["@filter -> settings.filter"]);
     }
     check::<NodeScreen>(text);
-    check::<NewtypeScreen>(&text.replace("Screen {", "NewtypeScreen {"));
+    check::<NewtypeScreen>(&text.replace("NodeScreen {", "NewtypeScreen {"));
 }

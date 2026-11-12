@@ -8,6 +8,7 @@ use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 
 use crate::compose::{CrolData, VariantName};
+use crate::de::{NameFit, TypeNames};
 use crate::resolve::{DataPath, DataStep, Resolver};
 use crate::schema::{
     DataRoot, Field, FieldDefault, Repr, SchemaFile, TypeDef, TypeExpr, VariantShape,
@@ -88,7 +89,7 @@ pub fn check_value(
     let root_path = root.unwrap_or(&schema.root);
     let root_type = TypeExpr::Named(root_path.to_owned());
     let mut checker = Checker::new(schema, options, data, None, ResolveAs::Value(root_path));
-    checker.value(value, &root_type, Path::Root(""), None);
+    checker.value(value, &root_type, Path::Root(""), TypeNames::default());
     checker.found
 }
 
@@ -252,7 +253,7 @@ fn check_whole(
             root.as_ref().unwrap_or(data.base),
             root_type,
             Path::Root(""),
-            None,
+            TypeNames::default(),
         );
         merge(&mut found, checker.found, index);
     }
@@ -280,7 +281,7 @@ fn check_keys(
     for (key, value) in &root.entries {
         let Key::Str(name) = key else { continue };
         checker.ids = Some(Vec::new());
-        checker.value(value, root_type, Path::Root(name), None);
+        checker.value(value, root_type, Path::Root(name), TypeNames::default());
         let diagnostics = std::mem::take(&mut checker.found);
         let ids = checker.ids.take().unwrap_or_default();
         base.push((key, diagnostics.clone(), ids));
@@ -313,7 +314,7 @@ fn check_keys(
         }
         for (key, change) in &context.changes {
             if let (Key::Str(name), Some(value)) = (key, change) {
-                checker.value(value, root_type, Path::Root(name), None);
+                checker.value(value, root_type, Path::Root(name), TypeNames::default());
             }
         }
         same.append(&mut checker.found);
@@ -471,6 +472,14 @@ impl<'a> StructIndex<'a> {
     }
 }
 
+/// The type name a value is written with, if it is a keyed value.
+fn written(value: &Value) -> Option<&str> {
+    match &value.kind {
+        ValueKind::Keyed(keyed) => keyed.name.as_deref(),
+        _ => None,
+    }
+}
+
 fn found(value: &Value) -> String {
     match &value.kind {
         ValueKind::Int(i) => i.to_string(),
@@ -525,6 +534,14 @@ impl<'a> Checker<'a> {
         self.found.push(diagnostic);
     }
 
+    fn warning(&mut self, span: Span, message: String, path: Path<'_>) {
+        let mut diagnostic = Diagnostic::warning(span, message);
+        if !path.is_empty() {
+            diagnostic.context = Some(path.to_string());
+        }
+        self.found.push(diagnostic);
+    }
+
     fn expected(&mut self, value: &Value, what: &str, path: Path<'_>) {
         self.error(
             value.span,
@@ -533,7 +550,8 @@ impl<'a> Checker<'a> {
         );
     }
 
-    fn value(&mut self, value: &'a Value, ty: &'a TypeExpr, path: Path<'_>, variant: Option<&str>) {
+    /// `names` is what names the value's type so far (`SPEC.md` 10.2).
+    fn value(&mut self, value: &'a Value, ty: &'a TypeExpr, path: Path<'_>, names: TypeNames<'_>) {
         let int =
             |min: i128, max: i128| matches!(value.kind, ValueKind::Int(i) if i >= min && i <= max);
         let ok = match ty {
@@ -578,11 +596,11 @@ impl<'a> Checker<'a> {
             TypeExpr::Option(inner) => match &value.kind {
                 ValueKind::UnitName(n) if &**n == "None" => true,
                 ValueKind::NamedTuple(n, items) if &**n == "Some" && items.len() == 1 => {
-                    self.value(&items[0], inner, path, None);
+                    self.value(&items[0], inner, path, TypeNames::default());
                     true
                 }
                 _ if self.options.implicit_some => {
-                    self.value(value, inner, path, None);
+                    self.value(value, inner, path, names);
                     true
                 }
                 _ => false,
@@ -590,7 +608,7 @@ impl<'a> Checker<'a> {
             TypeExpr::List(inner) | TypeExpr::Set(inner) => match &value.kind {
                 ValueKind::List(items) => {
                     for (i, item) in items.iter().enumerate() {
-                        self.value(item, inner, Path::Index(&path, i), None);
+                        self.value(item, inner, Path::Index(&path, i), TypeNames::default());
                     }
                     true
                 }
@@ -599,7 +617,7 @@ impl<'a> Checker<'a> {
             TypeExpr::Array(inner, n) => match &value.kind {
                 ValueKind::Tuple(items) if items.len() == *n => {
                     for (i, item) in items.iter().enumerate() {
-                        self.value(item, inner, Path::Element(&path, i), None);
+                        self.value(item, inner, Path::Element(&path, i), TypeNames::default());
                     }
                     true
                 }
@@ -608,7 +626,7 @@ impl<'a> Checker<'a> {
             TypeExpr::Tuple(types) => match &value.kind {
                 ValueKind::Tuple(items) if items.len() == types.len() => {
                     for (i, (item, ty)) in items.iter().zip(types).enumerate() {
-                        self.value(item, ty, Path::Element(&path, i), None);
+                        self.value(item, ty, Path::Element(&path, i), TypeNames::default());
                     }
                     true
                 }
@@ -617,6 +635,15 @@ impl<'a> Checker<'a> {
             },
             TypeExpr::Map(key_type, value_type) => match &value.kind {
                 ValueKind::Keyed(keyed) => {
+                    // A map has the names of what wraps it (`SPEC.md` 10.2).
+                    match keyed.name.as_deref().map(|written| names.of_map(written)) {
+                        Some(NameFit::Mismatch(message)) => self.error(value.span, message, path),
+                        Some(NameFit::Unnamed) => {
+                            let written = keyed.name.as_deref().unwrap_or_default();
+                            self.warning(value.span, crate::de::unnamed_map(written), path);
+                        }
+                        _ => {}
+                    }
                     for (key, item) in &keyed.entries {
                         // Integer keys go into integer types; string keys into
                         // strings, unit variants and ids (`SPEC.md` 10.1).
@@ -632,13 +659,18 @@ impl<'a> Checker<'a> {
                                 path,
                             );
                         }
-                        self.value(item, value_type, Path::Key(&path, key), None);
+                        self.value(
+                            item,
+                            value_type,
+                            Path::Key(&path, key),
+                            TypeNames::default(),
+                        );
                     }
                     true
                 }
                 _ => false,
             },
-            TypeExpr::Named(type_path) => return self.named(value, type_path, path, variant),
+            TypeExpr::Named(type_path) => return self.named(value, type_path, path, names),
         };
         if !ok {
             let what = describe(ty);
@@ -646,7 +678,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn named(&mut self, value: &'a Value, type_path: &str, path: Path<'_>, variant: Option<&str>) {
+    fn named(&mut self, value: &'a Value, type_path: &str, path: Path<'_>, names: TypeNames<'_>) {
         let Some(&definition) = self.types.get(type_path) else {
             // A type the schema does not describe is not checked.
             return;
@@ -657,16 +689,20 @@ impl<'a> Checker<'a> {
                 fields,
                 explicit_defaults,
                 ..
-            } => self.fields(value, name, fields, *explicit_defaults, path, variant),
+            } => self.fields(value, name, fields, *explicit_defaults, path, names),
             TypeDef::Newtype { name, inner, .. } => match &value.kind {
                 ValueKind::NamedTuple(written, items)
                     if **written == **name && items.len() == 1 =>
                 {
-                    self.value(&items[0], inner, path, None);
+                    self.value(&items[0], inner, path, TypeNames::default());
                 }
-                _ => self.value(value, inner, path, None),
+                // The value itself: a type name on it may be the newtype's
+                // (`SPEC.md` 10.2).
+                _ => self.value(value, inner, path, names.wrap(name, written(value))),
             },
-            TypeDef::Transparent { inner, .. } => self.value(value, inner, path, None),
+            TypeDef::Transparent { name, inner, .. } => {
+                self.value(value, inner, path, names.wrap(name, written(value)));
+            }
             TypeDef::TupleStruct { name, fields, .. } => {
                 let items = match &value.kind {
                     ValueKind::NamedTuple(written, items) if **written == **name => items,
@@ -681,7 +717,7 @@ impl<'a> Checker<'a> {
                     );
                 }
                 for (i, (item, ty)) in items.iter().zip(fields).enumerate() {
-                    self.value(item, ty, Path::Element(&path, i), None);
+                    self.value(item, ty, Path::Element(&path, i), TypeNames::default());
                 }
             }
             TypeDef::UnitStruct { name, .. } => {
@@ -728,22 +764,29 @@ impl<'a> Checker<'a> {
                     (VariantShape::Newtype(inner), ValueKind::NamedTuple(_, items))
                         if items.len() == 1 =>
                     {
-                        self.value(&items[0], inner, path, None);
+                        self.value(&items[0], inner, path, TypeNames::default());
                     }
                     // `V { ... }` as a newtype variant (`SPEC.md` 10.4).
                     (VariantShape::Newtype(inner), ValueKind::Keyed(_)) => {
-                        self.value(value, inner, path, Some(variant_name));
+                        self.value(value, inner, path, TypeNames::variant(variant_name));
                     }
                     (VariantShape::Tuple(types), ValueKind::NamedTuple(_, items))
                         if items.len() == types.len() =>
                     {
                         for (i, (item, ty)) in items.iter().zip(types).enumerate() {
-                            self.value(item, ty, Path::Element(&path, i), None);
+                            self.value(item, ty, Path::Element(&path, i), TypeNames::default());
                         }
                     }
                     (VariantShape::Struct(fields), ValueKind::Keyed(_)) => {
                         let explicit = variant.explicit_defaults;
-                        self.fields(value, variant_name, fields, explicit, path, None);
+                        self.fields(
+                            value,
+                            variant_name,
+                            fields,
+                            explicit,
+                            path,
+                            TypeNames::default(),
+                        );
                     }
                     _ => self.expected(
                         value,
@@ -763,20 +806,15 @@ impl<'a> Checker<'a> {
         fields: &'a IndexMap<String, Field>,
         explicit_defaults: Option<bool>,
         path: Path<'_>,
-        variant: Option<&str>,
+        names: TypeNames<'_>,
     ) {
         let ValueKind::Keyed(keyed) = &value.kind else {
             return self.expected(value, &format!("`{name} {{ ... }}`"), path);
         };
         if let Some(written) = &keyed.name
-            && **written != *name
-            && Some(&**written) != variant
+            && let NameFit::Mismatch(message) = names.of_struct(name, written)
         {
-            return self.error(
-                value.span,
-                format!("expected a `{name}`, found a `{written}`"),
-                path,
-            );
+            return self.error(value.span, message, path);
         }
         let index = self.struct_index(fields);
         for (key, item) in &keyed.entries {
@@ -790,7 +828,10 @@ impl<'a> Checker<'a> {
             };
             let field = index.by_name.get(&**field_name).copied();
             match field {
-                Some(field) => self.value(item, &field.ty, Path::Field(&path, field_name), None),
+                Some(field) => {
+                    let path = Path::Field(&path, field_name);
+                    self.value(item, &field.ty, path, TypeNames::default());
+                }
                 None if self.options.allow_unknown_fields || index.flattened => {}
                 None => {
                     // As serde lists them: each field's aliases, then its name.

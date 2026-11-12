@@ -177,7 +177,8 @@ The name before the braces is the _type name_. It is optional, but when you
 write it, it has to match the Rust type. Writing `Limits` on a `Service` field
 is an error, so the name acts as a check and tells readers what they are
 looking at. It also decides which variant of an enum a value is, as the next
-section shows.
+section shows. A value that is a plain map has no type name, and with a
+[schema](schemas.md) a name written on one gets a warning.
 
 Keys are identifiers, quoted strings (for anything that is not an identifier)
 or integers. `port` and `"port"` are the same key; `12` and `"12"` are not.

@@ -469,11 +469,26 @@ pub(crate) fn deserialize_resolved<'a, T: for<'de> Deserialize<'de>>(
     key: Option<&str>,
     resolver: Option<resolve::Resolver<'a>>,
 ) -> Result<(T, Vec<IdUse>)> {
+    deserialize_typed(value, sources, options, key, resolver, None)
+}
+
+/// [`deserialize_resolved`], with what the schema says the type at each
+/// place is, for the type names of blocks (`SPEC.md` 10.2): the data and its
+/// types, and how many steps of a place come before the root of that data.
+pub(crate) fn deserialize_typed<'a, T: for<'de> Deserialize<'de>>(
+    value: &'a Value,
+    sources: &'a Sources,
+    options: de::Options,
+    key: Option<&str>,
+    resolver: Option<resolve::Resolver<'a>>,
+    typed: Option<(resolve::Resolver<'a>, usize)>,
+) -> Result<(T, Vec<IdUse>)> {
     let context = de::Context {
         sources,
         options,
         ids: Default::default(),
         resolver,
+        typed,
     };
     let deserializer = match key {
         Some(key) => de::ValueDeserializer::at_key(value, &context, key),

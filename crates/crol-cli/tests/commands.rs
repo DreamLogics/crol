@@ -404,6 +404,61 @@ fn warnings_do_not_fail_a_command() {
     assert!(stdout(&output).contains("replicas: 3"), "{output:?}");
 }
 
+/// Type names where serde gives the loader none (`SPEC.md` 10.2): a
+/// transparent struct around a map has its name, and a map has none.
+#[test]
+fn check_reports_type_names_on_maps() {
+    let schema = r#"Schema {
+        format: 1,
+        root: "app::App",
+        types: {
+            "app::App": Struct {
+                name: "App",
+                source: ("src/lib.rs", 1),
+                fields: {
+                    screen: { ty: Named("app::Screen"), .. },
+                    stats: { ty: Map(String, U32), .. },
+                },
+                ..
+            },
+            "app::Screen": Transparent {
+                name: "Screen",
+                source: ("src/lib.rs", 2),
+                inner: Map(String, U32),
+                ..
+            },
+        },
+    }"#;
+    let dir = tree(
+        "type-names-on-maps",
+        &[
+            ("schema.crol", schema),
+            ("good.crod", "screen: Screen { a: 1 }\nstats: { a: 1 }\n"),
+            ("bad.crod", "screen: Scren { a: 1 }\nstats: { a: 1 }\n"),
+            (
+                "warned.crod",
+                "screen: Screen { a: 1 }\nstats: Stats { a: 1 }\n",
+            ),
+        ],
+    );
+    let check = |file| crol(&dir, &["check", file, "--schema", "schema.crol"]);
+    let output = check("good.crod");
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(stderr(&output), "");
+    let output = check("bad.crod");
+    assert!(failed(&output), "{output:?}");
+    assert!(
+        stderr(&output).contains("error: `Scren { ... }` is not a `Screen`"),
+        "{output:?}"
+    );
+    let output = check("warned.crod");
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        stderr(&output).contains("warning: the type name `Stats` names nothing"),
+        "{output:?}"
+    );
+}
+
 // ---- Layers and keys (`SPEC.md` 11) ----
 
 const PROJECT: &str = "Project { layers: List([{ name: \"base\", dir: \"data\", .. }]), .. }";

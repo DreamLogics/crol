@@ -966,6 +966,78 @@ fn diagnostics_follow_a_types_explicit_defaults() {
     client.stop();
 }
 
+/// Type names where serde gives the loader none (`SPEC.md` 10.2): an error
+/// on a transparent struct around a map, a warning on a map.
+#[test]
+fn type_names_on_maps_are_checked() {
+    let dir = workspace(
+        "lsp-type-names-on-maps",
+        &[
+            (
+                "schema.crol",
+                r#"Schema {
+                    format: 1,
+                    root: "app::App",
+                    types: {
+                        "app::App": Struct {
+                            name: "App",
+                            source: ("src/lib.rs", 1),
+                            fields: {
+                                screen: { ty: Named("app::Screen"), .. },
+                                stats: { ty: Map(String, U32), .. },
+                            },
+                            ..
+                        },
+                        "app::Screen": Transparent {
+                            name: "Screen",
+                            source: ("src/lib.rs", 2),
+                            inner: Map(String, U32),
+                            ..
+                        },
+                    },
+                }"#,
+            ),
+            ("config.crol", ""),
+        ],
+    );
+    let client = Client::start(&dir);
+    let config = uri(&dir.join("config.crol"));
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": config, "languageId": "crol", "version": 1, "text": "#![schema(::schema)]\n\nApp { screen: Scren { a: 1 }, stats: Stats { a: 1 } }" } }),
+    );
+    let diagnostics = client.diagnostics_for(&config, |d| !d.is_empty());
+    let found: Vec<(u64, &str)> = diagnostics
+        .iter()
+        .map(|d| {
+            (
+                d["severity"].as_u64().unwrap(),
+                // Without the path below it.
+                d["message"].as_str().unwrap().lines().next().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        found,
+        [
+            (1, "`Scren { ... }` is not a `Screen`"),
+            (
+                2,
+                "the type name `Stats` names nothing: this is a map, which has no type name; write `{ ... }`"
+            ),
+        ]
+    );
+    client.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": config, "version": 2 },
+            "contentChanges": [{ "text": "#![schema(::schema)]\n\nApp { screen: Screen { a: 1 }, stats: { a: 1 } }" }],
+        }),
+    );
+    client.diagnostics_for(&config, <[Value]>::is_empty);
+    client.stop();
+}
+
 #[test]
 fn the_project_file_is_checked_against_its_schema() {
     let project = r#"Project { layers: List([{ name: "base", dir: "base", .. }]), .. }"#;

@@ -36,7 +36,7 @@ with any format, with a few CROL rules on top.
 | tuples, arrays                 | a tuple                                                |
 | maps                           | a keyed value; keys are strings, integers, unit enum variants or `crol::Id` |
 | structs                        | a keyed value, with the checks below                   |
-| `struct N(T)`                  | `N(x)` or `x`                                          |
+| `struct N(T)`                  | `N(x)` or `x`; a block `x` may be written `N { ... }`  |
 | `struct P(A, B)`               | `P(a, b)` or `(a, b)`                                  |
 | enums                          | `V`, `V(x)`, `V(a, b)`, `V { ... }`                    |
 
@@ -56,6 +56,41 @@ change.
 
 `#[serde(flatten)]` makes serde ask for a map rather than a struct. It works,
 but these checks then do not apply to that struct.
+
+### Type names on maps and wrappers
+
+A block can also load into a map, or into a newtype or `#[serde(transparent)]`
+struct around a map or a struct. Its type name is then the wrapper's:
+
+```rust,ignore
+#[derive(Deserialize, crol::Schema)]
+struct Screen(BTreeMap<String, Node>);
+```
+
+```crol
+dashboard: Screen { +filter: TextInput { placeholder: "Filter" } }
+settings: { +filter: TextInput { placeholder: "Search" } }   // the name is optional
+dashbaord: Scren { }   // error: `Scren { ... }` is not a `Screen`
+```
+
+How much is checked depends on what serde tells the loader:
+
+| Rust type                           | A type name on its block                                  |
+| ----------------------------------- | --------------------------------------------------------- |
+| a struct                            | must be the struct's                                      |
+| a newtype, `struct N(T)`            | must be `N`, or a name `T` takes                          |
+| `#[serde(transparent)] struct N(T)` | must be `N`, or a name `T` takes, if the loader has the [schema](schemas.md) |
+| a map, such as `BTreeMap`           | names nothing: a warning, if the loader has the schema    |
+
+Serde passes a newtype's name to the loader, but for a transparent struct it
+asks for what is inside, so `Scren { ... }` there is caught only when you give
+the loader your schema with `CrolComposer::schema(...)`. `crol check` and your
+editor have the schema, and report all of these.
+
+A name on a plain map, such as `stats: Stats { ... }` for a
+`BTreeMap<String, u32>` field, loads as before. With the schema it is a warning
+in `data.warnings()`, since the name says nothing about the value. Write
+`stats: { ... }`.
 
 ### Types that decide for themselves
 

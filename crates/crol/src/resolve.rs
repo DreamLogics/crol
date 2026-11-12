@@ -11,6 +11,7 @@ use std::fmt;
 
 use crol_eval::{IdPath, Key, Keyed, Span, Value, ValueKind};
 
+use crate::de::{NameFit, TypeNames};
 use crate::schema::{DataRoot, Field, SchemaFile, TypeDef, TypeExpr, VariantShape};
 
 /// How deep a type is followed through wrappers before giving up.
@@ -302,8 +303,36 @@ impl<'a> Resolver<'a> {
     pub(crate) fn all(&self) -> Vec<Resolved<'a>> {
         let mut found = Vec::new();
         let ty = self.root_type();
-        self.collect(self.root, ty, &mut DataPath::root(), &mut found);
+        self.collect(self.root, ty, &mut DataPath::root(), &mut found, None);
         found
+    }
+
+    /// [`all`](Self::all), and from the same walk the keyed values written
+    /// with a type name where the schema has a map that nothing names
+    /// (`SPEC.md` 10.2).
+    pub(crate) fn all_with_unnamed(&self) -> (Vec<Resolved<'a>>, Vec<&'a Value>) {
+        let (mut found, mut unnamed) = (Vec::new(), Vec::new());
+        let ty = self.root_type();
+        let location = &mut DataPath::root();
+        self.collect(self.root, ty, location, &mut found, Some(&mut unnamed));
+        (found, unnamed)
+    }
+
+    /// Whether the type name of the keyed value at `place` fits the type the
+    /// schema gives that place (`SPEC.md` 10.2).
+    pub(crate) fn block_name(&self, place: &DataPath) -> NameFit {
+        let found = || {
+            let types = self.types?;
+            let mut value = self.root;
+            let mut ty = self.root_type()?;
+            for step in place.steps() {
+                let next = step_into(value, step)?;
+                ty = types.child(&ty, value, step)?;
+                value = next;
+            }
+            Some(types.block_name(&ty, value))
+        };
+        found().unwrap_or(NameFit::Unknown)
     }
 
     fn collect(
@@ -312,6 +341,7 @@ impl<'a> Resolver<'a> {
         ty: Option<TypeExpr>,
         location: &mut DataPath,
         found: &mut Vec<Resolved<'a>>,
+        mut unnamed: Option<&mut Vec<&'a Value>>,
     ) {
         let child_type = |step: &DataStep| {
             ty.as_ref()
@@ -328,6 +358,12 @@ impl<'a> Resolver<'a> {
                 });
             }
             ValueKind::Keyed(keyed) => {
+                if let (Some(unnamed), Some(ty), Some(types)) = (&mut unnamed, &ty, self.types)
+                    && keyed.name.is_some()
+                    && types.block_name(ty, value) == NameFit::Unnamed
+                {
+                    unnamed.push(value);
+                }
                 let id_keys = match (&ty, self.types) {
                     (Some(ty), Some(types)) => types.keys_are_ids(ty),
                     _ => false,
@@ -347,7 +383,7 @@ impl<'a> Resolver<'a> {
                     let step = DataStep::Key(key.clone());
                     let ty = child_type(&step);
                     location.push(step);
-                    self.collect(entry, ty, location, found);
+                    self.collect(entry, ty, location, found, unnamed.as_deref_mut());
                     location.0.pop();
                 }
             }
@@ -356,7 +392,7 @@ impl<'a> Resolver<'a> {
                     let step = DataStep::Index(i);
                     let ty = child_type(&step);
                     location.push(step);
-                    self.collect(item, ty, location, found);
+                    self.collect(item, ty, location, found, unnamed.as_deref_mut());
                     location.0.pop();
                 }
             }
@@ -365,7 +401,7 @@ impl<'a> Resolver<'a> {
                     let step = DataStep::Element(i);
                     let ty = child_type(&step);
                     location.push(step);
-                    self.collect(item, ty, location, found);
+                    self.collect(item, ty, location, found, unnamed.as_deref_mut());
                     location.0.pop();
                 }
             }
@@ -477,6 +513,40 @@ impl<'a> Types<'a> {
             }
         }
         false
+    }
+
+    /// Whether the type name `value` is written with fits `ty`, the type of
+    /// its place: through `Option`, newtypes and transparent structs, down
+    /// to the struct or map it is (`SPEC.md` 10.2).
+    fn block_name(&self, ty: &TypeExpr, value: &Value) -> NameFit {
+        let ValueKind::Keyed(keyed) = &value.kind else {
+            return NameFit::Unknown;
+        };
+        let Some(written) = keyed.name.as_deref() else {
+            return NameFit::Fits;
+        };
+        let mut names = TypeNames::default();
+        let mut ty = ty;
+        for _ in 0..MAX_WRAPPERS {
+            match ty {
+                TypeExpr::Option(inner) => ty = inner,
+                TypeExpr::Map(..) => return names.of_map(written),
+                TypeExpr::Named(path) => match self.schema.get(path) {
+                    Some(
+                        TypeDef::Newtype { name, inner, .. }
+                        | TypeDef::Transparent { name, inner, .. },
+                    ) => {
+                        names = names.wrap(name, Some(written));
+                        ty = inner;
+                    }
+                    Some(TypeDef::Struct { name, .. }) => return names.of_struct(name, written),
+                    // An enum's variants name it, and say so themselves.
+                    _ => return NameFit::Unknown,
+                },
+                _ => return NameFit::Unknown,
+            }
+        }
+        NameFit::Unknown
     }
 
     /// Whether a value of type `ty` is a map keyed by ids.
