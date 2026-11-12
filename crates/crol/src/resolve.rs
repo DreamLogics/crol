@@ -486,6 +486,8 @@ impl<'a> Types<'a> {
         for _ in 0..MAX_WRAPPERS {
             match ty {
                 TypeExpr::Option(inner) => ty = *inner,
+                // A value written in place has the type it is; an id none.
+                TypeExpr::IdOr(_, inner) if !matches!(value.kind, ValueKind::Id(_)) => ty = *inner,
                 TypeExpr::Named(ref path) => {
                     let def = self.schema.get(path)?;
                     match def {
@@ -555,7 +557,7 @@ impl<'a> Types<'a> {
         let mut ty = ty.clone();
         for _ in 0..MAX_WRAPPERS {
             match ty {
-                TypeExpr::Option(inner) => ty = *inner,
+                TypeExpr::Option(inner) | TypeExpr::IdOr(_, inner) => ty = *inner,
                 TypeExpr::Named(ref path) => match self.schema.get(path) {
                     Some(
                         TypeDef::Newtype { inner, scope, .. }
@@ -588,7 +590,8 @@ impl<'a> Types<'a> {
         let mut ty = ty;
         for _ in 0..MAX_WRAPPERS {
             match ty {
-                TypeExpr::Option(inner) => ty = inner,
+                // The reserved name of `IdOr` is no type name (`SPEC.md` 10.2).
+                TypeExpr::Option(inner) | TypeExpr::IdOr(_, inner) => ty = inner,
                 TypeExpr::Map(..) => return names.of_map(written),
                 TypeExpr::Named(path) => match self.schema.get(path) {
                     Some(
@@ -640,7 +643,8 @@ impl<'a> Types<'a> {
         let mut ty = ty;
         for _ in 0..MAX_WRAPPERS {
             match (&ty, step) {
-                (TypeExpr::Option(inner), _) => ty = (**inner).clone(),
+                // A step goes into a value written in place, never an id.
+                (TypeExpr::Option(inner) | TypeExpr::IdOr(_, inner), _) => ty = (**inner).clone(),
                 (TypeExpr::Map(_, item), DataStep::Key(_)) => return Some((**item).clone()),
                 (
                     TypeExpr::List(item) | TypeExpr::Set(item) | TypeExpr::Array(item, _),

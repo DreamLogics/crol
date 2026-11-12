@@ -219,6 +219,7 @@ pub fn rust_type(schema: &SchemaFile, ty: &TypeExpr) -> String {
         TypeExpr::Any => "any value".to_owned(),
         TypeExpr::Bytes => "bytes".to_owned(),
         TypeExpr::Id(_) => "Id".to_owned(),
+        TypeExpr::IdOr(_, t) => format!("IdOr<{}>", inner(t)),
         TypeExpr::Option(t) => format!("Option<{}>", inner(t)),
         TypeExpr::List(t) => format!("Vec<{}>", inner(t)),
         TypeExpr::Set(t) => format!("Set<{}>", inner(t)),
@@ -516,7 +517,10 @@ fn step_type(
         return None;
     }
     match (ty, kind) {
-        (TypeExpr::Option(inner), _) => step_type(schema, inner, kind, depth + 1),
+        // A path goes into a value written in place, never through an id.
+        (TypeExpr::Option(inner) | TypeExpr::IdOr(_, inner), _) => {
+            step_type(schema, inner, kind, depth + 1)
+        }
         (TypeExpr::Named(path), _) => match schema.get(path)? {
             TypeDef::Struct { fields, .. } => step_fields(schema, fields, kind, depth),
             TypeDef::TupleStruct { fields, .. } => match kind {
@@ -594,7 +598,7 @@ fn offers(schema: &SchemaFile, ty: &TypeExpr, out: &mut Vec<TypeStepOffer>, dept
         return;
     }
     match ty {
-        TypeExpr::Option(inner) => offers(schema, inner, out, depth + 1),
+        TypeExpr::Option(inner) | TypeExpr::IdOr(_, inner) => offers(schema, inner, out, depth + 1),
         TypeExpr::Named(path) => match schema.get(path) {
             Some(TypeDef::Struct { fields, .. }) => field_offers(schema, fields, out, depth),
             Some(TypeDef::TupleStruct { fields, .. }) => index_offers(fields, out),
@@ -802,6 +806,14 @@ impl<'s> ValueChecker<'s> {
             TypeExpr::U128 => int(0, i128::MAX),
             TypeExpr::F32 | TypeExpr::F64 => matches!(w, Written::Float | Written::Int(_)),
             TypeExpr::Id(_) => matches!(w, Written::Id),
+            // An id fits; anything else is the value written in place.
+            TypeExpr::IdOr(_, inner) => {
+                if !matches!(w, Written::Id) {
+                    self.names = names;
+                    self.value(expr, inner, depth + 1);
+                }
+                true
+            }
             TypeExpr::Option(inner) => {
                 match &w {
                     Written::UnitName(n) if n == "None" => {}
@@ -1427,7 +1439,9 @@ fn data_step(
         return None;
     }
     match (ty, step) {
-        (TypeExpr::Option(inner), _) => data_step(schema, inner, step, depth + 1),
+        (TypeExpr::Option(inner) | TypeExpr::IdOr(_, inner), _) => {
+            data_step(schema, inner, step, depth + 1)
+        }
         (TypeExpr::Named(path), _) => match schema.get(path)? {
             TypeDef::Struct { fields, .. } => match step {
                 DataStep::Field(name) => data_fields(schema, fields, name, depth),
@@ -1481,7 +1495,9 @@ fn named_in<'s>(
         return None;
     }
     match ty {
-        TypeExpr::Option(inner) => named_in(schema, inner, name, depth + 1),
+        TypeExpr::Option(inner) | TypeExpr::IdOr(_, inner) => {
+            named_in(schema, inner, name, depth + 1)
+        }
         TypeExpr::Named(path) => match schema.get(path)? {
             TypeDef::Enum { variants, .. } => {
                 let variant = variants.get(name).or_else(|| {
@@ -1518,7 +1534,9 @@ fn payload(
     }
     match ty {
         TypeExpr::Option(inner) if name == "Some" => (index == 0).then(|| (**inner).clone()),
-        TypeExpr::Option(inner) => payload(schema, inner, name, index, depth + 1),
+        TypeExpr::Option(inner) | TypeExpr::IdOr(_, inner) => {
+            payload(schema, inner, name, index, depth + 1)
+        }
         TypeExpr::Named(path) => match schema.get(path)? {
             TypeDef::Enum { variants, .. } => match &variants.get(name)?.shape {
                 VariantShape::Newtype(inner) if index == 0 => Some(inner.clone()),
@@ -1552,7 +1570,8 @@ fn same_type(schema: &SchemaFile, template: &TypeExpr, place: &TypeExpr) -> bool
 fn plain<'a>(schema: &'a SchemaFile, mut ty: &'a TypeExpr) -> &'a TypeExpr {
     for _ in 0..MAX_DEPTH {
         ty = match ty {
-            TypeExpr::Option(inner) => inner,
+            // A template is a value, never an id.
+            TypeExpr::Option(inner) | TypeExpr::IdOr(_, inner) => inner,
             TypeExpr::Named(path) => match schema.get(path) {
                 Some(TypeDef::Newtype { inner, .. } | TypeDef::Transparent { inner, .. }) => inner,
                 _ => break,

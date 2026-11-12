@@ -4,6 +4,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use crol::schema::TypeExpr;
 use crol::{Id, IdOr, PrettyConfig};
 use serde::Deserialize as _;
 use serde::de::IntoDeserializer;
@@ -17,13 +18,18 @@ enum Size {
 
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
 enum Node {
-    Stack { children: Vec<(Size, IdOr<Box<Node>>)> },
+    Stack {
+        children: Vec<(Size, IdOr<Box<Node>>)>,
+    },
     Label {
         text: String,
         #[serde(default)]
         muted: bool,
     },
-    Panel { title: String, child: IdOr<Box<Node>> },
+    Panel {
+        title: String,
+        child: IdOr<Box<Node>>,
+    },
 }
 
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
@@ -225,12 +231,16 @@ fn json_has_the_plain_form() {
 #[test]
 fn from_deserializers_that_forward_a_newtype_struct() {
     type E = serde::de::value::Error;
-    let read = |text: &str| {
-        IdOr::<String>::deserialize(serde::de::value::StrDeserializer::<E>::new(text))
-    };
+    let read =
+        |text: &str| IdOr::<String>::deserialize(serde::de::value::StrDeserializer::<E>::new(text));
     assert_eq!(read("@web").unwrap(), IdOr::Id(id("@web")));
     assert_eq!(read("web").unwrap(), IdOr::Value("web".into()));
-    assert!(read("@ hi").unwrap_err().to_string().contains("is not an id"));
+    assert!(
+        read("@ hi")
+            .unwrap_err()
+            .to_string()
+            .contains("is not an id")
+    );
 
     let number = IdOr::<u32>::deserialize(IntoDeserializer::<E>::into_deserializer(5u32));
     assert_eq!(number.unwrap(), IdOr::Value(5));
@@ -269,4 +279,209 @@ fn under_flatten() {
         crol::from_str_with_ids("name: \"x\"\nvolume: \"@text\"").unwrap();
     assert_eq!(outer.inner.volume, IdOr::Id(id("@text")));
     assert!(ids.is_empty());
+}
+
+// ---- With a schema: checks, scopes and `refers` ----
+
+#[allow(unreachable_pub)]
+mod ui {
+    use std::collections::BTreeMap;
+
+    use crol::IdOr;
+    use crol_derive::Schema;
+    use serde_derive::{Deserialize, Serialize};
+
+    #[derive(Debug, PartialEq, Deserialize, Serialize, Schema)]
+    pub enum Size {
+        Length(u16),
+        Fill(u16),
+    }
+
+    #[derive(Debug, PartialEq, Deserialize, Serialize, Schema)]
+    pub enum Node {
+        Stack {
+            children: Vec<(Size, IdOr<Box<Node>>)>,
+        },
+        Label {
+            text: String,
+            #[serde(default)]
+            muted: bool,
+        },
+        Panel {
+            title: String,
+            child: IdOr<Box<Node>>,
+        },
+        TextInput {
+            placeholder: String,
+        },
+        List {},
+    }
+
+    /// A screen is a scope for the nodes it places.
+    #[derive(Debug, PartialEq, Deserialize, Serialize, Schema)]
+    #[crol(scope)]
+    pub struct Screen(pub BTreeMap<String, Node>);
+
+    #[derive(Debug, PartialEq, Deserialize, Serialize, Schema)]
+    pub struct Theme {
+        pub accent: String,
+    }
+
+    #[derive(Debug, PartialEq, Deserialize, Serialize, Schema)]
+    pub struct App {
+        pub screens: BTreeMap<String, Screen>,
+        #[serde(default)]
+        pub themes: BTreeMap<String, Theme>,
+        #[crol(refers(Theme))]
+        #[serde(default)]
+        pub theme: Option<IdOr<Theme>>,
+    }
+
+    /// `App`'s screens, as written in the proposal.
+    pub const APP: &str = r#"
+screens: {
+    dashboard: {
+        layout: Stack {
+            children: [
+                (Fill(1), @sidebar),
+                (Length(1), Label { text: "q: quit", muted: true }),
+            ],
+        },
+        +sidebar: Panel {
+            title: " Workers ",
+            child: Stack { children: [(Length(1), @filter), (Fill(1), @list)] },
+        },
+        +filter: TextInput { placeholder: "Filter workers…" },
+        +list: List {},
+    },
+}
+themes: { dark: Theme { accent: "blue" } }
+theme: Some(@themes.dark)
+"#;
+}
+
+fn load_app(text: &str) -> Result<crol::CrolData, crol::Error> {
+    let layer = crol::CrolLayer::from_sources("base", [("ui.crod", text)]);
+    crol::CrolComposer::new()
+        .schema(crol::schema::build::<ui::App>())
+        .load_layer(layer)
+        .compose_data()
+}
+
+fn check_app(text: &str) -> Vec<String> {
+    let data = load_app(text).unwrap();
+    let schema = crol::schema::build::<ui::App>();
+    crol::check(&data, &schema, None, &Default::default())
+        .into_iter()
+        .map(|d| d.message)
+        .collect()
+}
+
+#[test]
+fn checks_take_ids_and_values() {
+    let data = load_app(ui::APP).unwrap();
+    let (screens, ids): (BTreeMap<String, ui::Screen>, _) = data.get_with_ids("screens").unwrap();
+    assert_eq!(screens["dashboard"].0.len(), 4);
+    // Ids resolve through the screen's scope, also inside values written in
+    // place.
+    let targets: Vec<String> = ids
+        .iter()
+        .map(|used| {
+            let target = used
+                .target
+                .as_ref()
+                .map_or("nothing".into(), |t| t.to_string());
+            format!("{} -> {target}", used.id)
+        })
+        .collect();
+    assert_eq!(
+        targets,
+        [
+            "@sidebar -> screens.dashboard.sidebar",
+            "@filter -> screens.dashboard.filter",
+            "@list -> screens.dashboard.list",
+        ]
+    );
+    // And `crol::check` takes both sides: no "found an id".
+    assert_eq!(check_app(ui::APP), Vec::<String>::new());
+
+    let theme: Option<IdOr<ui::Theme>> = data.get("theme").unwrap();
+    assert_eq!(theme, Some(IdOr::Id(id("@themes.dark"))));
+    let text = ui::APP.replace("Some(@themes.dark)", "Some({ accent: \"red\" })");
+    assert_eq!(check_app(&text), Vec::<String>::new());
+}
+
+#[test]
+fn checks_see_into_values_written_in_place() {
+    let misspelt = ui::APP.replace("Label { text", "Lable { text");
+    assert_eq!(
+        check_app(&misspelt),
+        [
+            "`Node` has no variant `Lable`; its variants are `Stack`, `Label`, `Panel`, \
+             `TextInput`, `List`"
+        ]
+    );
+
+    // `explicit_defaults` holds inside a value written in place.
+    let missing = ui::APP.replace("muted: true ", "");
+    assert_eq!(
+        check_app(&missing),
+        [
+            "`Label` is missing the field `muted`; write it, or end the block with `..` to \
+             leave out fields that have defaults"
+        ]
+    );
+
+    let wrong = ui::APP.replace("placeholder: \"Filter workers…\"", "placeholder: 3");
+    assert_eq!(check_app(&wrong), ["expected a string, found 3"]);
+}
+
+#[test]
+fn checks_report_ids_as_ids() {
+    let misspelt = ui::APP.replace("@filter)", "@filtr)");
+    assert_eq!(
+        check_app(&misspelt),
+        ["the id `@filtr` names nothing: no `filtr` in `screens.dashboard` or the root"]
+    );
+
+    // `refers` on an `IdOr` field: the id has to name a `Theme`.
+    let wrong = ui::APP.replace("Some(@themes.dark)", "Some(@screens.dashboard)");
+    assert_eq!(
+        check_app(&wrong),
+        [
+            "the id `@screens.dashboard` names a value without a type name, but it may only name \
+          `Theme`"
+        ]
+    );
+}
+
+#[test]
+fn an_id_is_no_value_where_only_a_value_is() {
+    // A screen's own entry is a `Node`, not an `IdOr`: no alias.
+    let text = ui::APP.replace("+list: List {},", "+list: @filter,");
+    assert_eq!(check_app(&text), ["expected a `Node` variant, found an id"]);
+}
+
+#[test]
+fn the_schema_writes_id_or() {
+    let schema = crol::schema::build::<ui::App>();
+    let text = schema.to_text().unwrap();
+    // `IdOr(refers, ty)`, and `refers` reaches it through `Option`.
+    assert!(
+        text.contains(r#"IdOr([], Named("id_or::ui::Node"))"#),
+        "{text}"
+    );
+    let theme = &schema.get("id_or::ui::App").unwrap();
+    let crol::schema::TypeDef::Struct { fields, .. } = theme else {
+        panic!("{theme:?}")
+    };
+    assert_eq!(
+        fields["theme"].ty,
+        TypeExpr::Option(Box::new(TypeExpr::IdOr(
+            vec!["id_or::ui::Theme".into()],
+            Box::new(TypeExpr::Named("id_or::ui::Theme".into())),
+        )))
+    );
+    // And reads back.
+    assert_eq!(crol::schema::SchemaFile::from_text(&text).unwrap(), schema);
 }

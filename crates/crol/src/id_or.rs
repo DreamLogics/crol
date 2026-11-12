@@ -4,11 +4,13 @@ use std::fmt;
 use std::marker::PhantomData;
 
 use serde::de::value::{
-    BorrowedBytesDeserializer, BorrowedStrDeserializer, BytesDeserializer,
-    EnumAccessDeserializer, MapAccessDeserializer, SeqAccessDeserializer, StrDeserializer,
-    StringDeserializer, UnitDeserializer,
+    BorrowedBytesDeserializer, BorrowedStrDeserializer, BytesDeserializer, EnumAccessDeserializer,
+    MapAccessDeserializer, SeqAccessDeserializer, StrDeserializer, StringDeserializer,
+    UnitDeserializer,
 };
-use serde::de::{self, Deserialize, Deserializer, EnumAccess, IntoDeserializer, MapAccess, SeqAccess, Visitor};
+use serde::de::{
+    self, Deserialize, Deserializer, EnumAccess, IntoDeserializer, MapAccess, SeqAccess, Visitor,
+};
 use serde::ser::{Serialize, Serializer};
 
 use crate::Id;

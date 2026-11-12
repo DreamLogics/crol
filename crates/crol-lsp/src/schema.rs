@@ -591,6 +591,8 @@ fn placeholder_at(schema: &SchemaFile, ty: &TypeExpr, depth: usize) -> String {
             "[]".to_owned()
         }
         TypeExpr::Id(_) => "@\"\"".to_owned(),
+        // The value, which shows more of the shape than an empty id.
+        TypeExpr::IdOr(_, inner) => placeholder_at(schema, inner, depth + 1),
         TypeExpr::Option(_) => "None".to_owned(),
         TypeExpr::Tuple(items) => format!("({})", many(items)),
         TypeExpr::Map(..) => "{}".to_owned(),
