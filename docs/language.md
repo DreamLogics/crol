@@ -181,6 +181,8 @@ section shows.
 
 Keys are identifiers, quoted strings (for anything that is not an identifier)
 or integers. `port` and `"port"` are the same key; `12` and `"12"` are not.
+A key can also be an [id](#ids-as-keys), `@web: 1`, in a map whose keys name
+other entries.
 
 ## Enums and options
 
@@ -730,6 +732,50 @@ An id can also reach into a scope, or skip the scopes around it:
 | `@::filter`          | the root key `filter`, whatever the scopes around say    |
 
 An id names keys only: `@items[0]` and `@pair.0` are errors.
+
+### Ids as keys
+
+A map whose keys name other entries has ids as its keys:
+
+```crol
+// units.crod
++is_biological: Tag {}
++armored: Tag {}
+
++toxin_grenade: Weapon {
+    damage: {
+        amount: 23.0,
+        bonus: { @is_biological: 47.0, @armored: 5.0 },
+    },
+}
+```
+
+`bonus` is a `HashMap<crol::Id, f64>` in Rust: a map keyed by
+[`crol::Id`](rust.md#ids) takes only id keys, so that `is_biological: 47.0`
+there is an error, and no other map takes them. An id key has every form an
+id has, `@a.b: 1` and `@::a: 1` too, and names things the same way, through
+the scopes around the map it is in.
+
+Two id keys are the same key when they name the same entry, however they are
+written. A later layer changes the bonus above with any of these:
+
+```crol
+// balance.crod
+toxin_grenade.damage.bonus.@is_biological: 50.0
+toxin_grenade.damage.bonus[@::is_biological]: 50.0
+toxin_grenade: & ~ { damage: { bonus: { @::is_biological: 50.0 } } }
+```
+
+In a path, an id key goes after a dot or in brackets. The steps after an id
+without brackets belong to the id, `@a.b` being one id, so write the brackets
+to go on below it: `bonus[@armored].factor: 2`. A reference reads an entry the
+same way, `&root.toxin_grenade.damage.bonus[@armored]`.
+
+Since keys are compared by what they name, an id key has to name something:
+one that names nothing is an error, where an id value that names nothing is a
+warning. If the keys of a map can name things that are not in the data, make
+them strings. In a scope, `@armored` and `@::armored` are two keys when the
+scope has an `armored` of its own, and one key when it has not.
 
 ## Attributes
 

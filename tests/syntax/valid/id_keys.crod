@@ -1,0 +1,19 @@
+// Ids as keys (SPEC.md 3.1, 5.1).
++bonus: {
+    @is_biological: 47.0,
+    @"odd id": 1.0,
+    @::armored: 2.0,
+    @factions.zerg.light: 3.0,
+    @tags["x y"]: 4.0
+    +@late: 5.0
+    ?@maybe: 6.0
+    ^@replaced: 7.0
+    -@gone
+    -?@perhaps
+    [@a.b].c: 8.0
+    [@::a["x y"]]: 9.0
+}
+bonus.@is_biological: 50.0
+bonus[@::armored]: 51.0
+bonus<prod>.@late: 52.0
+read: &root.bonus[@is_biological] + &root.bonus.@late

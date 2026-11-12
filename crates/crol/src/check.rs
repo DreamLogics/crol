@@ -617,20 +617,52 @@ impl<'a> Checker<'a> {
             },
             TypeExpr::Map(key_type, value_type) => match &value.kind {
                 ValueKind::Keyed(keyed) => {
+                    // The types its keys may name, for a map keyed by ids.
+                    let id_keys = crate::resolve::Types::new(self.schema).id_type(key_type);
                     for (key, item) in &keyed.entries {
-                        // Integer keys go into integer types; string keys into
-                        // strings, unit variants and ids (`SPEC.md` 10.1).
+                        // Integer keys go into integer types, string keys into
+                        // strings and unit variants, and id keys into ids,
+                        // which take no other key (`SPEC.md` 10.1, 10.5).
                         let integer_type = is_integer(key_type);
-                        let key_ok = match key {
-                            Key::Int(_) => integer_type || **key_type == TypeExpr::Any,
-                            Key::Str(_) => !integer_type,
+                        let any = **key_type == TypeExpr::Any;
+                        let problem = match (key, id_keys) {
+                            (Key::Id(id), Some(refers)) => {
+                                // A key resolves at the map's place, and is
+                                // checked as an id value is.
+                                if let Some(ids) = &mut self.ids {
+                                    ids.push(IdUse {
+                                        value: item,
+                                        id,
+                                        refers,
+                                        path: path.to_string(),
+                                        location: path.data_path(),
+                                    });
+                                }
+                                self.id(item, id, refers, path, &path.data_path());
+                                None
+                            }
+                            (Key::Id(_), None) if any => None,
+                            (Key::Id(id), None) => Some(format!(
+                                "the id key `{id}` is not a key of this map: only a map keyed \
+                                 by `crol::Id` takes id keys"
+                            )),
+                            (Key::Str(name), Some(_)) => Some(format!(
+                                "expected an id key, found the string key {key}; write `{}`",
+                                IdPath::key(name.clone())
+                            )),
+                            (Key::Int(_), Some(_)) => {
+                                Some(format!("expected an id key, found the integer key {key}"))
+                            }
+                            (Key::Int(_), None) if !(integer_type || any) => {
+                                Some(format!("the key {key} is not a key of this map"))
+                            }
+                            (Key::Str(_), None) if integer_type => {
+                                Some(format!("the key {key} is not a key of this map"))
+                            }
+                            _ => None,
                         };
-                        if !key_ok {
-                            self.error(
-                                item.span,
-                                format!("the key {key} is not a key of this map"),
-                                path,
-                            );
+                        if let Some(problem) = problem {
+                            self.error(item.span, problem, path);
                         }
                         self.value(item, value_type, Path::Key(&path, key), None);
                     }

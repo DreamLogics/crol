@@ -275,22 +275,25 @@ fn map_keys_resolve_at_the_map() {
         db: Empty,
         weights: Weights,
     }
-    let layer = CrolLayer::from_sources(
-        "base",
-        [("a.crod", "db: {}\nweights: { by: { db: 1, gone: 2 } }")],
-    );
-    let data = CrolComposer::new()
-        .schema(crol::schema::build::<Root>())
-        .load_layer(layer)
-        .compose_data()
-        .unwrap();
-    // The schema says the keys are ids, so they are checked at load.
-    assert_eq!(
-        data.warnings(),
-        ["warning: base/a.crod:2:16: the id `@gone` names no root key"]
-    );
+    let load = |text: &str| {
+        CrolComposer::new()
+            .schema(crol::schema::build::<Root>())
+            .load_layer(CrolLayer::from_sources("base", [("a.crod", text)]))
+            .compose_data()
+    };
+    let data = load("db: {}\nweights: { by: { @db: 1 } }").unwrap();
+    assert!(data.warnings().is_empty(), "{:?}", data.warnings());
     let (_, ids): (Weights, _) = data.get_with_ids("weights").unwrap();
-    assert_eq!(targets(&ids), ["@db -> db", "@gone -> nothing"]);
+    assert_eq!(targets(&ids), ["@db -> db"]);
+    // An id key has to name an entry: keys are compared by what they name
+    // (`SPEC.md` 3.2).
+    let error = load("db: {}\nweights: { by: { @db: 1, @gone: 2 } }").unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "base/a.crod:2:26: the id key `@gone` names no root key; an id key has to name an \
+         entry, and a key that names nothing is written as a string (while evaluating \
+         weights.by)"
+    );
 }
 
 #[test]

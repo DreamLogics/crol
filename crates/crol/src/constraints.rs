@@ -172,6 +172,7 @@ impl Walker<'_> {
             let kind = match key {
                 Key::Str(text) => ValueKind::String(text.as_ref().into()),
                 Key::Int(i) => ValueKind::Int(*i),
+                Key::Id(id) => ValueKind::Id(id.clone()),
             };
             self.apply(
                 name,

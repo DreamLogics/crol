@@ -457,7 +457,16 @@ impl Snapshot {
 
     /// What the ids of the data a file is in resolve against.
     pub(crate) fn id_resolver(&self, file: FileId) -> Option<crol::IdResolver<'_>> {
-        let root = self.data_of(file)?;
+        Some(self.id_resolver_in(file, self.data_of(file)?))
+    }
+
+    /// [`id_resolver`](Self::id_resolver) for the data `root`, as that of
+    /// the last evaluation that gave any.
+    pub(crate) fn id_resolver_in<'a>(
+        &'a self,
+        file: FileId,
+        root: &'a crol_eval::Value,
+    ) -> crol::IdResolver<'a> {
         let mut resolver = crol::IdResolver::new(root);
         if self.in_layers(file)
             && let Some(schema) = &self.schema
@@ -467,7 +476,7 @@ impl Snapshot {
                 resolver = resolver.root_type(root);
             }
         }
-        Some(resolver)
+        resolver
     }
 
     /// The keys an id written at `span` could name, in each place it is met:
