@@ -1,0 +1,2 @@
+// An integer is no key of an id (SPEC.md 5.1).
+a: { [@x.0]: 1 }

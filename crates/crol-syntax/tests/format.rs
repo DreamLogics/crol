@@ -734,3 +734,17 @@ fn entry_attributes() {
         "##]],
     );
 }
+
+#[test]
+fn id_keys_are_kept_as_written() {
+    // An id key is no string key: it keeps its `@` and its brackets
+    // (`SPEC.md` 3.1).
+    check(
+        "a:{@x:1,@\"odd id\":2,@::y.z:3,[@x].b:4,[ @y[ \"k\" ] ]:5,-@x,-?@::y}\na . @x:6\nb:&root.a[ @x ]+&root.a.@y",
+        expect![[r#"
+            a: { @x: 1, @"odd id": 2, @::y.z: 3, [@x].b: 4, [@y["k"]]: 5, -@x, -?@::y }
+            a.@x: 6
+            b: &root.a[@x] + &root.a.@y
+        "#]],
+    );
+}
