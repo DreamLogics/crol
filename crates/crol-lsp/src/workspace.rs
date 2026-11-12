@@ -460,8 +460,9 @@ impl Snapshot {
         Some(self.id_resolver_in(file, self.data_of(file)?))
     }
 
-    /// [`id_resolver`](Self::id_resolver) for the data `root`, as that of
-    /// the last evaluation that gave any.
+    /// [`id_resolver`](Self::id_resolver) for the data `root`: that of the
+    /// last evaluation that gave any, of a context, or that data after a
+    /// change.
     pub(crate) fn id_resolver_in<'a>(
         &'a self,
         file: FileId,

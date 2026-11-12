@@ -162,29 +162,36 @@ fn bind_occurrences(
     Some(found)
 }
 
-/// The range of the bind name at the cursor, if it can be renamed.
+/// The range of what can be renamed at the cursor: a bind's name, a string
+/// key of a target or of a reference's path, or a key of an id.
 pub(crate) fn prepare_rename(text: &str, position: Position, encoding: Encoding) -> Option<Range> {
     let (_, token) = crate::features::token_at(text, position, encoding)?;
-    let name = bind_name(&token)?;
-    Some(convert::range(
-        text,
-        &LineIndex::new(text),
-        name.text_range(),
-        encoding,
-    ))
+    let range = match bind_name(&token) {
+        Some(name) => name.text_range(),
+        None => crate::rename::prepare(&token)?,
+    };
+    Some(convert::range(text, &LineIndex::new(text), range, encoding))
 }
 
-/// Renames the bind at the cursor, its declaration and every use: within
-/// its block for an entry bind or a value bind in a block, everywhere for
-/// a template (`SPEC.md` 12.5).
+/// Renames what is at the cursor (`SPEC.md` 12.5). A bind, with its
+/// declaration and every use: within its block for an entry bind or a value
+/// bind in a block, everywhere for a template. A key, or the key an id
+/// names, with everything that names it: see [`crate::rename`].
 pub(crate) fn rename(
     snapshot: Option<&Snapshot>,
     uri: &Uri,
     text: &str,
     position: Position,
     new_name: &str,
+    current: &dyn Fn(&Uri) -> Option<String>,
     encoding: Encoding,
 ) -> Result<Option<WorkspaceEdit>, String> {
+    let Some(found) = bind_occurrences(snapshot, uri, text, position, encoding) else {
+        let Some((_, token)) = crate::features::token_at(text, position, encoding) else {
+            return Ok(None);
+        };
+        return crate::rename::rename(snapshot, uri, text, &token, new_name, current, encoding);
+    };
     if !crol_eval::is_identifier(new_name)
         || matches!(
             new_name,
@@ -193,9 +200,6 @@ pub(crate) fn rename(
     {
         return Err(format!("`{new_name}` cannot be the name of a bind"));
     }
-    let Some(found) = bind_occurrences(snapshot, uri, text, position, encoding) else {
-        return Ok(None);
-    };
     // `WorkspaceEdit` has `Uri` keys.
     #[allow(clippy::mutable_key_type)]
     let mut changes = HashMap::new();

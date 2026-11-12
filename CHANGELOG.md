@@ -93,6 +93,12 @@ This release changes the format in ways that break documents and programs writte
   `IdScope`s, each with a `ScopeKind`, and `IdResolver::within` keeps to the ids at a
   place or in what is there. An id key is in both its map and its entry, and
   `ScopeChain::place` is its entry's place. `DataPath::starts_with`.
+- The language server renames keys, at any depth, from the key or from an id or
+  reference that names it: every operation on the key in every layer, the references
+  through it, and the ids that resolve to it, of which a path id changes only the key
+  that names it. It refuses, and says why, where an id written once names other keys
+  too, where the new name would change what an id names, where the name is taken, and
+  where the key is written in a template (#14).
 
 ### Changed
 

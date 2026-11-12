@@ -334,7 +334,7 @@ fn key_steps(target: &ast::Target) -> Option<Vec<PathStep>> {
 /// of the entries around it, list elements at `[i]`, and tuple and
 /// named-tuple elements at `.i`. None for what has no such place, as a
 /// value bind's expression, or a list that is an operand.
-fn place_path(node: &SyntaxNode) -> Option<Vec<PathStep>> {
+pub(crate) fn place_path(node: &SyntaxNode) -> Option<Vec<PathStep>> {
     let position = |parent: &SyntaxNode, node: &SyntaxNode| {
         parent
             .children()
