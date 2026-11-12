@@ -1,5 +1,6 @@
 //! Completion (`SPEC.md` 12.5).
 
+use crol::Mode;
 use crol::schema::{SchemaFile, TypeDef, TypeExpr, VariantShape};
 use crol_eval::{FileId, PathStep, Value, ValueKind, print};
 use crol_syntax::ast::{self, AstNode};
@@ -10,6 +11,7 @@ use lsp_types::{
 };
 
 use crate::Settings;
+use crate::attributes;
 use crate::convert::{self, Encoding};
 use crate::features;
 use crate::place::{self, Cursor, Place, Scope, Slot};
@@ -82,8 +84,9 @@ fn closed_string(token: &str) -> bool {
 /// bind, the keys of the value there; after `&`, the names a reference can
 /// start with; after `@`, root keys; in `<...>`, variant names; in a block
 /// of a known type, its fields not written yet; after a `.` in a target,
-/// the fields there; where a value goes, the values its type allows. Each
-/// item replaces the word at the cursor. Nothing in strings and comments.
+/// the fields there; where a value goes, the values its type allows; after
+/// `#[` and `#![`, the attributes. Each item replaces the word at the
+/// cursor. Nothing in strings and comments.
 pub(crate) fn complete(
     snapshot: &Snapshot,
     uri: &Uri,
@@ -268,6 +271,17 @@ fn items_at(
         before_colon: after.starts_with(':') && !after.starts_with("::"),
     };
 
+    let word = TextRange::new(
+        TextSize::try_from(word_start).unwrap_or_default(),
+        TextSize::try_from(word_end).unwrap_or_default(),
+    );
+    // A name that states no mode is value mode here (`SPEC.md` 12.5).
+    let mode = convert::uri_to_path(uri)
+        .and_then(|p| Mode::of_path(&p))
+        .unwrap_or(Mode::Value);
+    if let Some(items) = attributes::complete(text, word, &completer.cursor, mode) {
+        return items;
+    }
     if let Some(items) = completer.in_type(text, word_start) {
         return items;
     }

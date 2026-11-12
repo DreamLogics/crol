@@ -46,6 +46,9 @@ This release changes the format in ways that break documents and programs writte
   scopes around the cursor, and suggests them for a misspelt id.
 - `crol::IdResolver` and `crol::check_ids` resolve and check the ids of evaluated data,
   for tools.
+- The language server completes attributes: after `#[`, `scope` and `type`, where the
+  entry after it can have them and has not; after `#![`, the document attributes that
+  fit the document and its mode. Each comes with its doc (#16).
 
 ### Changed
 
