@@ -11,14 +11,17 @@ use crate::Settings;
 use crate::workspace::Snapshot;
 
 /// The doc comments of every operation on `path` in the chain of `file`,
-/// lowest layer first.
+/// lowest layer first; for a document with no layers, as a value document,
+/// that of the entry at `path` in its root.
 pub(crate) fn of_path(
     snapshot: &Snapshot,
     file: FileId,
     path: &str,
     settings: &Settings,
 ) -> Option<String> {
-    let (layers, options) = snapshot.chain_of(file)?;
+    let Some((layers, options)) = snapshot.chain_of(file) else {
+        return in_own_root(snapshot.sources.file(file).text(), path);
+    };
     if !has_docs(snapshot, layers) {
         return None;
     }
@@ -32,6 +35,28 @@ pub(crate) fn of_path(
         }
     }
     (!docs.is_empty()).then(|| docs.join("\n\n"))
+}
+
+/// The doc comment of the entry at `path` in the root of a document of its
+/// own: its entries, or the block its one expression is (or names, as
+/// `Config { ... }` does).
+fn in_own_root(text: &str, path: &str) -> Option<String> {
+    if !text.contains("///") {
+        return None;
+    }
+    let parse = crol_syntax::parse(text);
+    let document = ast::Document::cast(parse.syntax())?;
+    let root = match document.expr() {
+        Some(expr) if expr.syntax().kind() == SyntaxKind::BLOCK => expr.syntax().clone(),
+        Some(expr) => expr
+            .syntax()
+            .children()
+            .find(|node| node.kind() == SyntaxKind::BLOCK)?,
+        None => document.syntax().clone(),
+    };
+    root.children()
+        .filter_map(ast::Entry::cast)
+        .find_map(|entry| find(&entry, "", path))
 }
 
 /// Whether any document of the layers has a doc comment: most generated data
@@ -105,16 +130,21 @@ fn blocks_of(entry: &SyntaxNode) -> Vec<SyntaxNode> {
         .collect()
 }
 
-/// An entry's target as a path, without conditions.
+/// An entry's target as a path, without conditions or the space between
+/// its tokens (a string key keeps its own).
 fn target_text(entry: &ast::Entry) -> Option<String> {
-    let text = entry.target()?.syntax().text().to_string();
-    let mut out = String::with_capacity(text.len());
+    let target = entry.target()?;
+    let mut out = String::new();
     let mut depth = 0;
-    for c in text.chars() {
-        match c {
-            '<' => depth += 1,
-            '>' => depth -= 1,
-            _ if depth == 0 && !c.is_whitespace() => out.push(c),
+    for token in target
+        .syntax()
+        .descendants_with_tokens()
+        .filter_map(|element| element.into_token())
+    {
+        match token.kind() {
+            SyntaxKind::L_ANGLE => depth += 1,
+            SyntaxKind::R_ANGLE => depth -= 1,
+            kind if depth == 0 && !kind.is_trivia() => out.push_str(token.text()),
             _ => {}
         }
     }

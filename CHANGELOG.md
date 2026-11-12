@@ -110,6 +110,12 @@ This release changes the format in ways that break documents and programs writte
 - Documents are lowered on several threads, as they are parsed. Loading a data set of
   14,000 keys from text takes 590 ms instead of 940 ms.
 
+### Fixed
+
+- Hover on an id shows the doc comment of the key it names in a value document,
+  which has no layers, and for a key written as a string with a space in it
+  (`@"odd id"`).
+
 ## [0.3.0] - 2026-11-08
 
 This release changes the format in ways that break documents and programs written for

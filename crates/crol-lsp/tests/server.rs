@@ -4476,6 +4476,54 @@ fn doc_comments_in_data_show_in_hover_and_completion() {
     assert_eq!(rocket["documentation"]["value"], "A rocket.");
 }
 
+/// Hover on an id has the doc comment of the key it names, in a document on
+/// its own too: data, or a value document, which has no layers.
+#[test]
+fn hover_on_an_id_shows_the_doc_of_what_it_names() {
+    let cases: &[(&str, &str)] = &[
+        (
+            "a.crod",
+            "/// A rocket.\n+rocket: { range: 5 },\nuse: @roc|ket,\n",
+        ),
+        (
+            "a.crod",
+            "/// A rocket.\n+rocket: { range: 5 },\nuse: |@rocket,\n",
+        ),
+        (
+            "a.crod",
+            "+list: [@roc|ket],\n/// A rocket.\n+rocket: { range: 5 },\n",
+        ),
+        (
+            "a.crod",
+            "/// A rocket.\n+\"odd id\": { range: 5 },\nuse: @\"od|d id\",\n",
+        ),
+        (
+            "a.crol",
+            "{\n    /// A rocket.\n    rocket: { range: 5 },\n    use: @roc|ket,\n}\n",
+        ),
+        (
+            "a.crol",
+            "/// A rocket.\nrocket: { range: 5 },\nuse: @roc|ket,\n",
+        ),
+        (
+            "a.crol",
+            "Root {\n    /// A rocket.\n    rocket: { range: 5 },\n    use: @roc|ket,\n}\n",
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (i, (name, marked)) in cases.iter().enumerate() {
+        let dir = workspace(&format!("lsp-id-docs-{i}"), &[(name, "")]);
+        let mut client = Client::start(&dir);
+        let mut buffer = Buffer::open(&client, &dir, name);
+        let markdown = buffer.hover(&mut client, marked);
+        if !markdown.starts_with("A rocket.\n\n") {
+            failures.push(format!("{marked:?}: {markdown:?}"));
+        }
+        client.stop();
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 /// A read-only layer is kept in its binary form between evaluations, which
 /// must not outlive what it was made from.
 #[test]
