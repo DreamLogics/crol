@@ -582,15 +582,43 @@ fn field_names(path: &[Selector]) -> Vec<Arc<str>> {
         .collect()
 }
 
+/// The selectors after an id written without brackets that are its own keys
+/// (`SPEC.md` 5.1): all up to a `?` or a condition. `optional` says whether
+/// the id itself has a `?` after it.
+fn id_keys(
+    optional: bool,
+    selectors: &mut std::iter::Peekable<impl Iterator<Item = ast::Selector>>,
+) -> Vec<ast::Selector> {
+    let mut own = Vec::new();
+    let mut optional = optional;
+    while !optional
+        && let Some(next) = selectors.next_if(|s| !matches!(s, ast::Selector::Variant(_)))
+    {
+        optional = next.is_optional();
+        own.push(next);
+    }
+    own
+}
+
 /// Whether a target has a `?` after its key (`SPEC.md` 5.1).
 fn key_is_optional(target: &ast::Target) -> bool {
-    target.key().is_some_and(|key| key.is_optional())
+    let Some(key) = target.key() else {
+        return false;
+    };
+    if key.id().is_none() {
+        return key.is_optional();
+    }
+    // The `?` is after the last of the id's own keys.
+    let own = id_keys(key.is_optional(), &mut target.selectors().peekable());
+    own.last()
+        .map_or(key.is_optional(), |last| last.is_optional())
 }
 
 fn key_selector(key: &Key, span: Span) -> Selector {
     let kind = match key {
         Key::Str(s) => SelectorKind::Field(s.clone()),
         Key::Int(i) => SelectorKind::Accessor(*i),
+        Key::Id(id) => SelectorKind::Id(id.clone()),
     };
     Selector {
         kind,
@@ -834,6 +862,16 @@ impl Lowerer {
                 );
                 return;
             }
+            Key::Id(id) => {
+                self.error(
+                    span,
+                    format!(
+                        "`{id}` cannot be a root key: root keys are what ids name, and an \
+                         id key is a key of a map inside the data (`SPEC.md` 3.1)"
+                    ),
+                );
+                return;
+            }
         };
         let mut alternatives = conditions.to_vec();
         for list in &lists {
@@ -1045,8 +1083,9 @@ impl Lowerer {
         target: &ast::Target,
         conditions: &mut Vec<Vec<Cond>>,
     ) -> Option<(Key, Vec<Selector>)> {
-        let key = self.target_key(target)?;
-        let path = self.selectors(target.selectors(), SelectorUse::Target, conditions)?;
+        let mut selectors = target.selectors().peekable();
+        let key = self.target_key(target, &mut selectors)?;
+        let path = self.selectors(selectors, SelectorUse::Target, conditions)?;
         Some((key, path))
     }
 
@@ -1510,15 +1549,22 @@ impl Lowerer {
 
     /// A target's key and selectors, for an entry without variants.
     fn target(&mut self, target: &ast::Target) -> Option<(Key, Vec<Selector>)> {
-        let key = self.target_key(target)?;
-        let mut conditions = Vec::new();
-        let path = self.selectors(target.selectors(), SelectorUse::Target, &mut conditions)?;
-        Some((key, path))
+        self.target_with_conditions(target, &mut Vec::new())
     }
 
-    fn target_key(&mut self, target: &ast::Target) -> Option<Key> {
+    /// The key a target starts with. The selectors after an id key written
+    /// without brackets are its own keys (`SPEC.md` 5.1), and are taken from
+    /// `selectors`.
+    fn target_key(
+        &mut self,
+        target: &ast::Target,
+        selectors: &mut std::iter::Peekable<impl Iterator<Item = ast::Selector>>,
+    ) -> Option<Key> {
         let key_node = target.key()?;
-        let key = if let Some(accessor) = key_node.accessor() {
+        let key = if let Some(id) = key_node.id() {
+            let own = id_keys(key_node.is_optional(), selectors);
+            Key::Id(self.id_path(&id, own.into_iter())?)
+        } else if let Some(accessor) = key_node.accessor() {
             self.accessor_key(&accessor)?
         } else {
             let token = key_node.token()?;
@@ -1541,6 +1587,9 @@ impl Lowerer {
     }
 
     fn accessor_key(&mut self, accessor: &ast::Accessor) -> Option<Key> {
+        if let Some(id) = accessor.id() {
+            return Some(Key::Id(self.id_path(&id, accessor.id_selectors())?));
+        }
         let token = accessor.key()?;
         match token.kind() {
             SyntaxKind::INT => match literal::int(token.text(), accessor.is_negative()) {
@@ -1563,9 +1612,22 @@ impl Lowerer {
         conditions: &mut Vec<Vec<Cond>>,
     ) -> Option<Vec<Selector>> {
         let mut out = Vec::new();
-        for selector in selectors {
-            let span = self.span(selector.syntax());
+        let mut selectors = selectors.peekable();
+        while let Some(selector) = selectors.next() {
+            let mut span = self.span(selector.syntax());
+            let mut optional = selector.is_optional();
             let kind = match &selector {
+                // `.@a.b`: the selectors after the id are its own keys.
+                ast::Selector::Field(field) if field.id().is_some() => {
+                    let id = field.id()?;
+                    let own = id_keys(optional, &mut selectors);
+                    if let Some(last) = own.last() {
+                        let end = self.span(last.syntax()).range.end();
+                        span.range = crol_syntax::TextRange::new(span.range.start(), end);
+                        optional = last.is_optional();
+                    }
+                    SelectorKind::Id(self.id_path(&id, own.into_iter())?)
+                }
                 ast::Selector::Field(field) => SelectorKind::Field(self.name(field.name()?.text())),
                 ast::Selector::Index(index) => {
                     let token = index.index()?;
@@ -1580,6 +1642,7 @@ impl Lowerer {
                 ast::Selector::Accessor(accessor) => match self.accessor_key(accessor)? {
                     Key::Str(s) => SelectorKind::Field(s),
                     Key::Int(i) => SelectorKind::Accessor(i),
+                    Key::Id(id) => SelectorKind::Id(id),
                 },
                 ast::Selector::Variant(variant) => match usage {
                     SelectorUse::Target => {
@@ -1604,7 +1667,7 @@ impl Lowerer {
             out.push(Selector {
                 kind,
                 span,
-                optional: selector.is_optional(),
+                optional,
             });
         }
         Some(out)
@@ -1899,12 +1962,8 @@ impl Lowerer {
                     .find_map(|(depth, scope)| {
                         if let Some((target, key, _)) = scope.entry_binds.get(name) {
                             let mut path = vec![Selector {
-                                kind: match key {
-                                    Key::Str(s) => SelectorKind::Field(s.clone()),
-                                    Key::Int(i) => SelectorKind::Accessor(*i),
-                                },
                                 span,
-                                optional: false,
+                                ..key_selector(key, span)
                             }];
                             path.extend(target.iter().cloned());
                             Some((

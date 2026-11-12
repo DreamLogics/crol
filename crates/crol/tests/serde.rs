@@ -172,10 +172,20 @@ fn ids_need_the_at_sign() {
         err::<Vec<crol::Id>>(r#"["web"]"#),
         "expected an id (`@name`), found \"web\" (<string>:1:2, while deserializing [0])"
     );
-    // A map keyed by ids takes string keys.
-    let (map, ids): (HashMap<crol::Id, u32>, _) = crol::from_str_with_ids("{ web: 1 }").unwrap();
-    assert_eq!(map[&crol::Id::key("web")], 1);
+    // A map keyed by ids takes id keys, and no other (`SPEC.md` 10.5).
+    #[derive(Debug, Deserialize)]
+    struct Doc {
+        web: u8,
+        weights: HashMap<crol::Id, u32>,
+    }
+    let (doc, ids): (Doc, _) = crol::from_str_with_ids("{ web: 0, weights: { @web: 1 } }").unwrap();
+    assert_eq!((doc.web, doc.weights[&crol::Id::key("web")]), (0, 1));
     assert_eq!(ids[0].id, crol::Id::key("web"));
+    assert_eq!(
+        err::<Doc>("{ web: 0, weights: { web: 1 } }"),
+        "expected an id key, found the string key web; write `@web` (<string>:1:27, while \
+         deserializing weights.web)"
+    );
 }
 
 #[test]
@@ -246,11 +256,14 @@ fn untagged_tells_ids_from_strings() {
 }
 
 #[test]
-fn id_keys_serialize_bare() {
+fn id_keys_serialize_as_ids() {
     let map = BTreeMap::from([(crol::Id::key("web"), 1)]);
-    assert_eq!(crol::to_string(&map).unwrap(), "{web: 1}");
-    let path = BTreeMap::from([("@a.b".parse::<crol::Id>().unwrap(), 1)]);
-    assert!(crol::to_string(&path).is_err());
+    assert_eq!(crol::to_string(&map).unwrap(), "{@web: 1}");
+    let path = BTreeMap::from([
+        ("@a.b".parse::<crol::Id>().unwrap(), 1),
+        ("@::a".parse::<crol::Id>().unwrap(), 2),
+    ]);
+    assert_eq!(crol::to_string(&path).unwrap(), "{@::a: 2, @a.b: 1}");
     let ids = vec!["@::a.b".parse::<crol::Id>().unwrap()];
     assert_eq!(crol::to_string(&ids).unwrap().trim(), "[@::a.b]");
 }

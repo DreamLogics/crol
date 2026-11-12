@@ -98,6 +98,7 @@ fn fingerprints_of(
         let name = match key {
             Key::Str(name) => name.to_string(),
             Key::Int(i) => i.to_string(),
+            Key::Id(id) => id.to_string(),
         };
         found.insert(name, *blake3::hash(&out).as_bytes());
     }
@@ -192,9 +193,11 @@ fn encode_name(out: &mut Vec<u8>, name: &str) {
     out.extend_from_slice(name.as_bytes());
 }
 
-/// A key, encoded as the value it is (tag `0x02` or `0x05`).
+/// A key, encoded as the value it is (tag `0x02` or `0x05`, or for an id
+/// key `0x06` or `0x0C`).
 fn encode_key(out: &mut Vec<u8>, key: &Key) {
     match key {
+        Key::Id(id) => encode_id(out, id),
         Key::Int(i) => {
             out.push(0x02);
             out.extend_from_slice(&i.to_le_bytes());
@@ -202,6 +205,24 @@ fn encode_key(out: &mut Vec<u8>, key: &Key) {
         Key::Str(s) => {
             out.push(0x05);
             encode_name(out, s);
+        }
+    }
+}
+
+/// An id. A single key keeps the encoding it had before path ids.
+fn encode_id(out: &mut Vec<u8>, id: &crate::value::IdPath) {
+    match id.name() {
+        Some(name) => {
+            out.push(0x06);
+            encode_name(out, name);
+        }
+        None => {
+            out.push(0x0C);
+            out.push(u8::from(id.is_rooted()));
+            leb128(out, id.keys().len() as u128);
+            for key in id.keys() {
+                encode_name(out, key);
+            }
         }
     }
 }
@@ -230,21 +251,7 @@ pub fn encode(out: &mut Vec<u8>, value: &Value) {
             out.push(0x05);
             encode_name(out, s);
         }
-        // A single key keeps the encoding it had before path ids.
-        ValueKind::Id(id) => match id.name() {
-            Some(name) => {
-                out.push(0x06);
-                encode_name(out, name);
-            }
-            None => {
-                out.push(0x0C);
-                out.push(u8::from(id.is_rooted()));
-                leb128(out, id.keys().len() as u128);
-                for key in id.keys() {
-                    encode_name(out, key);
-                }
-            }
-        },
+        ValueKind::Id(id) => encode_id(out, id),
         ValueKind::List(items) => {
             out.push(0x07);
             encode_all(out, items);

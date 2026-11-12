@@ -114,7 +114,7 @@ fn starts_expr(kind: SyntaxKind) -> bool {
 
 /// Tokens that may start a key.
 fn starts_key(kind: SyntaxKind) -> bool {
-    matches!(kind, IDENT | STRING | RAW_STRING | INT | L_BRACK)
+    matches!(kind, IDENT | STRING | RAW_STRING | INT | L_BRACK | AT)
 }
 
 impl Parser<'_> {
@@ -394,7 +394,7 @@ impl Parser<'_> {
             IDENT if matches!(self.nth(1), EQ | COLON_EQ) => true,
             MINUS => matches!(
                 self.nth(1),
-                IDENT | STRING | RAW_STRING | L_BRACK | QUESTION
+                IDENT | STRING | RAW_STRING | L_BRACK | QUESTION | AT
             ),
             _ => self.at_target_then_colon(),
         }
@@ -424,6 +424,10 @@ impl Parser<'_> {
         match self.nth(n) {
             // `true: 1` is entries, so that the key gets a proper error.
             IDENT | STRING | RAW_STRING | INT | TRUE_KW | FALSE_KW => n += 1,
+            AT => match self.after_id(n) {
+                Some(after) => n = after,
+                None => return false,
+            },
             L_BRACK => {
                 if !skip_balanced(&mut n, L_BRACK, R_BRACK) {
                     return false;
@@ -434,6 +438,10 @@ impl Parser<'_> {
         loop {
             match self.nth(n) {
                 DOT if matches!(self.nth(n + 1), IDENT | INT) => n += 2,
+                DOT if self.nth(n + 1) == AT => match self.after_id(n + 1) {
+                    Some(after) => n = after,
+                    None => return false,
+                },
                 QUESTION if matches!(self.nth(n + 1), DOT | L_BRACK | COLON) => n += 1,
                 L_BRACK => {
                     if !skip_balanced(&mut n, L_BRACK, R_BRACK) {
@@ -807,6 +815,9 @@ impl Parser<'_> {
     fn at_entry_start(&self) -> bool {
         match self.current() {
             MINUS | PLUS | QUESTION | CARET | DOT2 | L_ANGLE | POUND => true,
+            // An id starts an entry only as its key: elsewhere it is a value
+            // that is out of place.
+            AT => self.has_entry_shape(0),
             kind => starts_key(kind),
         }
     }
@@ -832,7 +843,9 @@ impl Parser<'_> {
             MINUS if self.nth(n + 1) == QUESTION => {
                 same_line(n + 1) && same_line(n + 2) && starts_key(self.nth(n + 2))
             }
-            MINUS => same_line(n + 1) && matches!(self.nth(n + 1), IDENT | STRING | RAW_STRING),
+            MINUS => {
+                same_line(n + 1) && matches!(self.nth(n + 1), IDENT | STRING | RAW_STRING | AT)
+            }
             L_ANGLE => self
                 .after_variant(n)
                 .is_some_and(|n| same_line(n) && self.nth(n) == L_BRACE),
@@ -846,6 +859,10 @@ impl Parser<'_> {
     fn has_target_and_colon(&self, mut n: usize) -> bool {
         match self.nth(n) {
             IDENT | STRING | RAW_STRING | INT | TRUE_KW | FALSE_KW => n += 1,
+            AT => match self.after_id(n) {
+                Some(after) if (n + 1..after).all(|i| !self.nth_starts_line(i)) => n = after,
+                _ => return false,
+            },
             L_BRACK => match self.after_accessor(n) {
                 Some(after) => n = after,
                 None => return false,
@@ -861,6 +878,9 @@ impl Parser<'_> {
                 DOT if !self.nth_starts_line(n + 1) && matches!(self.nth(n + 1), IDENT | INT) => {
                     Some(n + 2)
                 }
+                DOT if !self.nth_starts_line(n + 1) && self.nth(n + 1) == AT => self
+                    .after_id(n + 1)
+                    .filter(|&after| (n + 2..after).all(|i| !self.nth_starts_line(i))),
                 QUESTION
                     if !self.nth_starts_line(n + 1) && matches!(self.nth(n + 1), DOT | L_BRACK) =>
                 {
@@ -877,9 +897,38 @@ impl Parser<'_> {
         }
     }
 
+    /// The token after the id at the `n`-th token, an `@`: after its name,
+    /// if it has one.
+    fn after_id(&self, n: usize) -> Option<usize> {
+        let name = if self.nth(n + 1) == COLON2 {
+            n + 2
+        } else {
+            n + 1
+        };
+        matches!(self.nth(name), IDENT | STRING | RAW_STRING).then_some(name + 1)
+    }
+
     /// The token after the accessor at the `n`-th token, if it is one with a
     /// single key, on one line.
     fn after_accessor(&self, n: usize) -> Option<usize> {
+        if self.nth(n + 1) == AT {
+            // `[@x]`, `[@::a.b]`, `[@a["b"]]`: an id and its own keys.
+            let mut depth = 0usize;
+            let mut i = n + 1;
+            loop {
+                if self.nth_starts_line(i) {
+                    return None;
+                }
+                match self.nth(i) {
+                    R_BRACK if depth == 0 => return Some(i + 1),
+                    R_BRACK => depth -= 1,
+                    L_BRACK => depth += 1,
+                    AT | COLON2 | IDENT | STRING | RAW_STRING | DOT => {}
+                    _ => return None,
+                }
+                i += 1;
+            }
+        }
         let key = if self.nth(n + 1) == MINUS {
             n + 2
         } else {
@@ -1052,6 +1101,9 @@ impl Parser<'_> {
         match self.current() {
             IDENT | STRING | RAW_STRING | INT => self.bump(),
             L_BRACK => self.accessor(),
+            // An id key (`SPEC.md` 3.1). The selectors after it are its own
+            // keys, as after an id value.
+            AT => self.id(),
             TRUE_KW | FALSE_KW => {
                 let word = self.nth_text(0).to_owned();
                 self.error(format!(
@@ -1117,6 +1169,12 @@ impl Parser<'_> {
                 self.bump();
                 self.bump();
             }
+            // `.@id`: an id key (`SPEC.md` 5.1).
+            AT => {
+                self.start(FIELD_SELECTOR);
+                self.bump();
+                self.id();
+            }
             INT => {
                 self.start(INDEX_SELECTOR);
                 self.bump();
@@ -1153,12 +1211,34 @@ impl Parser<'_> {
         self.finish();
     }
 
-    /// `[key]`: a string, or an integer with an optional `-`.
+    /// `[key]`: a string, an integer with an optional `-`, or an id with its
+    /// own keys.
     fn accessor(&mut self) {
         self.start(ACCESSOR);
         self.bump(); // `[`
         match self.current() {
             STRING | RAW_STRING | INT => self.bump(),
+            AT => {
+                self.id();
+                loop {
+                    match self.current() {
+                        DOT if self.nth(1) == IDENT => {
+                            self.start(FIELD_SELECTOR);
+                            self.bump();
+                            self.bump();
+                            self.finish();
+                        }
+                        L_BRACK if matches!(self.nth(1), STRING | RAW_STRING) => {
+                            self.start(ACCESSOR);
+                            self.bump();
+                            self.bump();
+                            self.expect(R_BRACK, "`]`");
+                            self.finish();
+                        }
+                        _ => break,
+                    }
+                }
+            }
             MINUS if self.nth(1) == INT => {
                 self.bump();
                 self.bump();
@@ -1170,7 +1250,7 @@ impl Parser<'_> {
                 ));
                 self.bump();
             }
-            _ => self.error_missing("expected a string or integer key"),
+            _ => self.error_missing("expected a string, an integer or an id as the key"),
         }
         self.recover_until(&[R_BRACK, COMMA, R_BRACE]);
         self.expect(R_BRACK, "`]`");

@@ -166,8 +166,14 @@ struct Written {
 }
 
 fn written_target(target: &ast::Target) -> Option<Written> {
-    let mut steps = vec![key_step(&target.key()?)?];
-    steps.extend(selector_steps(target.selectors()));
+    let key = target.key()?;
+    // What an id key names decides the entry, so the steps stop at one, as
+    // they stop at `.@id` and `[@id]` (`SPEC.md` 5.1).
+    let mut steps = Vec::new();
+    if key.id().is_none() {
+        steps.push(key_step(&key)?);
+        steps.extend(selector_steps(target.selectors()));
+    }
     Some(Written {
         base: crate::features::place_path(&target.syntax().parent()?),
         steps,
@@ -249,6 +255,8 @@ fn id_segments(node: &SyntaxNode) -> Option<Vec<Segment>> {
 
 /// What can be renamed at the cursor.
 enum At {
+    /// An id that is a key: `@x` in `@x: 1`, `.@x` or `[@x]`.
+    IdKey(String),
     /// A key of an id: `filter` in `@settings.filter` is its second.
     Id { node: SyntaxNode, index: usize },
     /// A key of a target or of a reference's path, with the path up to it.
@@ -260,6 +268,17 @@ enum At {
 
 fn at(token: &SyntaxToken) -> Option<(At, TextRange)> {
     let range = token.text_range();
+    if let Some(id) = token.parent().and_then(ast::IdExpr::cast)
+        && id.syntax().parent().is_some_and(|holder| {
+            matches!(
+                holder.kind(),
+                SyntaxKind::KEY | SyntaxKind::FIELD_SELECTOR | SyntaxKind::ACCESSOR
+            )
+        })
+        && id.name().is_some_and(|name| name.text_range() == range)
+    {
+        return Some((At::IdKey(id.syntax().text().to_string()), range));
+    }
     if let Some(node) = crate::features::id_node(token)
         && let Some(index) =
             id_segments(&node).and_then(|segments| segments.iter().position(|s| s.range == range))
@@ -431,8 +450,8 @@ fn difference(a: &Value, b: &Value, path: &mut Vec<DataStep>) -> bool {
 
 // ---- The data a document is in ----
 
-/// An id met in the data, and whether it is a key of a map keyed by ids
-/// rather than a value (`SPEC.md` 10.5).
+/// An id met in the data, and whether it is a key, `@x: v`, rather than a
+/// value (`SPEC.md` 3.1).
 struct Met {
     id: ResolvedId,
     map_key: bool,
@@ -503,10 +522,7 @@ impl<'a> World<'a> {
             .ids()
             .into_iter()
             .map(|id| Met {
-                map_key: !matches!(
-                    id.location.value_in(root).map(|v| &v.kind),
-                    Some(ValueKind::Id(_))
-                ),
+                map_key: id.is_key,
                 id,
             })
             .collect()
@@ -536,9 +552,12 @@ impl<'a> World<'a> {
     /// The place of the key at the cursor.
     fn place(&self, at: &At) -> Result<Vec<DataStep>, String> {
         match at {
+            At::IdKey(id) => Err(format!(
+                "`{id}` is a key that is an id: renaming keys that are ids is not supported"
+            )),
             At::Path { path: None, name } => Err(format!(
-                "`{name}` is written where it has no place of its own, as in a template: \
-                 rename the key where the value ends up"
+                "`{name}` is written where it has no place of its own, as in a template or \
+                 under a key that is an id: rename the key where the value ends up"
             )),
             At::Path {
                 path: Some(path), ..
@@ -600,27 +619,22 @@ impl<'a> World<'a> {
     /// place. Refuses where one of them also names something else.
     fn ids_to_rename(&self, rename: &Rename<'_>) -> Result<Vec<(Span, usize)>, String> {
         let mut found: Vec<(Span, usize)> = Vec::new();
-        let (_, parent) = rename.place.split_last().ok_or(NOT_EVALUATED)?;
         for met in self.roots.iter().flat_map(|root| &root.ids) {
-            // The key to rename is itself an id, of a map keyed by ids.
-            if met.map_key
-                && met.id.location.steps() == parent
-                && met.id.id.name() == Some(rename.old)
-            {
-                return Err(format!(
-                    "{} is a key that is an id: renaming keys that are ids is not supported",
-                    show(rename.place)
-                ));
-            }
             let Some(index) = rename.key_of(&met.id) else {
                 continue;
             };
+            // `@x: v` (`SPEC.md` 3.1).
             if met.map_key {
                 return Err(format!(
-                    "the key `{}` of {} is an id that names {}: renaming keys that are ids \
-                     is not supported",
-                    Key::Str(rename.old.into()),
+                    "`{}`, a key of {} at {}, is an id that names {}: renaming keys that are \
+                     ids, and so what they name, is not supported",
+                    met.id.id,
                     show(met.id.location.steps()),
+                    // Its span is its entry's value; say where it is written.
+                    self.whereabouts(
+                        crate::features::id_key_span(self.snapshot, met.id.span, &met.id.id)
+                            .unwrap_or(met.id.span)
+                    ),
                     show(rename.place),
                 ));
             }
@@ -980,6 +994,11 @@ pub(crate) fn rename(
     }
     let world = World::new(snapshot, file)?;
     let place = world.place(&at)?;
+    if let Some(DataStep::Key(Key::Id(id))) = place.last() {
+        return Err(format!(
+            "`{id}` is a key that is an id: renaming keys that are ids is not supported"
+        ));
+    }
     let Some(DataStep::Key(Key::Str(old))) = place.last() else {
         return Err(format!("{} is not a string key", show(&place)));
     };

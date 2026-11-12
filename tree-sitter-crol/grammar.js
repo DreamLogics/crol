@@ -56,6 +56,10 @@ module.exports = grammar({
     [$.key, $.unit_name],
     [$.key, $.literal],
     [$.key, $.block],
+    // At the start of a document, `@a` may be an id key or an id value.
+    [$.key, $._primary],
+    // And `[@a.b]` an accessor key with an id, or a list of one.
+    [$._id_key, $._primary],
     // At the start of a document, `["x"]` may be an accessor key or a list.
     [$.accessor, $.literal],
   ],
@@ -176,17 +180,29 @@ module.exports = grammar({
       alias($._adjacent_index, $.index_selector),
       alias($._adjacent_accessor, $.accessor),
     )),
-    _adjacent_field: $ => seq(token.immediate('.'), field('name', $.identifier)),
+    _adjacent_field: $ => seq(
+      token.immediate('.'),
+      choice(field('name', $.identifier), field('id', $.id_expr)),
+    ),
     _adjacent_index: $ => seq(
       token.immediate('.'),
       field('index', alias(token.immediate(/[0-9]+/), $.tuple_index)),
     ),
     _adjacent_accessor: $ => seq(
       token.immediate('['),
-      choice($.string, $.raw_string, seq(optional('-'), $.integer)),
+      choice($.string, $.raw_string, seq(optional('-'), $.integer), $._id_key),
       ']',
     ),
-    key: $ => choice($.identifier, $.string, $.raw_string, $.integer, $.accessor),
+    // An id is a key too: `@x: 1` (SPEC.md 3.1). The steps after one written
+    // without brackets are its own keys, as after an id value.
+    key: $ => choice($.identifier, $.string, $.raw_string, $.integer, $.accessor, $.id_expr),
+    // An id in brackets, with its own keys: `[@a.b]`, `[@a["b c"]]`.
+    _id_key: $ => seq(field('id', $.id_expr), repeat(choice(
+      alias($._id_field, $.field_selector),
+      alias($._id_accessor, $.accessor),
+    ))),
+    _id_field: $ => seq('.', field('name', $.identifier)),
+    _id_accessor: $ => seq('[', choice($.string, $.raw_string), ']'),
 
     _selector: $ => choice(
       $.field_selector,
@@ -194,11 +210,11 @@ module.exports = grammar({
       $.accessor,
       $.variant,
     ),
-    field_selector: $ => seq('.', field('name', $.identifier)),
+    field_selector: $ => seq('.', choice(field('name', $.identifier), field('id', $.id_expr))),
     index_selector: $ => seq('.', field('index', alias(token.immediate(/[0-9]+/), $.tuple_index))),
     accessor: $ => seq(
       '[',
-      choice($.string, $.raw_string, seq(optional('-'), $.integer)),
+      choice($.string, $.raw_string, seq(optional('-'), $.integer), $._id_key),
       ']',
     ),
 

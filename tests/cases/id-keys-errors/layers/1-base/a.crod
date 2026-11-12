@@ -1,0 +1,25 @@
+// An id key has to name an entry (SPEC.md 3.2).
++tag: Tag {}
++unresolved: { @nothing: 1, @::nothing: 2, @tag.nothing: 3 }
+#[scope]
++scoped: { inner: { @nothing: 1 } }
+
+// Declaring a key that another id already names.
++twice: { @tag: 1, +@::tag: 2 }
++gone: { -@tag }
+
+// A map that comes from another place has its keys resolved again where it
+// ends up: there these two name the same entry.
+#[scope]
++source: { tag: Tag {}, bonus: { @tag: 1, @::tag: 2 } }
++copied: &root.source.bonus
+
+// An ancestor that spreads the map needs its keys, which need the
+// ancestor's: a cycle.
+#[scope]
++cycle: { ..&self.inner, inner: { @tag: 1 } }
+
+// See the layer above.
+#[scope]
++moved: { weapon: { bonus: { @tag: 1.0 } } }
++patch: { tag: Tag {} }

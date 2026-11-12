@@ -1,0 +1,2 @@
+// An id key has a name (SPEC.md 3.1).
+a: { @: 1 }

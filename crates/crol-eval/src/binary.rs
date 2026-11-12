@@ -25,7 +25,7 @@ use crate::value::{IdPath, Key};
 const MAGIC: &[u8; 4] = b"CROB";
 
 /// The version of the format: files of another are refused, and made again.
-pub const FORMAT: u32 = 7;
+pub const FORMAT: u32 = 8;
 
 /// The magic, the format, the hash of the rest of the file, the hash of the
 /// documents and the size of what is compressed.
@@ -127,6 +127,19 @@ impl Writer<'_> {
                 self.out.push(1);
                 self.string(s);
             }
+            Key::Id(id) => {
+                self.out.push(2);
+                self.id_path(id);
+            }
+        }
+    }
+
+    /// An id as written: whether it starts from the root, and its keys.
+    fn id_path(&mut self, id: &IdPath) {
+        self.flag(id.is_rooted());
+        self.uint(id.keys().len() as u64);
+        for key in id.keys() {
+            self.string(key);
         }
     }
 
@@ -144,6 +157,10 @@ impl Writer<'_> {
             SelectorKind::Accessor(i) => {
                 self.out.push(2);
                 self.int(*i);
+            }
+            SelectorKind::Id(id) => {
+                self.out.push(4);
+                self.id_path(id);
             }
             SelectorKind::Context(changes) => {
                 self.out.push(3);
@@ -227,11 +244,7 @@ impl Writer<'_> {
             }
             ExprKind::Id(id) => {
                 self.out.push(6);
-                self.flag(id.is_rooted());
-                self.uint(id.keys().len() as u64);
-                for key in id.keys() {
-                    self.string(key);
-                }
+                self.id_path(id);
             }
             ExprKind::Ref(kind) => {
                 self.out.push(7);
@@ -652,8 +665,18 @@ impl Reader<'_> {
         match self.byte()? {
             0 => self.int().map(Key::Int),
             1 => self.string().map(Key::Str),
+            2 => self.id_path().map(Key::Id),
             _ => Err(Corrupt),
         }
+    }
+
+    fn id_path(&mut self) -> Read<IdPath> {
+        let rooted = self.flag()?;
+        let count = self.count()?;
+        let keys = (0..count)
+            .map(|_| self.string())
+            .collect::<Read<Vec<_>>>()?;
+        IdPath::new(rooted, keys).ok_or(Corrupt)
     }
 
     fn selector(&mut self) -> Read<Selector> {
@@ -663,6 +686,7 @@ impl Reader<'_> {
             1 => SelectorKind::Element(self.id()?),
             2 => SelectorKind::Accessor(self.int()?),
             3 => SelectorKind::Context(self.list(|r| Ok((r.string()?, r.flag()?, r.span()?)))?),
+            4 => SelectorKind::Id(self.id_path()?),
             _ => return Err(Corrupt),
         };
         Ok(Selector {
@@ -734,14 +758,7 @@ impl Reader<'_> {
                 ExprKind::Char(char::from_u32(c).ok_or(Corrupt)?)
             }
             5 => ExprKind::Str(self.string()?),
-            6 => {
-                let rooted = self.flag()?;
-                let count = self.count()?;
-                let keys = (0..count)
-                    .map(|_| self.string())
-                    .collect::<Read<Vec<_>>>()?;
-                ExprKind::Id(IdPath::new(rooted, keys).ok_or(Corrupt)?)
-            }
+            6 => ExprKind::Id(self.id_path()?),
             7 => ExprKind::Ref(self.reference()?),
             8 => ExprKind::Block(self.id()?.saturating_add(self.blocks)),
             9 => ExprKind::List(self.expr_ids()?),

@@ -1,0 +1,47 @@
+is_biological: Tag {}
+armored: Tag {}
+"odd id": Tag {}
+grenade: Weapon {
+    bonus: {
+        @is_biological: 50.0,
+        @late: 9.0,
+        @armored: 3.0,
+        @"odd id": (),
+        -@"odd id",
+    },
+}
+late: Tag {}
+same: { @armored: 3, @is_biological: 2 }
+#[scope]
+zerg: { armored: Tag {}, bonus: { @armored: 3, @::armored: 2 } }
+terran: { bonus: { @zerg.armored: 4, @::zerg.bonus: 5 } }
+ops: {
+    @armored: 1,
+    @late: 4,
+    @grenade: (),
+    -@grenade,
+    @is_biological: (),
+    -@is_biological,
+}
+nested: { @armored: { amount: 1, factor: 2 }, @late: { amount: 30 } }
+read: { direct: 50.0, dotted: 9.0, rooted: 4, missing: -1.0, in_scope: 2 }
+plain: { @armored: 11 }
+#[scope]
+protoss: { armored: Tag {}, bonus: { @armored: 10, @::armored: 12 } }
+merged: { @armored: 3, @late: 2, @is_biological: 4 }
+mixed: { armored: "a string key", @armored: "an id key" }
+in_variant: { @armored: 1 }
+#[scope]
+marine: Unit {
+    light: Tag {},
+    weapon: {
+        bonus: { @light: 5.0, @::armored: 6.0, @heavy: 7.5, @shield: 9.0 },
+    },
+    squad: [{ bonus: { @light: 8.0 } }],
+    heavy: Tag {},
+    shield: Tag {},
+}
+
+<!dev & prod> {
+    in_variant: { @armored: 2, @late: 3 },
+}
