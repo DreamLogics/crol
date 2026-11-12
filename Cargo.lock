@@ -316,7 +316,7 @@ dependencies = [
 
 [[package]]
 name = "crol"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "blake3",
  "crol-derive",
@@ -341,7 +341,7 @@ dependencies = [
 
 [[package]]
 name = "crol-cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "clap",
  "codespan-reporting",
@@ -355,7 +355,7 @@ dependencies = [
 
 [[package]]
 name = "crol-derive"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "crol-syntax",
  "proc-macro2",
@@ -365,7 +365,7 @@ dependencies = [
 
 [[package]]
 name = "crol-eval"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "blake3",
  "crol-syntax",
@@ -377,7 +377,7 @@ dependencies = [
 
 [[package]]
 name = "crol-lsp"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "crol",
  "crol-eval",
@@ -393,7 +393,7 @@ dependencies = [
 
 [[package]]
 name = "crol-syntax"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "expect-test",
  "rowan",

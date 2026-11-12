@@ -3883,7 +3883,7 @@ fn completion_at_every_level_of_a_schema_file() {
     let dir = workspace("lsp-complete-schema-file", &[("crol/schema.crol", &text)]);
     let mut client = Client::start(&dir);
     let mut buffer = Buffer::open(&client, &dir, "crol/schema.crol");
-    let head = "#![schema(\"crate:crol@0.3\")]\n\n";
+    let head = "#![schema(\"crate:crol@0.4\")]\n\n";
     let cases: &[Case<'_>] = &[
         ("Schema { | }", &["format", "root", "types"], &[]),
         ("Schema { format: 1, | }", &["root", "types"], &["format"]),

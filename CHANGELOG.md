@@ -9,6 +9,8 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-12
+
 This release changes the format in ways that break documents and programs written for
 0.3.0 (#11, #19):
 
@@ -59,7 +61,8 @@ This release changes the format in ways that break documents and programs writte
   screens can each have a `filter`, and `@filter` in each names its own. A block is a
   scope with `#[scope]` before its entry, or when its type has `#[crol(scope)]` and the
   loader has the schema. `#[crol(scope)]` goes on a struct, a struct variant, or a
-  newtype or transparent struct, such as one around a map of components. Without scopes, ids name root keys as before.
+  newtype or transparent struct, such as one around a map of components. Without
+  scopes, ids name root keys as before.
 - Path ids: `@settings.filter` reaches into another scope, `@"odd id"["x y"]` names keys
   that are not identifiers, and `@::web` names the root key whatever the scopes around.
 - `IdUse.target` says where an id resolved to, as a `crol::DataPath`, and
@@ -675,7 +678,8 @@ What changed during development, before anything was published.
   cursor, keep an existing `:`, and are triggered where keys and values
   start; a document just opened is evaluated at once.
 
-[Unreleased]: https://github.com/DreamLogics/crol/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/DreamLogics/crol/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/DreamLogics/crol/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/DreamLogics/crol/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/DreamLogics/crol/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/DreamLogics/crol/releases/tag/v0.1.0

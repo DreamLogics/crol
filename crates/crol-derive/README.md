@@ -6,7 +6,7 @@ than depending on this crate:
 
 ```toml
 [dependencies]
-crol = { version = "0.3", features = ["derive"] }
+crol = { version = "0.4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 ```
 

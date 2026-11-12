@@ -8,7 +8,7 @@ load into your types through [serde](https://serde.rs).
 
 ```toml
 [dependencies]
-crol = "0.3"
+crol = "0.4"
 serde = { version = "1", features = ["derive"] }
 ```
 
