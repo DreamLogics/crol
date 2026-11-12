@@ -21,9 +21,9 @@ pub(crate) const ID_TOKEN: &str = "$crol::Id";
 /// (`SPEC.md` 3.2, 10.5).
 ///
 /// Unlike a `String`, an `Id` accepts only an id, not a string. As a map key
-/// it accepts a string key, since keys cannot be written with `@`. An id is a
-/// name, not a lookup; [`IdUse`] reports every id read, so the application
-/// can check what it names.
+/// it accepts only an id key, `@web: 1`, and a map of another key type takes
+/// none. An id is a name, not a lookup; [`IdUse`] reports every id read, a
+/// key as well, so the application can check what it names.
 ///
 /// As text, in [`Display`](fmt::Display), [`FromStr`] and other serde
 /// formats, an id is its CROL syntax with the `@`: `"@web"`. Equality is by
@@ -158,9 +158,10 @@ pub(crate) fn id_text(id: &IdPath) -> std::borrow::Cow<'_, str> {
 pub struct IdUse {
     /// The id as written.
     pub id: Id,
-    /// Where it was written.
+    /// Where it was written; for an id key, where its entry's value was.
     pub span: Span,
-    /// The path in the deserialized value: `web.depends_on[0]`.
+    /// The path in the deserialized value: `web.depends_on[0]`; for an id
+    /// key, that of its entry, `grenade.bonus[@is_biological]`.
     pub rust_path: String,
     /// The place in the data the id resolved to, or `None` if it names
     /// nothing there (`SPEC.md` 10.5).

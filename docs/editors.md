@@ -25,6 +25,10 @@ finds your [project file](projects.md#how-it-is-found) by itself.
   keys after `&root.`, `&self.` and the like. It knows the type at the cursor at
   any depth: through nested blocks, lists, `Some(...)`, dotted keys and variant
   blocks.
+  After `#[` it offers `scope` and `type`, and after `#![` the document
+  attributes, each with what it does, and only those that fit there: no `type`
+  before an entry that is no value bind, no `extends` in a `.crol` file, no second
+  `schema`.
 - **Go to definition**: on keys, references, binds and ids. On a bare `&`, it
   takes you to the value below.
 - **Find references**: every operation on a key, in every layer, and every

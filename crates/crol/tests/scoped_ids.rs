@@ -275,22 +275,25 @@ fn map_keys_resolve_at_the_map() {
         db: Empty,
         weights: Weights,
     }
-    let layer = CrolLayer::from_sources(
-        "base",
-        [("a.crod", "db: {}\nweights: { by: { db: 1, gone: 2 } }")],
-    );
-    let data = CrolComposer::new()
-        .schema(crol::schema::build::<Root>())
-        .load_layer(layer)
-        .compose_data()
-        .unwrap();
-    // The schema says the keys are ids, so they are checked at load.
-    assert_eq!(
-        data.warnings(),
-        ["warning: base/a.crod:2:16: the id `@gone` names no root key"]
-    );
+    let load = |text: &str| {
+        CrolComposer::new()
+            .schema(crol::schema::build::<Root>())
+            .load_layer(CrolLayer::from_sources("base", [("a.crod", text)]))
+            .compose_data()
+    };
+    let data = load("db: {}\nweights: { by: { @db: 1 } }").unwrap();
+    assert!(data.warnings().is_empty(), "{:?}", data.warnings());
     let (_, ids): (Weights, _) = data.get_with_ids("weights").unwrap();
-    assert_eq!(targets(&ids), ["@db -> db", "@gone -> nothing"]);
+    assert_eq!(targets(&ids), ["@db -> db"]);
+    // An id key has to name an entry: keys are compared by what they name
+    // (`SPEC.md` 3.2).
+    let error = load("db: {}\nweights: { by: { @db: 1, @gone: 2 } }").unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "base/a.crod:2:26: the id key `@gone` names no root key; an id key has to name an \
+         entry, and a key that names nothing is written as a string (while evaluating \
+         weights.by)"
+    );
 }
 
 #[test]
@@ -417,7 +420,7 @@ fn evaluate(text: &str) -> crol_eval::Value {
 fn lines(chains: &[crol::ScopeChain]) -> String {
     chains
         .iter()
-        .map(|chain| format!("{}: {chain}\n", chain.location))
+        .map(|chain| format!("{}: {chain}\n", chain.place()))
         .collect()
 }
 
@@ -556,4 +559,37 @@ fn a_scope_says_whether_the_data_or_the_schema_makes_it_one() {
         dashboard.layout.children[1].1: the id `@list` names nothing; scopes: the root (no `list`)
         settings.layout.children[0].1: the id `@filter` names `settings.filter`; scopes: `settings` (`#[scope]`, has `filter`), the root (has `filter`, shadowed)
     "#]].assert_eq(&lines(&plain));
+}
+
+#[test]
+fn id_keys_have_their_scopes_at_the_map() {
+    // An id key resolves at its map's place, and is written at its entry's.
+    let text = r#"
++db: 0,
+#[scope]
++screen: {
+    db: 1,
+    weights: { @db: 2, @::db: 3, inner: [@db] },
+},
+"#;
+    let root = evaluate(text);
+    let chains = crol::IdResolver::new(&root).chains();
+    expect_test::expect![[r#"
+        screen.weights[@db]: the id `@db` names `screen.db`; scopes: `screen` (`#[scope]`, has `db`), the root (has `db`, shadowed)
+        screen.weights[@::db]: the id `@::db` names `db`; scopes: `screen` (`#[scope]`, passed by `::`), the root (has `db`)
+        screen.weights.inner[0]: the id `@db` names `screen.db`; scopes: `screen` (`#[scope]`, has `db`), the root (has `db`, shadowed)
+    "#]].assert_eq(&lines(&chains));
+    assert_eq!(
+        chains.iter().map(|chain| chain.is_key).collect::<Vec<_>>(),
+        [true, true, false]
+    );
+    // Within the map, its keys; within one entry, its key only.
+    let resolver = crol::IdResolver::new(&root);
+    let map = DataPath::new([key("screen"), key("weights")]);
+    assert_eq!(resolver.within(&map).chains().len(), 3);
+    let entry = chains[0].place();
+    let found = resolver.within(&entry).chains();
+    expect_test::expect![[r#"
+        screen.weights[@db]: the id `@db` names `screen.db`; scopes: `screen` (`#[scope]`, has `db`), the root (has `db`, shadowed)
+    "#]].assert_eq(&lines(&found));
 }

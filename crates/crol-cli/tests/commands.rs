@@ -603,7 +603,14 @@ settings<prod>.filter: @dashboard.filter,
 fn explain_says_which_scope_an_id_resolved_in() {
     let dir = tree(
         "explain-ids",
-        &[("schema.crol", SCREEN_SCHEMA), ("ui.crod", SCREENS)],
+        &[
+            ("schema.crol", SCREEN_SCHEMA),
+            ("ui.crod", SCREENS),
+            (
+                "keys.crod",
+                "+armored: 0\n#[scope]\n+marine: { armored: 1, bonus: { @armored: 1.0, @::armored: 2.0 } }\n",
+            ),
+        ],
     );
     let explain = |arguments: &[&str]| {
         let output = crol(
@@ -680,6 +687,14 @@ fn explain_says_which_scope_an_id_resolved_in() {
         "ui.crod",
         "settings.filter",
     ]));
+    // Id keys, at their entries, resolved at their map.
+    expect_test::expect![[r#"
+        marine.bonus:
+          keys.crod:3:2  +marine  definition  {@armored: 1.0, @::armored: 2.0}
+        ids:
+          marine.bonus[@armored]    the id `@armored` names `marine.armored`; scopes: `marine` (`#[scope]`, has `armored`), the root (has `armored`, shadowed)
+          marine.bonus[@::armored]  the id `@::armored` names `armored`; scopes: `marine` (`#[scope]`, passed by `::`), the root (has `armored`)
+    "#]].assert_eq(&explain(&["keys.crod", "marine.bonus"]));
     // Nothing more where there is no id.
     expect_test::expect![[r#"
         port:

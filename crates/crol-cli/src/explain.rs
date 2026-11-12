@@ -139,7 +139,7 @@ fn ids(inputs: &crate::layers::Inputs, path: &str, context: &[String]) -> String
     if chains.is_empty() {
         return String::new();
     }
-    let locations: Vec<String> = chains.iter().map(|c| c.location.to_string()).collect();
+    let locations: Vec<String> = chains.iter().map(|c| c.place().to_string()).collect();
     let width = locations.iter().map(String::len).max().unwrap_or(0);
     let mut out = String::from("ids:\n");
     for (chain, location) in chains.iter().zip(&locations) {

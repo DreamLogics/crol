@@ -1,0 +1,5 @@
+// A path entry puts the map together while a later operation, which no
+// entry of a block says the keys of, gives the scope a `tag` of its own:
+// the key names another entry in the end.
+moved.weapon.bonus.@tag: 5.0
+moved: & ~ &root.patch

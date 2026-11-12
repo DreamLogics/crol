@@ -1,5 +1,6 @@
 //! Completion (`SPEC.md` 12.5).
 
+use crol::Mode;
 use crol::schema::{SchemaFile, TypeDef, TypeExpr, VariantShape};
 use crol_eval::{FileId, PathStep, Value, ValueKind, print};
 use crol_syntax::ast::{self, AstNode};
@@ -10,6 +11,7 @@ use lsp_types::{
 };
 
 use crate::Settings;
+use crate::attributes;
 use crate::convert::{self, Encoding};
 use crate::features;
 use crate::place::{self, Cursor, Place, Scope, Slot};
@@ -82,8 +84,9 @@ fn closed_string(token: &str) -> bool {
 /// bind, the keys of the value there; after `&`, the names a reference can
 /// start with; after `@`, root keys; in `<...>`, variant names; in a block
 /// of a known type, its fields not written yet; after a `.` in a target,
-/// the fields there; where a value goes, the values its type allows. Each
-/// item replaces the word at the cursor. Nothing in strings and comments.
+/// the fields there; where a value goes, the values its type allows; after
+/// `#[` and `#![`, the attributes. Each item replaces the word at the
+/// cursor. Nothing in strings and comments.
 pub(crate) fn complete(
     snapshot: &Snapshot,
     uri: &Uri,
@@ -178,7 +181,7 @@ fn type_paths(snapshot: &Snapshot, file: Option<FileId>) -> Vec<String> {
         .keys()
         .filter_map(|key| match key {
             crol_eval::Key::Str(path) => Some(path.to_string()),
-            crol_eval::Key::Int(_) => None,
+            crol_eval::Key::Int(_) | crol_eval::Key::Id(_) => None,
         })
         .collect()
 }
@@ -268,6 +271,17 @@ fn items_at(
         before_colon: after.starts_with(':') && !after.starts_with("::"),
     };
 
+    let word = TextRange::new(
+        TextSize::try_from(word_start).unwrap_or_default(),
+        TextSize::try_from(word_end).unwrap_or_default(),
+    );
+    // A name that states no mode is value mode here (`SPEC.md` 12.5).
+    let mode = convert::uri_to_path(uri)
+        .and_then(|p| Mode::of_path(&p))
+        .unwrap_or(Mode::Value);
+    if let Some(items) = attributes::complete(text, word, &completer.cursor, mode) {
+        return items;
+    }
     if let Some(items) = completer.in_type(text, word_start) {
         return items;
     }
@@ -666,12 +680,26 @@ impl Completer<'_> {
             return Vec::new();
         };
         let schema = self.snapshot.schema_for(self.file);
-        let place = self
-            .cursor
-            .value_or_root()
+        // An id key names what the scopes around the value it is a key of
+        // have (`SPEC.md` 3.2): the block the cursor is in, or what a path
+        // has reached.
+        let keyed = match self.cursor.slot {
+            Slot::Key => self.cursor.bracket(),
+            Slot::Path => self.cursor.current(),
+            _ => None,
+        };
+        let place = keyed
+            .or_else(|| self.cursor.value_or_root())
             .and_then(|place| place.path.as_deref())
             .map(|steps| features::data_path_lenient(root, steps));
-        let refers = self.value_type().and_then(|ty| refers_of(&ty));
+        let refers = match keyed {
+            // The types the keys of a map keyed by ids may name.
+            Some(place) => match &place.shape {
+                Some(Shape::Type(TypeExpr::Map(key, _))) => refers_of(key),
+                _ => None,
+            },
+            None => self.value_type().and_then(|ty| refers_of(&ty)),
+        };
         let names: Option<Vec<&str>> = refers.map(|paths| {
             let schema = self.snapshot.schema_for(self.file).map(|s| s.file);
             paths

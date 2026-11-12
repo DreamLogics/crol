@@ -342,6 +342,8 @@ pub(crate) enum SelectorKind {
     Element(usize),
     /// `[3]`, `[-3]`: an integer key, or on a list an index.
     Accessor(i128),
+    /// `[@name]`, `.@name`: an id key (`SPEC.md` 5.1).
+    Id(IdPath),
     /// `<a & !b>` in a reference: the context to read it in (`SPEC.md`
     /// 8.4), as variants made active or inactive.
     Context(Vec<(Arc<str>, bool, Span)>),

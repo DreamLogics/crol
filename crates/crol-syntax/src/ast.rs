@@ -687,8 +687,8 @@ impl Target {
 }
 
 ast_node!(
-    /// The key a target starts with: an identifier, a string, an integer or
-    /// an accessor.
+    /// The key a target starts with: an identifier, a string, an integer,
+    /// an accessor or an id.
     Key, KEY
 );
 
@@ -706,6 +706,12 @@ impl Key {
 
     /// The accessor, for a key written `[...]`.
     pub fn accessor(&self) -> Option<Accessor> {
+        child(&self.0)
+    }
+
+    /// The id, for an id key: `@name` (`SPEC.md` 3.1). In `@a.b: 1`, the
+    /// selectors after the key are the id's own keys.
+    pub fn id(&self) -> Option<IdExpr> {
         child(&self.0)
     }
 }
@@ -738,6 +744,12 @@ impl FieldSelector {
     pub fn name(&self) -> Option<SyntaxToken> {
         token(&self.0, IDENT)
     }
+
+    /// The id, for an id key: `.@name` (`SPEC.md` 5.1). The selectors after
+    /// it are the id's own keys.
+    pub fn id(&self) -> Option<IdExpr> {
+        child(&self.0)
+    }
 }
 
 ast_node!(
@@ -768,6 +780,17 @@ impl Accessor {
     /// Whether the integer inside has a `-`.
     pub fn is_negative(&self) -> bool {
         token(&self.0, MINUS).is_some()
+    }
+
+    /// The id inside the brackets, for an id key: `[@name]` (`SPEC.md`
+    /// 5.1).
+    pub fn id(&self) -> Option<IdExpr> {
+        child(&self.0)
+    }
+
+    /// The id's own keys, after it inside the brackets: `.b` in `[@a.b]`.
+    pub fn id_selectors(&self) -> impl Iterator<Item = Selector> + use<> {
+        children(&self.0)
     }
 }
 

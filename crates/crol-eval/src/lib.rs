@@ -47,7 +47,7 @@ pub use value::{
 pub use variants::{Context, VariantId, Variants};
 
 pub use eval::{
-    ContextData, DefaultsProvider, ExplainStep, PathStep, StepKind, VariantKeys,
+    ContextData, DefaultsProvider, ExplainStep, PathStep, ScopeStep, StepKind, VariantKeys,
     single_payload_value, value_at_path,
 };
 
@@ -624,7 +624,7 @@ impl Update {
         base.span = self.root_span;
         let is_affected = |key: &Key| match key {
             Key::Str(name) => affected.contains(name),
-            Key::Int(_) => false,
+            Key::Int(_) | Key::Id(_) => false,
         };
         if let ValueKind::Keyed(keyed) = &mut base.kind {
             let mut old = std::mem::take(&mut keyed.entries);
@@ -1202,6 +1202,7 @@ fn check_constraints(
     let name_of = |key: &Key| match key {
         Key::Str(name) => name.to_string(),
         Key::Int(i) => i.to_string(),
+        Key::Id(id) => id.to_string(),
     };
     let in_base = |name: &str| keyed.entries.get(&value::KeyRef::Str(name)).cloned();
     for (key, value) in &keyed.entries {
