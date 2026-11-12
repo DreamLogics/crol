@@ -175,11 +175,15 @@ impl<T> IdOrVisitor<T> {
     }
 }
 
-/// A value of the plain form, as `T` reads it: what `D` gives, and to an
-/// `Option`, `Some` of it. serde's value deserializers forward
-/// `deserialize_option` to `deserialize_any`, so without this an
-/// `IdOr<Option<u32>>` would not read `3` where an `Option<u32>` does. The
-/// unit, `null` in JSON, does not come through here and stays `None`.
+/// A value of the plain form, as `T` reads it: what `D` gives, to an
+/// `Option` `Some` of it, and to a newtype struct the value itself, as
+/// serde_json and serde's buffer give them. serde's value deserializers
+/// forward `deserialize_option` and `deserialize_newtype_struct` to
+/// `deserialize_any`, so without this an `IdOr<Option<u32>>` would not read
+/// `3`, nor an `IdOr<Meters>` `5`, where the bare type does. It stays around
+/// the value inside a `Some`, so an `Option<Meters>` reads as a `Meters`
+/// does. The unit, `null` in JSON, does not come through here and stays
+/// `None`.
 struct Plain<D>(D);
 
 impl<'de, D: Deserializer<'de>> Deserializer<'de> for Plain<D> {
@@ -190,7 +194,15 @@ impl<'de, D: Deserializer<'de>> Deserializer<'de> for Plain<D> {
     }
 
     fn deserialize_option<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, D::Error> {
-        visitor.visit_some(self.0)
+        visitor.visit_some(self)
+    }
+
+    fn deserialize_newtype_struct<V: Visitor<'de>>(
+        self,
+        _: &'static str,
+        visitor: V,
+    ) -> Result<V::Value, D::Error> {
+        visitor.visit_newtype_struct(self)
     }
 
     fn deserialize_enum<V: Visitor<'de>>(
@@ -204,7 +216,7 @@ impl<'de, D: Deserializer<'de>> Deserializer<'de> for Plain<D> {
 
     serde::forward_to_deserialize_any! {
         bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
-        bytes byte_buf unit unit_struct newtype_struct seq tuple
+        bytes byte_buf unit unit_struct seq tuple
         tuple_struct map struct identifier ignored_any
     }
 }

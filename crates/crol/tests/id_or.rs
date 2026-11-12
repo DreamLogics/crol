@@ -32,6 +32,11 @@ enum Node {
     },
 }
 
+/// A newtype struct, which a derived visitor reads only through
+/// `visit_newtype_struct` or `visit_seq`.
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
+struct Meters(u32);
+
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
 struct Screen {
     layout: Node,
@@ -226,6 +231,15 @@ fn json_has_the_plain_form() {
     );
     let options: Vec<IdOr<Option<Limits>>> = serde_json::from_str(r#"[{"cpu": 2}]"#).unwrap();
     assert_eq!(options, [IdOr::Value(Some(Limits { cpu: 2 }))]);
+
+    // A newtype struct reads back as it does alone, also inside an `Option`.
+    let lengths = vec![IdOr::Id(id("@web")), IdOr::Value(Meters(5))];
+    let json = serde_json::to_string(&lengths).unwrap();
+    assert_eq!(json, r#"["@web",5]"#);
+    let back: Vec<IdOr<Meters>> = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, lengths);
+    let options: Vec<IdOr<Option<Meters>>> = serde_json::from_str("[5, null]").unwrap();
+    assert_eq!(options, [IdOr::Value(Some(Meters(5))), IdOr::Value(None)]);
 }
 
 #[test]
@@ -244,6 +258,8 @@ fn from_deserializers_that_forward_a_newtype_struct() {
 
     let number = IdOr::<u32>::deserialize(IntoDeserializer::<E>::into_deserializer(5u32));
     assert_eq!(number.unwrap(), IdOr::Value(5));
+    let length = IdOr::<Meters>::deserialize(IntoDeserializer::<E>::into_deserializer(5u32));
+    assert_eq!(length.unwrap(), IdOr::Value(Meters(5)));
 }
 
 #[test]
@@ -273,6 +289,9 @@ fn under_flatten() {
 
     let outer: Outer<Vec<u32>> = crol::from_str("name: \"x\"\nvolume: [1, 2]").unwrap();
     assert_eq!(outer.inner.volume, IdOr::Value(vec![1, 2]));
+
+    let outer: Outer<Meters> = crol::from_str("name: \"x\"\nvolume: 5").unwrap();
+    assert_eq!(outer.inner.volume, IdOr::Value(Meters(5)));
 
     // A string that starts with `@` reads as an id through the buffer.
     let (outer, ids): (Outer<String>, _) =
