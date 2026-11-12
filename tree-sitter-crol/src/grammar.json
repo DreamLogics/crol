@@ -1210,12 +1210,25 @@
           }
         },
         {
-          "type": "FIELD",
-          "name": "name",
-          "content": {
-            "type": "SYMBOL",
-            "name": "identifier"
-          }
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "FIELD",
+              "name": "name",
+              "content": {
+                "type": "SYMBOL",
+                "name": "identifier"
+              }
+            },
+            {
+              "type": "FIELD",
+              "name": "id",
+              "content": {
+                "type": "SYMBOL",
+                "name": "id_expr"
+              }
+            }
+          ]
         }
       ]
     },
@@ -1288,6 +1301,10 @@
                   "name": "integer"
                 }
               ]
+            },
+            {
+              "type": "SYMBOL",
+              "name": "_id_key"
             }
           ]
         },
@@ -1319,6 +1336,92 @@
         {
           "type": "SYMBOL",
           "name": "accessor"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "id_expr"
+        }
+      ]
+    },
+    "_id_key": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "FIELD",
+          "name": "id",
+          "content": {
+            "type": "SYMBOL",
+            "name": "id_expr"
+          }
+        },
+        {
+          "type": "REPEAT",
+          "content": {
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "ALIAS",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "_id_field"
+                },
+                "named": true,
+                "value": "field_selector"
+              },
+              {
+                "type": "ALIAS",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "_id_accessor"
+                },
+                "named": true,
+                "value": "accessor"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "_id_field": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "."
+        },
+        {
+          "type": "FIELD",
+          "name": "name",
+          "content": {
+            "type": "SYMBOL",
+            "name": "identifier"
+          }
+        }
+      ]
+    },
+    "_id_accessor": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "["
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "string"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "raw_string"
+            }
+          ]
+        },
+        {
+          "type": "STRING",
+          "value": "]"
         }
       ]
     },
@@ -1351,12 +1454,25 @@
           "value": "."
         },
         {
-          "type": "FIELD",
-          "name": "name",
-          "content": {
-            "type": "SYMBOL",
-            "name": "identifier"
-          }
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "FIELD",
+              "name": "name",
+              "content": {
+                "type": "SYMBOL",
+                "name": "identifier"
+              }
+            },
+            {
+              "type": "FIELD",
+              "name": "id",
+              "content": {
+                "type": "SYMBOL",
+                "name": "id_expr"
+              }
+            }
+          ]
         }
       ]
     },
@@ -1423,6 +1539,10 @@
                   "name": "integer"
                 }
               ]
+            },
+            {
+              "type": "SYMBOL",
+              "name": "_id_key"
             }
           ]
         },
@@ -2605,6 +2725,14 @@
     [
       "key",
       "block"
+    ],
+    [
+      "key",
+      "_primary"
+    ],
+    [
+      "_id_key",
+      "_primary"
     ],
     [
       "accessor",

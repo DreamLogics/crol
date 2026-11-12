@@ -190,10 +190,50 @@ static bool skip_word_or_raw_string(TSLexer *lexer) {
   return true;
 }
 
+// An id, at `@`: `@name`, `@"text"`, or either after `::`. Its name follows
+// directly (SPEC.md 2.5).
+static bool skip_id(TSLexer *lexer) {
+  advance(lexer);
+  if (lexer->lookahead == ':') {
+    advance(lexer);
+    if (lexer->lookahead != ':') return false;
+    advance(lexer);
+  }
+  if (lexer->lookahead == '"') return skip_string(lexer);
+  if (!is_identifier_char(lexer->lookahead) || is_digit(lexer->lookahead)) return false;
+  skip_word(lexer);
+  return true;
+}
+
 // `[key]`, at `[`.
 static bool skip_accessor(TSLexer *lexer) {
   advance(lexer);
   if (!skip_inline_trivia(lexer)) return false;
+  if (lexer->lookahead == '@') {
+    // An id key with its own keys: `[@a.b]`, `[@a["b c"]]` (SPEC.md 5.1).
+    if (!skip_id(lexer)) return false;
+    for (;;) {
+      if (!skip_inline_trivia(lexer)) return false;
+      if (lexer->lookahead == '.') {
+        advance(lexer);
+        if (!skip_inline_trivia(lexer)) return false;
+        if (!is_identifier_char(lexer->lookahead)) return false;
+        skip_word(lexer);
+      } else if (lexer->lookahead == '[') {
+        advance(lexer);
+        if (!skip_inline_trivia(lexer)) return false;
+        if (lexer->lookahead != '"' || !skip_string(lexer)) return false;
+        if (!skip_inline_trivia(lexer)) return false;
+        if (lexer->lookahead != ']') return false;
+        advance(lexer);
+      } else {
+        break;
+      }
+    }
+    if (lexer->lookahead != ']') return false;
+    advance(lexer);
+    return true;
+  }
   if (lexer->lookahead == '-') {
     advance(lexer);
     if (!skip_inline_trivia(lexer)) return false;
@@ -246,6 +286,11 @@ static bool at_selectors_and_colon(TSLexer *lexer) {
       case '.':
         advance(lexer);
         if (!skip_inline_trivia(lexer)) return false;
+        if (lexer->lookahead == '@') {
+          // An id key: `m.@x`.
+          if (!skip_id(lexer)) return false;
+          break;
+        }
         if (!is_identifier_char(lexer->lookahead)) return false;
         skip_word(lexer);
         break;
@@ -271,6 +316,9 @@ static bool at_target_and_colon(TSLexer *lexer) {
     if (!skip_string(lexer)) return false;
   } else if (lexer->lookahead == '[') {
     if (!skip_accessor(lexer)) return false;
+  } else if (lexer->lookahead == '@') {
+    // An id key: `@x: 1` (SPEC.md 3.1).
+    if (!skip_id(lexer)) return false;
   } else if (is_identifier_char(lexer->lookahead)) {
     if (!skip_word_or_raw_string(lexer)) return false;
   } else {
@@ -300,7 +348,8 @@ static bool at_entry_shape(TSLexer *lexer) {
       if (lexer->lookahead == '?') return true;
       if (!skip_inline_trivia(lexer)) return false;
       // Not `-12` or `-[key]`.
-      return lexer->lookahead == '"' || (is_identifier_char(lexer->lookahead) && !is_digit(lexer->lookahead));
+      return lexer->lookahead == '"' || lexer->lookahead == '@' ||
+             (is_identifier_char(lexer->lookahead) && !is_digit(lexer->lookahead));
     case '<':
       return skip_variant(lexer) && skip_inline_trivia(lexer) && lexer->lookahead == '{';
     case '#':
