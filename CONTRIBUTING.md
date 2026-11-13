@@ -58,19 +58,3 @@ All crates share one version number (`SPEC.md` 14.4).
 
 A pull request that changes `release.yml` runs the same builds and publishes
 nothing, so a change to the workflow is tried before a tag depends on it.
-
-### The first release
-
-The workflow publishes with crates.io trusted publishing, which a crate needs to
-exist for, so the first version of each crate goes up by hand, from a clean
-checkout of the commit to tag:
-
-1. `cargo login`, with a token that may publish new crates.
-2. `cargo publish --workspace --locked`. crates.io limits how many new crates an
-   account makes at once. If it answers 429 for the last crates, wait for the time
-   it gives and run `cargo publish --locked -p <crate>` for each, in the order
-   `crol-syntax`, `crol-derive`, `crol-eval`, `crol`, `crol-lsp`, `crol-cli`.
-3. Tag and push as above. The workflow finds the crates there, and goes on to the
-   GitHub release.
-4. In each crate's settings on crates.io, add a trusted publisher: the repository
-   `DreamLogics/crol`, the workflow `release.yml` and the environment `crates-io`.
