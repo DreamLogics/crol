@@ -9,6 +9,8 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-13
+
 ### Added
 
 - `crol::IdOr<T>`: a place that takes an id, `@name`, or a `T` written in place (#27),
@@ -698,7 +700,8 @@ What changed during development, before anything was published.
   cursor, keep an existing `:`, and are triggered where keys and values
   start; a document just opened is evaluated at once.
 
-[Unreleased]: https://github.com/DreamLogics/crol/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/DreamLogics/crol/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/DreamLogics/crol/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/DreamLogics/crol/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/DreamLogics/crol/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/DreamLogics/crol/compare/v0.1.0...v0.2.0

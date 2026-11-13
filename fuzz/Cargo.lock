@@ -74,7 +74,7 @@ dependencies = [
 
 [[package]]
 name = "crol-eval"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "blake3",
  "crol-syntax",
@@ -94,7 +94,7 @@ dependencies = [
 
 [[package]]
 name = "crol-syntax"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "rowan",
 ]

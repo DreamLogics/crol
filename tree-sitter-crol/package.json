@@ -1,6 +1,6 @@
 {
   "name": "tree-sitter-crol",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "CROL, the Composable Rust Object Language: a tree-sitter grammar",
   "repository": "https://github.com/DreamLogics/crol",
   "license": "MIT OR Apache-2.0",

@@ -103,7 +103,8 @@ fn first_token(parent: &SyntaxNode) -> Option<SyntaxToken> {
 
 ast_node!(
     /// A whole document: attributes, then entries or one expression.
-    Document, DOCUMENT
+    Document,
+    DOCUMENT
 );
 
 impl Document {
@@ -183,7 +184,8 @@ pub fn doc_comment(entry: &SyntaxNode) -> Option<String> {
 
 ast_node!(
     /// `#![...]`
-    Attribute, ATTRIBUTE
+    Attribute,
+    ATTRIBUTE
 );
 
 ast_enum!(
@@ -206,7 +208,8 @@ impl Attribute {
 
 ast_node!(
     /// `use(a::B, c::D as E)`
-    UseAttr, USE_ATTR
+    UseAttr,
+    USE_ATTR
 );
 
 impl UseAttr {
@@ -218,7 +221,8 @@ impl UseAttr {
 
 ast_node!(
     /// `app::net::Config`, `app::Pair<u32, String> as Pair`
-    UsePath, USE_PATH
+    UsePath,
+    USE_PATH
 );
 
 impl UsePath {
@@ -240,12 +244,14 @@ impl UsePath {
 
 ast_node!(
     /// `as Alias`
-    UseAlias, USE_ALIAS
+    UseAlias,
+    USE_ALIAS
 );
 
 ast_node!(
     /// `<A, B>`
-    TypeArgList, TYPE_ARG_LIST
+    TypeArgList,
+    TYPE_ARG_LIST
 );
 
 impl TypeArgList {
@@ -258,7 +264,8 @@ impl TypeArgList {
 ast_node!(
     /// A type expression: `u32`, `app::Pair<A, B>`, `[T; 3]`, `(A, B)`
     /// (`SPEC.md` 6.1.2).
-    TypeExpr, TYPE_EXPR
+    TypeExpr,
+    TYPE_EXPR
 );
 
 /// The form of a type expression.
@@ -311,7 +318,8 @@ impl TypeExpr {
 ast_node!(
     /// `#[type(...)]` before a value bind, or `#[scope]` before a value bind
     /// or an entry (`SPEC.md` 6.1.2).
-    EntryAttr, ENTRY_ATTR
+    EntryAttr,
+    ENTRY_ATTR
 );
 
 impl EntryAttr {
@@ -329,7 +337,8 @@ impl EntryAttr {
 
 ast_node!(
     /// A type expression and the steps into it: `Foo.bar.[]`.
-    TypeRef, TYPE_REF
+    TypeRef,
+    TYPE_REF
 );
 
 impl TypeRef {
@@ -346,7 +355,8 @@ impl TypeRef {
 
 ast_node!(
     /// `.field`, `.0` or `.[]` in a type reference.
-    TypeStep, TYPE_STEP
+    TypeStep,
+    TYPE_STEP
 );
 
 /// What a [`TypeStep`] steps into.
@@ -376,7 +386,8 @@ impl TypeStep {
 
 ast_node!(
     /// `schema(::crol::schema)` or `schema("https://...")`
-    SchemaAttr, SCHEMA_ATTR
+    SchemaAttr,
+    SCHEMA_ATTR
 );
 
 impl SchemaAttr {
@@ -393,7 +404,8 @@ impl SchemaAttr {
 
 ast_node!(
     /// `type(Name)`
-    TypeAttr, TYPE_ATTR
+    TypeAttr,
+    TYPE_ATTR
 );
 
 impl TypeAttr {
@@ -405,7 +417,8 @@ impl TypeAttr {
 
 ast_node!(
     /// `extends(super::defaults)`
-    ExtendsAttr, EXTENDS_ATTR
+    ExtendsAttr,
+    EXTENDS_ATTR
 );
 
 impl ExtendsAttr {
@@ -417,7 +430,8 @@ impl ExtendsAttr {
 
 ast_node!(
     /// `variant(civ: empire)`
-    VariantAttr, VARIANT_ATTR
+    VariantAttr,
+    VARIANT_ATTR
 );
 
 impl VariantAttr {
@@ -434,7 +448,8 @@ impl VariantAttr {
 
 ast_node!(
     /// A module path (`SPEC.md` 4.2): `::a::b`, `super::a`, `a::b`.
-    ModulePath, MODULE_PATH
+    ModulePath,
+    MODULE_PATH
 );
 
 /// Where a module path starts (`SPEC.md` 4.2).
@@ -483,7 +498,8 @@ ast_enum!(
 ast_node!(
     /// `target: expr`, `+target: expr`, `?target: expr` or `^target: expr`,
     /// optionally with a bind before it.
-    Entry, ENTRY
+    Entry,
+    ENTRY
 );
 
 /// The operation of an [`Entry`].
@@ -551,7 +567,8 @@ impl Entry {
 
 ast_node!(
     /// `name =`, before an entry (`SPEC.md` 6.1.1).
-    Bind, BIND
+    Bind,
+    BIND
 );
 
 impl Bind {
@@ -563,7 +580,8 @@ impl Bind {
 
 ast_node!(
     /// `-target`, or `-?target`
-    RemoveEntry, REMOVE_ENTRY
+    RemoveEntry,
+    REMOVE_ENTRY
 );
 
 impl RemoveEntry {
@@ -585,7 +603,8 @@ impl RemoveEntry {
 
 ast_node!(
     /// `name := expr` (`SPEC.md` 6.1.2)
-    ValueBind, VALUE_BIND
+    ValueBind,
+    VALUE_BIND
 );
 
 impl ValueBind {
@@ -612,7 +631,8 @@ impl ValueBind {
 
 ast_node!(
     /// `<c> { entries }` (`SPEC.md` 8.2)
-    VariantBlock, VARIANT_BLOCK
+    VariantBlock,
+    VARIANT_BLOCK
 );
 
 impl VariantBlock {
@@ -634,7 +654,8 @@ impl VariantBlock {
 
 ast_node!(
     /// `..operand` (`SPEC.md` 5.2)
-    Spread, SPREAD
+    Spread,
+    SPREAD
 );
 
 impl Spread {
@@ -651,7 +672,8 @@ impl Spread {
 
 ast_node!(
     /// `..`: fields left out take their defaults (`SPEC.md` 10.3).
-    Defaults, DEFAULTS
+    Defaults,
+    DEFAULTS
 );
 
 impl Defaults {
@@ -665,7 +687,8 @@ impl Defaults {
 
 ast_node!(
     /// A key followed by selectors (`SPEC.md` 5.1).
-    Target, TARGET
+    Target,
+    TARGET
 );
 
 /// Whether a `?` directly follows a step of a target (`SPEC.md` 5.1).
@@ -689,7 +712,8 @@ impl Target {
 ast_node!(
     /// The key a target starts with: an identifier, a string, an integer,
     /// an accessor or an id.
-    Key, KEY
+    Key,
+    KEY
 );
 
 impl Key {
@@ -729,7 +753,8 @@ ast_enum!(
 
 ast_node!(
     /// `.name`
-    FieldSelector, FIELD_SELECTOR
+    FieldSelector,
+    FIELD_SELECTOR
 );
 
 impl Selector {
@@ -754,7 +779,8 @@ impl FieldSelector {
 
 ast_node!(
     /// `.0`
-    IndexSelector, INDEX_SELECTOR
+    IndexSelector,
+    INDEX_SELECTOR
 );
 
 impl IndexSelector {
@@ -766,7 +792,8 @@ impl IndexSelector {
 
 ast_node!(
     /// `[key]`
-    Accessor, ACCESSOR
+    Accessor,
+    ACCESSOR
 );
 
 impl Accessor {
@@ -796,14 +823,16 @@ impl Accessor {
 
 ast_node!(
     /// `.&parent` where it is not allowed; always an error.
-    ParentSelector, PARENT_SELECTOR
+    ParentSelector,
+    PARENT_SELECTOR
 );
 
 // ---- Variants ----
 
 ast_node!(
     /// `<condition + condition>` (`SPEC.md` 8.2, 8.4)
-    Variant, VARIANT
+    Variant,
+    VARIANT
 );
 
 impl Variant {
@@ -825,7 +854,8 @@ ast_enum!(
 
 ast_node!(
     /// A variant name.
-    CondName, COND_NAME
+    CondName,
+    COND_NAME
 );
 
 impl CondName {
@@ -837,7 +867,8 @@ impl CondName {
 
 ast_node!(
     /// `!c`
-    CondNot, COND_NOT
+    CondNot,
+    COND_NOT
 );
 
 impl CondNot {
@@ -849,7 +880,8 @@ impl CondNot {
 
 ast_node!(
     /// `a & b`, `a | b` or `a ^ b`
-    CondBinary, COND_BINARY
+    CondBinary,
+    COND_BINARY
 );
 
 /// The operator of a [`CondBinary`].
@@ -890,7 +922,8 @@ impl CondBinary {
 
 ast_node!(
     /// `(c)`
-    CondParen, COND_PAREN
+    CondParen,
+    COND_PAREN
 );
 
 impl CondParen {
@@ -923,7 +956,8 @@ ast_enum!(
 
 ast_node!(
     /// A string, char, integer, float or boolean literal.
-    Literal, LITERAL
+    Literal,
+    LITERAL
 );
 
 impl Literal {
@@ -936,7 +970,8 @@ impl Literal {
 ast_node!(
     /// `@name`, `@"text"` or `@::name` (`SPEC.md` 3.2). In `@a.b`, the
     /// selectors are a [`PathExpr`] around it.
-    IdExpr, ID_EXPR
+    IdExpr,
+    ID_EXPR
 );
 
 impl IdExpr {
@@ -956,7 +991,8 @@ impl IdExpr {
 ast_node!(
     /// `&`, `&name`, `&self`, `&parent` (or `&super`), `&top`, `&root` or
     /// `&default` (`SPEC.md` 6.1)
-    Reference, REFERENCE
+    Reference,
+    REFERENCE
 );
 
 /// What a [`Reference`] refers to.
@@ -1006,7 +1042,8 @@ impl Reference {
 
 ast_node!(
     /// `Name? { entries }` (`SPEC.md` 5.2)
-    Block, BLOCK
+    Block,
+    BLOCK
 );
 
 impl Block {
@@ -1023,7 +1060,8 @@ impl Block {
 
 ast_node!(
     /// `[a, b]`
-    ListExpr, LIST_EXPR
+    ListExpr,
+    LIST_EXPR
 );
 
 impl ListExpr {
@@ -1035,7 +1073,8 @@ impl ListExpr {
 
 ast_node!(
     /// `()`, `(a,)`, `(a, b)`
-    TupleExpr, TUPLE_EXPR
+    TupleExpr,
+    TUPLE_EXPR
 );
 
 impl TupleExpr {
@@ -1047,7 +1086,8 @@ impl TupleExpr {
 
 ast_node!(
     /// `round!(a)`
-    MacroCall, MACRO_CALL
+    MacroCall,
+    MACRO_CALL
 );
 
 impl MacroCall {
@@ -1066,7 +1106,8 @@ impl MacroCall {
 
 ast_node!(
     /// `Name(a, b)`
-    NamedTuple, NAMED_TUPLE
+    NamedTuple,
+    NAMED_TUPLE
 );
 
 impl NamedTuple {
@@ -1085,12 +1126,14 @@ impl NamedTuple {
 
 ast_node!(
     /// The parenthesised payload of a [`NamedTuple`] or [`MacroCall`].
-    ArgList, ARG_LIST
+    ArgList,
+    ARG_LIST
 );
 
 ast_node!(
     /// `None`, `Red`: a unit variant or unit struct.
-    UnitName, UNIT_NAME
+    UnitName,
+    UNIT_NAME
 );
 
 impl UnitName {
@@ -1102,7 +1145,8 @@ impl UnitName {
 
 ast_node!(
     /// `(expr)`
-    ParenExpr, PAREN_EXPR
+    ParenExpr,
+    PAREN_EXPR
 );
 
 impl ParenExpr {
@@ -1114,7 +1158,8 @@ impl ParenExpr {
 
 ast_node!(
     /// An expression followed by selectors: `&root.web.port`, `[1, 2][0]`.
-    PathExpr, PATH_EXPR
+    PathExpr,
+    PATH_EXPR
 );
 
 impl PathExpr {
@@ -1131,7 +1176,8 @@ impl PathExpr {
 
 ast_node!(
     /// `-expr` or `!expr`
-    PrefixExpr, PREFIX_EXPR
+    PrefixExpr,
+    PREFIX_EXPR
 );
 
 impl PrefixExpr {
@@ -1150,7 +1196,8 @@ impl PrefixExpr {
 
 ast_node!(
     /// `a op b`
-    BinaryExpr, BINARY_EXPR
+    BinaryExpr,
+    BINARY_EXPR
 );
 
 /// The operator of a [`BinaryExpr`] (`SPEC.md` 6.2).
