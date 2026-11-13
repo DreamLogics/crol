@@ -489,6 +489,9 @@ pub enum TypeExpr {
     Bytes,
     /// `crol::Id`, with the types it may refer to (`[]`: any root key).
     Id(Vec<String>),
+    /// `crol::IdOr<T>`: an id, with the types it may refer to as in `Id`,
+    /// or a value of the second type written in place.
+    IdOr(Vec<String>, Box<TypeExpr>),
     /// `Option<T>`.
     Option(Box<TypeExpr>),
     /// `Vec<T>`, `VecDeque<T>` or a slice.
@@ -575,7 +578,7 @@ impl SchemaFile {
         }
         match ty {
             TypeExpr::Map(..) => true,
-            TypeExpr::Option(inner) => self.has_keys(inner, depth + 1),
+            TypeExpr::Option(inner) | TypeExpr::IdOr(_, inner) => self.has_keys(inner, depth + 1),
             TypeExpr::Named(path) => match self.get(path) {
                 Some(TypeDef::Struct { .. }) => true,
                 Some(TypeDef::Newtype { inner, .. } | TypeDef::Transparent { inner, .. }) => {
@@ -936,11 +939,12 @@ fn is_none(value: &crate::Value) -> bool {
     matches!(&value.kind, crate::ValueKind::UnitName(name) if &**name == "None")
 }
 
-/// The named type a type expression stands for, through `Option`.
+/// The named type a type expression stands for, through `Option` and the
+/// value side of `IdOr`.
 fn named_type(expr: &TypeExpr) -> Option<&str> {
     match expr {
         TypeExpr::Named(path) => Some(path),
-        TypeExpr::Option(inner) => named_type(inner),
+        TypeExpr::Option(inner) | TypeExpr::IdOr(_, inner) => named_type(inner),
         _ => None,
     }
 }
@@ -1035,16 +1039,19 @@ pub fn type_name(expr: &TypeExpr) -> String {
             format!("Tuple([{}])", items.join(", "))
         }
         TypeExpr::Id(refers) => format!("Id({refers:?})"),
+        TypeExpr::IdOr(refers, inner) => format!("IdOr({refers:?}, {})", type_name(inner)),
         other => format!("{other:?}"),
     }
 }
 
 /// `expr` with the ids in it restricted to naming `refers`
-/// (`#[crol(refers(...))]`): an `Id`, or ids inside an option, list, set or
-/// map of them.
+/// (`#[crol(refers(...))]`): an `Id`, the id side of an `IdOr`, or ids
+/// inside an option, list, set or map of them. The value side of an `IdOr`
+/// keeps its own.
 pub fn with_refers(expr: TypeExpr, refers: Vec<String>) -> TypeExpr {
     match expr {
         TypeExpr::Id(_) => TypeExpr::Id(refers),
+        TypeExpr::IdOr(_, inner) => TypeExpr::IdOr(refers, inner),
         TypeExpr::Option(inner) => TypeExpr::Option(Box::new(with_refers(*inner, refers))),
         TypeExpr::List(inner) => TypeExpr::List(Box::new(with_refers(*inner, refers))),
         TypeExpr::Set(inner) => TypeExpr::Set(Box::new(with_refers(*inner, refers))),
@@ -1100,6 +1107,12 @@ scalar! {
 impl Schema for crate::Id {
     fn describe(_: &mut Registry) -> TypeRef {
         TypeExpr::Id(Vec::new())
+    }
+}
+
+impl<T: Schema> Schema for crate::IdOr<T> {
+    fn describe(registry: &mut Registry) -> TypeRef {
+        TypeExpr::IdOr(Vec::new(), Box::new(T::describe(registry)))
     }
 }
 
@@ -1905,6 +1918,12 @@ impl Schema for TypeExpr {
                         "Id",
                         list(TypeExpr::String),
                         "`crol::Id`, with the types it may refer to (`[]`: any root key).",
+                    ),
+                    pair(
+                        "IdOr",
+                        list(TypeExpr::String),
+                        expr.clone(),
+                        "`crol::IdOr<T>`: an id, with the types it may refer to as in `Id`, or a value of the second type written in place.",
                     ),
                     holds("Option", expr.clone(), "`Option<T>`."),
                     holds("List", expr.clone(), "`Vec<T>`, `VecDeque<T>` or a slice."),

@@ -9,6 +9,26 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ## [Unreleased]
 
+### Added
+
+- `crol::IdOr<T>`: a place that takes an id, `@name`, or a `T` written in place (#27),
+  such as a child in a UI tree that is either `@filter` or `Label { text: "q: quit" }`.
+  The kind of the value decides, so `IdOr<String>` tells `@web` from `"web"`, and the
+  `T` deserializes as a field of type `T` would: its type name picks the variant, `..`
+  and `explicit_defaults` apply, errors point into it, and ids inside it are reported.
+  The id is an id like any other. `to_string` writes either side with nothing around
+  it. Other formats, and serde's buffer under `flatten` and `untagged`, see the plain
+  form: the id as `"@web"` and the value as `T` writes it, where a string that starts
+  with `@` reads back as the id. `IdOr` is no map key.
+- The schema type expression `IdOr(refers, ty)`, with `#[crol(refers(...))]` setting
+  `refers` on an `IdOr` field. `crol::check` checks an id there as `Id(refers)` and
+  anything else as `ty`, and what walks data by type (type names, defaults, scopes,
+  constraints, paths) sees through it. The schema format stays 1: a tool that does
+  not know the expression rejects the schemas that use it.
+- `#[type(crol::IdOr<T>)]` on value binds, and in the language server completion of
+  both sides at an `IdOr` place: after `@` the keys its `refers` allows, otherwise
+  the values and fields of the type written in place.
+
 ## [0.4.0] - 2026-11-12
 
 This release changes the format in ways that break documents and programs written for

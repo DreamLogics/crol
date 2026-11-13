@@ -147,6 +147,9 @@ impl Walker<'_> {
         match (ty, &value.kind) {
             (TypeExpr::Option(_), _) if is_none(value) => {}
             (TypeExpr::Option(inner), _) => self.constrain(name, inner, unwrap_some(value)),
+            // A constraint is on values; an id is a name.
+            (TypeExpr::IdOr(..), ValueKind::Id(_)) => {}
+            (TypeExpr::IdOr(_, inner), _) => self.constrain(name, inner, value),
             (
                 TypeExpr::List(inner) | TypeExpr::Set(inner) | TypeExpr::Array(inner, _),
                 ValueKind::List(items) | ValueKind::Tuple(items),
@@ -215,6 +218,8 @@ impl Walker<'_> {
         match (ty, &value.kind) {
             (TypeExpr::Option(_), _) if is_none(value) => {}
             (TypeExpr::Option(inner), _) => self.value(inner, unwrap_some(value)),
+            (TypeExpr::IdOr(..), ValueKind::Id(_)) => {}
+            (TypeExpr::IdOr(_, inner), _) => self.value(inner, value),
             (
                 TypeExpr::List(inner) | TypeExpr::Set(inner) | TypeExpr::Array(inner, _),
                 ValueKind::List(items) | ValueKind::Tuple(items),
@@ -594,6 +599,11 @@ impl SchemaDefaults {
             (TypeExpr::Option(inner), ..) => {
                 self.sealed_in(inner, unwrap_some(before), unwrap_some(after), path, found);
             }
+            // Sealed fields are inside a value written in place, on both
+            // sides; an id has none.
+            (TypeExpr::IdOr(..), ValueKind::Id(_), _)
+            | (TypeExpr::IdOr(..), _, ValueKind::Id(_)) => {}
+            (TypeExpr::IdOr(_, inner), ..) => self.sealed_in(inner, before, after, path, found),
             (TypeExpr::Map(_, inner), ValueKind::Keyed(a), ValueKind::Keyed(b)) => {
                 for (key, old) in &a.entries {
                     if let Some(new) = b.entries.get(key) {

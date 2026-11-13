@@ -10,6 +10,7 @@ use crol_eval::{Key, Keyed, Span, Value, ValueKind};
 use crate::error::Error;
 use crate::expression::{EXPRESSION_TOKEN, text_value};
 use crate::id::ID_TOKEN;
+use crate::id_or::ID_OR_TOKEN;
 use crate::raw::RAW_TOKEN;
 use crol_syntax::is_expression;
 
@@ -221,6 +222,11 @@ impl<'c> ser::Serializer for ValueSerializer<'c> {
                 },
                 _ => Err(Error::new("a raw value must be CROL text")),
             };
+        }
+        // What it holds, alone: no `$crol::IdOr(...)` around it, also with
+        // type names on (`SPEC.md` 10.8).
+        if name == ID_OR_TOKEN {
+            return Ok(inner);
         }
         if name == ID_TOKEN {
             return match inner.kind {
@@ -624,6 +630,9 @@ impl ser::Serializer for KeySerializer {
         name: &'static str,
         v: &T,
     ) -> Result<Key, Error> {
+        if name == ID_OR_TOKEN {
+            return Err(Error::new(crate::id_or::ID_OR_KEY));
+        }
         // An `Id` is an id key, a path id as well (`SPEC.md` 10.5).
         if name == ID_TOKEN {
             let Key::Str(text) = v.serialize(self)? else {

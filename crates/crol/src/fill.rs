@@ -57,6 +57,9 @@ impl Filler<'_> {
         }
         match (ty, &mut value.kind) {
             (TypeExpr::Option(inner), _) => self.value(value, inner, variant, depth + 1),
+            // An id has nothing to fill; a value written in place does.
+            (TypeExpr::IdOr(..), ValueKind::Id(_)) => {}
+            (TypeExpr::IdOr(_, inner), _) => self.value(value, inner, variant, depth + 1),
             (
                 TypeExpr::List(item) | TypeExpr::Set(item) | TypeExpr::Array(item, _),
                 ValueKind::List(items),

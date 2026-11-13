@@ -476,3 +476,33 @@ fn a_block_has_the_names_of_what_wraps_it() {
         ["expected u8, found -1"]
     );
 }
+
+#[test]
+fn id_or_takes_an_id_or_a_value() {
+    let limits = named(&path_of("Limits"));
+    assert_eq!(
+        resolved("#[type(crol::IdOr<Limits>)] x := @a"),
+        Ok(TypeExpr::IdOr(Vec::new(), Box::new(limits)))
+    );
+    assert!(
+        resolved("#[type(crol::IdOr)] x := @a")
+            .unwrap_err()
+            .contains("takes one type argument")
+    );
+    // An id fits, and so does a value that fits the type.
+    let none = Vec::<String>::new();
+    assert_eq!(problems("#[type(crol::IdOr<Limits>)] x := @a"), none);
+    assert_eq!(
+        problems("#[type(crol::IdOr<Limits>)] x := Limits { cpu: 1.0 }"),
+        none
+    );
+    // Anything else is checked as the value.
+    assert_eq!(
+        problems("#[type(crol::IdOr<Limits>)] x := Limits { cpu: \"x\" }"),
+        ["expected a float, found \"x\""]
+    );
+    assert_eq!(
+        problems("#[type(crol::IdOr<u8>)] x := \"x\""),
+        ["expected u8, found \"x\""]
+    );
+}

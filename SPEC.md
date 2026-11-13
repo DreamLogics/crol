@@ -1303,6 +1303,7 @@ more_cols := { a: [], b: [] },
   | `(A, B)`, `(A,)`; `(A)` is `A` | `Tuple([A, B])` |
   | `Box<T>`, `Rc<T>`, `Arc<T>`, `Cow<T>` | what `T` is |
   | `crol::Id`, `crol::Value` | `Id([])`, `Any` |
+  | `crol::IdOr<T>` | `IdOr([], T)`: an id fits, and anything else is checked as `T` |
   | `Item`, `app::Item`, `Pair<u32, String>` | `Named(...)`: a schema type, its instantiation for a generic one |
 
   The names that give the same schema type are the same type to tools:
@@ -1310,9 +1311,9 @@ more_cols := { a: [], b: [] },
   one a type names is for the reader. Every other name is a schema type,
   resolved like a type name (`use` applies, section 4.1). A name in the
   table wins over a schema type of that name (one called `Vec`, or a serde
-  rename to `String`); `use(path as Alias)` reaches that type. `crol::Id`
-  and `crol::Value` are written with their path, so that a schema type
-  called `Id` or `Value` keeps its name. The same type expressions are what
+  rename to `String`); `use(path as Alias)` reaches that type. `crol::Id`,
+  `crol::IdOr` and `crol::Value` are written with their path, so that a
+  schema type called `Id`, `IdOr` or `Value` keeps its name. The same type expressions are what
   a `use` writes as type arguments.
 - **Steps** go into a type, to the type a value at that step has:
   - `.field`: a field of a struct or struct variant, by its serde name.
@@ -2300,6 +2301,8 @@ and a `Serializer` that writes plain value documents.
 | `any` | the value's natural form: keyed values as maps (type name dropped), named tuples as single-entry maps from name to payload, ids as their text with `@` (`"@web"`, section 10.5), also as keys |
 | `ignored_any` | anything |
 
+`crol::IdOr<T>` takes an id, or what `T` takes (section 10.5).
+
 ### 10.2 Structs
 
 For `deserialize_struct(name, fields, visitor)` the deserializer checks:
@@ -2522,7 +2525,10 @@ enum Definition { Service(Service), Volume(Volume) }
 
 Internally tagged, adjacently tagged and untagged enums go through
 `deserialize_any`, which loses type names. They work as they would with
-`serde_json::Value`, with that restriction.
+`serde_json::Value`, with that restriction. So `#[serde(untagged)] enum
+Child { Id(Id), Inline(Node) }` cannot read `Stack { ... }` as a `Node`;
+`crol::IdOr<Node>` is the type for a place that takes an id or a value
+written in place (section 10.5).
 
 ### 10.5 Ids
 
@@ -2561,6 +2567,65 @@ also where serde buffers the value. There a `String` gets the text,
 is the same text through `any`, so a flattened map keyed by `Id` reads its
 keys, and one keyed by `String` gets `"@web"`. Ids are
 equal when written alike: `@x` and `@::x` are different ids.
+
+**An id or a value.** `crol::IdOr<T>` is a place that takes an id or a
+`T` written in place, for data that refers to other data by id and writes
+small things where they go:
+
+```rust
+pub enum IdOr<T> {
+    Id(Id),     // `@name`
+    Value(T),   // the value itself
+}
+```
+
+```crol
+children: [
+    @filter,                                // IdOr::Id
+    Label { text: "q: quit", muted: true }, // IdOr::Value(Node::Label { .. })
+],
+```
+
+The kind of the value decides: an id is the `Id` side, also when `T`
+could take one, and anything else is the `Value` side and must
+deserialize as `T`. So `IdOr<String>` takes `@web` and `"web"` and tells
+them apart. The `T` is deserialized as a field of type `T` would be:
+type names pick enum variants and are checked (section 10.2), `..` and
+`explicit_defaults` apply (section 10.3), errors carry the value's place,
+and ids inside it are reported with their `rust_path`. The id is an id
+like any other: it resolves through the scopes around its place, is
+reported as an `IdUse`, and is a warning, or with `strict_ids` an error,
+when it names nothing. An id is still no lookup: a path does not go
+through one, and a value written in place that is a scope is one.
+
+`IdOr` asks for a newtype struct with a reserved name, `$crol::IdOr`, as
+`Id` does with `$crol::Id`. The CROL deserializer recognizes the name and
+hands an id over as its text through `visit_newtype_struct`, and anything
+else through `visit_some`, with the type names it has. The reserved name
+is no type name a value may carry. Every other call reads the plain form:
+in it the text of an id, a string that starts with `@`, is the id, and
+an error, the one `Id` gives, if it is no id; it is never given to `T`
+instead. Anything else is given to `T`, a `Some` of it to a `T` that is
+an `Option`. The plain form comes from deserializers that pass themselves
+on through `visit_newtype_struct` (serde_json, and serde's buffer under
+`#[serde(flatten)]` and `#[serde(untagged)]`), and from those that forward
+a newtype struct to `any` and call `visit_str`, `visit_map` and the rest
+directly. A deserializer that forwards over an option calls `visit_some`
+too; what the `Some` holds then goes to `T` without the `@` check.
+
+Under `flatten` and `untagged` an id is the `Id` side and is reported, as
+the deserializer records ids before serde buffers them, and a value is
+what the buffer holds, so a `T` works there if it works there alone: a
+block that needs its type name does not (section 10.4). A string that
+starts with `@` is the id there, and is not reported. Read directly from
+CROL, `"@web"` and `"@ hi"` are strings like any other.
+
+`IdOr` is no map key: a value takes id keys or it does not (section 3.1).
+The key deserializer and serializer refuse it, "`IdOr` cannot be a map
+key; a map takes id keys (`crol::Id`) or it does not". Another format
+cannot, and writes such keys as the text they hold. A format that does
+not describe itself, such as bincode, can write an `IdOr` and cannot read
+one, since nothing in what is written says which side it is.
 
 **Reported uses.** Every id the deserializer produces is recorded as an
 `IdUse`, returned beside the value, with what it resolved to (section 3.2),
@@ -2839,8 +2904,11 @@ an error. A struct whose serialization leaves fields out with
 `#[serde(skip_serializing)]`, so a struct with such a field reads back
 only if it has `explicit_defaults = false` (section 10.3). A `crol::Id` is
 written as an id, `@web`, `@settings.filter` or `@::web`, as a map key too:
-`{@web: 1}`. The output has no operators; it is plain data that reads back
-to the same value, where its id keys name entries of the document it is
+`{@web: 1}`. A `crol::IdOr` is written as what it holds, the id or the
+value with nothing around it, also with type names on; other formats see
+the plain form (section 10.5), `"@web"` or the value as `T` writes it, and
+read `IdOr::Value("@web")` back as the id. The output has no operators;
+it is plain data that reads back to the same value, where its id keys name entries of the document it is
 read in (section 3.1).
 
 `CrolData::reload(changes)` is for a program watching its files: each
@@ -2901,8 +2969,9 @@ pub struct Service {
 }
 ```
 
-`#[crol(refers(...))]` applies to an `Id` field, or to the ids inside a
-list, option or map of them, and names the root types an id may name.
+`#[crol(refers(...))]` applies to an `Id` field, the id side of an `IdOr`
+field, or to the ids inside a list, option or map of them, and names the
+root types an id may name. The value side of an `IdOr` is not affected.
 `#[crol(defaults)]` on a type records its default values in the schema,
 for `&default` (section 6.1.3) and tools: the struct's
 `Default::default()` if it has `#[serde(default)]`, and each field's own
@@ -2943,7 +3012,7 @@ pub trait Schema {
   of the type (`file!()`, `line!()`).
 - `crol` implements it for the scalars, `String`, `Option`, `Box`, `Rc`,
   `Arc`, `Cow`, std's collections, `IndexMap`, tuples, arrays, `PathBuf`,
-  `Duration` and `crol::Id`. `IndexMap` needs no feature, as `crol`
+  `Duration`, `crol::Id` and `crol::IdOr<T>`. `IndexMap` needs no feature, as `crol`
   depends on `indexmap` anyway. Other crates' types have no
   implementation, so that `crol` needs no dependency on them, nor a
   release for each of theirs.
@@ -3106,6 +3175,7 @@ its default, unless `explicit_defaults` says otherwise (section 10.3).
 | `I8` … `I128`, `U8` … `U128`, `F32`, `F64` | the numeric types; integer ranges follow from the type |
 | `Bytes` | `serde_bytes` and the like |
 | `Id(["path", ...])` | `crol::Id`, with the types what it names may have (`Id([])`: any) |
+| `IdOr(["path", ...], ty)` | `crol::IdOr<T>`: an id, checked as `Id([...])` is, or a value written in place, checked as `ty` is. What walks data by type sees through it for a value that is no id: type names, defaults, scopes, constraints, paths |
 | `Option(ty)` | `Option<T>` |
 | `List(ty)`, `Set(ty)` | `Vec`, `VecDeque`, slices; `HashSet`, `BTreeSet` (elements unique) |
 | `Array(ty, n)` | `[T; n]` (a tuple of `n` in serde) |
@@ -3138,7 +3208,9 @@ earlier build of the same version left.
 of existing files as it was does not change `format`: `explicit_defaults`
 is such a field. A file that does not use it is the same as before, and
 a tool that does not know it rejects the files that do, as an unknown
-field, instead of checking them by other rules.
+field, instead of checking them by other rules. A type expression added
+so is such an addition too: `IdOr(...)` did not change `format`, and a
+tool that does not know it rejects the files that use it, as a whole.
 
 
 ### 10.11 Views and queries
@@ -3896,7 +3968,9 @@ trigger completion, as do `.`, `&`, `<` and `@`.
   `true`/`false`; after `@`, the keys of the scopes around the cursor,
   innermost first (section 3.2), filtered by `#[crol(refers(...))]`;
   `None`/`Some`. After `@` where a key goes, the same for the scopes around
-  the value the key is of.
+  the value the key is of. A `crol::IdOr` place offers both: after `@`
+  the keys its `refers` allows, and otherwise the values of the type
+  written in place, whose fields and paths are offered as that type's.
   In a schema file (section 10.10), `root` and `Named(...)` offer the paths in
   its `types`, as a string or inside the quotes of one, the only place in a
   string where anything is offered.

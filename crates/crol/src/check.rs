@@ -550,6 +550,21 @@ impl<'a> Checker<'a> {
         );
     }
 
+    /// An id at a place that takes one, an `Id` or an `IdOr`: recorded, and
+    /// checked against what it may refer to.
+    fn id_value(&mut self, value: &'a Value, id: &'a IdPath, refers: &'a [String], path: Path<'_>) {
+        if let Some(ids) = &mut self.ids {
+            ids.push(IdUse {
+                value,
+                id,
+                refers,
+                path: path.to_string(),
+                location: path.data_path(),
+            });
+        }
+        self.id(value, id, refers, path, &path.data_path());
+    }
+
     /// `names` is what names the value's type so far (`SPEC.md` 10.2).
     fn value(&mut self, value: &'a Value, ty: &'a TypeExpr, path: Path<'_>, names: TypeNames<'_>) {
         let int =
@@ -578,20 +593,21 @@ impl<'a> Checker<'a> {
             }
             TypeExpr::Id(refers) => {
                 if let ValueKind::Id(id) = &value.kind {
-                    if let Some(ids) = &mut self.ids {
-                        ids.push(IdUse {
-                            value,
-                            id,
-                            refers,
-                            path: path.to_string(),
-                            location: path.data_path(),
-                        });
-                    }
-                    self.id(value, id, refers, path, &path.data_path());
+                    self.id_value(value, id, refers, path);
                     true
                 } else {
                     false
                 }
+            }
+            // An id as `Id(refers)`, anything else as the value written in
+            // place, with the names it has (`SPEC.md` 10.5).
+            TypeExpr::IdOr(refers, inner) => {
+                if let ValueKind::Id(id) = &value.kind {
+                    self.id_value(value, id, refers, path);
+                } else {
+                    self.value(value, inner, path, names);
+                }
+                true
             }
             TypeExpr::Option(inner) => match &value.kind {
                 ValueKind::UnitName(n) if &**n == "None" => true,
@@ -1020,6 +1036,7 @@ pub(crate) fn describe(ty: &TypeExpr) -> String {
         TypeExpr::F32 | TypeExpr::F64 => "a float".into(),
         TypeExpr::Bytes => "a list of bytes".into(),
         TypeExpr::Id(_) => "an id (`@name`)".into(),
+        TypeExpr::IdOr(_, inner) => format!("an id (`@name`) or {}", describe(inner)),
         TypeExpr::Option(_) => "`Some(...)` or `None`".into(),
         TypeExpr::List(_) | TypeExpr::Set(_) => "a list".into(),
         TypeExpr::Array(_, n) => format!("a tuple of {n}"),
