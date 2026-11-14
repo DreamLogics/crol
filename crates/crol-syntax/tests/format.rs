@@ -53,6 +53,23 @@ fn binds_spreads_and_references() {
 }
 
 #[test]
+fn seals() {
+    check(
+        "!a:1,+!b:2,?!c:3,^!d:{!e:4,-!f},-!g,-?!h,n=!i.j:5,k:!&",
+        expect![[r#"
+            !a: 1
+            +!b: 2
+            ?!c: 3
+            ^!d: { !e: 4, -!f }
+            -!g
+            -?!h
+            n = !i.j: 5
+            k: !&
+        "#]],
+    );
+}
+
+#[test]
 fn an_integer_key_keeps_its_space_before_a_dot_but_not_after_a_question_mark() {
     check(
         "1 .a: 7,1?.a: 7,2?.0: 7,-3?.a,-4 .a",

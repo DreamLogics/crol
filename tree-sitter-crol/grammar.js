@@ -126,16 +126,22 @@ module.exports = grammar({
     entry: $ => seq(
       optional(field('scope', $.scope_attr)),
       optional($.bind),
-      optional(field('op', choice('+', '?', '^'))),
+      optional(choice(
+        seq(field('op', choice('+', '?', '^')), optional(field('seal', alias(token.immediate('!'), '!')))),
+        // `!target: e` sets and seals the target (SPEC.md 5.4).
+        field('seal', '!'),
+      )),
       field('target', $.target),
       ':',
       field('value', $._expression),
     ),
     bind: $ => seq(field('name', $.identifier), '='),
-    // `-?target` removes the target if it is set.
+    // `-?target` removes the target if it is set; `-!target` and `-?!target`
+    // also seal it as unset (SPEC.md 5.4).
     remove_entry: $ => seq(
       '-',
       optional(field('if_set', alias(token.immediate('?'), '?'))),
+      optional(field('seal', alias(token.immediate('!'), '!'))),
       field('target', $.target),
     ),
     // `#[type(...)]` and `#[scope]`, once each, in either order.

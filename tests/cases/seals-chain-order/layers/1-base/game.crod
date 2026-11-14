@@ -1,0 +1,5 @@
+// Written before the seal, but more specific: in `prod_eu` the chain applies
+// it after the seal, which is an error there (`SPEC.md` 5.4).
++game: { debug: true }
+<prod_eu> { game.debug: true }
+<prod> { !game.debug: false }

@@ -10,7 +10,7 @@
 //! 6.1, "rebinding through spreads").
 
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
@@ -183,6 +183,9 @@ struct KeyedShape {
     slots: FastMap<Key, Slot>,
     defaults: bool,
     defaulted: BTreeSet<Key>,
+    /// The keys sealed with `!` (`SPEC.md` 5.4), with the span of the entry
+    /// that sealed each. A key sealed as unset (`-!key`) has no slot.
+    sealed: BTreeMap<Key, Span>,
     /// `#[scope]` (`SPEC.md` 6.1.2).
     scope: bool,
     /// What the id keys name, for a value that has any (`SPEC.md` 3.1).
@@ -355,6 +358,8 @@ struct PathRecipe {
     op: Option<SetOp>,
     /// `-?target`: a remove that is no error where the target is not set.
     if_set: bool,
+    /// `!`: the entry seals its target (`SPEC.md` 5.4).
+    seal: bool,
     value: Option<Rc<EntryRecipe>>,
     span: Span,
 }
@@ -649,6 +654,30 @@ fn key_selector(key: &Key, span: Span) -> Selector {
 }
 
 /// An entry's target as written: `web.limits.cpu`, with its operator.
+/// What a message about a path entry on a sealed key starts with: its
+/// prefix, or nothing for a set.
+fn seal_prefix(op: Option<SetOp>) -> &'static str {
+    match op {
+        None => "-",
+        Some(SetOp::Set) => "",
+        Some(op) => op.symbol(),
+    }
+}
+
+/// A root operation's target as written, for messages: `-web.port`.
+fn describe_op(op: &RootOp) -> String {
+    let key = &op.key;
+    let mut target = match op.op {
+        None => format!("-{key}"),
+        Some(SetOp::Set) => key.to_string(),
+        Some(set) => format!("{}{key}", set.symbol()),
+    };
+    for selector in &op.path {
+        target.push_str(&describe_selector(selector));
+    }
+    target
+}
+
 fn describe_target(entry: &Entry) -> String {
     let mut out = match entry.op {
         None if entry.if_set => "-?".to_owned(),
@@ -756,6 +785,45 @@ pub(crate) struct Evaluator<'ir> {
     /// Whether any value has an id key, so that they are checked in the end.
     id_keys: bool,
     scope_cache: Option<ScopeCache>,
+    /// What ensures met where a target is sealed (`SPEC.md` 5.4).
+    seals: SealNotes,
+}
+
+/// What `?target` entries met with seals (`SPEC.md` 5.4), gathered over
+/// every context: an ensure is reported only where it meets a seal in every
+/// context it is evaluated in, since elsewhere it can still set its target.
+#[derive(Default)]
+pub(crate) struct SealNotes {
+    /// The ensures that met a sealed target: the ensure's span, the seal's,
+    /// and what the ensure targets, for the message.
+    hits: Vec<(Span, Span, String)>,
+    /// The ensures that met a target that is not sealed.
+    open: std::collections::HashSet<Span>,
+}
+
+impl SealNotes {
+    fn append(&mut self, other: SealNotes) {
+        for hit in other.hits {
+            if !self.hits.iter().any(|(span, ..)| *span == hit.0) {
+                self.hits.push(hit);
+            }
+        }
+        self.open.extend(other.open);
+    }
+
+    /// A warning for each ensure that met a seal wherever it was evaluated.
+    fn warnings(&self) -> impl Iterator<Item = Diagnostic> + '_ {
+        self.hits
+            .iter()
+            .filter(|(span, ..)| !self.open.contains(span))
+            .map(|(span, seal, target)| {
+                Diagnostic::warning(
+                    *span,
+                    format!("?: `{target}` is sealed, so this never sets it"),
+                )
+                .with_related(*seal, "sealed here")
+            })
+    }
 }
 
 impl Drop for Evaluator<'_> {
@@ -953,6 +1021,8 @@ fn shaped_from_value(value: &Value) -> Rc<Shaped> {
                     )
                 })
                 .collect(),
+            // A value from outside has no seals: they are not kept in values.
+            sealed: BTreeMap::new(),
             defaults: keyed.defaults,
             defaulted: keyed.defaulted.clone(),
             scope: keyed.scope,
@@ -1002,6 +1072,7 @@ pub(crate) fn evaluate(ir: &Ir, root: ExprId) -> (Option<Value>, Vec<Diagnostic>
         bases: Vec::new(),
         id_keys: false,
         scope_cache: None,
+        seals: SealNotes::default(),
     };
     let root_cell = Rc::new(Cell {
         state: RefCell::new(State::Running),
@@ -1036,7 +1107,9 @@ pub(crate) fn evaluate(ir: &Ir, root: ExprId) -> (Option<Value>, Vec<Diagnostic>
     let value = evaluator.full_value(&root_cell, span, &mut Vec::new()).ok();
     let place = evaluator.contexts[0].root.clone();
     evaluator.check_id_keys(&root_cell, &place, 0);
-    (value, std::mem::take(&mut evaluator.diagnostics))
+    let mut diagnostics = std::mem::take(&mut evaluator.diagnostics);
+    diagnostics.extend(evaluator.seals.warnings());
+    (value, diagnostics)
 }
 
 /// Which keys a context may have, compared with the base (`SPEC.md` 8.5).
@@ -1094,6 +1167,8 @@ pub(crate) struct DataResult {
     /// The errors of evaluation, each with the contexts it is in, in the
     /// order found; [`finish`] turns them into diagnostics.
     found: Vec<(Diagnostic, Vec<Context>)>,
+    /// What ensures met with seals, over the contexts evaluated.
+    seals: SealNotes,
 }
 
 /// How one context's data differs from the base: the keys whose value is
@@ -1415,6 +1490,7 @@ pub(crate) fn evaluate_data_threaded(
             contexts: Vec::new(),
             planned: Vec::new(),
             found: Vec::new(),
+            seals: SealNotes::default(),
         },
         None => {
             let base_input = DataInput {
@@ -1494,7 +1570,9 @@ pub(crate) fn evaluate_data_threaded(
         .collect();
     let mut contexts: Vec<Option<ContextData>> = todo.iter().map(|_| None).collect();
     let mut found: Vec<((usize, usize), Diagnostic, Vec<usize>)> = Vec::new();
+    let mut seals = SealNotes::default();
     let mut merge = |result: DataResult, share: usize| {
+        seals.append(result.seals);
         for data in result.contexts {
             let index = position[&data.context];
             contexts[index - 1] = Some(data);
@@ -1511,6 +1589,7 @@ pub(crate) fn evaluate_data_threaded(
         variants,
         base: own_base,
         found: base_found,
+        seals: base_seals,
         ..
     } = first;
     let base_result = DataResult {
@@ -1519,6 +1598,7 @@ pub(crate) fn evaluate_data_threaded(
         contexts: Vec::new(),
         planned: Vec::new(),
         found: base_found,
+        seals: base_seals,
     };
     merge(base_result, 0);
     for (share, result) in results.iter_mut().enumerate() {
@@ -1547,6 +1627,7 @@ pub(crate) fn evaluate_data_threaded(
         contexts: contexts.into_iter().flatten().collect(),
         planned,
         found,
+        seals,
     };
     finish(&mut result, input, &mut diagnostics);
     (Some(result), diagnostics)
@@ -1583,6 +1664,7 @@ fn finish(result: &mut DataResult, input: &DataInput<'_>, diagnostics: &mut Vec<
         }
         diagnostics.push(diagnostic);
     }
+    diagnostics.extend(result.seals.warnings());
     diagnostics.sort_by_key(|d| (d.span.file, d.span.range.start()));
 }
 
@@ -1626,6 +1708,7 @@ fn evaluate_raw(
         bases: Vec::new(),
         id_keys: false,
         scope_cache: None,
+        seals: SealNotes::default(),
     };
     // Errors in the static structure of the chains are reported once.
     evaluator.check_chains(input, &planned, None);
@@ -1773,6 +1856,7 @@ fn evaluate_raw(
             contexts: per_context,
             planned,
             found,
+            seals: std::mem::take(&mut evaluator.seals),
         }),
         diagnostics,
     )
@@ -1859,6 +1943,7 @@ pub(crate) fn evaluate_again(
         bases: Vec::new(),
         id_keys: false,
         scope_cache: None,
+        seals: SealNotes::default(),
     };
     // The chains of the other keys are as they were, and had no errors.
     evaluator.check_chains(input, &planned, Some(dirty));
@@ -2146,6 +2231,7 @@ pub(crate) fn explain_planned(
         bases: Vec::new(),
         id_keys: false,
         scope_cache: None,
+        seals: SealNotes::default(),
     };
     let id = evaluator.context_state(&context);
     Ok(requests
@@ -2762,6 +2848,45 @@ impl Evaluator<'_> {
                     self.report(diagnostic);
                 }
             }
+            self.check_written_seals(key, all, ops);
+        }
+    }
+
+    /// A conditional seal holds in every context for what is written after
+    /// it, later in its layer or in a higher one (`SPEC.md` 5.4): the
+    /// evaluation finds the rest, in the contexts where the seal holds. Only
+    /// operations whose target is the sealed one or inside it are found here.
+    fn check_written_seals(&mut self, key: &Arc<str>, all: &[usize], ops: &[RootOp]) {
+        let same = |a: &[Selector], b: &[Selector]| {
+            a.len() == b.len()
+                && a.iter()
+                    .zip(b)
+                    .all(|(x, y)| describe_selector(x) == describe_selector(y))
+        };
+        for &o in all {
+            let op = &ops[o];
+            let seal = all.iter().copied().find(|&s| {
+                let seal = &ops[s];
+                seal.seal
+                    && seal.condition.is_some()
+                    && (op.layer > seal.layer || op.layer == seal.layer && o > s)
+                    && op.path.len() >= seal.path.len()
+                    && same(&op.path[..seal.path.len()], &seal.path)
+            });
+            let Some(seal) = seal.map(|s| &ops[s]) else {
+                continue;
+            };
+            let inside = op.path.len() > seal.path.len();
+            if op.op == Some(SetOp::Ensure) && !inside {
+                continue;
+            }
+            let name = match seal.path.last() {
+                Some(selector) => {
+                    selector_field(selector).unwrap_or_else(|| describe_selector(selector))
+                }
+                None => key.to_string(),
+            };
+            let _ = self.sealed_error(op.span, seal_prefix(op.op), &name, seal.span, inside);
         }
     }
 }
@@ -3082,8 +3207,26 @@ impl Evaluator<'_> {
         let ops = self.plan.expect("data mode").ops;
         let here = root.child(Step::Key(Key::Str(key.clone())));
         let mut value: Option<(usize, Lazy)> = None;
+        // The entry that sealed the key, once one has (`SPEC.md` 5.4).
+        let mut sealed: Option<Span> = None;
         for &i in order {
             let op = &ops[i];
+            let ensure = op.op == Some(SetOp::Ensure) && op.path.is_empty();
+            if let Some(seal) = sealed {
+                if ensure {
+                    self.ensure_met(op.span, Some(seal), key);
+                } else {
+                    let prefix = seal_prefix(op.op);
+                    let _ = self.sealed_error(op.span, prefix, key, seal, !op.path.is_empty());
+                }
+                continue;
+            }
+            if ensure {
+                self.ensure_met(op.span, None, key);
+            }
+            if op.seal && op.path.is_empty() {
+                sealed = Some(op.span);
+            }
             let chain = self.op_chain(root, root_chain, key, &op.blocks);
             if !op.path.is_empty() {
                 let filled = if value.is_none() {
@@ -3102,14 +3245,7 @@ impl Evaluator<'_> {
                     if op.if_set {
                         continue;
                     }
-                    let mut target = match op.op {
-                        None => format!("-{key}"),
-                        Some(SetOp::Set) => key.to_string(),
-                        Some(set) => format!("{}{key}", set.symbol()),
-                    };
-                    for selector in &op.path {
-                        target.push_str(&describe_selector(selector));
-                    }
+                    let target = describe_op(op);
                     let _ = self.fail(
                         op.span,
                         format!("{target}: `{key}` is not set, so it cannot be patched"),
@@ -3137,6 +3273,7 @@ impl Evaluator<'_> {
                     path: op.path.clone(),
                     op: op.op,
                     if_set: op.if_set,
+                    seal: op.seal,
                     value: entry,
                     span: op.span,
                 });
@@ -3392,6 +3529,45 @@ impl Evaluator<'_> {
     fn fail(&mut self, span: Span, message: impl Into<String>) -> Fail {
         self.report(Diagnostic::error(span, message));
         Fail::Poison
+    }
+
+    /// An operation on a sealed key, or on something in its value
+    /// (`SPEC.md` 5.4).
+    fn sealed_error(
+        &mut self,
+        span: Span,
+        what: &str,
+        key: &dyn std::fmt::Display,
+        seal: Span,
+        inside: bool,
+    ) -> Fail {
+        let what = if what.is_empty() {
+            String::new()
+        } else {
+            format!("{what}: ")
+        };
+        let message = if inside {
+            format!("{what}`{key}` is sealed, so nothing in it can be changed")
+        } else {
+            format!("{what}`{key}` is sealed, so it cannot be changed")
+        };
+        self.report(Diagnostic::error(span, message).with_related(seal, "sealed here"));
+        Fail::Poison
+    }
+
+    /// Notes what an ensure met: a seal, or a target it can set (`SPEC.md`
+    /// 5.4).
+    fn ensure_met(&mut self, span: Span, seal: Option<Span>, target: &dyn std::fmt::Display) {
+        match seal {
+            Some(seal) => {
+                if !self.seals.hits.iter().any(|(at, ..)| *at == span) {
+                    self.seals.hits.push((span, seal, target.to_string()));
+                }
+            }
+            None => {
+                self.seals.open.insert(span);
+            }
+        }
     }
 
     fn report(&mut self, mut diagnostic: Diagnostic) {
@@ -4408,7 +4584,8 @@ impl Evaluator<'_> {
                 outer_below: &outer_below,
                 span: spread_span,
             };
-            self.copy_entries(source, &mut keyed, &copy);
+            // A spread copies values, not seals (`SPEC.md` 5.4).
+            self.copy_entries(source, &mut keyed, &copy, false);
         }
 
         let scope = BlockScope {
@@ -4433,14 +4610,30 @@ impl Evaluator<'_> {
     }
 
     /// Sets each of `source`'s entries in `target`, evaluated again at the
-    /// target's location, and passes on its defaults (`SPEC.md` 5.2).
-    fn copy_entries(&mut self, source: &KeyedShape, target: &mut KeyedShape, copy: &CopyTo<'_>) {
+    /// target's location, and passes on its defaults (`SPEC.md` 5.2). A
+    /// merge passes on its seals too (`seals`); a spread does not
+    /// (`SPEC.md` 5.4).
+    fn copy_entries(
+        &mut self,
+        source: &KeyedShape,
+        target: &mut KeyedShape,
+        copy: &CopyTo<'_>,
+        seals: bool,
+    ) {
         for (key, slot) in &source.slots {
             // An id key is the key that names the same entry here.
             let Ok(key) = self.slot_key(key, target, copy.location, copy.span) else {
                 continue;
             };
             let key = &key;
+            if let Some(&seal) = target.sealed.get(key) {
+                let what = if seals { "~" } else { ".." };
+                let _ = self.sealed_error(copy.span, what, key, seal, false);
+                continue;
+            }
+            if seals && let Some(&seal) = source.sealed.get(key) {
+                target.sealed.insert(key.clone(), seal);
+            }
             let here = child_location(copy.location, Step::Key(key.clone()));
             let recipe = self.landed(key, slot, target.slots.get(key), copy);
             let value =
@@ -4451,6 +4644,14 @@ impl Evaluator<'_> {
         target.defaults |= source.defaults;
         target.scope |= source.scope;
         target.defaulted.extend(source.defaulted.iter().cloned());
+        if seals {
+            // Keys sealed as unset, which have no slot to copy.
+            for (key, &seal) in &source.sealed {
+                if !source.slots.contains_key(key) {
+                    target.sealed.entry(key.clone()).or_insert(seal);
+                }
+            }
+        }
     }
 
     /// How a copied entry is produced where it lands: `&` with nothing
@@ -4532,6 +4733,22 @@ impl Evaluator<'_> {
             return;
         };
         let key = &key;
+        let ensure = entry.op == Some(SetOp::Ensure) && entry.path.is_empty();
+        if let Some(&seal) = keyed.sealed.get(key) {
+            if ensure {
+                self.ensure_met(entry.span, Some(seal), key);
+            } else {
+                let prefix = seal_prefix(entry.op);
+                let _ = self.sealed_error(entry.span, prefix, key, seal, !entry.path.is_empty());
+            }
+            return;
+        }
+        if ensure {
+            self.ensure_met(entry.span, None, key);
+        }
+        if entry.seal && entry.path.is_empty() {
+            keyed.sealed.insert(key.clone(), entry.span);
+        }
         let existing = keyed.slots.get(key).cloned();
         let here = child_location(location, Step::Key(key.clone()));
         if !entry.path.is_empty() {
@@ -4579,6 +4796,7 @@ impl Evaluator<'_> {
                 path: entry.path.clone(),
                 op: entry.op,
                 if_set: entry.if_set,
+                seal: entry.seal,
                 value,
                 span: entry.span,
             }));
@@ -4714,6 +4932,19 @@ impl Evaluator<'_> {
                 return Err(self.fail(selector.span, "internal error: a condition in a path"));
             }
         };
+        // Nothing in a sealed value changes (`SPEC.md` 5.4); the last step
+        // is checked where it is applied.
+        if let (Shape::Keyed(keyed), Step::Key(key), false) = (&value.shape, &step, rest.is_empty())
+            && let Some(&seal) = keyed.sealed.get(key)
+        {
+            if recipe.op == Some(SetOp::Ensure) {
+                self.ensure_met(recipe.span, Some(seal), key);
+                return Ok(value.clone());
+            }
+            // The operation is skipped: the value stays what it was.
+            let _ = self.sealed_error(recipe.span, seal_prefix(recipe.op), key, seal, true);
+            return Ok(value.clone());
+        }
         let here = child_location(&here, step);
         if rest.is_empty() {
             return self.apply_last(value, selector, recipe, chain, here, context);
@@ -4828,6 +5059,21 @@ impl Evaluator<'_> {
                     }
                     SelectorKind::Element(_) | SelectorKind::Context(_) => unreachable!(),
                 };
+                if let Some(&seal) = keyed.sealed.get(&key) {
+                    if recipe.op == Some(SetOp::Ensure) {
+                        self.ensure_met(recipe.span, Some(seal), &key);
+                        return Ok(value.clone());
+                    }
+                    let prefix = seal_prefix(recipe.op);
+                    let _ = self.sealed_error(recipe.span, prefix, &key, seal, false);
+                    return Ok(value.clone());
+                }
+                if recipe.op == Some(SetOp::Ensure) {
+                    self.ensure_met(recipe.span, None, &key);
+                }
+                if recipe.seal {
+                    keyed.sealed.insert(key.clone(), recipe.span);
+                }
                 let exists = keyed.slots.contains_key(&key);
                 match recipe.op {
                     None if !exists && !recipe.if_set => {
@@ -4840,7 +5086,8 @@ impl Evaluator<'_> {
                     Some(SetOp::Declare) if exists => {
                         return Err(self.fail(span, format!("+: `{key}` is already set")));
                     }
-                    Some(SetOp::Ensure) if exists => return Ok(value.clone()),
+                    Some(SetOp::Ensure) if exists && !recipe.seal => return Ok(value.clone()),
+                    Some(SetOp::Ensure) if exists => {}
                     Some(_) => {
                         let (cell, recipe) = new_value(self).expect("a set entry has a value");
                         keyed.slots.insert(
@@ -4859,6 +5106,11 @@ impl Evaluator<'_> {
                 span,
                 format!(".{i}: a keyed value has no tuple elements; write `[{i}]` for the key {i}"),
             )),
+            (Shape::List(_) | Shape::Tuple(_) | Shape::Named(..), _) if recipe.seal => Err(self
+                .fail(
+                    span,
+                    "!: only a key can be sealed, not an element; seal the key that holds it",
+                )),
             (Shape::List(elements), SelectorKind::Accessor(i)) => {
                 let index = usize::try_from(*i).ok().filter(|&i| i < elements.len());
                 let Some(index) = index else {
@@ -5057,7 +5309,7 @@ impl Evaluator<'_> {
             chain: &chain,
             ..*copy
         };
-        self.copy_entries(b, &mut keyed, &inner);
+        self.copy_entries(b, &mut keyed, &inner, true);
         Self::shaped(Shape::Keyed(Box::new(keyed)), copy.span)
     }
 

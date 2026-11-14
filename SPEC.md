@@ -750,6 +750,7 @@ optional path into its value.
 | `^target: expr` | replace | as set, but the value never merges with what is there (section 5.2) | |
 | `-target` | remove | remove the target | it is not set |
 | `-?target` | remove if set | remove the target if it is set; otherwise nothing | |
+| `!` after the prefix | seal | as without it, and seal the target: `!t: e`, `+!t: e`, `?!t: e`, `^!t: e`, `-!t`, `-?!t` (section 5.4) | the target is sealed |
 | `<c> { entries }` | variant block | the entries apply under condition `c` (section 8.2) | |
 | `..operand` | spread | copy the keyed value's entries in | it is not a keyed value |
 | `..` | defaults | fields left out take their defaults (section 10.3) | |
@@ -974,7 +975,8 @@ start an entry; what follows them, on that same line, decides:
 | `<` | it is a variant and `{` follows: `<prod> {` | `<prod>`, `<prod>.name` |
 
 Any other line needs no such look: `?`, `^`, `..`, a key or a bind can
-only start an entry, and `.`, `*`, `/`, `%`, `~`, `~^`, `|`, `??` can only
+only start an entry, and so can `!` with a target and `:` after it
+(`!b: 2`, section 5.4): a negation never continues a value, and `.`, `*`, `/`, `%`, `~`, `~^`, `|`, `??` can only
 continue a value: `??` is one token, not two `?`. A `(` or `{` continues a bare name, as a named tuple or a block's
 type name, and otherwise is an error. A value also goes on when what is
 before the line break needs it: a line that ends with a binary operator,
@@ -1018,8 +1020,8 @@ spread over lines as before.
 subtraction: a number from a number, a list from a list. After `a: 5`,
 `-12` on the next line is the value `-7`. Write `a: 5,` to remove key
 `12`; after a remove or a variant block, where there is no value to
-continue, a missing comma here is an error. `-?12` and `-?[0]` need no
-comma: `-?` never continues a value.
+continue, a missing comma here is an error. `-?12`, `-?[0]` and `-!12`
+need no comma: `-?` and `-!` never continue a value.
 
 A file whose entries were all separated by commas means what it always
 did, with one exception: `a: &x`, then `-b` or `-"b"` on the next line,
@@ -1027,6 +1029,84 @@ used to be a subtraction of a unit name or a string. That is an error
 whenever it is evaluated, so only a value that was never read, or
 whose left side was missing under a fallback, ever got past it; it is now
 a remove.
+
+### 5.4 Seals
+
+`!` right after an entry's prefix **seals** its target: from then on the
+target, and everything in its value, cannot change.
+
+| Entry | Meaning |
+|---|---|
+| `!target: expr` | set the target, and seal it |
+| `+!target: expr` | declare it, and seal it |
+| `?!target: expr` | ensure it, and seal it, whether or not this sets it |
+| `^!target: expr` | replace it, and seal it |
+| `-!target` | remove it, and seal it as unset |
+| `-?!target` | remove it if it is set, and seal it as unset |
+
+```rust
+// base/units.crod
++archer: {
+    !id: 4,                  // sealed
+    !stats: { range: 6 },    // sealed, and so is everything in it
+    hp: 30,
+}
+
+// mods/balance.crod
+archer.hp: & + 5             // fine
+archer: & ~ { hp: 40 }       // fine: the merge does not touch a sealed key
+archer.id: 7                 // error: `id` is sealed
+archer.id: 4                 // error too: it is the same value, but a change
+archer.stats.range: 8        // error: `stats` is sealed
+-archer.id                   // error
+?archer.id: 9                // warning: this never sets `id`
+```
+
+- **Immutable, deeply.** An operation after the seal on the sealed
+  target, or on anything in its value, is an error, whatever it would
+  give: a set (to the value it has, too), a declare, a replace, a
+  remove, a path entry into it, an entry over it in a block, and a merge
+  or spread that writes it. The operation is skipped, so what comes after
+  it is checked against the value as it was. A target sealed as unset
+  cannot be set again. Reading a sealed value is unaffected.
+- **What holds a seal is not sealed.** Replacing or removing a value that
+  holds sealed keys changes no sealed value; it drops the value that
+  holds them: `^archer: { ... }`, `-archer`, or a definition of `archer`
+  in a higher layer (section 7.2). The new value has no seals but its
+  own.
+- **Merging carries seals; spreading does not.** A patch block, a
+  merging block, `a ~ b` and `a ~^ b` keep the seals of what they start
+  from and add those of what they merge in. An entry of what is merged in
+  that touches a sealed key is an error, as an entry over it would be.
+  `~^` is shallow: a value it replaces goes, with any seals inside it. A
+  spread copies the values of the source's keys, not their seals, so
+  `{ ..&base, id: 7 }` may set a key `base` seals, where `&base ~ { id: 7 }`
+  may not. Seals inside the copied values stay.
+- **Through layers.** A seal holds for the rest of the key's chain
+  (section 7.2): later in its layer and in every layer above it.
+- **Ensure.** `?target` on a sealed target is a warning, not an error,
+  since it never sets it. It is reported only where it meets the seal in
+  every context it is evaluated in: where some context lets it set the
+  target, nothing is.
+- **Variants.** A conditional seal (`<prod> { !debug: false }`) holds in
+  the contexts where its condition does, for the operations after it in
+  the chain of each (section 8.3). It holds in every context for what is
+  written after it, later in its layer or in a higher one: such an
+  operation on the target or inside it is an error even where the
+  condition does not hold, and this is found before evaluating. So an
+  operation is an error if it comes after the seal in either order, and
+  only one before it in both may set the target.
+- **Keys only.** A list or tuple element cannot be sealed; seal the key
+  that holds it.
+
+Seals belong to the evaluation, not to the values: the data, its printed
+form and its fingerprint do not show them. A compiled layer keeps them
+(section 7.8), and data with a seal is evaluated again in full on a
+reload (section 7.9). A transaction (section 10.14) writes no seals.
+
+`#[crol(sealed)]` (section 10.13) is a schema's rule, and compares values:
+setting a field to the value it has is no change there. A seal in the data
+is about operations, and holds from where it is written.
 
 ---
 
@@ -1893,6 +1973,7 @@ fingerprint included; only the time differs.
   that did not change come in another order (section 7.1); when a
   reference reads another context (section 8.4); when the layer's
   `schema.crod` changed, or the schema has constraints or sealed fields;
+  when an entry seals its target (section 5.4), as values keep no seals;
   with a `variant_keys` rule (section 8.5); and when there is anything to
   report, so that errors are found as they always are.
 - **Ids are resolved again, all of them** (section 3.2), not only those in
@@ -3354,7 +3435,8 @@ This costs one more evaluation for each such layer below the top one, and
 only for a schema with sealed fields.
 
 The schema records the mark on the field, and a `schema.crod` cannot
-change it. Sealing changes no value and no fingerprint.
+change it. Sealing changes no value and no fingerprint. For a seal written
+in the data, `!field: value`, see section 5.4.
 
 ### 10.14 Databases and transactions
 

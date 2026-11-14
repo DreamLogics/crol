@@ -109,7 +109,8 @@ impl Log {
                 .map(|target| target.syntax().text().to_string().trim().to_owned())
         };
         let operation = match entry {
-            ast::AnyEntry::Entry(entry) if entry.bind().is_none() => {
+            // A transaction writes no seals (`SPEC.md` 5.4).
+            ast::AnyEntry::Entry(entry) if entry.bind().is_none() && !entry.is_sealed() => {
                 let value = entry.value().map(|v| v.syntax().text().to_string());
                 match (entry.op(), plain(entry.target()), value) {
                     (EntryOp::Replace, Some(target), Some(value)) => Some(Operation {
@@ -124,7 +125,9 @@ impl Log {
                 }
             }
             // A transaction writes only `-target`.
-            ast::AnyEntry::Remove(remove) if remove.bind().is_none() && !remove.if_set() => {
+            ast::AnyEntry::Remove(remove)
+                if remove.bind().is_none() && !remove.if_set() && !remove.is_sealed() =>
+            {
                 plain(remove.target()).map(|target| Operation {
                     target,
                     kind: OperationKind::Remove { settle: None },

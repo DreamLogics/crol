@@ -9,6 +9,21 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ## [Unreleased]
 
+### Added
+
+- Sealed fields in the data (#31, `SPEC.md` 5.4): `!` after an entry's prefix seals
+  its target, so that nothing after it can change the target or anything in its
+  value: `!id: 4`, `+!id: 4`, `?!id: 4`, `^!id: 4`, and `-!id`, which seals it as
+  unset. A change to a sealed value is an error, even to the value it has; `?id` on
+  one is a warning, unless some context lets it set `id`. Replacing or removing what
+  holds a sealed key is fine. A merge carries the seals of both sides, a spread copies
+  values without them. A seal holds in the layers above it, and a seal in a variant
+  holds in every context for what is written after it.
+
+### Changed
+
+- The `.crob` format is version 9, for seals: files of version 8 are compiled again.
+
 ## [0.4.1] - 2026-11-13
 
 ### Added

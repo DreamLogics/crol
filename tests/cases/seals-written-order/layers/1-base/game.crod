@@ -1,0 +1,2 @@
++game: { debug: true, level: 1 }
+<prod> { !game.debug: false }

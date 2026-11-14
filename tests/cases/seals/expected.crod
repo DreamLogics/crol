@@ -1,0 +1,7 @@
+archer: { id: 4, stats: { range: 6 }, hp: 36, armour: 2 }
+merged: { id: 1, hp: 41 }
+spread: { id: 8, hp: 40 }
+ensured: { x: 1, y: 2 }
+removed: { a: (), -a, b: (), -b }
+nest: { inner: { k: 2 } }
+fixed: 1

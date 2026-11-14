@@ -392,9 +392,11 @@ impl Parser<'_> {
         match self.current() {
             EOF | PLUS | QUESTION | CARET | DOT2 | L_ANGLE | POUND => true,
             IDENT if matches!(self.nth(1), EQ | COLON_EQ) => true,
+            // `!x` alone is a negation; `!x: 1` seals (`SPEC.md` 5.4).
+            BANG => self.has_target_and_colon(1),
             MINUS => matches!(
                 self.nth(1),
-                IDENT | STRING | RAW_STRING | L_BRACK | QUESTION | AT
+                IDENT | STRING | RAW_STRING | L_BRACK | QUESTION | AT | BANG
             ),
             _ => self.at_target_then_colon(),
         }
@@ -713,7 +715,7 @@ impl Parser<'_> {
             }
         } else {
             match self.current() {
-                PLUS | QUESTION | CARET => {}
+                PLUS | QUESTION | CARET | BANG => {}
                 kind if starts_key(kind) => {}
                 _ => self.error_missing(
                     "expected an entry that sets a value after `#[scope]`: `key: { ... }`, or a \
@@ -814,7 +816,7 @@ impl Parser<'_> {
 
     fn at_entry_start(&self) -> bool {
         match self.current() {
-            MINUS | PLUS | QUESTION | CARET | DOT2 | L_ANGLE | POUND => true,
+            MINUS | PLUS | QUESTION | CARET | BANG | DOT2 | L_ANGLE | POUND => true,
             // An id starts an entry only as its key: elsewhere it is a value
             // that is out of place.
             AT => self.has_entry_shape(0),
@@ -836,11 +838,21 @@ impl Parser<'_> {
         match self.nth(n) {
             QUESTION | CARET | DOT2 => true,
             POUND => same_line(n + 1) && self.nth(n + 1) == L_BRACK,
+            PLUS if self.nth(n + 1) == BANG => same_line(n + 1) && self.has_entry_shape(n + 1),
             PLUS => same_line(n + 1) && self.has_target_and_colon(n + 1),
+            // `!` cannot continue a value, so `!key:` begins an entry
+            // (`SPEC.md` 5.4).
+            BANG => same_line(n + 1) && self.has_target_and_colon(n + 1),
             // Not `-12` or `-[key]`: those read as subtracting an integer or
             // a list too, while subtracting a name or a string is an error.
-            // `-?` is never an expression, so any key may follow it.
-            MINUS if self.nth(n + 1) == QUESTION => {
+            // `-?` and `-!` are never an expression, so any key may follow.
+            MINUS if self.nth(n + 1) == QUESTION && self.nth(n + 2) == BANG => {
+                same_line(n + 1)
+                    && same_line(n + 2)
+                    && same_line(n + 3)
+                    && starts_key(self.nth(n + 3))
+            }
+            MINUS if matches!(self.nth(n + 1), QUESTION | BANG) => {
                 same_line(n + 1) && same_line(n + 2) && starts_key(self.nth(n + 2))
             }
             MINUS => {
@@ -972,7 +984,7 @@ impl Parser<'_> {
                 self.bump();
                 self.finish();
                 match self.current() {
-                    PLUS | QUESTION | CARET => {}
+                    PLUS | QUESTION | CARET | BANG => {}
                     kind if starts_key(kind) => {}
                     MINUS => self.error("a bind cannot name a remove"),
                     L_ANGLE => self.error("a bind cannot name a variant block"),
@@ -1000,6 +1012,7 @@ impl Parser<'_> {
                     }
                     self.bump();
                 }
+                self.seal_mark();
                 self.start(TARGET);
                 self.key();
                 self.optional_step(false);
@@ -1008,6 +1021,14 @@ impl Parser<'_> {
                 self.finish();
             }
             PLUS | QUESTION | CARET => {
+                self.start_at(checkpoint, ENTRY);
+                self.bump();
+                self.seal_mark();
+                self.target();
+                self.entry_value();
+                self.finish();
+            }
+            BANG => {
                 self.start_at(checkpoint, ENTRY);
                 self.bump();
                 self.target();
@@ -1058,6 +1079,19 @@ impl Parser<'_> {
                 self.finish();
             }
             _ => {}
+        }
+    }
+
+    /// The `!` that seals an entry's target (`SPEC.md` 5.4), after the
+    /// entry's other prefix: `+!`, `?!`, `^!`, `-!`, `-?!`.
+    fn seal_mark(&mut self) {
+        if self.at(BANG) {
+            if !self.current_is_adjacent() {
+                self.error(
+                    "a seal is written right after the entry's prefix, with no space: `+!key`",
+                );
+            }
+            self.bump();
         }
     }
 

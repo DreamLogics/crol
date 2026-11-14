@@ -1,0 +1,17 @@
+// Seals (`SPEC.md` 5.4): what is an error.
+base := { !id: 4, hp: 30 }
+
++archer: {
+    !id: 4,
+    !stats: { range: 6 },
+    hp: 30,
+    -?!gone,
+}
+
++merged: &base ~ { hp: 40 }
++shallow: &base ~^ { hp: 1 }
++over: &base ~ { id: 5 }
+!fixed: 1
++lists: { !items: [1, 2] }
++element: { list: [1], !list[0]: 2 }
++again: { !a: 1, a: 2 }

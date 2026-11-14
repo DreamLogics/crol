@@ -389,6 +389,9 @@ pub(crate) struct Entry {
     pub(crate) replace: bool,
     /// `-?target`: a remove that is no error where the target is not set.
     pub(crate) if_set: bool,
+    /// `!target`, `+!target`, `-!target`, ...: the entry seals its target
+    /// (`SPEC.md` 5.4).
+    pub(crate) seal: bool,
     pub(crate) key: Key,
     /// `a?.b`: the path goes through the key whatever it holds.
     pub(crate) key_optional: bool,
@@ -415,6 +418,9 @@ pub(crate) struct RootOp {
     pub(crate) replace: bool,
     /// `-?target`: a remove that is no error where the target is not set.
     pub(crate) if_set: bool,
+    /// `!target`, `+!target`, `-!target`, ...: the entry seals its target
+    /// (`SPEC.md` 5.4).
+    pub(crate) seal: bool,
     /// `a?.b`: the path goes through the key whatever it holds.
     pub(crate) key_optional: bool,
     pub(crate) path: Vec<Selector>,

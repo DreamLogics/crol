@@ -554,6 +554,17 @@ impl Entry {
         found
     }
 
+    /// The `!` that seals the target (`SPEC.md` 5.4), if any.
+    pub fn seal_token(&self) -> Option<SyntaxToken> {
+        token(&self.0, BANG)
+    }
+
+    /// Whether the entry seals its target (`SPEC.md` 5.4): `!key: e`,
+    /// `+!key: e`, `?!key: e` or `^!key: e`.
+    pub fn is_sealed(&self) -> bool {
+        self.seal_token().is_some()
+    }
+
     /// The target.
     pub fn target(&self) -> Option<Target> {
         child(&self.0)
@@ -588,6 +599,12 @@ impl RemoveEntry {
     /// `-?target`: the target need not be set.
     pub fn if_set(&self) -> bool {
         token(&self.0, QUESTION).is_some()
+    }
+
+    /// `-!target`, `-?!target`: the target is sealed as unset (`SPEC.md`
+    /// 5.4).
+    pub fn is_sealed(&self) -> bool {
+        token(&self.0, BANG).is_some()
     }
 
     /// A bind before the entry, which is an error.

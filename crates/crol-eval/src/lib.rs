@@ -664,8 +664,8 @@ impl Update {
 /// `None` where that cannot be done and everything is to be evaluated again
 /// (`SPEC.md` 7.9): a template, a `..` at a root or a variant declaration
 /// changed, documents changed their order, a reference reads another
-/// context, the schema has constraints or sealed fields, or there is
-/// anything to report.
+/// context, the schema has constraints or sealed fields, an entry seals its
+/// target (`!`, `SPEC.md` 5.4), or there is anything to report.
 pub fn evaluate_changed(
     before: &Compiled,
     after: &Compiled,
@@ -679,6 +679,10 @@ pub fn evaluate_changed(
         return None;
     }
     if options.variant_keys != VariantKeys::Any || before.layer_names != after.layer_names {
+        return None;
+    }
+    // Values keep no seals, so a key kept from before would lose them.
+    if before.lowered.has_seals() || after.lowered.has_seals() {
         return None;
     }
     // The documents in both are in the same order, and those in one of them

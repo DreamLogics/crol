@@ -1,0 +1,15 @@
+1-base/units.crod:13:18: `id` is sealed, so it cannot be changed
+1-base/units.crod:16:29: !: only a key can be sealed, not an element; seal the key that holds it
+1-base/units.crod:17:18: `a` is sealed, so it cannot be changed
+2-mods/balance.crod:1:1: `id` is sealed, so it cannot be changed
+2-mods/balance.crod:2:1: `id` is sealed, so it cannot be changed
+2-mods/balance.crod:3:1: `stats` is sealed, so nothing in it can be changed
+2-mods/balance.crod:4:2: -: `id` is sealed, so it cannot be changed
+2-mods/balance.crod:5:2: +: `gone` is sealed, so it cannot be changed
+2-mods/balance.crod:6:15: `stats` is sealed, so it cannot be changed
+2-mods/balance.crod:7:17: ..: `id` is sealed, so it cannot be changed
+2-mods/balance.crod:8:1: `id` is sealed, so it cannot be changed
+2-mods/balance.crod:9:1: `id` is sealed, so it cannot be changed
+2-mods/balance.crod:10:1: `fixed` is sealed, so it cannot be changed
+2-mods/balance.crod:11:2: -: `fixed` is sealed, so it cannot be changed
+2-mods/balance.crod:12:1: `items` is sealed, so nothing in it can be changed

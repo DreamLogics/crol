@@ -252,3 +252,29 @@ fn an_id_key_starts_an_entry_on_its_line() {
     // An id that is no key is a value out of place, with one error.
     assert_eq!(errors("a: 1\n@b\nc: 2").len(), 1);
 }
+
+#[test]
+fn a_line_break_begins_each_kind_of_seal() {
+    // `!` cannot continue a value, so `!key:` begins an entry (`SPEC.md` 5.4).
+    same("a: 1\n!b: 2", "a: 1, !b: 2");
+    same("a: 1\n+!b: 2", "a: 1, +!b: 2");
+    same("a: 1\n?!b: 2", "a: 1, ?!b: 2");
+    same("a: 1\n^!b: 2", "a: 1, ^!b: 2");
+    same("a: 1\n-!b", "a: 1, -!b");
+    same("a: 1\n-?!b", "a: 1, -?!b");
+    same("a: 1\n-!12", "a: 1, -!12");
+    same("a: 1\n!b.c: 2", "a: 1, !b.c: 2");
+    same("a: 1\nn = !b: 2", "a: 1, n = !b: 2");
+    same("a: { !b: 1\n!c: 2 }", "a: { !b: 1, !c: 2 }");
+}
+
+#[test]
+fn a_seal_is_written_without_a_space() {
+    fails("+ !b: 2");
+    fails("- !b");
+}
+
+#[test]
+fn a_negation_alone_is_still_a_value() {
+    assert!(errors("!true").is_empty());
+}

@@ -1,0 +1,17 @@
+// Fields that are not sealed stay open.
+archer.hp: & + 5
+archer: & ~ { hp: & + 1, armour: 2 }
+merged.hp: 41
+
+// An ensure on a sealed field never sets it: a warning.
+?archer.id: 9
+?fixed: 2
+?ensured.x: 3
+
+// A spread dropped the seals.
+spread.id: 8
+
+// Replacing or removing what holds a seal is fine.
+^merged: { id: 1 }
+nest: & ~^ { inner: { k: 2 } }
+-gone
