@@ -1,12 +1,26 @@
+// A key sealed with `!` is never set again or removed.
 archer.id: 7
 archer.id: 4
-archer.stats.range: 8
 -archer.id
 +archer.gone: 1
-archer: & ~ { stats: { range: 2 } }
-archer: & ~ { ..&base }
-merged.id: 5
-shallow.id: 5
 fixed: 2
 -fixed
-lists.items[0]: 9
+
+// Its value is merged into, not replaced.
+archer.stats: 5
+^archer.stats: { range: 1 }
+archer: & ~ { stats: 5 }
+archer: & ~^ { stats: { range: 3 } }
+
+// Its value keeps its keys.
+archer.stats.extra: 1
+-archer.stats.range
+archer: & ~ { stats: { extra: 1 } }
+-lists.items[0]
+
+// Nothing in a value sealed with `seal!` changes.
+frozen.a: 2
+frozen.inner.b: 3
+frozen.c: 1
+-frozen.a
+frozen: & ~ { a: 5 }

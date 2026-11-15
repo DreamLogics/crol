@@ -311,6 +311,7 @@ impl Writer<'_> {
                     MacroKind::Floor => 1,
                     MacroKind::Ceil => 2,
                     MacroKind::Clamp => 3,
+                    MacroKind::Seal => 4,
                 });
                 self.ids(args);
             }
@@ -790,6 +791,7 @@ impl Reader<'_> {
                     1 => MacroKind::Floor,
                     2 => MacroKind::Ceil,
                     3 => MacroKind::Clamp,
+                    4 => MacroKind::Seal,
                     _ => return Err(Corrupt),
                 };
                 let args = self.expr_ids()?;

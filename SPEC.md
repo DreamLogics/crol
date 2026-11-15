@@ -1032,8 +1032,9 @@ a remove.
 
 ### 5.4 Seals
 
-`!` right after an entry's prefix **seals** its target: from then on the
-target, and everything in its value, cannot change.
+`!` right after an entry's prefix **seals** its target: from then on, the
+key keeps the value it has. `seal!(value)` (section 6.7) seals everything
+in a value.
 
 | Entry | Meaning |
 |---|---|
@@ -1048,27 +1049,41 @@ target, and everything in its value, cannot change.
 // base/units.crod
 +archer: {
     !id: 4,                  // sealed
-    !stats: { range: 6 },    // sealed, and so is everything in it
+    !stats: { range: 6 },    // sealed: `stats` keeps this value
     hp: 30,
 }
 
 // mods/balance.crod
-archer.hp: & + 5             // fine
-archer: & ~ { hp: 40 }       // fine: the merge does not touch a sealed key
-archer.id: 7                 // error: `id` is sealed
-archer.id: 4                 // error too: it is the same value, but a change
-archer.stats.range: 8        // error: `stats` is sealed
--archer.id                   // error
-?archer.id: 9                // warning: this never sets `id`
+archer.hp: & + 5                      // fine
+archer.stats.range: 8                 // fine: what `stats` holds can change
+archer: & ~ { stats: { range: 9 } }   // fine: the merge keeps the value
+archer.id: 7                          // error: `id` is sealed
+archer.id: 4                          // error too, though it is the same value
+archer.stats: 5                       // error: it would replace the value
+archer.stats.extra: 1                 // error: the value keeps its keys
+-archer.id                            // error
+?archer.id: 9                         // warning: this never sets `id`
 ```
 
-- **Immutable, deeply.** An operation after the seal on the sealed
-  target, or on anything in its value, is an error, whatever it would
-  give: a set (to the value it has, too), a declare, a replace, a
-  remove, a path entry into it, an entry over it in a block, and a merge
-  or spread that writes it. The operation is skipped, so what comes after
-  it is checked against the value as it was. A target sealed as unset
-  cannot be set again. Reading a sealed value is unaffected.
+- **A sealed key keeps its value.** After the seal, an operation that
+  sets the key again is an error, whatever it gives, the value it has
+  too, and so are a declare, a replace (`^`) and a remove. A target
+  sealed as unset cannot be set again. The operation is skipped, so what
+  comes after it is checked against the value as it was. Reading is
+  unaffected.
+- **What the value holds can change.** A path goes into it as into any
+  value, and an entry whose value merges with what the key holds (a
+  block where blocks merge, section 5.2, a path entry's block, or
+  `& ~ ...`) sets nothing: the value stays, and what is in it changes.
+  Such a merge must merge: where it would replace instead, as over
+  another type name or a value that is not keyed, or with `~^` over the
+  key, it is an error. The value keeps its keys: no key can be added to
+  it or removed, by a path, an entry or a merge, and a list keeps its
+  length. What its keys hold changes freely, unless they are sealed too.
+- **`seal!` seals everything.** `seal!(value)` takes a keyed value, and
+  seals every key in it so that nothing at any depth below them can
+  change; the value keeps its keys. The key it is set to is not sealed:
+  `x: seal!({ ... })` can be replaced, `!x: seal!({ ... })` cannot.
 - **What holds a seal is not sealed.** Replacing or removing a value that
   holds sealed keys changes no sealed value; it drops the value that
   holds them: `^archer: { ... }`, `-archer`, or a definition of `archer`
@@ -1076,12 +1091,13 @@ archer.stats.range: 8        // error: `stats` is sealed
   own.
 - **Merging carries seals; spreading does not.** A patch block, a
   merging block, `a ~ b` and `a ~^ b` keep the seals of what they start
-  from and add those of what they merge in. An entry of what is merged in
-  that touches a sealed key is an error, as an entry over it would be.
-  `~^` is shallow: a value it replaces goes, with any seals inside it. A
-  spread copies the values of the source's keys, not their seals, so
-  `{ ..&base, id: 7 }` may set a key `base` seals, where `&base ~ { id: 7 }`
-  may not. Seals inside the copied values stay.
+  from, those of `seal!` among them, and add those of what they merge
+  in. An entry of what is merged in that reaches a sealed key follows the
+  rules above, as an entry over it would. `~^` is shallow: a value it
+  replaces goes, with any seals inside it. A spread copies the values of
+  the source's keys, not their seals, so `{ ..&base, id: 7 }` may set a
+  key `base` seals, where `&base ~ { id: 7 }` may not. Seals inside the
+  copied values stay.
 - **Through layers.** A seal holds for the rest of the key's chain
   (section 7.2): later in its layer and in every layer above it.
 - **Ensure.** `?target` on a sealed target is a warning, not an error,
@@ -1091,13 +1107,14 @@ archer.stats.range: 8        // error: `stats` is sealed
 - **Variants.** A conditional seal (`<prod> { !debug: false }`) holds in
   the contexts where its condition does, for the operations after it in
   the chain of each (section 8.3). It holds in every context for what is
-  written after it, later in its layer or in a higher one: such an
-  operation on the target or inside it is an error even where the
-  condition does not hold, and this is found before evaluating. So an
-  operation is an error if it comes after the seal in either order, and
-  only one before it in both may set the target.
-- **Keys only.** A list or tuple element cannot be sealed; seal the key
-  that holds it.
+  written after it, later in its layer or in a higher one: an operation
+  there that sets the target again or removes it is an error even where
+  the condition does not hold, and this is found before evaluating.
+  Changes inside the target are checked in the contexts where the seal
+  holds. So an operation on the target is an error if it comes after the
+  seal in either order, and only one before it in both may set it.
+- **Keys only.** A list or tuple element cannot be sealed with `!`, and
+  `seal!` takes only a keyed value: seal the key that holds it.
 
 Seals belong to the evaluation, not to the values: the data, its printed
 form and its fingerprint do not show them. A compiled layer keeps them
@@ -1643,8 +1660,8 @@ values) are an error; write `"..."` around an id's text if needed.
 
 ### 6.7 Macros
 
-A macro is written `name!(arguments)`. There are four, all on numbers,
-and a file cannot define more:
+A macro is written `name!(arguments)`. There are five, four of them on
+numbers, and a file cannot define more:
 
 | Macro | Result |
 |---|---|
@@ -1652,16 +1669,18 @@ and a file cannot define more:
 | `floor!(x)` | the largest integer not above `x` |
 | `ceil!(x)` | the smallest integer not below `x` |
 | `clamp!(x, min, max)` | `x`, kept between `min` and `max` |
+| `seal!(value)` | `value`, a keyed value, with everything in it sealed (section 5.4) |
 
 `round!`, `floor!` and `ceil!` return an integer, and are errors when the
 result does not fit one; an integer argument is returned as it is. So
 `hit_points: round!(& * 1.1)` stays an integer. `clamp!` of integers is an
 integer, and with any float among its arguments it counts as floats, as
-arithmetic does; `min` above `max` is an error. Any argument that is not
-a number is an error naming its kind, and so are a wrong number of
+arithmetic does; `min` above `max` is an error. Any argument of these four
+that is not a number is an error naming its kind, and so are a wrong number of
 arguments and a name that is no macro. Arguments are evaluated as
 operands of an arithmetic operator are. The results are exact, so they are
-the same on every platform (section 7.6).
+the same on every platform (section 7.6). `seal!`'s argument is evaluated
+where the macro is, as the entry's value, so that it can refer to its place.
 
 ## 7. Layers and evaluation
 

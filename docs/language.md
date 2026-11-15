@@ -319,8 +319,8 @@ armour: Some(6)
 
 Some values are set once and should never change afterwards: an id another
 system relies on, or a value that a base layer fixes for every layer above it.
-`!` after an entry's prefix _seals_ its key. After that, anything that would
-change the value, or anything inside it, is an error:
+`!` after an entry's prefix _seals_ its key: from then on, the key keeps the value
+it has. What that value holds can still change, as long as its keys stay the same:
 
 ```crol
 // base.crod
@@ -333,21 +333,24 @@ change the value, or anything inside it, is an error:
 
 ```crol
 // mods.crod
-archer.hp: & + 5             // fine
-archer: & ~ { hp: 40 }       // fine: the merge does not touch a sealed key
-archer.id: 7                 // error
-archer.id: 4                 // an error too: a sealed value is not set at all
-archer.stats.range: 8        // error: everything in `stats` is sealed
--archer.id                   // error
-?archer.id: 9                // a warning: this never sets `id`
+archer.hp: & + 5                      // fine: `hp` is not sealed
+archer.stats.range: 8                 // fine: what `stats` holds can change
+archer: & ~ { stats: { range: 9 } }   // fine: a merge keeps `stats`'s value
+archer.id: 7                          // error
+archer.id: 4                          // an error too: a sealed key is not set at all
+archer.stats: 5                       // error: this would replace `stats`
+archer.stats.extra: 1                 // error: the value of `stats` keeps its keys
+-archer.id                            // error
+?archer.id: 9                         // a warning: this never sets `id`
 ```
 
 ```console
 $ crol check base.crod mods.crod
-error: `id` is sealed, so it cannot be changed
-error: `id` is sealed, so it cannot be changed
-error: `stats` is sealed, so nothing in it can be changed
-error: -: `id` is sealed, so it cannot be changed
+error: `id` is sealed, so it cannot be set again
+error: `id` is sealed, so it cannot be set again
+error: `stats` is sealed, so it cannot be set again
+error: `extra` cannot be added: the keys of a sealed value stay as they are
+error: -: `id` is sealed, so it cannot be removed
 warning: ?: `id` is sealed, so this never sets it
 ```
 
@@ -358,6 +361,18 @@ the ones after it are checked against the value as it was.
 and seals, `^!id: 4` replaces and seals, and `-!id` removes the key and seals it
 as unset, so that nothing can set it again.
 
+To keep everything in a value as it is, at any depth, use `seal!`. It seals every
+key in the value, and keeps its keys:
+
+```crol
+// example.crod
++limits: seal!({ cpu: 1.0, memory: { mb: 512 } })
++fixed: { !limits: seal!({ cpu: 1.0 }) }
+```
+
+Here `limits.memory.mb: 256` and `limits.gpu: 1` are errors, but `limits` itself
+can still be replaced; `fixed.limits` can be neither changed nor replaced.
+
 A seal holds for the rest of the file and in every layer above it. What it does
 not stop is replacing or removing the value that holds the sealed key:
 `^archer: { ... }` and `-archer` drop `archer`, seals and all, and so does a new
@@ -367,18 +382,19 @@ Merging and spreading treat seals differently, so you can choose:
 
 ```crol
 // example.crod
-base := { !id: 4, hp: 30 }
+base := seal!({ id: 4, hp: 30 })
 
-+merged: &base ~ { hp: 40 }      // `id` is still sealed
++merged: &base ~ { name: "x" }   // an error: `merged` keeps `base`'s seals
 +copied: { ..&base, id: 7 }      // a spread copies the values, not the seals
 ```
 
-`~^` keeps the seals of the value it starts from too, but it is shallow: a value it
-replaces goes, with any seals inside it.
+`~^` keeps the seals of the value it starts from too, but it is shallow: it replaces
+the values in it, so over a sealed key it is an error, and a value it replaces goes,
+with any seals inside it.
 
 A seal in a variant, `<prod> { !game.debug: false }`, holds where `prod` does. Still,
-anything written after it, later in the same layer or in a higher one, may not
-change `game.debug` in any context, so that `prod` cannot be undone from outside it.
+anything written after it, later in the same layer or in a higher one, may not set
+`game.debug` again in any context, so that `prod` cannot be undone from outside it.
 `?game.debug: true` written after it gives no warning there, as it still sets
 `debug` where `prod` does not hold.
 
@@ -696,6 +712,9 @@ accept. Four built-in macros bring a number back, or keep it in range:
 | `floor!(x)`           | the largest integer not above `x`           |
 | `ceil!(x)`            | the smallest integer not below `x`          |
 | `clamp!(x, min, max)` | `x`, kept between `min` and `max`           |
+
+A fifth, `seal!(value)`, is not about numbers: it keeps everything in a value as it
+is. See [Sealing fields](#sealing-fields).
 
 ```crol
 // example.crod

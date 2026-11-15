@@ -1,3 +1,2 @@
-warning: 2-mods/balance.crod:7:2: ?: `id` is sealed, so this never sets it
-warning: 2-mods/balance.crod:8:2: ?: `fixed` is sealed, so this never sets it
-warning: 2-mods/balance.crod:9:2: ?: `x` is sealed, so this never sets it
+warning: 2-mods/balance.crod:16:2: ?: `id` is sealed, so this never sets it
+warning: 2-mods/balance.crod:17:2: ?: `x` is sealed, so this never sets it
