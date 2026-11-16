@@ -1,0 +1,26 @@
+// Keys that are not sealed stay open.
+archer.hp: & + 5
+archer: & ~ { hp: & + 1, armour: 2 }
+merged.hp: 41
+
+// What a key sealed with `!` holds can change, by a path or a merge.
+archer.stats.range: 8
+archer: & ~ { stats: { speed: 2 } }
+archer.stats: & ~ { range: & + 1 }
+archer.stats: { speed: & + 1 }
+fixed.level: 2
+fixed: & ~ { level: & + 1 }
+lists.items[0]: 9
+
+// An ensure on a sealed key never sets it: a warning.
+?archer.id: 9
+?ensured.x: 3
+
+// A spread dropped the seals.
+spread.id: 8
+
+// Replacing or removing what holds a seal is fine.
+^merged: { id: 1 }
+nest: & ~^ { inner: { k: 2 } }
+-gone
+frozen: seal!({ a: 2 })

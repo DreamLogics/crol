@@ -1,0 +1,8 @@
++path: { debug: true, level: 1 }
+!path.debug: false
++merge: { debug: true, level: 1 }
+!merge.debug: false
++spread: { debug: true, level: 1 }
+!spread.debug: false
++replace: { debug: true, level: 1 }
+!replace.debug: false

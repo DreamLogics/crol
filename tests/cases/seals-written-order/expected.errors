@@ -1,0 +1,2 @@
+2-cheats/cheats.crod:3:1: `debug` is sealed, so it cannot be set again
+2-cheats/cheats.crod:4:9: `debug` is sealed, so it cannot be set again

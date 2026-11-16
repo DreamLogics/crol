@@ -1,0 +1,6 @@
++a: { !inner: { range: 6 } }
++b: { !stats: { range: 6 } }
++c: { !stats: { range: 6 } }
++d: { !inner: { range: 6 } }
++e: { !stats: { range: 6 } }
++f: { !inner: { range: 6 } }

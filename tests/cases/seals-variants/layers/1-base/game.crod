@@ -1,0 +1,12 @@
+// A seal in a variant (`SPEC.md` 5.4).
++game: { debug: true, level: 1 }
+<prod> { !game.debug: false }
+
+// It can still set `debug` where `prod` does not hold: no warning.
+?game.debug: true
+
+// Wherever this is evaluated, `debug` is sealed: a warning.
+<prod> { ?game.debug: true }
+
+// Not sealed: open in every context.
+<prod_eu> { game.level: 2 }

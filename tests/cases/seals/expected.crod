@@ -1,0 +1,9 @@
+archer: { id: 4, stats: { range: 9, speed: 3 }, hp: 36, armour: 2 }
+fixed: { level: 3 }
+lists: { items: [9, 2] }
+merged: { id: 1, hp: 41 }
+spread: { id: 8, hp: 40 }
+ensured: { x: 1, y: 2 }
+removed: { a: (), -a, b: (), -b }
+frozen: { a: 2 }
+nest: { inner: { k: 2 } }

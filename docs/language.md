@@ -44,6 +44,9 @@ Why have several ways of writing a key? Because your intent is checked. In a
 project with many files, `+web` says "I am introducing `web`", and you get an
 error if someone else already did, rather than a silent overwrite.
 
+Any of them can also _seal_ the key, with `!` after the prefix, so that nothing
+after it can change it: see [Sealing fields](#sealing-fields).
+
 ### Line breaks and commas
 
 Entries are separated by a line break, a comma, or both, at the top level and in
@@ -89,7 +92,7 @@ sum: 3
 ```
 
 Most lines are not in doubt: `?`, `^`, `..`, a key or a bind can only start an
-entry, and `.`, `*`, `/`, `%`, `~`, `~^`, `|` and `??` can only continue a value. Four tokens can do
+entry, as can `!` with a key and `:` after it (`!b: 2`), and `.`, `*`, `/`, `%`, `~`, `~^`, `|` and `??` can only continue a value. Four tokens can do
 both, and what follows them on the same line decides:
 
 | Line starts with | Begins an entry when...                            | Otherwise it continues the value |
@@ -311,6 +314,94 @@ $ crol eval example.crod
 colour: Rgb(11, 20, 0)
 armour: Some(6)
 ```
+
+## Sealing fields
+
+Some values are set once and should never change afterwards: an id another
+system relies on, or a value that a base layer fixes for every layer above it.
+`!` after an entry's prefix _seals_ its key: from then on, the key keeps the value
+it has. What that value holds can still change, as long as its keys stay the same:
+
+```crol
+// base.crod
++archer: {
+    !id: 4,
+    !stats: { range: 6 },
+    hp: 30,
+}
+```
+
+```crol
+// mods.crod
+archer.hp: & + 5                      // fine: `hp` is not sealed
+archer.stats.range: 8                 // fine: what `stats` holds can change
+archer: & ~ { stats: { range: 9 } }   // fine: a merge keeps `stats`'s value
+archer.id: 7                          // error
+archer.id: 4                          // an error too: a sealed key is not set at all
+archer.stats: 5                       // error: this would replace `stats`
+archer.stats.extra: 1                 // error: the value of `stats` keeps its keys
+-archer.id                            // error
+?archer.id: 9                         // a warning: this never sets `id`
+```
+
+```console
+$ crol check base.crod mods.crod
+error: `id` is sealed, so it cannot be set again
+error: `id` is sealed, so it cannot be set again
+error: `stats` is sealed, so it cannot be set again
+error: `extra` cannot be added: the keys of a sealed value stay as they are
+error: -: `id` is sealed, so it cannot be removed
+warning: ?: `id` is sealed, so this never sets it
+```
+
+Each error also points to the entry that sealed the key. The entry is skipped, so
+the ones after it are checked against the value as it was.
+
+`!` combines with every prefix: `+!id: 4` declares and seals, `?!id: 4` ensures
+and seals, `^!id: 4` replaces and seals, and `-!id` removes the key and seals it
+as unset, so that nothing can set it again.
+
+To keep everything in a value as it is, at any depth, use `seal!`. It seals every
+key in the value, and keeps its keys:
+
+```crol
+// example.crod
++limits: seal!({ cpu: 1.0, memory: { mb: 512 } })
++fixed: { !limits: seal!({ cpu: 1.0 }) }
+```
+
+Here `limits.memory.mb: 256` and `limits.gpu: 1` are errors, but `limits` itself
+can still be replaced; `fixed.limits` can be neither changed nor replaced.
+
+A seal holds for the rest of the file and in every layer above it. What it does
+not stop is replacing or removing the value that holds the sealed key:
+`^archer: { ... }` and `-archer` drop `archer`, seals and all, and so does a new
+definition of `archer` in a higher layer. The new value has no seals but its own.
+
+Merging and spreading treat seals differently, so you can choose:
+
+```crol
+// example.crod
+base := seal!({ id: 4, hp: 30 })
+
++merged: &base ~ { name: "x" }   // an error: `merged` keeps `base`'s seals
++copied: { ..&base, id: 7 }      // a spread copies the values, not the seals
+```
+
+`~^` keeps the seals of the value it starts from too, but it is shallow: it replaces
+the values in it, so over a sealed key it is an error, and a value it replaces goes,
+with any seals inside it.
+
+A seal in a variant, `<prod> { !game.debug: false }`, holds where `prod` does. Still,
+anything written after it, later in the same layer or in a higher one, may not set
+`game.debug` again in any context, so that `prod` cannot be undone from outside it.
+`?game.debug: true` written after it gives no warning there, as it still sets
+`debug` where `prod` does not hold.
+
+Seals are not part of the data: `crol eval` and the fingerprint do not show them.
+[`#[crol(sealed)]`](schemas.md#sealed-fields) is a different rule, from a schema:
+there only the layer that defines a value may set the field, and setting it to the
+value it has is no change.
 
 ## References
 
@@ -621,6 +712,9 @@ accept. Four built-in macros bring a number back, or keep it in range:
 | `floor!(x)`           | the largest integer not above `x`           |
 | `ceil!(x)`            | the smallest integer not below `x`          |
 | `clamp!(x, min, max)` | `x`, kept between `min` and `max`           |
+
+A fifth, `seal!(value)`, is not about numbers: it keeps everything in a value as it
+is. See [Sealing fields](#sealing-fields).
 
 ```crol
 // example.crod

@@ -1,0 +1,8 @@
+// A path through a key a sealed value does not have finds it not set, as
+// it would with no seal (`SPEC.md` 5.4): nothing is added.
+-?a.inner.missing.x          // fine: there is nothing to remove
+b: & ~ { -?stats.missing.x } // fine
+-?c.stats.missing.x          // fine
+-d.inner.missing.x
+e: & ~ { -stats.missing.x }
+f.inner.missing.x: 1

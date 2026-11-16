@@ -1,0 +1,2 @@
+variants: [Grouped(["dev", "prod", "prod_eu"])],
+parents: { prod_eu: "prod" },

@@ -138,6 +138,11 @@ static bool is_identifier_char(int32_t c) {
 
 static bool is_digit(int32_t c) { return c >= '0' && c <= '9'; }
 
+// Whether `c` can begin a key: a name, a string, an integer, `[...]` or an id.
+static bool at_key_start(int32_t c) {
+  return is_identifier_char(c) || c == '"' || c == '[' || c == '@';
+}
+
 static void skip_word(TSLexer *lexer) {
   while (is_identifier_char(lexer->lookahead)) advance(lexer);
 }
@@ -341,11 +346,26 @@ static bool at_entry_shape(TSLexer *lexer) {
       return lexer->lookahead == '.';
     case '+':
       advance(lexer);
+      // `+!key:` declares and seals (SPEC.md 5.4).
+      if (lexer->lookahead == '!') advance(lexer);
+      return skip_inline_trivia(lexer) && at_target_and_colon(lexer);
+    case '!':
+      // `!` cannot continue a value, so `!key:` begins an entry (SPEC.md 5.4).
+      advance(lexer);
       return skip_inline_trivia(lexer) && at_target_and_colon(lexer);
     case '-':
       advance(lexer);
-      // `-?` is never an expression.
-      if (lexer->lookahead == '?') return true;
+      if (lexer->lookahead == '?') {
+        advance(lexer);
+        // `-?` is never an expression.
+        if (lexer->lookahead != '!') return true;
+      }
+      if (lexer->lookahead == '!') {
+        // `-!key` and `-?!key` remove and seal (SPEC.md 5.4); `-!x` with no
+        // key after it subtracts a negation.
+        advance(lexer);
+        return skip_inline_trivia(lexer) && at_key_start(lexer->lookahead);
+      }
       if (!skip_inline_trivia(lexer)) return false;
       // Not `-12` or `-[key]`.
       return lexer->lookahead == '"' || lexer->lookahead == '@' ||

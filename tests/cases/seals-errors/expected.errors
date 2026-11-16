@@ -1,0 +1,24 @@
+1-base/units.crod:15:20: `hp` is sealed, so it cannot be set again
+1-base/units.crod:16:19: `extra` cannot be added: the keys of a sealed value stay as they are
+1-base/units.crod:18:29: !: only a key can be sealed, not an element; seal the key that holds it
+1-base/units.crod:19:18: `a` is sealed, so it cannot be set again
+1-base/units.crod:20:8: seal!: only a keyed value can be sealed, not a list; seal the key that holds it with `!`
+2-mods/balance.crod:2:1: `id` is sealed, so it cannot be set again
+2-mods/balance.crod:3:1: `id` is sealed, so it cannot be set again
+2-mods/balance.crod:4:2: -: `id` is sealed, so it cannot be removed
+2-mods/balance.crod:5:2: +: `gone` is sealed, so it cannot be set again
+2-mods/balance.crod:6:1: `fixed` is sealed, so it cannot be set again
+2-mods/balance.crod:7:2: -: `fixed` is sealed, so it cannot be removed
+2-mods/balance.crod:10:1: `stats` is sealed, so it cannot be set again
+2-mods/balance.crod:11:2: `stats` is sealed, so it cannot be set again
+2-mods/balance.crod:12:15: `stats` is sealed, so it cannot be set again
+2-mods/balance.crod:13:16: `stats` is sealed, so it cannot be set again
+2-mods/balance.crod:16:1: `extra` cannot be added: the keys of a sealed value stay as they are
+2-mods/balance.crod:17:2: -: `range` cannot be removed: the keys of a sealed value stay as they are
+2-mods/balance.crod:18:24: `extra` cannot be added: the keys of a sealed value stay as they are
+2-mods/balance.crod:19:2: -: `[0]` cannot be removed: the list of a sealed key keeps its length
+2-mods/balance.crod:22:1: `a` is sealed, so it cannot be set again
+2-mods/balance.crod:23:1: `inner` is sealed with `seal!`, so nothing in it can change
+2-mods/balance.crod:24:1: `c` cannot be added: the keys of a sealed value stay as they are
+2-mods/balance.crod:25:2: -: `a` is sealed, so it cannot be removed
+2-mods/balance.crod:26:15: `a` is sealed, so it cannot be set again

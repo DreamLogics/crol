@@ -25,7 +25,7 @@ use crate::value::{IdPath, Key};
 const MAGIC: &[u8; 4] = b"CROB";
 
 /// The version of the format: files of another are refused, and made again.
-pub const FORMAT: u32 = 8;
+pub const FORMAT: u32 = 9;
 
 /// The magic, the format, the hash of the rest of the file, the hash of the
 /// documents and the size of what is compressed.
@@ -311,6 +311,7 @@ impl Writer<'_> {
                     MacroKind::Floor => 1,
                     MacroKind::Ceil => 2,
                     MacroKind::Clamp => 3,
+                    MacroKind::Seal => 4,
                 });
                 self.ids(args);
             }
@@ -323,6 +324,7 @@ impl Writer<'_> {
         self.set_op(entry.op);
         self.flag(entry.replace);
         self.flag(entry.if_set);
+        self.flag(entry.seal);
         self.key(&entry.key);
         self.flag(entry.key_optional);
         self.selectors(&entry.path);
@@ -367,6 +369,7 @@ impl Writer<'_> {
         self.set_op(op.op);
         self.flag(op.replace);
         self.flag(op.if_set);
+        self.flag(op.seal);
         self.flag(op.key_optional);
         self.selectors(&op.path);
         self.option(op.value.as_ref(), |w, id| w.id(*id));
@@ -788,6 +791,7 @@ impl Reader<'_> {
                     1 => MacroKind::Floor,
                     2 => MacroKind::Ceil,
                     3 => MacroKind::Clamp,
+                    4 => MacroKind::Seal,
                     _ => return Err(Corrupt),
                 };
                 let args = self.expr_ids()?;
@@ -811,6 +815,7 @@ impl Reader<'_> {
         let op = self.set_op()?;
         let replace = self.flag()?;
         let if_set = self.flag()?;
+        let seal = self.flag()?;
         let key = self.key()?;
         let key_optional = self.flag()?;
         let path = self.selectors()?;
@@ -822,6 +827,7 @@ impl Reader<'_> {
             op,
             replace,
             if_set,
+            seal,
             key,
             key_optional,
             path,
@@ -865,6 +871,7 @@ impl Reader<'_> {
         let op = self.set_op()?;
         let replace = self.flag()?;
         let if_set = self.flag()?;
+        let seal = self.flag()?;
         let key_optional = self.flag()?;
         let path = self.selectors()?;
         let value = self.option(Self::expr_id)?;
@@ -876,6 +883,7 @@ impl Reader<'_> {
             op,
             replace,
             if_set,
+            seal,
             key_optional,
             path,
             value,

@@ -10,7 +10,7 @@
 //! 6.1, "rebinding through spreads").
 
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
@@ -112,6 +112,8 @@ enum Job {
         here: Option<Location>,
         context: usize,
         span: Span,
+        /// The key is sealed: the merge must not replace (`SPEC.md` 5.4).
+        closed: Option<Span>,
     },
     /// A root key of the base: its chain is applied when it is read, so that
     /// what it holds can be freed and made again (`Evaluator::full_base`).
@@ -172,6 +174,45 @@ impl Shape {
     }
 }
 
+/// A sealed key (`SPEC.md` 5.4).
+#[derive(Clone, Copy)]
+struct Seal {
+    /// The entry or `seal!` that sealed it.
+    span: Span,
+    /// From `seal!`: nothing in the key's value can change either. A seal
+    /// with `!` fixes the key's value and its keys, but what they hold can
+    /// still change.
+    deep: bool,
+}
+
+/// What an operation on a sealed key would have done (`SPEC.md` 5.4).
+#[derive(Clone, Copy)]
+enum Breach {
+    /// Set the key again.
+    Set,
+    /// Remove the key.
+    Remove,
+    /// Change something in a value sealed with `seal!`.
+    Inside,
+    /// Add a key to a sealed value.
+    Add,
+    /// Remove a key from a sealed value.
+    Drop,
+    /// Replace the value of a key sealed with `!`, where it must merge.
+    Replace,
+}
+
+impl Breach {
+    /// What setting (`op`), or removing, a sealed key would do.
+    fn of(op: Option<SetOp>) -> Breach {
+        if op.is_some() {
+            Breach::Set
+        } else {
+            Breach::Remove
+        }
+    }
+}
+
 /// A map for what the evaluator looks up all the time, where hashing is much
 /// of the cost, and nobody chooses keys to attack it: the order is that of
 /// insertion all the same.
@@ -183,6 +224,11 @@ struct KeyedShape {
     slots: FastMap<Key, Slot>,
     defaults: bool,
     defaulted: BTreeSet<Key>,
+    /// The sealed keys (`SPEC.md` 5.4). A key sealed as unset (`-!key`) has
+    /// no slot.
+    sealed: BTreeMap<Key, Seal>,
+    /// Set by `seal!`: no key can be added to the value or removed from it.
+    closed: Option<Span>,
     /// `#[scope]` (`SPEC.md` 6.1.2).
     scope: bool,
     /// What the id keys name, for a value that has any (`SPEC.md` 3.1).
@@ -330,8 +376,11 @@ struct MergeRecipe {
     left: Slot,
     right: Slot,
     span: Span,
+    /// The key is sealed (`SPEC.md` 5.4): the merge must not replace.
+    closed: Option<Span>,
 }
 
+#[derive(Clone)]
 struct EntryRecipe {
     expr: ExprId,
     /// `&`. It stays where the entry was written when the entry is copied,
@@ -344,6 +393,9 @@ struct EntryRecipe {
     replace: bool,
     /// Value binds, which do not move either (`SPEC.md` 6.1.1).
     vbinds: VBinds,
+    /// The entry's key is sealed (`SPEC.md` 5.4): the value must merge with
+    /// what the key holds, and add or remove no key of it.
+    closed: Option<Span>,
 }
 
 struct PathRecipe {
@@ -355,8 +407,13 @@ struct PathRecipe {
     op: Option<SetOp>,
     /// `-?target`: a remove that is no error where the target is not set.
     if_set: bool,
+    /// `!`: the entry seals its target (`SPEC.md` 5.4).
+    seal: bool,
     value: Option<Rc<EntryRecipe>>,
     span: Span,
+    /// The path's start is the value of a sealed key: no key can be added to
+    /// it or removed (`SPEC.md` 5.4).
+    closed: Option<Span>,
 }
 
 /// What an expression is evaluated in.
@@ -372,6 +429,9 @@ struct Env {
     outer_below: Below,
     /// Whether a block here merges with the value below.
     merge: bool,
+    /// The value is that of a sealed key (`SPEC.md` 5.4): it must merge
+    /// with what the key holds, and add or remove no key of it.
+    closed: Option<Span>,
     vbinds: VBinds,
     /// The context the expression is evaluated in, as an index into the
     /// evaluator's contexts.
@@ -648,6 +708,60 @@ fn key_selector(key: &Key, span: Span) -> Selector {
     }
 }
 
+/// The recipe of a value over a key sealed with `!` (`SPEC.md` 5.4), if it
+/// merges with what the key holds: then it must keep doing so, and add or
+/// remove no key.
+fn sealed_recipe(recipe: Recipe, seal: Span) -> Option<Recipe> {
+    match recipe {
+        Recipe::Merge(merge) => Some(Recipe::Merge(Rc::new(MergeRecipe {
+            left: merge.left.clone(),
+            right: merge.right.clone(),
+            span: merge.span,
+            closed: Some(seal),
+        }))),
+        Recipe::Entry(entry) if entry.merge => Some(Recipe::Entry(Rc::new(EntryRecipe {
+            closed: Some(seal),
+            ..(*entry).clone()
+        }))),
+        _ => None,
+    }
+}
+
+/// Passes a seal on to a merge's result: a seal with `seal!` wins over one
+/// with `!`.
+fn carry_seal(target: &mut KeyedShape, key: &Key, seal: Seal) {
+    match target.sealed.get(key) {
+        Some(old) if old.deep || !seal.deep => {}
+        _ => {
+            target.sealed.insert(key.clone(), seal);
+        }
+    }
+}
+
+/// What a message about a path entry on a sealed key starts with: its
+/// prefix, or nothing for a set.
+fn seal_prefix(op: Option<SetOp>) -> &'static str {
+    match op {
+        None => "-",
+        Some(SetOp::Set) => "",
+        Some(op) => op.symbol(),
+    }
+}
+
+/// A root operation's target as written, for messages: `-web.port`.
+fn describe_op(op: &RootOp) -> String {
+    let key = &op.key;
+    let mut target = match op.op {
+        None => format!("-{key}"),
+        Some(SetOp::Set) => key.to_string(),
+        Some(set) => format!("{}{key}", set.symbol()),
+    };
+    for selector in &op.path {
+        target.push_str(&describe_selector(selector));
+    }
+    target
+}
+
 /// An entry's target as written: `web.limits.cpu`, with its operator.
 fn describe_target(entry: &Entry) -> String {
     let mut out = match entry.op {
@@ -693,6 +807,22 @@ fn missing_step(
     };
     let rest: String = rest.iter().map(describe_selector).collect();
     format!("{prefix}{missing}{rest}: `{missing}` is not set, so it cannot be patched")
+}
+
+/// Whether two selectors name the same key.
+fn same_selector(a: &Selector, b: &Selector) -> bool {
+    match (&a.kind, &b.kind) {
+        (SelectorKind::Field(a), SelectorKind::Field(b)) => a == b,
+        (SelectorKind::Element(a), SelectorKind::Element(b)) => a == b,
+        (SelectorKind::Accessor(a), SelectorKind::Accessor(b)) => a == b,
+        (SelectorKind::Id(a), SelectorKind::Id(b)) => a == b,
+        _ => false,
+    }
+}
+
+/// Whether two paths name the same key.
+fn same_path(a: &[Selector], b: &[Selector]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(a, b)| same_selector(a, b))
 }
 
 fn describe_selector(selector: &Selector) -> String {
@@ -756,6 +886,43 @@ pub(crate) struct Evaluator<'ir> {
     /// Whether any value has an id key, so that they are checked in the end.
     id_keys: bool,
     scope_cache: Option<ScopeCache>,
+    /// What ensures met where a target is sealed (`SPEC.md` 5.4).
+    seals: SealNotes,
+}
+
+/// What `?target` entries met with seals (`SPEC.md` 5.4), gathered over
+/// every context: an ensure is reported only where it meets a seal in every
+/// context it is evaluated in, since elsewhere it can still set its target.
+#[derive(Default)]
+pub(crate) struct SealNotes {
+    /// The ensures that met a sealed target, by the ensure's span: the
+    /// seal's, and what the ensure targets, for the message.
+    hits: FastMap<Span, (Span, String)>,
+    /// The ensures that met a target that is not sealed.
+    open: std::collections::HashSet<Span, std::hash::BuildHasherDefault<rustc_hash::FxHasher>>,
+}
+
+impl SealNotes {
+    fn append(&mut self, other: SealNotes) {
+        for (span, hit) in other.hits {
+            self.hits.entry(span).or_insert(hit);
+        }
+        self.open.extend(other.open);
+    }
+
+    /// A warning for each ensure that met a seal wherever it was evaluated.
+    fn warnings(&self) -> impl Iterator<Item = Diagnostic> + '_ {
+        self.hits
+            .iter()
+            .filter(|(span, _)| !self.open.contains(*span))
+            .map(|(span, (seal, target))| {
+                Diagnostic::warning(
+                    *span,
+                    format!("?: `{target}` is sealed, so this never sets it"),
+                )
+                .with_related(*seal, "sealed here")
+            })
+    }
 }
 
 impl Drop for Evaluator<'_> {
@@ -778,6 +945,9 @@ struct BlockScope {
     merging: bool,
     vbinds: VBinds,
     context: usize,
+    /// The block is the value of a key sealed with `!`: it adds no key and
+    /// removes none (`SPEC.md` 5.4).
+    closed: Option<Span>,
 }
 
 /// Where a keyed value's entries are copied to.
@@ -953,6 +1123,9 @@ fn shaped_from_value(value: &Value) -> Rc<Shaped> {
                     )
                 })
                 .collect(),
+            // A value from outside has no seals: they are not kept in values.
+            sealed: BTreeMap::new(),
+            closed: None,
             defaults: keyed.defaults,
             defaulted: keyed.defaulted.clone(),
             scope: keyed.scope,
@@ -1002,6 +1175,7 @@ pub(crate) fn evaluate(ir: &Ir, root: ExprId) -> (Option<Value>, Vec<Diagnostic>
         bases: Vec::new(),
         id_keys: false,
         scope_cache: None,
+        seals: SealNotes::default(),
     };
     let root_cell = Rc::new(Cell {
         state: RefCell::new(State::Running),
@@ -1022,6 +1196,7 @@ pub(crate) fn evaluate(ir: &Ir, root: ExprId) -> (Option<Value>, Vec<Diagnostic>
             merge: false,
             vbinds: None,
             context: 0,
+            closed: None,
         },
     }));
     evaluator.contexts.push(ContextState {
@@ -1036,7 +1211,9 @@ pub(crate) fn evaluate(ir: &Ir, root: ExprId) -> (Option<Value>, Vec<Diagnostic>
     let value = evaluator.full_value(&root_cell, span, &mut Vec::new()).ok();
     let place = evaluator.contexts[0].root.clone();
     evaluator.check_id_keys(&root_cell, &place, 0);
-    (value, std::mem::take(&mut evaluator.diagnostics))
+    let mut diagnostics = std::mem::take(&mut evaluator.diagnostics);
+    diagnostics.extend(evaluator.seals.warnings());
+    (value, diagnostics)
 }
 
 /// Which keys a context may have, compared with the base (`SPEC.md` 8.5).
@@ -1094,6 +1271,8 @@ pub(crate) struct DataResult {
     /// The errors of evaluation, each with the contexts it is in, in the
     /// order found; [`finish`] turns them into diagnostics.
     found: Vec<(Diagnostic, Vec<Context>)>,
+    /// What ensures met with seals, over the contexts evaluated.
+    seals: SealNotes,
 }
 
 /// How one context's data differs from the base: the keys whose value is
@@ -1415,6 +1594,7 @@ pub(crate) fn evaluate_data_threaded(
             contexts: Vec::new(),
             planned: Vec::new(),
             found: Vec::new(),
+            seals: SealNotes::default(),
         },
         None => {
             let base_input = DataInput {
@@ -1494,7 +1674,9 @@ pub(crate) fn evaluate_data_threaded(
         .collect();
     let mut contexts: Vec<Option<ContextData>> = todo.iter().map(|_| None).collect();
     let mut found: Vec<((usize, usize), Diagnostic, Vec<usize>)> = Vec::new();
+    let mut seals = SealNotes::default();
     let mut merge = |result: DataResult, share: usize| {
+        seals.append(result.seals);
         for data in result.contexts {
             let index = position[&data.context];
             contexts[index - 1] = Some(data);
@@ -1511,6 +1693,7 @@ pub(crate) fn evaluate_data_threaded(
         variants,
         base: own_base,
         found: base_found,
+        seals: base_seals,
         ..
     } = first;
     let base_result = DataResult {
@@ -1519,6 +1702,7 @@ pub(crate) fn evaluate_data_threaded(
         contexts: Vec::new(),
         planned: Vec::new(),
         found: base_found,
+        seals: base_seals,
     };
     merge(base_result, 0);
     for (share, result) in results.iter_mut().enumerate() {
@@ -1547,6 +1731,7 @@ pub(crate) fn evaluate_data_threaded(
         contexts: contexts.into_iter().flatten().collect(),
         planned,
         found,
+        seals,
     };
     finish(&mut result, input, &mut diagnostics);
     (Some(result), diagnostics)
@@ -1583,6 +1768,7 @@ fn finish(result: &mut DataResult, input: &DataInput<'_>, diagnostics: &mut Vec<
         }
         diagnostics.push(diagnostic);
     }
+    diagnostics.extend(result.seals.warnings());
     diagnostics.sort_by_key(|d| (d.span.file, d.span.range.start()));
 }
 
@@ -1626,6 +1812,7 @@ fn evaluate_raw(
         bases: Vec::new(),
         id_keys: false,
         scope_cache: None,
+        seals: SealNotes::default(),
     };
     // Errors in the static structure of the chains are reported once.
     evaluator.check_chains(input, &planned, None);
@@ -1773,6 +1960,7 @@ fn evaluate_raw(
             contexts: per_context,
             planned,
             found,
+            seals: std::mem::take(&mut evaluator.seals),
         }),
         diagnostics,
     )
@@ -1859,6 +2047,7 @@ pub(crate) fn evaluate_again(
         bases: Vec::new(),
         id_keys: false,
         scope_cache: None,
+        seals: SealNotes::default(),
     };
     // The chains of the other keys are as they were, and had no errors.
     evaluator.check_chains(input, &planned, Some(dirty));
@@ -2146,6 +2335,7 @@ pub(crate) fn explain_planned(
         bases: Vec::new(),
         id_keys: false,
         scope_cache: None,
+        seals: SealNotes::default(),
     };
     let id = evaluator.context_state(&context);
     Ok(requests
@@ -2762,7 +2952,107 @@ impl Evaluator<'_> {
                     self.report(diagnostic);
                 }
             }
+            self.check_written_seals(key, all, ops);
         }
+    }
+
+    /// A conditional seal holds in every context for what is written after
+    /// it, later in its layer or in a higher one (`SPEC.md` 5.4): the
+    /// evaluation finds the rest, in the contexts where the seal holds. Only
+    /// operations that set the sealed target itself are found here: one on
+    /// it that sets it without merging, or removes it, and an entry of a
+    /// merge into what holds it that does.
+    fn check_written_seals(&mut self, key: &Arc<str>, all: &[usize], ops: &[RootOp]) {
+        let seals: Vec<usize> = all
+            .iter()
+            .copied()
+            .filter(|&s| ops[s].seal && ops[s].condition.is_some())
+            .collect();
+        if seals.is_empty() {
+            return;
+        }
+        for &o in all {
+            let op = &ops[o];
+            let seal = seals.iter().copied().find(|&s| {
+                let seal = &ops[s];
+                (op.layer > seal.layer || op.layer == seal.layer && o > s)
+                    && op.path.len() <= seal.path.len()
+                    && same_path(&op.path, &seal.path[..op.path.len()])
+            });
+            let Some(seal) = seal.map(|s| &ops[s]) else {
+                continue;
+            };
+            let name = match seal.path.last() {
+                Some(selector) => {
+                    selector_field(selector).unwrap_or_else(|| describe_selector(selector))
+                }
+                None => key.to_string(),
+            };
+            // A path entry's value merges like a block entry's.
+            let merging = !op.path.is_empty() || self.merge_root;
+            let merges = op.op == Some(SetOp::Set)
+                && !op.replace
+                && op.value.is_some_and(|expr| self.merges_into(expr, merging));
+            let rest = &seal.path[op.path.len()..];
+            if rest.is_empty() {
+                if op.op == Some(SetOp::Ensure) || merges {
+                    continue;
+                }
+                let breach = Breach::of(op.op);
+                let _ = self.sealed_error(op.span, seal_prefix(op.op), &name, seal.span, breach);
+            } else if merges && let Some(expr) = op.value {
+                // Replacing or removing what holds the seal drops it; a merge
+                // into it reaches it.
+                if let Some(entry) = self.merge_reach(expr, rest) {
+                    let (span, op) = (entry.span, entry.op);
+                    let _ =
+                        self.sealed_error(span, seal_prefix(op), &name, seal.span, Breach::of(op));
+                }
+            }
+        }
+    }
+
+    /// The block a merging value merges in, and whether it merges deep (a
+    /// block, `~`) or shallow (`~^`).
+    fn merged_block(&self, expr: ExprId) -> Option<(BlockId, bool)> {
+        match &self.ir.exprs[expr].kind {
+            ExprKind::Block(block) => Some((*block, true)),
+            ExprKind::Binary(op @ (BinOp::Merge | BinOp::MergeShallow), _, rhs) => {
+                let (block, deep) = self.merged_block(*rhs)?;
+                Some((block, deep && *op == BinOp::Merge))
+            }
+            ExprKind::Named(named) => named.1.iter().find_map(|&e| self.merged_block(e)),
+            _ => None,
+        }
+    }
+
+    /// The entry of the merge `expr` that sets or removes the key at `rest`
+    /// below it, rather than merging into it or ensuring it.
+    fn merge_reach(&self, expr: ExprId, rest: &[Selector]) -> Option<&Entry> {
+        let (block, deep) = self.merged_block(expr)?;
+        let ir = self.ir;
+        ir.blocks[block].entries.iter().rev().find_map(|entry| {
+            let first = key_selector(&entry.key, entry.span);
+            let path: Vec<&Selector> = std::iter::once(&first).chain(&entry.path).collect();
+            if path.len() > rest.len() || !path.iter().zip(rest).all(|(a, b)| same_selector(a, b)) {
+                return None;
+            }
+            let merges = entry.op == Some(SetOp::Set)
+                && !entry.replace
+                && entry
+                    .value
+                    .is_some_and(|value| self.merges_into(value, true));
+            if path.len() == rest.len() {
+                // Under `~^` the entry replaces what the key holds.
+                let fine = entry.op == Some(SetOp::Ensure) || (deep && merges);
+                return (!fine).then_some(entry);
+            }
+            // An entry that replaces or removes what holds the seal drops it.
+            if !(deep && merges) {
+                return None;
+            }
+            self.merge_reach(entry.value?, &rest[path.len()..])
+        })
     }
 }
 
@@ -3082,8 +3372,35 @@ impl Evaluator<'_> {
         let ops = self.plan.expect("data mode").ops;
         let here = root.child(Step::Key(Key::Str(key.clone())));
         let mut value: Option<(usize, Lazy)> = None;
+        // The entry that sealed the key, once one has (`SPEC.md` 5.4).
+        let mut sealed: Option<Span> = None;
         for &i in order {
             let op = &ops[i];
+            let ensure = op.op == Some(SetOp::Ensure) && op.path.is_empty();
+            // A sealed key's value can change inside, through a path or a
+            // merge, but is never set again or removed (`SPEC.md` 5.4).
+            let closed = sealed;
+            if let Some(seal) = closed {
+                if ensure {
+                    self.ensure_met(op.span, Some(seal), key);
+                    continue;
+                }
+                let merges = op.op == Some(SetOp::Set)
+                    && !op.replace
+                    && op
+                        .value
+                        .is_some_and(|expr| self.merges_into(expr, self.merge_root));
+                if op.path.is_empty() && !merges {
+                    let prefix = seal_prefix(op.op);
+                    let _ = self.sealed_error(op.span, prefix, key, seal, Breach::of(op.op));
+                    continue;
+                }
+            } else if ensure {
+                self.ensure_met(op.span, None, key);
+            }
+            // The key is sealed once the operation is done: one that fails
+            // is skipped, and seals nothing (`SPEC.md` 5.4).
+            let seals = op.seal && op.path.is_empty();
             let chain = self.op_chain(root, root_chain, key, &op.blocks);
             if !op.path.is_empty() {
                 let filled = if value.is_none() {
@@ -3102,14 +3419,7 @@ impl Evaluator<'_> {
                     if op.if_set {
                         continue;
                     }
-                    let mut target = match op.op {
-                        None => format!("-{key}"),
-                        Some(SetOp::Set) => key.to_string(),
-                        Some(set) => format!("{}{key}", set.symbol()),
-                    };
-                    for selector in &op.path {
-                        target.push_str(&describe_selector(selector));
-                    }
+                    let target = describe_op(op);
                     let _ = self.fail(
                         op.span,
                         format!("{target}: `{key}` is not set, so it cannot be patched"),
@@ -3128,6 +3438,7 @@ impl Evaluator<'_> {
                         merge: !op.replace && self.merges_below(expr),
                         replace: op.replace,
                         vbinds: vbinds.clone(),
+                        closed: None,
                     })
                 });
                 let recipe = Rc::new(PathRecipe {
@@ -3137,8 +3448,10 @@ impl Evaluator<'_> {
                     path: op.path.clone(),
                     op: op.op,
                     if_set: op.if_set,
+                    seal: op.seal,
                     value: entry,
                     span: op.span,
+                    closed,
                 });
                 let cell = self.cell(
                     Job::Path {
@@ -3157,6 +3470,7 @@ impl Evaluator<'_> {
                 None => {
                     if value.take().is_none() && !op.if_set {
                         let _ = self.fail(op.span, format!("-: `{key}` is not set"));
+                        continue;
                     }
                 }
                 Some(set) => {
@@ -3171,7 +3485,13 @@ impl Evaluator<'_> {
                                 self.report(diagnostic);
                                 continue;
                             }
-                            SetOp::Ensure => continue,
+                            // `?!` seals whether or not it sets the key.
+                            SetOp::Ensure => {
+                                if seals {
+                                    sealed = Some(op.span);
+                                }
+                                continue;
+                            }
                             SetOp::Set => {}
                         }
                     }
@@ -3195,6 +3515,7 @@ impl Evaluator<'_> {
                                     && self.merges_below(op.value.expect("a set has a value")),
                                 vbinds: vbinds.clone(),
                                 context,
+                                closed,
                             },
                         },
                         Some(here.clone()),
@@ -3202,6 +3523,9 @@ impl Evaluator<'_> {
                     let created = value.as_ref().map_or(i, |(created, _)| *created);
                     value = Some((created, cell));
                 }
+            }
+            if seals {
+                sealed = Some(op.span);
             }
         }
         value.map(|(created, cell)| {
@@ -3266,6 +3590,7 @@ impl Evaluator<'_> {
                     merge: false,
                     vbinds: vbinds.clone(),
                     context,
+                    closed: None,
                 },
             }));
         }
@@ -3392,6 +3717,71 @@ impl Evaluator<'_> {
     fn fail(&mut self, span: Span, message: impl Into<String>) -> Fail {
         self.report(Diagnostic::error(span, message));
         Fail::Poison
+    }
+
+    /// An operation on a sealed key, or on something in its value
+    /// (`SPEC.md` 5.4).
+    fn sealed_error(
+        &mut self,
+        span: Span,
+        what: &str,
+        key: &dyn std::fmt::Display,
+        seal: Span,
+        breach: Breach,
+    ) -> Fail {
+        let what = if what.is_empty() {
+            String::new()
+        } else {
+            format!("{what}: ")
+        };
+        let message = match breach {
+            Breach::Set => format!("{what}`{key}` is sealed, so it cannot be set again"),
+            Breach::Remove => format!("{what}`{key}` is sealed, so it cannot be removed"),
+            Breach::Inside => {
+                format!("{what}`{key}` is sealed with `seal!`, so nothing in it can change")
+            }
+            Breach::Add => {
+                format!(
+                    "{what}`{key}` cannot be added: the keys of a sealed value stay as they are"
+                )
+            }
+            Breach::Drop => format!(
+                "{what}`{key}` cannot be removed: the keys of a sealed value stay as they are"
+            ),
+            Breach::Replace => {
+                format!("{what}`{key}` is sealed, so its value can be patched but not replaced")
+            }
+        };
+        self.report(Diagnostic::error(span, message).with_related(seal, "sealed here"));
+        Fail::Poison
+    }
+
+    /// Whether `expr` sets a key by merging with what it holds, as an
+    /// operation on a key sealed with `!` must (`SPEC.md` 5.4): a block
+    /// where blocks merge, or `& ~ ...`.
+    fn merges_into(&self, expr: ExprId, merging: bool) -> bool {
+        match &self.ir.exprs[expr].kind {
+            ExprKind::Binary(BinOp::Merge | BinOp::MergeShallow, lhs, _) => {
+                matches!(self.ir.exprs[*lhs].kind, ExprKind::Ref(RefKind::Below))
+            }
+            _ => merging && self.merges_below(expr),
+        }
+    }
+
+    /// Notes what an ensure met: a seal, or a target it can set (`SPEC.md`
+    /// 5.4).
+    fn ensure_met(&mut self, span: Span, seal: Option<Span>, target: &dyn std::fmt::Display) {
+        match seal {
+            Some(seal) => {
+                self.seals
+                    .hits
+                    .entry(span)
+                    .or_insert_with(|| (seal, target.to_string()));
+            }
+            None => {
+                self.seals.open.insert(span);
+            }
+        }
     }
 
     fn report(&mut self, mut diagnostic: Diagnostic) {
@@ -3522,7 +3912,8 @@ impl Evaluator<'_> {
                 here,
                 context,
                 span,
-            } => self.run_merge(left, right, chain, here, context, span),
+                closed,
+            } => self.run_merge(left, right, chain, here, context, span, closed),
         }
     }
 
@@ -3555,10 +3946,12 @@ impl Evaluator<'_> {
             at: &at,
             optional: recipe.key_optional,
         };
-        self.descend(&shaped, into, path, recipe, &chain, here, context)
+        let closed = recipe.closed;
+        self.descend(&shaped, into, path, recipe, &chain, here, context, closed)
     }
 
     /// Two copies of a value at one place (`Job::Merge`).
+    #[allow(clippy::too_many_arguments)]
     fn run_merge(
         &mut self,
         left: Lazy,
@@ -3567,6 +3960,7 @@ impl Evaluator<'_> {
         here: Option<Location>,
         context: usize,
         span: Span,
+        closed: Option<Span>,
     ) -> Eval<Rc<Shaped>> {
         let new = self.force(&right, span)?;
         let old = match self.force(&left, span) {
@@ -3574,6 +3968,15 @@ impl Evaluator<'_> {
             Err(Fail::Missing(..)) => return Ok(new),
             Err(fail) => return Err(fail),
         };
+        // Over a key sealed with `!`, only a merge of keyed values of one
+        // type keeps the key's value (`SPEC.md` 5.4).
+        if let Some(seal) = closed
+            && !matches!((&old.shape, &new.shape), (Shape::Keyed(a), Shape::Keyed(b)) if names_agree(&a.name, &b.name))
+        {
+            let key = here.as_ref().map_or_else(String::new, Location::describe);
+            let _ = self.sealed_error(span, "~", &key, seal, Breach::Replace);
+            return Ok(old);
+        }
         match (&old.shape, &new.shape) {
             (Shape::Keyed(a), Shape::Keyed(b)) if names_agree(&a.name, &b.name) => {
                 let copy = CopyTo {
@@ -3584,7 +3987,7 @@ impl Evaluator<'_> {
                     outer_below: &Below::Missing,
                     span,
                 };
-                self.merge_keyed(a, b, &copy)
+                self.merge_keyed(a, b, &copy, closed)
             }
             (Shape::Named(x, a), Shape::Named(y, b)) if x == y => {
                 let copy = CopyTo {
@@ -3623,12 +4026,18 @@ impl Evaluator<'_> {
                         merge: entry.merge,
                         vbinds: entry.vbinds.clone(),
                         context,
+                        closed: entry.closed,
                     },
                 },
                 here,
             ),
             Recipe::Merge(merge) => {
-                let MergeRecipe { left, right, span } = &**merge;
+                let MergeRecipe {
+                    left,
+                    right,
+                    span,
+                    closed,
+                } = &**merge;
                 self.cell(
                     Job::Merge {
                         left: self.instantiate(
@@ -3649,6 +4058,7 @@ impl Evaluator<'_> {
                         here: here.clone(),
                         context,
                         span: *span,
+                        closed: *closed,
                     },
                     here,
                 )
@@ -3692,6 +4102,15 @@ impl Evaluator<'_> {
                 } else {
                     None
                 };
+                // Over a key sealed with `!`, a block must merge (`SPEC.md`
+                // 5.4).
+                if let (Some(seal), None) = (env.closed, &start) {
+                    let key = env
+                        .here
+                        .as_ref()
+                        .map_or_else(String::new, Location::describe);
+                    return Err(self.sealed_error(span, "", &key, seal, Breach::Replace));
+                }
                 self.block(*block, start, true, env, span)
             }
             ExprKind::List(elements) => {
@@ -3774,6 +4193,30 @@ impl Evaluator<'_> {
                 }
             }
             ExprKind::Binary(op, lhs, rhs) => self.binary(*op, *lhs, *rhs, env, span),
+            // At the entry's location, so that what is in it can refer to
+            // its place (`SPEC.md` 5.4).
+            ExprKind::Macro(MacroKind::Seal, args) => {
+                let value = self.eval(
+                    args[0],
+                    &Env {
+                        closed: None,
+                        ..env.clone()
+                    },
+                )?;
+                let Shape::Keyed(keyed) = &value.shape else {
+                    let kind = value.shape.kind_name();
+                    return Err(self.fail(
+                        span,
+                        format!("seal!: only a keyed value can be sealed, not {kind}; seal the key that holds it with `!`"),
+                    ));
+                };
+                let mut keyed = keyed.clone();
+                for key in keyed.slots.keys() {
+                    keyed.sealed.insert(key.clone(), Seal { span, deep: true });
+                }
+                keyed.closed = Some(span);
+                Self::shaped(Shape::Keyed(keyed), value.span)
+            }
             ExprKind::Macro(kind, args) => {
                 let detached = Self::detached(env);
                 let mut values = Vec::with_capacity(args.len());
@@ -3792,6 +4235,7 @@ impl Evaluator<'_> {
         Env {
             here: None,
             outer_below: Below::Missing,
+            closed: None,
             ..env.clone()
         }
     }
@@ -4390,6 +4834,7 @@ impl Evaluator<'_> {
                 merge: false,
                 vbinds: vbinds.clone(),
                 context: env.context,
+                closed: None,
             };
             let spread_span = ir.exprs[spread].span;
             let source = self.eval(spread, &spread_env)?;
@@ -4408,7 +4853,8 @@ impl Evaluator<'_> {
                 outer_below: &outer_below,
                 span: spread_span,
             };
-            self.copy_entries(source, &mut keyed, &copy);
+            // A spread copies values, not seals (`SPEC.md` 5.4).
+            self.copy_entries(source, &mut keyed, &copy, false, env.closed);
         }
 
         let scope = BlockScope {
@@ -4419,6 +4865,7 @@ impl Evaluator<'_> {
             merging: deep && (is_patch || !block.spreads.is_empty()),
             vbinds,
             context: env.context,
+            closed: env.closed,
         };
         for entry in &block.entries {
             self.entry(entry, &mut keyed, &scope);
@@ -4433,16 +4880,70 @@ impl Evaluator<'_> {
     }
 
     /// Sets each of `source`'s entries in `target`, evaluated again at the
-    /// target's location, and passes on its defaults (`SPEC.md` 5.2).
-    fn copy_entries(&mut self, source: &KeyedShape, target: &mut KeyedShape, copy: &CopyTo<'_>) {
+    /// target's location, and passes on its defaults (`SPEC.md` 5.2). A
+    /// merge passes on its seals too (`seals`); a spread does not
+    /// (`SPEC.md` 5.4).
+    ///
+    /// `closed`: `target` is the value of a key sealed with `!`, so it takes
+    /// no key it does not have. A key of `target` sealed with `!` takes only
+    /// a value that merges with what it holds.
+    fn copy_entries(
+        &mut self,
+        source: &KeyedShape,
+        target: &mut KeyedShape,
+        copy: &CopyTo<'_>,
+        seals: bool,
+        closed: Option<Span>,
+    ) {
+        let closed = closed.or(target.closed);
+        let what = if seals { "~" } else { ".." };
         for (key, slot) in &source.slots {
             // An id key is the key that names the same entry here.
             let Ok(key) = self.slot_key(key, target, copy.location, copy.span) else {
                 continue;
             };
             let key = &key;
+            let exists = target.slots.contains_key(key);
+            let mut sealed = None;
+            if let Some(&seal) = target.sealed.get(key) {
+                if seal.deep && exists {
+                    // A merge into the key changes what is in it; anything
+                    // else sets it again.
+                    let recipe = self.landed(key, slot, target.slots.get(key), copy);
+                    let breach = if sealed_recipe(recipe, seal.span).is_some() {
+                        Breach::Inside
+                    } else {
+                        Breach::Set
+                    };
+                    let _ = self.sealed_error(copy.span, what, key, seal.span, breach);
+                    continue;
+                }
+                if !exists {
+                    let _ = self.sealed_error(copy.span, what, key, seal.span, Breach::Set);
+                    continue;
+                }
+                sealed = Some(seal.span);
+            } else if let Some(seal) = closed
+                && !exists
+            {
+                let _ = self.sealed_error(copy.span, what, key, seal, Breach::Add);
+                continue;
+            }
             let here = child_location(copy.location, Step::Key(key.clone()));
             let recipe = self.landed(key, slot, target.slots.get(key), copy);
+            let recipe = match sealed {
+                None => recipe,
+                Some(seal) => match sealed_recipe(recipe, seal) {
+                    Some(recipe) => recipe,
+                    None => {
+                        let _ = self.sealed_error(copy.span, what, key, seal, Breach::Replace);
+                        continue;
+                    }
+                },
+            };
+            if seals && let Some(&seal) = source.sealed.get(key) {
+                carry_seal(target, key, seal);
+            }
             let value =
                 self.instantiate(&recipe, Some(&slot.value), copy.chain, here, copy.context);
             target.slots.insert(key.clone(), Slot { value, recipe });
@@ -4451,6 +4952,15 @@ impl Evaluator<'_> {
         target.defaults |= source.defaults;
         target.scope |= source.scope;
         target.defaulted.extend(source.defaulted.iter().cloned());
+        if seals {
+            // Keys sealed as unset, which have no slot to copy.
+            for (key, &seal) in &source.sealed {
+                if !source.slots.contains_key(key) {
+                    carry_seal(target, key, seal);
+                }
+            }
+            target.closed = target.closed.or(source.closed);
+        }
     }
 
     /// How a copied entry is produced where it lands: `&` with nothing
@@ -4465,6 +4975,7 @@ impl Evaluator<'_> {
                     recipe,
                 },
                 span: copy.span,
+                closed: None,
             })),
             _ => recipe,
         };
@@ -4502,6 +5013,7 @@ impl Evaluator<'_> {
             merge: copy.deep && block,
             replace: false,
             vbinds: entry.vbinds.clone(),
+            closed: None,
         }));
         if block { recipe } else { merged(recipe) }
     }
@@ -4525,6 +5037,7 @@ impl Evaluator<'_> {
             merging,
             vbinds,
             context,
+            closed,
         } = scope;
         let context = *context;
         // An id key is the key that names the same entry (`SPEC.md` 3.1).
@@ -4532,6 +5045,63 @@ impl Evaluator<'_> {
             return;
         };
         let key = &key;
+        let ensure = entry.op == Some(SetOp::Ensure) && entry.path.is_empty();
+        let exists = keyed.slots.contains_key(key);
+        // A key sealed with `!` keeps its value, which can still change
+        // inside, through a path or a merge; nothing in a key sealed with
+        // `seal!` changes (`SPEC.md` 5.4).
+        let mut sealed = None;
+        if let Some(&seal) = keyed.sealed.get(key) {
+            if ensure {
+                self.ensure_met(entry.span, Some(seal.span), key);
+                return;
+            }
+            let merges = entry.op == Some(SetOp::Set)
+                && !entry.replace
+                && entry
+                    .value
+                    .is_some_and(|expr| self.merges_into(expr, *merging));
+            let inside = !entry.path.is_empty();
+            if seal.deep || !exists || !inside && !merges {
+                // A path or a merge changes what is in a key sealed with
+                // `seal!`.
+                let breach = if seal.deep && exists && (inside || merges) {
+                    Breach::Inside
+                } else {
+                    Breach::of(entry.op)
+                };
+                let prefix = seal_prefix(entry.op);
+                let _ = self.sealed_error(entry.span, prefix, key, seal.span, breach);
+                return;
+            }
+            sealed = Some(seal.span);
+        } else if ensure {
+            self.ensure_met(entry.span, None, key);
+        }
+        // The value of a key sealed with `!` keeps its keys.
+        if let Some(seal) = closed.or(keyed.closed) {
+            let breach = match entry.op {
+                // A path through a key that is not there is checked below.
+                Some(_) if !exists && entry.path.is_empty() => Some(Breach::Add),
+                None if exists && entry.path.is_empty() => Some(Breach::Drop),
+                _ => None,
+            };
+            if let Some(breach) = breach {
+                let prefix = seal_prefix(entry.op);
+                let _ = self.sealed_error(entry.span, prefix, key, seal, breach);
+                return;
+            }
+        }
+        // The key is sealed once the entry is done: one that fails is
+        // skipped, and seals nothing (`SPEC.md` 5.4).
+        let seal = |keyed: &mut KeyedShape| {
+            if entry.seal {
+                keyed.sealed.entry(key.clone()).or_insert(Seal {
+                    span: entry.span,
+                    deep: false,
+                });
+            }
+        };
         let existing = keyed.slots.get(key).cloned();
         let here = child_location(location, Step::Key(key.clone()));
         if !entry.path.is_empty() {
@@ -4542,6 +5112,14 @@ impl Evaluator<'_> {
             });
             let filled =
                 filled.and_then(|below| self.start_of(&below, entry.span, entry.key_optional));
+            // A default would add the key to a value that keeps its keys.
+            if filled.is_some()
+                && let Some(seal) = closed.or(keyed.closed)
+            {
+                let prefix = seal_prefix(entry.op);
+                let _ = self.sealed_error(entry.span, prefix, key, seal, Breach::Add);
+                return;
+            }
             let filled = filled.map(|value| Slot {
                 value,
                 recipe: Recipe::Fixed,
@@ -4570,6 +5148,7 @@ impl Evaluator<'_> {
                     merge: *deep && !entry.replace && self.merges_below(expr),
                     replace: entry.replace,
                     vbinds: vbinds.clone(),
+                    closed: None,
                 })
             });
             let recipe = Recipe::Path(Rc::new(PathRecipe {
@@ -4579,8 +5158,10 @@ impl Evaluator<'_> {
                 path: entry.path.clone(),
                 op: entry.op,
                 if_set: entry.if_set,
+                seal: entry.seal,
                 value,
                 span: entry.span,
+                closed: sealed,
             }));
             let value = self.instantiate(&recipe, Some(&slot.value), chain, here, context);
             keyed.slots.insert(key.clone(), Slot { value, recipe });
@@ -4594,6 +5175,7 @@ impl Evaluator<'_> {
                 }
                 keyed.slots.shift_remove(key);
                 keyed.defaulted.insert(key.clone());
+                seal(keyed);
             }
             Some(op) => {
                 if let Some(slot) = &existing {
@@ -4608,12 +5190,13 @@ impl Evaluator<'_> {
                             self.report(diagnostic);
                             return;
                         }
-                        SetOp::Ensure => return,
+                        // `?!` seals whether or not it sets the key.
+                        SetOp::Ensure => return seal(keyed),
                         SetOp::Set => {}
                     }
                 }
                 let expr = entry.value.expect("a set entry has a value");
-                let recipe = if self.is_literal(expr) && !entry.replace {
+                let recipe = if self.is_literal(expr) && !entry.replace && sealed.is_none() {
                     Recipe::Literal(expr)
                 } else {
                     let below = match &existing {
@@ -4638,11 +5221,13 @@ impl Evaluator<'_> {
                         merge: *merging && !entry.replace && self.merges_below(expr),
                         replace: entry.replace,
                         vbinds: vbinds.clone(),
+                        closed: sealed,
                     }))
                 };
                 let value = self.instantiate(&recipe, None, chain, here, context);
                 keyed.slots.insert(key.clone(), Slot { value, recipe });
                 keyed.defaulted.remove(key);
+                seal(keyed);
             }
         }
     }
@@ -4672,6 +5257,8 @@ impl Evaluator<'_> {
     // ---- Path entries (`SPEC.md` 5.1) ----
 
     #[allow(clippy::too_many_arguments)]
+    /// `closed`: `value` is that of a key sealed with `!`, so it takes no
+    /// key and loses none (`SPEC.md` 5.4).
     fn apply_path(
         &mut self,
         value: &Rc<Shaped>,
@@ -4681,6 +5268,7 @@ impl Evaluator<'_> {
         chain: &Chain,
         here: Option<Location>,
         context: usize,
+        closed: Option<Span>,
     ) -> Eval<Rc<Shaped>> {
         let (selector, rest) = path.split_first().expect("a path entry has a path");
         // A key goes into a named tuple of one element, and the result stays
@@ -4688,7 +5276,7 @@ impl Evaluator<'_> {
         if let Some(payload) = single_payload(value, selector) {
             let payload = payload.clone();
             let inner = self.force(&payload, selector.span)?;
-            let new = self.apply_path(&inner, at, path, recipe, chain, here, context)?;
+            let new = self.apply_path(&inner, at, path, recipe, chain, here, context, closed)?;
             let element = Selector {
                 kind: SelectorKind::Element(0),
                 span: selector.span,
@@ -4714,9 +5302,38 @@ impl Evaluator<'_> {
                 return Err(self.fail(selector.span, "internal error: a condition in a path"));
             }
         };
+        // A path goes into the value of a key sealed with `!`, which then
+        // takes no key and loses none; nothing in a value sealed with
+        // `seal!` changes (`SPEC.md` 5.4). The last step is checked where it
+        // is applied.
+        let level_closed = closed.or(match &value.shape {
+            Shape::Keyed(keyed) => keyed.closed,
+            _ => None,
+        });
+        let mut child_closed = None;
+        let mut missing_key = None;
+        if let (Shape::Keyed(keyed), Step::Key(key), false) = (&value.shape, &step, rest.is_empty())
+        {
+            if let Some(&seal) = keyed.sealed.get(key) {
+                if seal.deep {
+                    if recipe.op == Some(SetOp::Ensure) {
+                        self.ensure_met(recipe.span, Some(seal.span), key);
+                        return Ok(value.clone());
+                    }
+                    // The operation is skipped: the value stays what it was.
+                    let prefix = seal_prefix(recipe.op);
+                    let _ = self.sealed_error(recipe.span, prefix, key, seal.span, Breach::Inside);
+                    return Ok(value.clone());
+                }
+                child_closed = Some(seal.span);
+            }
+            if !keyed.slots.contains_key(key) {
+                missing_key = Some(key.clone());
+            }
+        }
         let here = child_location(&here, step);
         if rest.is_empty() {
-            return self.apply_last(value, selector, recipe, chain, here, context);
+            return self.apply_last(value, selector, recipe, chain, here, context, closed);
         }
         let child_at = Below::Select(Rc::new(at.clone()), selector.clone());
         let found = match self.select(value, selector) {
@@ -4745,6 +5362,12 @@ impl Evaluator<'_> {
                     let message = missing_step(selector, rest, recipe.op, here.as_ref());
                     return Err(self.fail(selector.span, message));
                 };
+                // A default would add the key to a value that keeps its keys.
+                if let (Some(seal), Some(key)) = (level_closed, &missing_key) {
+                    let prefix = seal_prefix(recipe.op);
+                    let _ = self.sealed_error(recipe.span, prefix, key, seal, Breach::Add);
+                    return Ok(value.clone());
+                }
                 child
             }
         };
@@ -4762,7 +5385,16 @@ impl Evaluator<'_> {
             at: &child_at,
             optional: selector.optional,
         };
-        let new_child = self.descend(&child, into, rest, recipe, chain, here, context)?;
+        let new_child = self.descend(
+            &child,
+            into,
+            rest,
+            recipe,
+            chain,
+            here,
+            context,
+            child_closed,
+        )?;
         Ok(self.with_child(value, selector, Cell::done(new_child)))
     }
 
@@ -4778,13 +5410,14 @@ impl Evaluator<'_> {
         chain: &Chain,
         here: Option<Location>,
         context: usize,
+        closed: Option<Span>,
     ) -> Eval<Rc<Shaped>> {
         let held = some_payload(value).filter(|_| into.optional).cloned();
         let Some(held) = held else {
-            return self.apply_path(value, into.at, path, recipe, chain, here, context);
+            return self.apply_path(value, into.at, path, recipe, chain, here, context, closed);
         };
         let inner = self.force(&held, recipe.span)?;
-        let new = self.apply_path(&inner, into.at, path, recipe, chain, here, context)?;
+        let new = self.apply_path(&inner, into.at, path, recipe, chain, here, context, closed)?;
         let element = Selector {
             kind: SelectorKind::Element(0),
             span: recipe.span,
@@ -4793,6 +5426,7 @@ impl Evaluator<'_> {
         Ok(self.with_child(value, &element, Cell::done(new)))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn apply_last(
         &mut self,
         value: &Rc<Shaped>,
@@ -4801,11 +5435,21 @@ impl Evaluator<'_> {
         chain: &Chain,
         here: Option<Location>,
         context: usize,
+        closed: Option<Span>,
     ) -> Eval<Rc<Shaped>> {
         let span = selector.span;
-        let new_value = |this: &Self| {
+        // `sealed`: the target is a key sealed with `!`, whose new value must
+        // merge with what it holds (`SPEC.md` 5.4).
+        let new_value = |this: &Self, sealed: Option<Span>| {
             recipe.value.as_ref().map(|entry| {
-                let recipe = Recipe::Entry(entry.clone());
+                let entry = match sealed {
+                    Some(_) => Rc::new(EntryRecipe {
+                        closed: sealed,
+                        ..(**entry).clone()
+                    }),
+                    None => entry.clone(),
+                };
+                let recipe = Recipe::Entry(entry);
                 (
                     this.instantiate(&recipe, None, chain, here.clone(), context),
                     recipe,
@@ -4828,7 +5472,50 @@ impl Evaluator<'_> {
                     }
                     SelectorKind::Element(_) | SelectorKind::Context(_) => unreachable!(),
                 };
+                let mut sealed = None;
+                if let Some(&seal) = keyed.sealed.get(&key) {
+                    if recipe.op == Some(SetOp::Ensure) {
+                        self.ensure_met(recipe.span, Some(seal.span), &key);
+                        return Ok(value.clone());
+                    }
+                    let merges = recipe.op == Some(SetOp::Set)
+                        && recipe.value.as_ref().is_some_and(|entry| {
+                            !entry.replace && (entry.merge || self.merges_into(entry.expr, false))
+                        });
+                    if seal.deep || !merges {
+                        let prefix = seal_prefix(recipe.op);
+                        // A merge changes what is in a key sealed with `seal!`.
+                        let breach = if merges {
+                            Breach::Inside
+                        } else {
+                            Breach::of(recipe.op)
+                        };
+                        let _ = self.sealed_error(recipe.span, prefix, &key, seal.span, breach);
+                        return Ok(value.clone());
+                    }
+                    sealed = Some(seal.span);
+                } else if recipe.op == Some(SetOp::Ensure) {
+                    self.ensure_met(recipe.span, None, &key);
+                }
                 let exists = keyed.slots.contains_key(&key);
+                if let Some(seal) = closed.or(keyed.closed) {
+                    let breach = match recipe.op {
+                        Some(_) if !exists => Some(Breach::Add),
+                        None if exists => Some(Breach::Drop),
+                        _ => None,
+                    };
+                    if let Some(breach) = breach {
+                        let prefix = seal_prefix(recipe.op);
+                        let _ = self.sealed_error(recipe.span, prefix, &key, seal, breach);
+                        return Ok(value.clone());
+                    }
+                }
+                if recipe.seal {
+                    keyed.sealed.entry(key.clone()).or_insert(Seal {
+                        span: recipe.span,
+                        deep: false,
+                    });
+                }
                 match recipe.op {
                     None if !exists && !recipe.if_set => {
                         return Err(self.fail(span, format!("-: `{key}` is not set")));
@@ -4840,9 +5527,11 @@ impl Evaluator<'_> {
                     Some(SetOp::Declare) if exists => {
                         return Err(self.fail(span, format!("+: `{key}` is already set")));
                     }
-                    Some(SetOp::Ensure) if exists => return Ok(value.clone()),
+                    Some(SetOp::Ensure) if exists && !recipe.seal => return Ok(value.clone()),
+                    Some(SetOp::Ensure) if exists => {}
                     Some(_) => {
-                        let (cell, recipe) = new_value(self).expect("a set entry has a value");
+                        let (cell, recipe) =
+                            new_value(self, sealed).expect("a set entry has a value");
                         keyed.slots.insert(
                             key.clone(),
                             Slot {
@@ -4859,6 +5548,11 @@ impl Evaluator<'_> {
                 span,
                 format!(".{i}: a keyed value has no tuple elements; write `[{i}]` for the key {i}"),
             )),
+            (Shape::List(_) | Shape::Tuple(_) | Shape::Named(..), _) if recipe.seal => Err(self
+                .fail(
+                    span,
+                    "!: only a key can be sealed, not an element; seal the key that holds it",
+                )),
             (Shape::List(elements), SelectorKind::Accessor(i)) => {
                 let index = usize::try_from(*i).ok().filter(|&i| i < elements.len());
                 let Some(index) = index else {
@@ -4868,13 +5562,22 @@ impl Evaluator<'_> {
                     let symbol = recipe.op.map_or("-", SetOp::symbol);
                     return Err(self.fail(span, format!("{symbol}: the list has no element [{i}]")));
                 };
+                // The list of a key sealed with `!` keeps its length.
+                if let (None, Some(seal)) = (recipe.op, closed) {
+                    let message = format!(
+                        "-: `[{i}]` cannot be removed: the list of a sealed key keeps its length"
+                    );
+                    let diagnostic = Diagnostic::error(recipe.span, message);
+                    self.report(diagnostic.with_related(seal, "sealed here"));
+                    return Ok(value.clone());
+                }
                 let mut elements = elements.clone();
                 match recipe.op {
                     None => {
                         elements.remove(index);
                     }
                     Some(SetOp::Set) => {
-                        let (cell, _) = new_value(self).expect("a set entry has a value");
+                        let (cell, _) = new_value(self, None).expect("a set entry has a value");
                         elements[index] = cell;
                     }
                     Some(op) => {
@@ -4895,7 +5598,7 @@ impl Evaluator<'_> {
                 match recipe.op {
                     None => return Err(self.fail(span, "-: tuple elements cannot be removed")),
                     Some(SetOp::Set) => {
-                        let (cell, _) = new_value(self).expect("a set entry has a value");
+                        let (cell, _) = new_value(self, None).expect("a set entry has a value");
                         elements[*i] = cell;
                     }
                     Some(op) => {
@@ -5008,7 +5711,13 @@ impl Evaluator<'_> {
                     };
                     return self.eval(rhs, &patch);
                 }
-                let right = self.eval(rhs, env)?;
+                let right = self.eval(
+                    rhs,
+                    &Env {
+                        closed: None,
+                        ..env.clone()
+                    },
+                )?;
                 self.merge(&left, &right, deep, env, span)
             }
             BinOp::Union => {
@@ -5036,11 +5745,13 @@ impl Evaluator<'_> {
     }
 
     /// `b` over `a`: the type names are for the caller to check.
+    /// `closed`: `a` is the value of a key sealed with `!` (`SPEC.md` 5.4).
     fn merge_keyed(
         &mut self,
         a: &KeyedShape,
         b: &KeyedShape,
         copy: &CopyTo<'_>,
+        closed: Option<Span>,
     ) -> Eval<Rc<Shaped>> {
         let mut keyed = a.clone();
         if keyed.name.is_none() {
@@ -5057,7 +5768,7 @@ impl Evaluator<'_> {
             chain: &chain,
             ..*copy
         };
-        self.copy_entries(b, &mut keyed, &inner);
+        self.copy_entries(b, &mut keyed, &inner, true, closed);
         Self::shaped(Shape::Keyed(Box::new(keyed)), copy.span)
     }
 
@@ -5087,6 +5798,7 @@ impl Evaluator<'_> {
                         here: here.clone(),
                         context: copy.context,
                         span: copy.span,
+                        closed: None,
                     },
                     here,
                 )
@@ -5121,7 +5833,7 @@ impl Evaluator<'_> {
                     outer_below: &Below::Missing,
                     span,
                 };
-                self.merge_keyed(a, b, &copy)
+                self.merge_keyed(a, b, &copy, env.closed)
             }
             (Shape::Named(x, a), Shape::Named(y, b)) if deep && x == y => {
                 let copy = CopyTo {

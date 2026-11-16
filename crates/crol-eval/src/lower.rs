@@ -40,6 +40,24 @@ pub(crate) struct LoweredData {
     pub(crate) root_span: Span,
 }
 
+impl LoweredData {
+    /// Whether any entry seals its target, or any `seal!` seals a value
+    /// (`SPEC.md` 5.4).
+    pub(crate) fn has_seals(&self) -> bool {
+        self.ops.iter().any(|op| op.seal)
+            || self
+                .ir
+                .blocks
+                .iter()
+                .any(|block| block.entries.iter().any(|entry| entry.seal))
+            || self
+                .ir
+                .exprs
+                .iter()
+                .any(|expr| matches!(expr.kind, ExprKind::Macro(MacroKind::Seal, _)))
+    }
+}
+
 /// The root entries of a data-mode document: its entries, or those of its
 /// untyped outer block (`SPEC.md` 4).
 fn root_entries(lowerer: &mut Lowerer, document: &ast::Document) -> Vec<ast::AnyEntry> {
@@ -453,6 +471,7 @@ impl Shift {
                     op: entry.op,
                     replace: entry.replace,
                     if_set: entry.if_set,
+                    seal: entry.seal,
                     key: entry.key.clone(),
                     key_optional: entry.key_optional,
                     path: entry.path.clone(),
@@ -761,6 +780,7 @@ impl Lowerer {
         let conditional = conditions.iter().any(Option::is_some);
         let mut replace = false;
         let mut if_set = false;
+        let seal;
         let (target, op, value) = match entry {
             ast::AnyEntry::Entry(entry) => {
                 if let Some(bind) = entry.bind() {
@@ -772,10 +792,12 @@ impl Lowerer {
                 }
                 let op = set_op(entry.op());
                 replace = entry.op() == ast::EntryOp::Replace;
+                seal = entry.is_sealed();
                 (entry.target(), Some(op), entry.value())
             }
             ast::AnyEntry::Remove(entry) => {
                 if_set = entry.if_set();
+                seal = entry.is_sealed();
                 (entry.target(), None, None)
             }
             ast::AnyEntry::ValueBind(bind) => {
@@ -918,6 +940,7 @@ impl Lowerer {
                 op,
                 replace,
                 if_set,
+                seal,
                 key_optional: target_optional,
                 path: path.clone(),
                 value,
@@ -938,6 +961,7 @@ impl Lowerer {
     fn lift(&mut self, entry: &ast::AnyEntry, fixed: &FixedBlock, conditions: &[Option<Cond>]) {
         let mut replace = false;
         let mut if_set = false;
+        let seal;
         let (target, op, value) = match entry {
             ast::AnyEntry::Entry(e) => {
                 if let Some(bind) = e.bind() {
@@ -946,10 +970,12 @@ impl Lowerer {
                 }
                 let op = set_op(e.op());
                 replace = e.op() == ast::EntryOp::Replace;
+                seal = e.is_sealed();
                 (e.target(), Some(op), e.value())
             }
             ast::AnyEntry::Remove(e) => {
                 if_set = e.if_set();
+                seal = e.is_sealed();
                 (e.target(), None, None)
             }
             ast::AnyEntry::VariantBlock(block) => {
@@ -1030,6 +1056,7 @@ impl Lowerer {
                 op,
                 replace,
                 if_set,
+                seal,
                 key_optional: false,
                 path: full_path.clone(),
                 value,
@@ -1454,6 +1481,7 @@ impl Lowerer {
                         op: Some(set_op(op)),
                         replace: op == ast::EntryOp::Replace,
                         if_set: false,
+                        seal: entry.is_sealed(),
                         key,
                         key_optional: key_is_optional(&target),
                         path,
@@ -1470,6 +1498,7 @@ impl Lowerer {
                             op: None,
                             replace: false,
                             if_set: entry.if_set(),
+                            seal: entry.is_sealed(),
                             key,
                             key_optional: key_is_optional(&target),
                             path,
@@ -1922,7 +1951,7 @@ impl Lowerer {
         let Some(kind) = MacroKind::from_name(&name) else {
             self.error(
                 span,
-                format!("there is no macro `{name}!`; the macros are `round!`, `floor!`, `ceil!` and `clamp!`"),
+                format!("there is no macro `{name}!`; the macros are `round!`, `floor!`, `ceil!`, `clamp!` and `seal!`"),
             );
             return self.ir.add_expr(ExprKind::Error, span);
         };

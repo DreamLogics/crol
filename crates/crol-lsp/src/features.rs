@@ -52,7 +52,10 @@ fn entry_symbol(
     let (name, detail, kind, selection, children) = match entry {
         ast::AnyEntry::Entry(e) => {
             let target = e.target()?;
-            let op = e.op_token().map_or(String::new(), |t| t.text().to_owned());
+            let mut op = e.op_token().map_or(String::new(), |t| t.text().to_owned());
+            if e.is_sealed() {
+                op.push('!');
+            }
             let (detail, children) = match e.value() {
                 Some(ast::Expr::Block(block)) => (
                     block.type_name().map(|t| t.text().to_owned()),
@@ -75,7 +78,12 @@ fn entry_symbol(
         }
         ast::AnyEntry::Remove(e) => {
             let target = e.target()?;
-            let op = if e.if_set() { "-?" } else { "-" };
+            let op = match (e.if_set(), e.is_sealed()) {
+                (true, true) => "-?!",
+                (true, false) => "-?",
+                (false, true) => "-!",
+                (false, false) => "-",
+            };
             (
                 format!("{prefix}{op}{}", target_text(&target)),
                 None,

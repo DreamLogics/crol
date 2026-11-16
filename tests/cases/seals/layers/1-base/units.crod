@@ -1,0 +1,25 @@
+// Seals (`SPEC.md` 5.4): what is allowed.
+base := { !id: 4, hp: 30 }
+
++archer: {
+    !id: 4,
+    !stats: { range: 6, speed: 1 },
+    hp: 30,
+}
+!fixed: { level: 1 }
++lists: { !items: [1, 2] }
+
+// A merge carries the seals, a spread does not.
++merged: &base ~ { hp: 40 }
++spread: { ..&base, hp: 40 }
+
+// `?!` ensures and seals; `-!` removes and seals as unset.
++ensured: { ?!x: 1, ?!y: 2 }
++removed: { a: 1, -!a, -?!b }
+
+// `seal!` seals everything in a value; the key it is set to stays open.
++frozen: seal!({ a: 1, inner: { b: 2 } })
+
+// Seals inside a value that is replaced go with it.
++nest: { inner: { !k: 1 } }
++gone: { !a: 1 }

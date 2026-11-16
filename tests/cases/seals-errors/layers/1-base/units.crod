@@ -1,0 +1,20 @@
+// Seals (`SPEC.md` 5.4): what is an error.
+base := seal!({ id: 4, hp: 30 })
+
++archer: {
+    !id: 4,
+    !stats: { range: 6 },
+    hp: 30,
+    -?!gone,
+}
+!fixed: 1
++lists: { !items: [1, 2] }
++frozen: seal!({ a: 1, inner: { b: 2 } })
+
+// A merge carries the seals of `seal!`.
++merged: &base ~ { hp: 40 }
++grown: &base ~ { extra: 1 }
+
++element: { list: [1], !list[0]: 2 }
++again: { !a: 1, a: 2 }
++list: seal!([1])

@@ -586,6 +586,16 @@
           }
         ]
       },
+      "seal": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "!",
+            "named": false
+          }
+        ]
+      },
       "target": {
         "multiple": false,
         "required": true,
@@ -1195,6 +1205,16 @@
         "types": [
           {
             "type": "?",
+            "named": false
+          }
+        ]
+      },
+      "seal": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "!",
             "named": false
           }
         ]

@@ -1,0 +1,7 @@
+// What changes in a key sealed with `seal!`, by a path or a merge, is
+// inside it (`SPEC.md` 5.4); a value that is not merged sets it again.
+a.inner.b: 3
+b: & ~ { inner: { b: 3 } }
+c: & ~ { inner.b: 3 }
+d.inner: { b: 3 }
+e: & ~ { inner: 5 }

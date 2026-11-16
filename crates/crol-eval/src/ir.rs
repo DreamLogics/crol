@@ -257,6 +257,9 @@ pub(crate) enum MacroKind {
     Floor,
     Ceil,
     Clamp,
+    /// `seal!(value)`: every key in the value, at any depth, is sealed, and
+    /// no key can be added to it or removed (`SPEC.md` 5.4).
+    Seal,
 }
 
 impl MacroKind {
@@ -266,6 +269,7 @@ impl MacroKind {
             "floor" => MacroKind::Floor,
             "ceil" => MacroKind::Ceil,
             "clamp" => MacroKind::Clamp,
+            "seal" => MacroKind::Seal,
             _ => return None,
         })
     }
@@ -276,6 +280,7 @@ impl MacroKind {
             MacroKind::Floor => "floor!",
             MacroKind::Ceil => "ceil!",
             MacroKind::Clamp => "clamp!",
+            MacroKind::Seal => "seal!",
         }
     }
 
@@ -294,6 +299,7 @@ impl MacroKind {
             MacroKind::Floor => "floor!(x)",
             MacroKind::Ceil => "ceil!(x)",
             MacroKind::Clamp => "clamp!(x, min, max)",
+            MacroKind::Seal => "seal!(value)",
         }
     }
 
@@ -314,6 +320,11 @@ impl MacroKind {
                 "The smallest integer not below `x`. An integer is returned \
                  as it is, and a result that does not fit an integer is an \
                  error."
+            }
+            MacroKind::Seal => {
+                "`value`, a keyed value, with every key in it sealed, at any \
+                 depth: nothing in it can change, and no key can be added to \
+                 it or removed. The key it is set to stays open."
             }
             MacroKind::Clamp => {
                 "`x`, kept between `min` and `max`. The result is an integer \
@@ -389,6 +400,9 @@ pub(crate) struct Entry {
     pub(crate) replace: bool,
     /// `-?target`: a remove that is no error where the target is not set.
     pub(crate) if_set: bool,
+    /// `!target`, `+!target`, `-!target`, ...: the entry seals its target
+    /// (`SPEC.md` 5.4).
+    pub(crate) seal: bool,
     pub(crate) key: Key,
     /// `a?.b`: the path goes through the key whatever it holds.
     pub(crate) key_optional: bool,
@@ -415,6 +429,9 @@ pub(crate) struct RootOp {
     pub(crate) replace: bool,
     /// `-?target`: a remove that is no error where the target is not set.
     pub(crate) if_set: bool,
+    /// `!target`, `+!target`, `-!target`, ...: the entry seals its target
+    /// (`SPEC.md` 5.4).
+    pub(crate) seal: bool,
     /// `a?.b`: the path goes through the key whatever it holds.
     pub(crate) key_optional: bool,
     pub(crate) path: Vec<Selector>,

@@ -227,6 +227,111 @@ a: 1
         (identifier)))))
 
 ==================
+Seals
+==================
+
+a: 1
+!b: 2
++!c: { !d: 3, -!e }
+?!f: 4
+^!g: 5
+-!h
+-?!i
+!j.k: !true
+
+---
+
+(document
+  (entry
+    (target
+      (key
+        (identifier)))
+    (literal
+      (integer)))
+  (entry
+    (target
+      (key
+        (identifier)))
+    (literal
+      (integer)))
+  (entry
+    (target
+      (key
+        (identifier)))
+    (block
+      (entry
+        (target
+          (key
+            (identifier)))
+        (literal
+          (integer)))
+      (remove_entry
+        (target
+          (key
+            (identifier))))))
+  (entry
+    (target
+      (key
+        (identifier)))
+    (literal
+      (integer)))
+  (entry
+    (target
+      (key
+        (identifier)))
+    (literal
+      (integer)))
+  (remove_entry
+    (target
+      (key
+        (identifier))))
+  (remove_entry
+    (target
+      (key
+        (identifier))))
+  (entry
+    (target
+      (key
+        (identifier))
+      (field_selector
+        (identifier)))
+    (prefix_expr
+      (literal))))
+
+==================
+Seals: `-!` with no key after it continues a value
+==================
+
+a: 1
+-!(true)
+b: 2
+-! c
+
+---
+
+(document
+  (entry
+    (target
+      (key
+        (identifier)))
+    (binary_expr
+      (literal
+        (integer))
+      (prefix_expr
+        (paren_expr
+          (literal)))))
+  (entry
+    (target
+      (key
+        (identifier)))
+    (literal
+      (integer)))
+  (remove_entry
+    (target
+      (key
+        (identifier)))))
+
+==================
 Fallbacks and list unions
 ==================
 

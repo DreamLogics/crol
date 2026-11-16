@@ -1,0 +1,5 @@
+// Written after the seal: an error in every context, though in `prod` the
+// chain applies it first (`SPEC.md` 5.4).
+game.debug: true
+<dev> { game.debug: true }
+game.level: 2

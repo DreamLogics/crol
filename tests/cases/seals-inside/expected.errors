@@ -1,0 +1,5 @@
+2-mods/mods.crod:3:1: `inner` is sealed with `seal!`, so nothing in it can change
+2-mods/mods.crod:4:10: `inner` is sealed with `seal!`, so nothing in it can change
+2-mods/mods.crod:5:10: `inner` is sealed with `seal!`, so nothing in it can change
+2-mods/mods.crod:6:1: `inner` is sealed with `seal!`, so nothing in it can change
+2-mods/mods.crod:7:10: `inner` is sealed, so it cannot be set again

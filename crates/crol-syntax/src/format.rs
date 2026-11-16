@@ -654,10 +654,14 @@ impl Formatter {
                 self.entry_prefix(node) + &self.flat(&child_node(node, is_expr)?)?
             }
             REMOVE_ENTRY => {
-                let mark = if child_token(node, &[QUESTION]).is_some() {
-                    "-?"
-                } else {
-                    "-"
+                let mark = match (
+                    child_token(node, &[QUESTION]).is_some(),
+                    child_token(node, &[BANG]).is_some(),
+                ) {
+                    (true, true) => "-?!",
+                    (true, false) => "-?",
+                    (false, true) => "-!",
+                    (false, false) => "-",
                 };
                 format!("{mark}{}", self.target(&child_node(node, |k| k == TARGET)?))
             }
@@ -699,6 +703,9 @@ impl Formatter {
                 }
                 if let Some(op) = child_token(node, &[PLUS, QUESTION, CARET]) {
                     prefix.push_str(op.text());
+                }
+                if child_token(node, &[BANG]).is_some() {
+                    prefix.push('!');
                 }
                 if let Some(target) = child_node(node, |k| k == TARGET) {
                     prefix.push_str(&self.target(&target));

@@ -1,0 +1,9 @@
+game: { debug: true, level: 1 }
+
+<!dev & prod & !prod_eu> {
+    game: { debug: false, level: 1 },
+}
+
+<!dev & prod & prod_eu> {
+    game: { debug: false, level: 2 },
+}
