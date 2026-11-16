@@ -172,6 +172,16 @@ impl Shape {
             Shape::Keyed(_) => "a keyed value",
         }
     }
+
+    /// A number as a float, as arithmetic counts it; `None` for anything
+    /// else.
+    fn as_f64(&self) -> Option<f64> {
+        match *self {
+            Shape::Int(i) => Some(i as f64),
+            Shape::Float(f) => Some(f),
+            _ => None,
+        }
+    }
 }
 
 /// A sealed key (`SPEC.md` 5.4).
@@ -5906,14 +5916,19 @@ impl Evaluator<'_> {
         Self::shaped(Shape::Int(whole), span)
     }
 
-    /// `float` rounded the way `round!`, `floor!` or `ceil!` does, as an
-    /// integer.
-    fn whole(&mut self, kind: MacroKind, float: f64, span: Span) -> Eval<i128> {
-        let whole = match kind {
+    /// `float` rounded the way `round!`, `floor!` or `ceil!` does.
+    fn rounded(kind: MacroKind, float: f64) -> f64 {
+        match kind {
             MacroKind::Round => float.round(),
             MacroKind::Floor => float.floor(),
             _ => float.ceil(),
-        };
+        }
+    }
+
+    /// `float` rounded the way `round!`, `floor!` or `ceil!` does, as an
+    /// integer.
+    fn whole(&mut self, kind: MacroKind, float: f64, span: Span) -> Eval<i128> {
+        let whole = Self::rounded(kind, float);
         // `i128::MAX as f64` rounds up to 2^127, which does not fit.
         if whole >= -(2f64.powi(127)) && whole < 2f64.powi(127) {
             Ok(whole as i128)
@@ -5940,44 +5955,35 @@ impl Evaluator<'_> {
         if let Some(step) = not_above_zero {
             return Err(self.fail(span, format!("{name}: the step {step} is not above zero")));
         }
-        let shape = match (&x.shape, &step.shape) {
-            (Shape::Int(x), Shape::Int(s)) => {
-                // Exact: the quotient, moved by one where the remainder says.
-                // With `s` at least 2 the quotient is far from the bounds,
-                // and with `s` 1 the remainder is 0.
-                let (q, r) = (x / s, x % s);
-                let q = match kind {
-                    MacroKind::Floor if r < 0 => q - 1,
-                    MacroKind::Ceil if r > 0 => q + 1,
-                    MacroKind::Round if r.unsigned_abs() >= s.unsigned_abs() - r.unsigned_abs() => {
-                        q + r.signum()
+        let x_float = x.shape.as_f64().expect("checked to be numbers");
+        let shape = match step.shape {
+            Shape::Int(s) => {
+                let q = match x.shape {
+                    // Exact: the quotient, moved by one where the remainder
+                    // says. With `s` at least 2 the quotient is far from the
+                    // bounds, and with `s` 1 the remainder is 0.
+                    Shape::Int(x) => {
+                        let (q, r) = (x / s, x % s);
+                        match kind {
+                            MacroKind::Floor if r < 0 => q - 1,
+                            MacroKind::Ceil if r > 0 => q + 1,
+                            MacroKind::Round
+                                if r.unsigned_abs() >= s.unsigned_abs() - r.unsigned_abs() =>
+                            {
+                                q + r.signum()
+                            }
+                            _ => q,
+                        }
                     }
-                    _ => q,
+                    _ => self.whole(kind, x_float / s as f64, span)?,
                 };
-                match q.checked_mul(*s) {
+                match q.checked_mul(s) {
                     Some(n) => Shape::Int(n),
                     None => return Err(self.fail(span, format!("{name}: integer overflow"))),
                 }
             }
-            (Shape::Float(x), Shape::Int(s)) => {
-                let q = self.whole(kind, x / *s as f64, span)?;
-                match q.checked_mul(*s) {
-                    Some(n) => Shape::Int(n),
-                    None => return Err(self.fail(span, format!("{name}: integer overflow"))),
-                }
-            }
-            (x, Shape::Float(s)) => {
-                let x = match x {
-                    Shape::Int(i) => *i as f64,
-                    Shape::Float(f) => *f,
-                    _ => unreachable!("checked to be numbers"),
-                };
-                let q = match kind {
-                    MacroKind::Round => (x / s).round(),
-                    MacroKind::Floor => (x / s).floor(),
-                    _ => (x / s).ceil(),
-                };
-                let result = q * s;
+            Shape::Float(s) => {
+                let result = Self::rounded(kind, x_float / s) * s;
                 if !result.is_finite() {
                     return Err(
                         self.fail(span, format!("{name}: the result is not a finite float"))
@@ -5995,35 +6001,30 @@ impl Evaluator<'_> {
     /// and otherwise a float. Of equal values the first is kept, so that the
     /// sign of a zero does not depend on the platform.
     fn extreme(kind: MacroKind, args: &[Rc<Shaped>]) -> Shape {
-        let ints: Option<Vec<i128>> = args
-            .iter()
-            .map(|arg| match arg.shape {
-                Shape::Int(i) => Some(i),
+        let better = |next: f64, kept: f64| match kind {
+            MacroKind::Min => next < kept,
+            _ => next > kept,
+        };
+        // The extreme as integers while every argument is one, and as floats.
+        let mut int = match args[0].shape {
+            Shape::Int(i) => Some(i),
+            _ => None,
+        };
+        let mut float = args[0].shape.as_f64().expect("checked to be numbers");
+        for arg in &args[1..] {
+            let next = arg.shape.as_f64().expect("checked to be numbers");
+            if better(next, float) {
+                float = next;
+            }
+            int = match (int, &arg.shape) {
+                (Some(kept), Shape::Int(next)) => Some(match kind {
+                    MacroKind::Min => kept.min(*next),
+                    _ => kept.max(*next),
+                }),
                 _ => None,
-            })
-            .collect();
-        if let Some(ints) = ints {
-            let found = match kind {
-                MacroKind::Min => ints.into_iter().min(),
-                _ => ints.into_iter().max(),
             };
-            return Shape::Int(found.expect("at least two arguments"));
         }
-        let floats = args.iter().map(|arg| match arg.shape {
-            Shape::Int(i) => i as f64,
-            Shape::Float(f) => f,
-            _ => unreachable!("checked to be numbers"),
-        });
-        let found = floats
-            .reduce(|kept, next| {
-                let better = match kind {
-                    MacroKind::Min => next < kept,
-                    _ => next > kept,
-                };
-                if better { next } else { kept }
-            })
-            .expect("at least two arguments");
-        Shape::Float(found)
+        int.map_or(Shape::Float(float), Shape::Int)
     }
 
     fn clamp(&mut self, x: &Shaped, lo: &Shaped, hi: &Shaped, span: Span) -> Eval<Rc<Shaped>> {
@@ -6036,11 +6037,7 @@ impl Evaluator<'_> {
             }
             return Self::shaped(Shape::Int(*x.clamp(lo, hi)), span);
         }
-        let float = |shaped: &Shaped| match shaped.shape {
-            Shape::Int(i) => i as f64,
-            Shape::Float(f) => f,
-            _ => unreachable!("checked to be numbers"),
-        };
+        let float = |shaped: &Shaped| shaped.shape.as_f64().expect("checked to be numbers");
         let (x, lo, hi) = (float(x), float(lo), float(hi));
         if lo > hi {
             let (lo, hi) = (format_float(lo), format_float(hi));
@@ -6080,11 +6077,7 @@ impl Evaluator<'_> {
                 }
             }
             (Int(_) | Float(_), Int(_) | Float(_)) if op != BinOp::Union => {
-                let as_float = |s: &Shape| match s {
-                    Int(i) => *i as f64,
-                    Float(f) => *f,
-                    _ => unreachable!(),
-                };
+                let as_float = |s: &Shape| s.as_f64().expect("matched as numbers");
                 let (a, b) = (as_float(&left.shape), as_float(&right.shape));
                 let result = match op {
                     BinOp::Add => a + b,

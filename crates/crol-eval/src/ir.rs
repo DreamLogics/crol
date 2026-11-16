@@ -316,8 +316,8 @@ impl MacroKind {
         match self.arity() {
             (1, Some(1)) => "1 argument".to_owned(),
             (least, Some(most)) if least == most => format!("{least} arguments"),
-            (least, Some(most)) if least + 1 == most => format!("{least} or {most} arguments"),
-            (least, Some(most)) => format!("{least} to {most} arguments"),
+            // No macro takes a wider range than this.
+            (least, Some(most)) => format!("{least} or {most} arguments"),
             (least, None) => format!("at least {least} arguments"),
         }
     }
@@ -340,23 +340,25 @@ impl MacroKind {
     pub(crate) fn doc(self) -> &'static str {
         match self {
             MacroKind::Round => {
-                "`x` to the nearest integer, ties away from zero. An integer \
-                 is returned as it is, and a result that does not fit an \
-                 integer is an error. With a `step`, `x` to the nearest \
-                 multiple of it: an integer if `step` is one, a float if it \
-                 is a float."
+                "Without a `step`, `x` to the nearest integer, ties away from \
+                 zero; an integer is returned as it is, and a result that \
+                 does not fit an integer is an error. With a `step`, the \
+                 nearest multiple of it: an integer if `step` is one, a float \
+                 if it is a float."
             }
             MacroKind::Floor => {
-                "The largest integer not above `x`. An integer is returned \
-                 as it is, and a result that does not fit an integer is an \
-                 error. With a `step`, the largest multiple of it not above \
-                 `x`: an integer if `step` is one, a float if it is a float."
+                "Without a `step`, the largest integer not above `x`; an \
+                 integer is returned as it is, and a result that does not \
+                 fit an integer is an error. With a `step`, the largest \
+                 multiple of it not above `x`: an integer if `step` is one, \
+                 a float if it is a float."
             }
             MacroKind::Ceil => {
-                "The smallest integer not below `x`. An integer is returned \
-                 as it is, and a result that does not fit an integer is an \
-                 error. With a `step`, the smallest multiple of it not below \
-                 `x`: an integer if `step` is one, a float if it is a float."
+                "Without a `step`, the smallest integer not below `x`; an \
+                 integer is returned as it is, and a result that does not \
+                 fit an integer is an error. With a `step`, the smallest \
+                 multiple of it not below `x`: an integer if `step` is one, \
+                 a float if it is a float."
             }
             MacroKind::Seal => {
                 "`value`, a keyed value, with every key in it sealed, at any \

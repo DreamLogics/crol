@@ -27,7 +27,9 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Changed
 
-- The `.crob` format is version 9, for seals: files of version 8 are compiled again.
+- The `.crob` format is version 9, for seals and the macros `min!`, `max!` and
+  `abs!`: files of version 8 are compiled again. A build of `main` from between
+  the two changes reports a version 9 file that uses the new macros as corrupt.
 
 ## [0.4.1] - 2026-11-13
 

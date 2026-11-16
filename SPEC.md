@@ -1675,20 +1675,24 @@ numbers, and a file cannot define more:
 | `abs!(x)` | `x` without its sign |
 | `seal!(value)` | `value`, a keyed value, with everything in it sealed (section 5.4) |
 
-`round!`, `floor!` and `ceil!` return an integer, and are errors when the
-result does not fit one; an integer argument is returned as it is. So
-`hit_points: round!(& * 1.1)` stays an integer. With a `step`, the result
-is a multiple of it, rounded the same way: `round!(17, 5)` is `15`,
+Without a `step`, `round!`, `floor!` and `ceil!` return an integer, and are
+errors when the result does not fit one; an integer argument is returned as
+it is. So `hit_points: round!(& * 1.1)` stays an integer. With a `step`, the
+result is a multiple of it, rounded the same way: `round!(17, 5)` is `15`,
 `floor!(-17, 5)` is `-20`, `floor!(7.3, 0.25)` is `7.25`. An integer `step`
 gives an integer, computed exactly when `x` is an integer too, and a float
-`step` gives a float, `(x / step)` rounded and multiplied by `step`, with a zero always
-positive. A `step` that is not above zero is an error.
+`step` gives a float, `(x / step)` rounded and multiplied by `step`, with a
+zero always positive, so `round!(7, 0.5)` is `7.0`. A `step` that is not
+above zero is an error. A float `step` is only as exact as float division:
+`0.1` is not exactly a tenth, so `floor!(0.3, 0.1)` is `0.2`, as CSS's
+`round()` gives too. Steps that are powers of two, like `0.25`, are exact.
 
 `clamp!`, `min!` and `max!` of integers are an integer, and with any float
-among their arguments they count as floats, as arithmetic does; `min` above
-`max` is an error. Of equal arguments, `min!` and `max!` keep the first, so
-`max!(-0.0, 0.0)` is `-0.0`. `abs!` keeps an integer an integer, and is an
-error when the result does not fit one (`abs!` of the lowest `i128`).
+among their arguments they count as floats, as arithmetic does. A `clamp!`
+whose `min` is above its `max` is an error. Of equal arguments, `min!` and
+`max!` keep the first, so `max!(-0.0, 0.0)` is `-0.0`. `abs!` keeps an
+integer an integer, and is an error when the result does not fit one
+(`abs!` of the lowest `i128`).
 
 Any argument of these seven that is not a number is an error naming its
 kind, and so are a wrong number of arguments and a name that is no macro.
