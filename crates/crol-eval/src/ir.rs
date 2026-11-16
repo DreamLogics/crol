@@ -257,6 +257,9 @@ pub(crate) enum MacroKind {
     Floor,
     Ceil,
     Clamp,
+    Min,
+    Max,
+    Abs,
     /// `seal!(value)`: every key in the value, at any depth, is sealed, and
     /// no key can be added to it or removed (`SPEC.md` 5.4).
     Seal,
@@ -269,6 +272,9 @@ impl MacroKind {
             "floor" => MacroKind::Floor,
             "ceil" => MacroKind::Ceil,
             "clamp" => MacroKind::Clamp,
+            "min" => MacroKind::Min,
+            "max" => MacroKind::Max,
+            "abs" => MacroKind::Abs,
             "seal" => MacroKind::Seal,
             _ => return None,
         })
@@ -280,25 +286,52 @@ impl MacroKind {
             MacroKind::Floor => "floor!",
             MacroKind::Ceil => "ceil!",
             MacroKind::Clamp => "clamp!",
+            MacroKind::Min => "min!",
+            MacroKind::Max => "max!",
+            MacroKind::Abs => "abs!",
             MacroKind::Seal => "seal!",
         }
     }
 
-    /// How many arguments the macro takes.
-    pub(crate) fn arity(self) -> usize {
+    /// The fewest and the most arguments the macro takes; `None` for no
+    /// most.
+    pub(crate) fn arity(self) -> (usize, Option<usize>) {
         match self {
-            MacroKind::Clamp => 3,
-            _ => 1,
+            MacroKind::Round | MacroKind::Floor | MacroKind::Ceil => (1, Some(2)),
+            MacroKind::Clamp => (3, Some(3)),
+            MacroKind::Min | MacroKind::Max => (2, None),
+            MacroKind::Abs | MacroKind::Seal => (1, Some(1)),
+        }
+    }
+
+    /// Whether the macro takes `count` arguments.
+    pub(crate) fn takes(self, count: usize) -> bool {
+        let (least, most) = self.arity();
+        count >= least && most.is_none_or(|most| count <= most)
+    }
+
+    /// How many arguments the macro takes, for an error: `1 argument`,
+    /// `1 or 2 arguments`, `at least 2 arguments`.
+    pub(crate) fn arity_text(self) -> String {
+        match self.arity() {
+            (1, Some(1)) => "1 argument".to_owned(),
+            (least, Some(most)) if least == most => format!("{least} arguments"),
+            // No macro takes a wider range than this.
+            (least, Some(most)) => format!("{least} or {most} arguments"),
+            (least, None) => format!("at least {least} arguments"),
         }
     }
 
     /// How a call is written, with its parameters.
     pub(crate) fn signature(self) -> &'static str {
         match self {
-            MacroKind::Round => "round!(x)",
-            MacroKind::Floor => "floor!(x)",
-            MacroKind::Ceil => "ceil!(x)",
+            MacroKind::Round => "round!(x, step?)",
+            MacroKind::Floor => "floor!(x, step?)",
+            MacroKind::Ceil => "ceil!(x, step?)",
             MacroKind::Clamp => "clamp!(x, min, max)",
+            MacroKind::Min => "min!(a, b, ...)",
+            MacroKind::Max => "max!(a, b, ...)",
+            MacroKind::Abs => "abs!(x)",
             MacroKind::Seal => "seal!(value)",
         }
     }
@@ -307,19 +340,25 @@ impl MacroKind {
     pub(crate) fn doc(self) -> &'static str {
         match self {
             MacroKind::Round => {
-                "`x` to the nearest integer, ties away from zero. An integer \
-                 is returned as it is, and a result that does not fit an \
-                 integer is an error."
+                "Without a `step`, `x` to the nearest integer, ties away from \
+                 zero; an integer is returned as it is, and a result that \
+                 does not fit an integer is an error. With a `step`, the \
+                 nearest multiple of it: an integer if `step` is one, a float \
+                 if it is a float."
             }
             MacroKind::Floor => {
-                "The largest integer not above `x`. An integer is returned \
-                 as it is, and a result that does not fit an integer is an \
-                 error."
+                "Without a `step`, the largest integer not above `x`; an \
+                 integer is returned as it is, and a result that does not \
+                 fit an integer is an error. With a `step`, the largest \
+                 multiple of it not above `x`: an integer if `step` is one, \
+                 a float if it is a float."
             }
             MacroKind::Ceil => {
-                "The smallest integer not below `x`. An integer is returned \
-                 as it is, and a result that does not fit an integer is an \
-                 error."
+                "Without a `step`, the smallest integer not below `x`; an \
+                 integer is returned as it is, and a result that does not \
+                 fit an integer is an error. With a `step`, the smallest \
+                 multiple of it not below `x`: an integer if `step` is one, \
+                 a float if it is a float."
             }
             MacroKind::Seal => {
                 "`value`, a keyed value, with every key in it sealed, at any \
@@ -330,6 +369,18 @@ impl MacroKind {
                 "`x`, kept between `min` and `max`. The result is an integer \
                  if all three are, and a float otherwise. `min` above `max` \
                  is an error."
+            }
+            MacroKind::Min => {
+                "The smallest of the arguments. The result is an integer if \
+                 all of them are, and a float otherwise."
+            }
+            MacroKind::Max => {
+                "The largest of the arguments. The result is an integer if \
+                 all of them are, and a float otherwise."
+            }
+            MacroKind::Abs => {
+                "`x` without its sign. An integer stays an integer, and one \
+                 whose result does not fit is an error."
             }
         }
     }

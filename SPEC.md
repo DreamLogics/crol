@@ -35,7 +35,7 @@ RFC 2119 sense.
 
 - A programming language. CROL has no functions of your own, no
   conditionals, comparisons, loops, imports or I/O. Every expression is
-  pure arithmetic, boolean negation and structural combination, with four
+  pure arithmetic, boolean negation and structural combination, with
   built-in macros for numbers (section 6.7).
 - A schema language. The format has no types. Types, defaults,
   required fields and the meaning of ids come from the Rust program
@@ -1660,7 +1660,7 @@ values) are an error; write `"..."` around an id's text if needed.
 
 ### 6.7 Macros
 
-A macro is written `name!(arguments)`. There are five, four of them on
+A macro is written `name!(arguments)`. There are eight, seven of them on
 numbers, and a file cannot define more:
 
 | Macro | Result |
@@ -1668,19 +1668,39 @@ numbers, and a file cannot define more:
 | `round!(x)` | `x` to the nearest integer, ties away from zero |
 | `floor!(x)` | the largest integer not above `x` |
 | `ceil!(x)` | the smallest integer not below `x` |
+| `round!(x, step)`, `floor!(x, step)`, `ceil!(x, step)` | the same, to a multiple of `step` |
 | `clamp!(x, min, max)` | `x`, kept between `min` and `max` |
+| `min!(a, b, ...)` | the smallest of two or more numbers |
+| `max!(a, b, ...)` | the largest of two or more numbers |
+| `abs!(x)` | `x` without its sign |
 | `seal!(value)` | `value`, a keyed value, with everything in it sealed (section 5.4) |
 
-`round!`, `floor!` and `ceil!` return an integer, and are errors when the
-result does not fit one; an integer argument is returned as it is. So
-`hit_points: round!(& * 1.1)` stays an integer. `clamp!` of integers is an
-integer, and with any float among its arguments it counts as floats, as
-arithmetic does; `min` above `max` is an error. Any argument of these four
-that is not a number is an error naming its kind, and so are a wrong number of
-arguments and a name that is no macro. Arguments are evaluated as
-operands of an arithmetic operator are. The results are exact, so they are
-the same on every platform (section 7.6). `seal!`'s argument is evaluated
-where the macro is, as the entry's value, so that it can refer to its place.
+Without a `step`, `round!`, `floor!` and `ceil!` return an integer, and are
+errors when the result does not fit one; an integer argument is returned as
+it is. So `hit_points: round!(& * 1.1)` stays an integer. With a `step`, the
+result is a multiple of it, rounded the same way: `round!(17, 5)` is `15`,
+`floor!(-17, 5)` is `-20`, `floor!(7.3, 0.25)` is `7.25`. An integer `step`
+gives an integer, computed exactly when `x` is an integer too, and a float
+`step` gives a float, `(x / step)` rounded and multiplied by `step`, with a
+zero always positive, so `round!(7, 0.5)` is `7.0`. A `step` that is not
+above zero is an error. A float `step` is only as exact as float division:
+`0.1` is not exactly a tenth, so `floor!(0.3, 0.1)` is `0.2`, as CSS's
+`round()` gives too. Steps that are powers of two, like `0.25`, are exact.
+
+`clamp!`, `min!` and `max!` of integers are an integer, and with any float
+among their arguments they count as floats, as arithmetic does. A `clamp!`
+whose `min` is above its `max` is an error. Of equal arguments, `min!` and
+`max!` keep the first, so `max!(-0.0, 0.0)` is `-0.0`. `abs!` keeps an
+integer an integer, and is an error when the result does not fit one
+(`abs!` of the lowest `i128`).
+
+Any argument of these seven that is not a number is an error naming its
+kind, and so are a wrong number of arguments and a name that is no macro.
+Arguments are evaluated as operands of an arithmetic operator are. The
+results are exact, or IEEE 754 operations, so they are the same on every
+platform (section 7.6); for that reason there are no macros for powers,
+logarithms or trigonometry. `seal!`'s argument is evaluated where the macro
+is, as the entry's value, so that it can refer to its place.
 
 ## 7. Layers and evaluation
 
@@ -4460,14 +4480,9 @@ only in major releases.
 
 ## 15. Open questions
 
-1. **Clamping.** Patches stacked over several layers (`& - 2` three
-   times) can push a value out of its range. `min`, `max` and `clamp`
-   would cover this without comparisons in the language, but
-   `min(a, b)` already parses as a named tuple, so they need their own
-   syntax.
-2. **Enums in paths.** Section 10.14 has no step into an enum's variant.
+1. **Enums in paths.** Section 10.14 has no step into an enum's variant.
    Such a step can fail for what the data holds, unlike a field's.
-3. **Active layers elsewhere.** `save` writes files. A program with a
+2. **Active layers elsewhere.** `save` writes files. A program with a
    `FileLoader`, or layers in memory, needs something to save through.
 
 ---
@@ -4524,6 +4539,14 @@ where it is not obvious.
 - Laziness with shape and contents levels, and what counts as a cycle
   (7.5); `??` checks its left side to its own level only (6.5).
 - String concatenation with numbers, chars and booleans (6.6).
+- Decided: the number macros (6.7) are those whose results are exact or
+  basic IEEE 754 operations: rounding, with or without a step, `clamp!`,
+  `min!`, `max!` and `abs!`. Powers, `exp`, logarithms and trigonometry are
+  left out, because their results in `libm` differ by platform and would
+  break the fingerprint (7.6). `%` covers `mod`. They are macros and not
+  functions because `min(a, b)` already reads as a named tuple. Stacked
+  patches that would push a value out of its range (`& - 2` in three
+  layers) are kept in it with `max!(& - 2, 0)` or `clamp!`.
 - Variants are combinable: `Discrete` flags and `Grouped` alternatives,
   declared with `CrolVariants<T>`, where `T` may be the application's
   own type through `crol::VariantName` (8.1),

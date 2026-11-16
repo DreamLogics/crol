@@ -13,3 +13,20 @@ clamp_counts_as_floats: 5.0
 hit_points: 1265
 nested: { value: 422 }
 list: [2, 1]
+min_integers: -2
+max_integers: 7
+min_counts_as_floats: 2.5
+max_counts_as_floats: 3.0
+max_keeps_the_first_zero: -0.0
+abs_integer: 7
+abs_float: 2.5
+round_step: 15
+round_step_tie: -20
+floor_step: -20
+ceil_step: 20
+step_on_a_multiple: 15
+round_float_integer_step: 10
+floor_float_step: 7.25
+ceil_integer_float_step: 7.0
+round_step_no_negative_zero: 0.0
+cooldown: 1

@@ -14,3 +14,21 @@
 hit_points: round!(& * 1.15)
 +nested: { value: floor!(&root.hit_points / 3.0) + 1 }
 +list: [round!(1.5), floor!(1.5)]
++min_integers: min!(4, -2, 7)
++max_integers: max!(4, -2, 7)
++min_counts_as_floats: min!(3, 2.5)
++max_counts_as_floats: max!(3, 2.5)
++max_keeps_the_first_zero: max!(-0.0, 0.0)
++abs_integer: abs!(-7)
++abs_float: abs!(-2.5)
++round_step: round!(17, 5)
++round_step_tie: round!(-15, 10)
++floor_step: floor!(-17, 5)
++ceil_step: ceil!(17, 5)
++step_on_a_multiple: ceil!(15, 5)
++round_float_integer_step: round!(12.4, 5)
++floor_float_step: floor!(7.3, 0.25)
++ceil_integer_float_step: ceil!(7, 0.5)
++round_step_no_negative_zero: round!(-0.1, 0.5)
++cooldown: 2
+cooldown: max!(& - 3, 1)

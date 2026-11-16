@@ -1,3 +1,6 @@
-1-base/a.crod:1:11: there is no macro `abs!`; the macros are `round!`, `floor!`, `ceil!`, `clamp!` and `seal!`
-1-base/a.crod:2:13: round! takes 1 argument, not 2
+1-base/a.crod:1:11: there is no macro `sqrt!`; the macros are `round!`, `floor!`, `ceil!`, `clamp!`, `min!`, `max!`, `abs!` and `seal!`
+1-base/a.crod:2:13: round! takes 1 or 2 arguments, not 0
 1-base/a.crod:3:19: clamp! takes 3 arguments, not 2
+1-base/a.crod:4:24: round! takes 1 or 2 arguments, not 3
+1-base/a.crod:5:17: min! takes at least 2 arguments, not 1
+1-base/a.crod:6:17: abs! takes 1 argument, not 2
