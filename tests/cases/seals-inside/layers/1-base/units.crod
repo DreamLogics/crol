@@ -1,0 +1,5 @@
++a: seal!({ inner: { b: 2 } })
++b: seal!({ inner: { b: 2 } })
++c: seal!({ inner: { b: 2 } })
++d: seal!({ inner: { b: 2 } })
++e: seal!({ inner: { b: 2 } })

@@ -1,0 +1,3 @@
+// An entry that fails is skipped, and seals nothing (`SPEC.md` 5.4).
++x: 1
++obj: { x: 1, +!x: 2, x: 3, -!y, +y: 4 }

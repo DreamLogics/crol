@@ -1,0 +1,7 @@
+// `!merge.debug` seals `debug`, not `merge` (`SPEC.md` 5.4): a merge into
+// `merge` reaches the sealed key, as a path does.
+// A conditional seal holds for what is written after it in every context.
+path.debug: true
+merge: & ~ { debug: true }
+spread: { ..&, debug: true }   // fine: a spread copies no seals
+replace: { debug: true }       // fine: this replaces what holds the seal

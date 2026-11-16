@@ -665,7 +665,8 @@ impl Update {
 /// (`SPEC.md` 7.9): a template, a `..` at a root or a variant declaration
 /// changed, documents changed their order, a reference reads another
 /// context, the schema has constraints or sealed fields, an entry seals its
-/// target (`!`, `SPEC.md` 5.4), or there is anything to report.
+/// target (`!`) or a `seal!` seals a value (`SPEC.md` 5.4), or there is
+/// anything to report.
 pub fn evaluate_changed(
     before: &Compiled,
     after: &Compiled,
@@ -1368,5 +1369,53 @@ mod tests {
             })
             .count();
         assert_eq!(kept, DOCUMENTS - 1);
+    }
+
+    #[test]
+    fn data_sealed_with_seal_is_evaluated_again_in_full() {
+        // Sealed with `!` or `seal!`, a reload evaluates everything again
+        // (`SPEC.md` 5.4): here, an incremental one would lose the warning.
+        for sealed in ["+merged: { !id: 4 }\n", "+merged: seal!({ id: 4 })\n"] {
+            let mut sources = Sources::new();
+            let base = sources.add("1-base/a.crod", sealed);
+            let before = sources.add("2-mods/m.crod", "+other: 1\n");
+            let after = sources.add("2-mods/m.crod", "+other: 1\n?merged.id: 9\n");
+            let layers = |file| {
+                vec![
+                    Layer {
+                        name: "base".to_owned(),
+                        documents: vec![("a.crod".to_owned(), base)],
+                    },
+                    Layer {
+                        name: "mods".to_owned(),
+                        documents: vec![("m.crod".to_owned(), file)],
+                    },
+                ]
+            };
+            let options = DataOptions::default().with_contexts(Some(Vec::new()));
+            let full = evaluate_data(&sources, &layers(after), &options);
+            assert_eq!(
+                full.diagnostics.len(),
+                1,
+                "{sealed}: {:?}",
+                full.diagnostics
+            );
+            let (Some(before), _) = compile(&sources, &layers(before)) else {
+                panic!("{sealed}");
+            };
+            let (Some(after), _) = compile(&sources, &layers(after)) else {
+                panic!("{sealed}");
+            };
+            let evaluation = evaluate_compiled(&before, &options);
+            assert!(evaluation.diagnostics.is_empty(), "{sealed}");
+            let update = evaluate_changed(
+                &before,
+                &after,
+                &options,
+                &evaluation.variants,
+                &evaluation.contexts,
+            );
+            assert!(update.is_none(), "{sealed}");
+        }
     }
 }

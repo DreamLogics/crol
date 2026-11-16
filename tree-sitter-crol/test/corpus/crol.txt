@@ -299,6 +299,39 @@ a: 1
       (literal))))
 
 ==================
+Seals: `-!` with no key after it continues a value
+==================
+
+a: 1
+-!(true)
+b: 2
+-! c
+
+---
+
+(document
+  (entry
+    (target
+      (key
+        (identifier)))
+    (binary_expr
+      (literal
+        (integer))
+      (prefix_expr
+        (paren_expr
+          (literal)))))
+  (entry
+    (target
+      (key
+        (identifier)))
+    (literal
+      (integer)))
+  (remove_entry
+    (target
+      (key
+        (identifier)))))
+
+==================
 Fallbacks and list unions
 ==================
 

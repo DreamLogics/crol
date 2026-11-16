@@ -1,0 +1,4 @@
+1-one/a.crod:3:17: +: `x` is already set
+1-one/a.crod:3:31: -: `y` is not set
+2-two/a.crod:1:3: +: `x` is already set
+2-two/a.crod:2:3: -: `y` is not set

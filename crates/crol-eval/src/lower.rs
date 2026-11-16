@@ -41,7 +41,8 @@ pub(crate) struct LoweredData {
 }
 
 impl LoweredData {
-    /// Whether any entry seals its target (`SPEC.md` 5.4).
+    /// Whether any entry seals its target, or any `seal!` seals a value
+    /// (`SPEC.md` 5.4).
     pub(crate) fn has_seals(&self) -> bool {
         self.ops.iter().any(|op| op.seal)
             || self
@@ -49,6 +50,11 @@ impl LoweredData {
                 .blocks
                 .iter()
                 .any(|block| block.entries.iter().any(|entry| entry.seal))
+            || self
+                .ir
+                .exprs
+                .iter()
+                .any(|expr| matches!(expr.kind, ExprKind::Macro(MacroKind::Seal, _)))
     }
 }
 
@@ -1945,7 +1951,7 @@ impl Lowerer {
         let Some(kind) = MacroKind::from_name(&name) else {
             self.error(
                 span,
-                format!("there is no macro `{name}!`; the macros are `round!`, `floor!`, `ceil!` and `clamp!`"),
+                format!("there is no macro `{name}!`; the macros are `round!`, `floor!`, `ceil!`, `clamp!` and `seal!`"),
             );
             return self.ir.add_expr(ExprKind::Error, span);
         };
