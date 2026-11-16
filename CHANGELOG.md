@@ -9,6 +9,8 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-16
+
 ### Added
 
 - Sealed fields in the data (#31, `SPEC.md` 5.4): `!` after an entry's prefix seals
@@ -722,7 +724,8 @@ What changed during development, before anything was published.
   cursor, keep an existing `:`, and are triggered where keys and values
   start; a document just opened is evaluated at once.
 
-[Unreleased]: https://github.com/DreamLogics/crol/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/DreamLogics/crol/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/DreamLogics/crol/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/DreamLogics/crol/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/DreamLogics/crol/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/DreamLogics/crol/compare/v0.2.0...v0.3.0
