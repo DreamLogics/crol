@@ -704,7 +704,7 @@ tags: ["web", "public", "tls"]
 ```
 
 Multiplying an integer by a float gives a float, which an integer field does not
-accept. Four built-in macros bring a number back, or keep it in range:
+accept. Built-in macros bring a number back, or keep it in range:
 
 | Macro                 | Gives                                       |
 | --------------------- | ------------------------------------------- |
@@ -712,23 +712,33 @@ accept. Four built-in macros bring a number back, or keep it in range:
 | `floor!(x)`           | the largest integer not above `x`           |
 | `ceil!(x)`            | the smallest integer not below `x`          |
 | `clamp!(x, min, max)` | `x`, kept between `min` and `max`           |
+| `min!(a, b, ...)`     | the smallest of the numbers                 |
+| `max!(a, b, ...)`     | the largest of the numbers                  |
+| `abs!(x)`             | `x` without its sign                        |
 
-A fifth, `seal!(value)`, is not about numbers: it keeps everything in a value as it
+`round!`, `floor!` and `ceil!` take a step as well: `round!(x, 5)` is the nearest
+multiple of 5, and `floor!(x, 0.25)` the multiple of 0.25 below `x`. An integer step
+gives an integer, a float step a float.
+
+Another macro, `seal!(value)`, is not about numbers: it keeps everything in a value as it
 is. See [Sealing fields](#sealing-fields).
 
 ```crol
 // example.crod
 +hit_points: 1100
-hit_points: round!(& * 1.15)
+hit_points: round!(& * 1.15, 10)
 +armour: clamp!(12 - 20, 0, 10)
 +speed: clamp!(2.5, 0, 1.5)
++cooldown: 2
+cooldown: max!(& - 3, 1)
 ```
 
 ```console
 $ crol eval example.crod
-hit_points: 1265
+hit_points: 1270
 armour: 0
 speed: 1.5
+cooldown: 1
 ```
 
 The operators bind in the usual order: selectors, unary `-` and `!`, `* / %`, `+ - |`,

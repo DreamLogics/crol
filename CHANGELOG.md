@@ -21,6 +21,9 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   carries the seals of both sides, a spread copies values without them. A seal holds
   in the layers above it, and a seal in a variant holds in every context for what is
   written after it.
+- The macros `min!(a, b, ...)`, `max!(a, b, ...)` and `abs!(x)`, and a step for
+  `round!`, `floor!` and `ceil!`: `round!(x, 5)` is the nearest multiple of 5
+  (`SPEC.md` 6.7). An integer step gives an integer, a float step a float.
 
 ### Changed
 

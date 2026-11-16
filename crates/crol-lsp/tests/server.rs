@@ -3256,9 +3256,32 @@ fn hover_on_a_macro_shows_its_signature_and_what_it_does() {
     let mut buffer = Buffer::open(&client, &dir, "a.crol");
 
     for (marked, signature, doc) in [
-        ("{ a: rou|nd!(1.5) }\n", "round!(x)", "nearest integer"),
-        ("{ a: floor|!(1.5) }\n", "floor!(x)", "largest integer"),
-        ("{ a: |ceil!(1.5) }\n", "ceil!(x)", "smallest integer"),
+        (
+            "{ a: rou|nd!(1.5) }\n",
+            "round!(x, step?)",
+            "nearest integer",
+        ),
+        (
+            "{ a: floor|!(1.5) }\n",
+            "floor!(x, step?)",
+            "largest integer",
+        ),
+        (
+            "{ a: |ceil!(1.5) }\n",
+            "ceil!(x, step?)",
+            "smallest integer",
+        ),
+        (
+            "{ a: mi|n!(1, 2) }\n",
+            "min!(a, b, ...)",
+            "smallest of the arguments",
+        ),
+        (
+            "{ a: max|!(1, 2) }\n",
+            "max!(a, b, ...)",
+            "largest of the arguments",
+        ),
+        ("{ a: a|bs!(-1) }\n", "abs!(x)", "without its sign"),
         (
             "{ a: cl|amp!(5, 0, 3) }\n",
             "clamp!(x, min, max)",
@@ -3267,11 +3290,15 @@ fn hover_on_a_macro_shows_its_signature_and_what_it_does() {
         // In a nested call, the macro under the cursor.
         (
             "{ a: clamp!(rou|nd!(1.5), 0, 3) }\n",
-            "round!(x)",
+            "round!(x, step?)",
             "nearest integer",
         ),
         // While the file does not evaluate.
-        ("{ a: rou|nd!(\"x\") }\n", "round!(x)", "nearest integer"),
+        (
+            "{ a: rou|nd!(\"x\") }\n",
+            "round!(x, step?)",
+            "nearest integer",
+        ),
     ] {
         let hover = buffer.hover(&mut client, marked);
         assert!(

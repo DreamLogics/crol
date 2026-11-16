@@ -2,3 +2,9 @@
 1-base/a.crod:2:10: clamp!: the minimum 5 is above the maximum 2
 1-base/a.crod:3:16: clamp!: the minimum 5.0 is above the maximum 2.0
 1-base/a.crod:4:12: round!: integer overflow
+1-base/a.crod:5:13: round!: the step 0 is not above zero
+1-base/a.crod:6:23: floor!: the step -0.5 is not above zero
+1-base/a.crod:7:15: ceil!: takes numbers, not a string
+1-base/a.crod:8:14: min!: takes numbers, not a string
+1-base/a.crod:9:16: abs!: integer overflow
+1-base/a.crod:10:17: ceil!: integer overflow

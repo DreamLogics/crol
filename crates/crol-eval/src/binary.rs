@@ -312,6 +312,9 @@ impl Writer<'_> {
                     MacroKind::Ceil => 2,
                     MacroKind::Clamp => 3,
                     MacroKind::Seal => 4,
+                    MacroKind::Min => 5,
+                    MacroKind::Max => 6,
+                    MacroKind::Abs => 7,
                 });
                 self.ids(args);
             }
@@ -792,10 +795,13 @@ impl Reader<'_> {
                     2 => MacroKind::Ceil,
                     3 => MacroKind::Clamp,
                     4 => MacroKind::Seal,
+                    5 => MacroKind::Min,
+                    6 => MacroKind::Max,
+                    7 => MacroKind::Abs,
                     _ => return Err(Corrupt),
                 };
                 let args = self.expr_ids()?;
-                if args.len() != kind.arity() {
+                if !kind.takes(args.len()) {
                     return Err(Corrupt);
                 }
                 ExprKind::Macro(kind, args.into())

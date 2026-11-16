@@ -1951,17 +1951,13 @@ impl Lowerer {
         let Some(kind) = MacroKind::from_name(&name) else {
             self.error(
                 span,
-                format!("there is no macro `{name}!`; the macros are `round!`, `floor!`, `ceil!`, `clamp!` and `seal!`"),
+                format!("there is no macro `{name}!`; the macros are `round!`, `floor!`, `ceil!`, `clamp!`, `min!`, `max!`, `abs!` and `seal!`"),
             );
             return self.ir.add_expr(ExprKind::Error, span);
         };
-        if args.len() != kind.arity() {
-            let (name, arity, found) = (kind.name(), kind.arity(), args.len());
-            let s = if arity == 1 { "" } else { "s" };
-            self.error(
-                span,
-                format!("{name} takes {arity} argument{s}, not {found}"),
-            );
+        if !kind.takes(args.len()) {
+            let (name, arity, found) = (kind.name(), kind.arity_text(), args.len());
+            self.error(span, format!("{name} takes {arity}, not {found}"));
             return self.ir.add_expr(ExprKind::Error, span);
         }
         self.ir.add_expr(ExprKind::Macro(kind, args.into()), span)
