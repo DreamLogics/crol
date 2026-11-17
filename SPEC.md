@@ -522,20 +522,29 @@ against, as one of:
 | `::crol::schema` | a file, by module path (section 4.2) |
 | `"https://example.org/app/v2/schema.crol"` | a file fetched over HTTPS |
 | `"crate:app@2.1"` | the schema a crate publishes, for a version requirement as in `Cargo.toml` (`@` and the requirement may be left out: any version) |
+| `"crate:app@2.1#theme"` | the schema the crate publishes under the name `theme` |
+| `"crate:app@2.1#crol/theme.crol"` | the file at that path in the crate's package |
 
 A string that starts with neither `https://` nor `crate:` is an error.
 
 A crate publishes its schema by including the file in the package and
-naming it in its `Cargo.toml`:
+naming it in its `Cargo.toml`, and may publish more, by name:
 
 ```toml
 [package.metadata.crol]
 schema = "crol/schema.crol"   # the default when the table exists
+schemas = { theme = "crol/theme.crol", ui = "crol/ui.crol" }
 ```
 
-(This path is Cargo's, relative to the package, like `include`; it is
-not a CROL module path. A schema is a value document, so a path or URL
+(These paths are Cargo's, relative to the package, like `include`; they
+are not CROL module paths. A schema is a value document, so a path or URL
 ending in `.crod` is an error.)
+
+What follows `#` is a path if it ends in `.crol`, and a name otherwise: a
+name of `schemas`, made of ASCII letters, digits, `-` and `_`. A name that
+the table does not have is an error that lists those it has. A path needs
+no metadata, and has to stay inside the package, as the paths of the
+table do. A URL names one file already, so it takes no `#` of this kind.
 
 Tools resolve `crate:app@2.1` in order: a package of that name and a
 matching version in the current Cargo workspace or its dependencies (by
@@ -3646,7 +3655,7 @@ has to load it.
 
 | Command | Does |
 |---|---|
-| `crol check [<layer>...]` | read and evaluate the layers (each `name=source` or a source, named after it, where a source is a module path (section 4.2) or a file system path, the module path if both name something; without any, those of the project file, section 12.4), or one value document (below); check them against the schema if one is given or configured; print diagnostics; exit 1 on errors |
+| `crol check [<layer>...]` | read and evaluate the layers (each `name=source` or a source, named after it, where a source is a module path (section 4.2) or a file system path, the module path if both name something; without any, those of the project file, of each of its layer stacks in turn, section 12.4), or one or more value documents (below), each on its own; check them against the schema if one is given or configured; print diagnostics; exit 1 on errors |
 | `crol eval [<layer>...] [--context a,b] [key[.path]]` | print evaluated data as a plain data-mode document (or one value); with a schema, struct fields that take their defaults are written out with the defaults the schema records, each marked `// default` (`--no-defaults` leaves them as the data does) |
 | `crol eval [<layer>...] --all-contexts` | print the base data, then for every other evaluated context a block `<a & b & !c & ...> { ... }` whose condition holds in that context only, with the keys whose value differs (`key: value`) or that are missing (`-key`). A `..` at the root is written in the base, or in the block of a context that has it where the base does not; for a root struct, a removed field as `key: (), -key`. The output is valid CROL and evaluates back to the same data |
 | `crol explain [<layer>...] [--context a,b] key[.path]` | print the operations that produced a value (section 12.3), and for each id in it the scope it resolved in (below) |
@@ -3658,10 +3667,21 @@ has to load it.
 | `crol lsp` | run the language server on standard input and output (section 12.5) |
 
 Common flags: `--discrete a,b`, `--group a,b,c` (repeatable), `--open civ` (repeatable), `--parent child=parent`, `--color auto|always|never`,
-`--message-format human|json`, `--project <file>`, `--schema <file>`,
-`--offline` (section 4.1).
+`--message-format human|json`, `--project <file>`, `--stack <name>`,
+`--schema <file>`, `--offline` (section 4.1).
 Without layer arguments, every command that needs layers reads them, with
 the variants and options, from the project file.
+
+**Stacks.** A command works out the layer stack of what it reads from the
+project (section 12.4), and that stack gives the layers, schema, root and
+options. `--stack` names one, and reads the project file even with layer
+arguments. `crol check` without layers checks every stack, one after the
+other. A `.crol` file is checked in the stack whose `files` match it; with
+`--stack`, only that stack's are tried. Every other command that evaluates
+layers needs one stack: the project's only one; else, with layer arguments
+and `--project`, the one whose layer directories hold them; else it stops
+with an error that lists the stacks, as `cargo run` does with several
+binaries, and so it does for layer arguments of different stacks.
 
 **Errors.** `check`, `eval` and `fingerprint` treat every error alike, in
 data and in value documents, whether it comes from reading, evaluating or
@@ -3726,13 +3746,15 @@ a layer. So:
   value, with a key and path the value there; with a schema, defaults are
   written out as above. `fingerprint` is over the value (appendix B).
   `--context`, `--all-contexts` and the flags that declare variants are
-  errors, as a value document has no variants. A project's schema and
+  errors, as a value document has no variants. A stack's schema and
   root type are for its layers: a value document only gets them through
-  `Project.files`.
+  its `files`.
+- `check` also takes several `.crol` files and nothing else, and checks
+  each as above, on its own, in its own stack.
 - `explain` follows a value through layers, so a `.crol` file is an error
   that points to `crol eval`.
-- A `.crol` file among other sources, or written `name=source`, is a layer,
-  and an error.
+- A `.crol` file among other sources (but for `check`, among other `.crol`
+  files), or written `name=source`, is a layer, and an error.
 - Anything else is a layer, data mode. Module paths on the command line are
   layers too: a value document is given by its file.
 
@@ -3854,6 +3876,7 @@ Project {
     files: [                           // value-mode documents and their types
         { glob: "config::*", type: "app::Config" },
     ],
+    ..                                 // `stacks`, below
 }
 ```
 
@@ -3917,6 +3940,74 @@ alone, never on what else exists.
   which a module path could not name.
 - Entries are tried in the order written, and the first that matches
   decides.
+
+**Layer stacks.** A project can hold data of unrelated kinds, built from
+different Rust types, such as theme definitions and UI definitions. Each
+kind is a **layer stack**, with its own layers, schema, root, options and
+`files`, checked and composed on its own, as a project with one stack is.
+`stacks` maps names to stacks, in the order written:
+
+```rust
+Project {
+    stacks: {
+        theme: {
+            layers: List([
+                { name: "base", dir: "themes::base", read_only: true },
+                { name: "user", dir: "themes::user", .. },
+            ]),
+            schema: Some("crol::theme_schema"),
+            files: [
+                { glob: "config::theme_*", type: "Theme" },
+            ],
+            ..
+        },
+        ui: {
+            layers: List([{ name: "base", dir: "ui", .. }]),
+            schema: Some("crate:fleet-ui@2#ui"),
+            files: [
+                { glob: "config::screens::**::*", type: "Screen" },
+            ],
+            ..
+        },
+    },
+    ..
+}
+```
+
+- A stack has `layers` (required), `options`, `schema`, `root` and `files`,
+  each as above. A project written with these at the top has one stack,
+  `default`, and `crol::project::Project::read` puts it in `stacks` under
+  that name. A project with `stacks` has none of them at the top, nor
+  `options` other than the defaults: that is an error, and so is a project
+  with neither `layers` nor `stacks`. `variants` and `parents` are the
+  project's, for every stack. A stack's name is an identifier.
+- A schema belongs to a whole stack, never to one layer: with a struct
+  root, the layers of a stack are checked together as one value.
+- **Every file belongs to one stack.** A stack owns the `.crod` files in its
+  layer directories and the `.crol` files its globs match. A file that two
+  stacks could claim is an error in the project file, reported at both
+  globs or both layer directories, so which stack a file belongs to never
+  depends on the order. Globs are compared by their form, as they match:
+  two overlap when some path matches both. Layer directories overlap when
+  one is the other or above it, by their module paths; those a layer
+  command prints are not compared. Within one stack, globs may overlap, and
+  the first that matches decides, as above.
+- **Ids stay in their stack.** An id names a root key of its own stack only
+  (section 10.5). A stack that needs a value of another's has its own type
+  for it; the checker never loads a second schema to resolve an id, and
+  `#[crol(refers(...))]` stays within one schema.
+- A `.crod` file outside every stack's layer directories is not part of
+  the project; in the editor it is a layer of its own, as above.
+- Section 11 says which stack each command uses. The language server works
+  out the stack of the file being edited, and its schema, root, options and
+  ids are that stack's. `--schema` and a document's `#![schema(...)]` work
+  with a stack's schema as with a project's (above, section 4.1): a `.crol`
+  file goes by its own attribute before `files`, and a document in a
+  stack's layers whose attribute disagrees with the stack's schema gets a
+  warning.
+- An application builds one composer per stack and gives each its schema;
+  each stack's schema is generated by a `crol::schema::check_file::<T>(...)`
+  test of its own (section 10.9).
 
 ### 12.5 Language server
 

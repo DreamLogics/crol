@@ -3639,7 +3639,7 @@ fn hover_in_a_project_file_shows_the_doc_of_the_field() {
             (
                 "layers:",
                 "layers",
-                "The layers, lowest first.\n\n`ProjectLayers`",
+                "The layers, lowest first, of a project with one stack.\n\n`Option<ProjectLayers>`",
             ),
             (
                 "List(",
@@ -3652,9 +3652,17 @@ fn hover_in_a_project_file_shows_the_doc_of_the_field() {
             ("read_only:", "read_only", "Generated or vendored data"),
             ("true", "true", "Generated or vendored data"),
             // A value in `Some(...)`, and `Some` itself.
-            ("schema:", "schema", "The schema:"),
-            ("Some(", "Some", "The schema:"),
-            ("\"crol::schema\"", "crol", "The schema:"),
+            (
+                "schema:",
+                "schema",
+                "The schema of a project with one stack:",
+            ),
+            ("Some(", "Some", "The schema of a project with one stack:"),
+            (
+                "\"crol::schema\"",
+                "crol",
+                "The schema of a project with one stack:",
+            ),
             // In a list of the field's.
             ("glob:", "glob", "A module path whose segments"),
             ("\"cfg::*\"", "cfg", "A module path whose segments"),

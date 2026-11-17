@@ -68,10 +68,9 @@ fn has_docs(snapshot: &Snapshot, layers: &[Layer]) -> bool {
             .flat_map(|layer| &layer.documents)
             .any(|(_, file)| snapshot.sources.file(*file).text().contains("///"))
     };
-    if std::ptr::eq(layers, snapshot.layers.as_slice()) {
-        snapshot.project_has_docs(find)
-    } else {
-        find()
+    match snapshot.stack_with_layers(layers) {
+        Some(stack) => stack.has_docs(find),
+        None => find(),
     }
 }
 
@@ -160,11 +159,12 @@ pub(crate) fn of_root_keys<'a>(
 ) -> Cow<'a, HashMap<String, String>> {
     let layers = file
         .and_then(|file| snapshot.chain_of(file))
-        .map_or(snapshot.layers.as_slice(), |(layers, _)| layers);
-    if std::ptr::eq(layers, snapshot.layers.as_slice()) {
-        Cow::Borrowed(snapshot.project_root_docs(|| root_docs_in(snapshot, layers)))
-    } else {
-        Cow::Owned(root_docs_in(snapshot, layers))
+        .map_or(snapshot.stack_for(file).layers.as_slice(), |(layers, _)| {
+            layers
+        });
+    match snapshot.stack_with_layers(layers) {
+        Some(stack) => Cow::Borrowed(stack.root_docs(|| root_docs_in(snapshot, layers))),
+        None => Cow::Owned(root_docs_in(snapshot, layers)),
     }
 }
 

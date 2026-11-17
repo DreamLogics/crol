@@ -264,8 +264,7 @@ fn schema_paths_name_crol_files() {
 
     let project = |name: &str| {
         let text = format!("Project {{ layers: List([]), schema: Some(\"{name}\"), .. }}");
-        crol::from_str::<Project>(&text)
-            .unwrap()
+        Project::from_text("project.crol", &text).unwrap().stacks[crol::project::DEFAULT_STACK]
             .schema_path(&dir, false)
     };
     assert_eq!(project("good").unwrap().unwrap(), dir.join("good.crol"));

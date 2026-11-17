@@ -50,7 +50,7 @@ fn sets_up_a_cargo_project_that_the_tools_can_load() {
     // The application's and the language server's view of the file.
     let path = dir.join("project.crol");
     let project = Project::read(&path).unwrap();
-    let ProjectLayers::List(layers) = &project.layers else {
+    let ProjectLayers::List(layers) = &project.stacks[crol::project::DEFAULT_STACK].layers else {
         panic!("{project:?}")
     };
     assert_eq!(layers.len(), 1);

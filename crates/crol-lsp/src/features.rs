@@ -577,7 +577,7 @@ pub(crate) fn evaluation_for(
 ) -> &crol_eval::Evaluation {
     let evaluation = file
         .and_then(|f| snapshot.evaluation_of(f))
-        .unwrap_or(&snapshot.evaluation);
+        .unwrap_or(&snapshot.stack_for(file).evaluation);
     match &evaluation.value {
         None => snapshot.last_good_of(file).unwrap_or(evaluation),
         Some(_) => evaluation,
@@ -1171,9 +1171,10 @@ pub(crate) fn definition(
     {
         let targets = id_targets(snapshot, file, &node);
         if !targets.is_empty() {
-            let (layers, options) = snapshot
-                .chain_of(file)
-                .unwrap_or((&snapshot.layers, &snapshot.options));
+            let (layers, options) = snapshot.chain_of(file).unwrap_or_else(|| {
+                let stack = snapshot.stack_for(Some(file));
+                (&stack.layers, &stack.options)
+            });
             let root = snapshot.data_of(file);
             return targets
                 .iter()
@@ -1314,7 +1315,10 @@ fn definition_of_key(
     let file = convert::uri_to_path(uri).and_then(|path| snapshot.file_of(&path));
     let (layers, options) = file
         .and_then(|file| snapshot.chain_of(file))
-        .unwrap_or((&snapshot.layers, &snapshot.options));
+        .unwrap_or_else(|| {
+            let stack = snapshot.stack_for(file);
+            (&stack.layers, &stack.options)
+        });
     let steps = snapshot
         .explain(layers, options, &Key::Str(key.into()).to_string(), &[])
         .ok()?;

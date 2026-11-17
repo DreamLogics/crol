@@ -11,6 +11,20 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Added
 
+- Several layer stacks per project (#29, `SPEC.md` 12.4): `stacks` in `project.crol`
+  maps names to stacks, each with its own `layers`, `schema`, `root`, `options` and
+  `files`, checked and composed on its own, so that themes and UI definitions, say,
+  get schemas of their own. A project with `layers` at the top is one stack,
+  `default`. A file that two stacks could claim, by their globs or layer
+  directories, is an error at both. `crol check` checks every stack, and a `.crol`
+  file in the stack whose `files` match it; `crol eval` and the other commands stop
+  and list the stacks unless `--stack` names one or the layers given are in one.
+  `crol check` takes several `.crol` files at once. The language server checks
+  each file against its own stack's schema, and ids stay within a stack.
+- A crate can publish several schemas (#29, `SPEC.md` 4.1): `schemas = { theme =
+  "crol/theme.crol" }` in `[package.metadata.crol]`, named as
+  `crate:fleet@2.1#theme`, and any file of a package as
+  `crate:fleet@2.1#crol/theme.crol`.
 - Sealed fields in the data (#31, `SPEC.md` 5.4): `!` after an entry's prefix seals
   its target, so that it keeps the value it has: `!id: 4`, `+!id: 4`, `?!id: 4`,
   `^!id: 4`, and `-!id`, which seals it as unset. Setting a sealed key again is an
@@ -30,6 +44,12 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 - The `.crob` format is version 9, for seals and the macros `min!`, `max!` and
   `abs!`: files of version 8 are compiled again. A build of `main` from between
   the two changes reports a version 9 file that uses the new macros as corrupt.
+- `Project` has the field `stacks`, and `layers` is optional, so a project file
+  that writes every field without `..` now needs `..`. In Rust, `layer_list`,
+  `file_type` and `schema_path` are methods of `ProjectStack`, and
+  `Project::read` puts a project with one stack in `stacks["default"]`. In
+  `crol-lsp`, `Snapshot` holds `stacks`, each a `StackSnapshot` with the
+  `layers`, `evaluation`, `schema` and `root_type` that were the snapshot's.
 
 ## [0.4.1] - 2026-11-13
 
