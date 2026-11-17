@@ -5,12 +5,12 @@ made while writing it.
 
 CROL is a text format for configuration and data files that load into
 Rust data models through serde. It looks like RON, but a document holds
-*operations* as well as values: it can declare, replace, patch and remove
+_operations_ as well as values: it can declare, replace, patch and remove
 definitions, including ones written in other files and in lower-priority
-*layers*. Many files, from many sources, combine into one data set
+_layers_. Many files, from many sources, combine into one data set
 with fixed, predictable rules.
 
-The key words *must*, *must not*, *should* and *may* are used in their
+The key words _must_, _must not_, _should_ and _may_ are used in their
 RFC 2119 sense.
 
 ---
@@ -51,7 +51,7 @@ RFC 2119 sense.
 ## 1. Overview by example
 
 Three layers, loaded in this order: `base`, `extension`, `local`.
-`<dev>` and `<prod>` are *variants* the application declared.
+`<dev>` and `<prod>` are _variants_ the application declared.
 
 `base/services.crod`:
 
@@ -132,7 +132,7 @@ web: Service {
 ```
 
 Note how `url` reads the final `port`, because late references read the
-*final* value (section 7.3), and how `extension` patches `web` after
+_final_ value (section 7.3), and how `extension` patches `web` after
 `base` wrote it. `database<prod>` has `memory_mb: 2048`: its `& * 4`
 runs after the base chain is complete.
 
@@ -188,13 +188,13 @@ the above are ordinary CROL identifiers (`type: "x"` is a field named
 
 ### 2.4 Literals
 
-| Kind | Syntax |
-|---|---|
-| integer | `12`, `0x1F`, `0o17`, `0b1010`, `1_000`. No suffixes (`1u8` is an error). |
-| float | `1.5`, `1e3`, `2.5E-3`, `1_000.0`. A digit is required on both sides of `.` (`1.` and `.5` are errors). No `inf` or `NaN`. |
-| string | `"text"` with Rust escapes (`\n \r \t \\ \0 \" \' \x7F \u{1F600}`, and `\` + newline to skip leading whitespace on the next line); raw `r"..."`, `r#"..."#`, any number of `#`. Strings may span lines. |
-| char | `'a'`, `'\n'`, `'\u{E9}'`, as in Rust. |
-| boolean | `true`, `false` |
+| Kind    | Syntax                                                                                                                                                                                                  |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| integer | `12`, `0x1F`, `0o17`, `0b1010`, `1_000`. No suffixes (`1u8` is an error).                                                                                                                               |
+| float   | `1.5`, `1e3`, `2.5E-3`, `1_000.0`. A digit is required on both sides of `.` (`1.` and `.5` are errors). No `inf` or `NaN`.                                                                              |
+| string  | `"text"` with Rust escapes (`\n \r \t \\ \0 \" \' \x7F \u{1F600}`, and `\` + newline to skip leading whitespace on the next line); raw `r"..."`, `r#"..."#`, any number of `#`. Strings may span lines. |
+| char    | `'a'`, `'\n'`, `'\u{E9}'`, as in Rust.                                                                                                                                                                  |
+| boolean | `true`, `false`                                                                                                                                                                                         |
 
 A `-` before a number is the unary operator; section 6.2 says when the
 result counts as a literal.
@@ -222,19 +222,19 @@ Three adjacency rules, all to keep one-token lookahead:
 
 The evaluated data consists of these values:
 
-| Value | Written as | Notes |
-|---|---|---|
-| boolean | `true` | |
-| integer | `12`, `-3` | 128-bit signed during evaluation; range-checked against the Rust type on deserialization |
-| float | `1.5` | IEEE 754 binary64; always finite |
-| char | `'a'` | |
-| string | `"a"` | |
-| id | `@web`, `@"odd id"`, `@a.b`, `@::web` | a name of a key, stored as a value (section 3.2) |
-| list | `[a, b]` | |
-| tuple | `(a, b)`, `(a,)`, `()` | `()` is the unit value; `(a)` is `a` |
-| unit name | `None`, `Red`, `Marker` | a unit enum variant or unit struct |
-| named tuple | `Some(1)`, `Rgb(1, 2, 3)` | a tuple or newtype variant, or a tuple or newtype struct |
-| keyed value | `{ ... }`, `Service { ... }` | a struct, struct variant or map (section 3.1) |
+| Value       | Written as                            | Notes                                                                                    |
+| ----------- | ------------------------------------- | ---------------------------------------------------------------------------------------- |
+| boolean     | `true`                                |                                                                                          |
+| integer     | `12`, `-3`                            | 128-bit signed during evaluation; range-checked against the Rust type on deserialization |
+| float       | `1.5`                                 | IEEE 754 binary64; always finite                                                         |
+| char        | `'a'`                                 |                                                                                          |
+| string      | `"a"`                                 |                                                                                          |
+| id          | `@web`, `@"odd id"`, `@a.b`, `@::web` | a name of a key, stored as a value (section 3.2)                                         |
+| list        | `[a, b]`                              |                                                                                          |
+| tuple       | `(a, b)`, `(a,)`, `()`                | `()` is the unit value; `(a)` is `a`                                                     |
+| unit name   | `None`, `Red`, `Marker`               | a unit enum variant or unit struct                                                       |
+| named tuple | `Some(1)`, `Rgb(1, 2, 3)`             | a tuple or newtype variant, or a tuple or newtype struct                                 |
+| keyed value | `{ ... }`, `Service { ... }`          | a struct, struct variant or map (section 3.1)                                            |
 
 The format does not distinguish a struct from an enum's struct variant,
 or a unit struct from a unit variant: both are a name with a payload.
@@ -263,13 +263,13 @@ type's business (section 10).
 
 **Keys** are strings, integers or ids.
 
-| Key | In an entry | In a path |
-|---|---|---|
-| a string that is an identifier | `port: 80` or `"port": 80` | `.port` or `["port"]` |
-| any other string | `"cache url": 1` | `["cache url"]` |
-| a non-negative integer | `12: "a"` | `[12]` |
-| a negative integer | `[-3]: "a"` (section 5.1) | `[-3]` |
-| an id | `@web: 1`, `@a.b: 1`, `@::web: 1` | `.@web` or `[@web]` (section 5.1) |
+| Key                            | In an entry                       | In a path                         |
+| ------------------------------ | --------------------------------- | --------------------------------- |
+| a string that is an identifier | `port: 80` or `"port": 80`        | `.port` or `["port"]`             |
+| any other string               | `"cache url": 1`                  | `["cache url"]`                   |
+| a non-negative integer         | `12: "a"`                         | `[12]`                            |
+| a negative integer             | `[-3]: "a"` (section 5.1)         | `[-3]`                            |
+| an id                          | `@web: 1`, `@a.b: 1`, `@::web: 1` | `.@web` or `[@web]` (section 5.1) |
 
 `port`, `"port"`, `.port` and `["port"]` all name the same key. A string
 key and an integer key are never equal: `"12"` and `12` are different
@@ -415,10 +415,10 @@ modes, and looking at a file's name tells which. `.crol` is the plain
 default; `.crod` is what a document opts in to for layers and what comes
 with them:
 
-| Extension | Mode | A document is | Read by |
-|---|---|---|---|
-| `.crol` | value mode | one value, on its own | `crol::from_str`, project files (12.4), schema files (10.10), and tools |
-| `.crod` | data mode | operations on the root shared by a composition's layers | the composer and tools, as a layer (section 7) |
+| Extension | Mode       | A document is                                           | Read by                                                                 |
+| --------- | ---------- | ------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `.crol`   | value mode | one value, on its own                                   | `crol::from_str`, project files (12.4), schema files (10.10), and tools |
+| `.crod`   | data mode  | operations on the root shared by a composition's layers | the composer and tools, as a layer (section 7)                          |
 
 The rules that decide a document's mode, in every crate and tool:
 
@@ -444,7 +444,7 @@ The rules apply to a source's identity as they do to a file's name, so
 `embedded:data/base.crol` from a file loader is refused as a layer.
 
 **Data mode** (layered data, section 7). The document is a list of
-entries operating on the *root*. The outer braces may be left out:
+entries operating on the _root_. The outer braces may be left out:
 
 ```rust
 +a: 1,
@@ -500,7 +500,7 @@ value mode, to the whole document.
 
 **`use(path)`** says which schema type a type name in this document
 means, when the schema has several types of that name (section 10.9). A
-path is a Rust module path followed by the type's name *as data writes it*
+path is a Rust module path followed by the type's name _as data writes it_
 (its serde name): `app::net::Config`. For the loader, a `use` without
 `as` changes nothing; tools use it to resolve the name, and report a
 path that names no schema type.
@@ -517,13 +517,13 @@ name is written (a block's type name, a named tuple, a unit name), so
 **`schema(...)`** names the schema that tools check this document
 against, as one of:
 
-| Form | Schema |
-|---|---|
-| `::crol::schema` | a file, by module path (section 4.2) |
-| `"https://example.org/app/v2/schema.crol"` | a file fetched over HTTPS |
-| `"crate:app@2.1"` | the schema a crate publishes, for a version requirement as in `Cargo.toml` (`@` and the requirement may be left out: any version) |
-| `"crate:app@2.1#theme"` | the schema the crate publishes under the name `theme` |
-| `"crate:app@2.1#crol/theme.crol"` | the file at that path in the crate's package |
+| Form                                       | Schema                                                                                                                            |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| `::crol::schema`                           | a file, by module path (section 4.2)                                                                                              |
+| `"https://example.org/app/v2/schema.crol"` | a file fetched over HTTPS                                                                                                         |
+| `"crate:app@2.1"`                          | the schema a crate publishes, for a version requirement as in `Cargo.toml` (`@` and the requirement may be left out: any version) |
+| `"crate:app@2.1#theme"`                    | the schema the crate publishes under the name `theme`                                                                             |
+| `"crate:app@2.1#crol/theme.crol"`          | the file at that path in the crate's package                                                                                      |
 
 A string that starts with neither `https://` nor `crate:` is an error.
 
@@ -598,14 +598,14 @@ once it is composed. A type that deserializes from a keyed value describes
 that whole value, as `compose::<T>()` reads it; any other type cannot, and
 is the type of each root value:
 
-| Root type | In data mode | A root key is |
-|---|---|---|
-| a struct | the whole document | a field of it |
-| a map (`IndexMap<String, V>`) | the whole document | a key of it, and its value a `V` |
-| an enum, of any representation, with any variants | each root value | the name of a value of that type |
-| a scalar, list, tuple, tuple struct, unit struct | each root value | the name of a value of that type |
-| a newtype, a `#[serde(transparent)]` type, `Option<T>` | what it wraps says | as for what it wraps |
-| a path no type in the schema has | nothing is checked | a name |
+| Root type                                              | In data mode       | A root key is                    |
+| ------------------------------------------------------ | ------------------ | -------------------------------- |
+| a struct                                               | the whole document | a field of it                    |
+| a map (`IndexMap<String, V>`)                          | the whole document | a key of it, and its value a `V` |
+| an enum, of any representation, with any variants      | each root value    | the name of a value of that type |
+| a scalar, list, tuple, tuple struct, unit struct       | each root value    | the name of a value of that type |
+| a newtype, a `#[serde(transparent)]` type, `Option<T>` | what it wraps says | as for what it wraps             |
+| a path no type in the schema has                       | nothing is checked | a name                           |
 
 - This goes for the type that applies, however it is chosen: the schema's
   root, `root` of the project file (section 12.4), or the `root` of
@@ -707,11 +707,11 @@ Documents and code name files with **module paths**, as Rust names
 modules, never with file system paths, so they read the same on every
 platform.
 
-| Path | Starts from |
-|---|---|
-| `::defaults::services` | the **root directory**: `CrolConfig::root_path` (section 10.7); for tools, the project file's directory, else the working directory (CLI) or the workspace folder (language server) |
-| `defaults::services` | the directory of the document it is written in; in code, the root directory |
-| `super::defaults::services` | the parent of that directory; `super` may repeat (`super::super::x`), only at the start |
+| Path                        | Starts from                                                                                                                                                                         |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `::defaults::services`      | the **root directory**: `CrolConfig::root_path` (section 10.7); for tools, the project file's directory, else the working directory (CLI) or the workspace folder (language server) |
+| `defaults::services`        | the directory of the document it is written in; in code, the root directory                                                                                                         |
+| `super::defaults::services` | the parent of that directory; `super` may repeat (`super::super::x`), only at the start                                                                                             |
 
 A document given by a bare file name (`x.crod`) is in the working
 directory, as `./x.crod` is, here and for what is looked up from a
@@ -743,7 +743,6 @@ decides what those names are in its own tree, which need not be a
 directory. A document it loaded still has a directory in that tree (its
 path without the last name), from which its relative paths start.
 
-
 ---
 
 ## 5. Entries
@@ -751,20 +750,20 @@ path without the last name), from which its relative paths start.
 An entry is an operation on a **target**: a key, followed by an
 optional path into its value.
 
-| Entry | Name | Meaning | Error when |
-|---|---|---|---|
-| `+target: expr` | declare | give the target its first value | it is set |
-| `target: expr` | set | replace the target, or create it | |
-| `?target: expr` | ensure | set the target if it is not set; otherwise nothing | |
-| `^target: expr` | replace | as set, but the value never merges with what is there (section 5.2) | |
-| `-target` | remove | remove the target | it is not set |
-| `-?target` | remove if set | remove the target if it is set; otherwise nothing | |
-| `!` after the prefix | seal | as without it, and seal the target: `!t: e`, `+!t: e`, `?!t: e`, `^!t: e`, `-!t`, `-?!t` (section 5.4) | the target is sealed |
-| `<c> { entries }` | variant block | the entries apply under condition `c` (section 8.2) | |
-| `..operand` | spread | copy the keyed value's entries in | it is not a keyed value |
-| `..` | defaults | fields left out take their defaults (section 10.3) | |
-| `name = entry` | bind | names the entry's target (section 6.1.1) | |
-| `name := expr` | value bind | names a value; at the top level, a template (section 6.1.2) | defined twice |
+| Entry                | Name          | Meaning                                                                                                | Error when              |
+| -------------------- | ------------- | ------------------------------------------------------------------------------------------------------ | ----------------------- |
+| `+target: expr`      | declare       | give the target its first value                                                                        | it is set               |
+| `target: expr`       | set           | replace the target, or create it                                                                       |                         |
+| `?target: expr`      | ensure        | set the target if it is not set; otherwise nothing                                                     |                         |
+| `^target: expr`      | replace       | as set, but the value never merges with what is there (section 5.2)                                    |                         |
+| `-target`            | remove        | remove the target                                                                                      | it is not set           |
+| `-?target`           | remove if set | remove the target if it is set; otherwise nothing                                                      |                         |
+| `!` after the prefix | seal          | as without it, and seal the target: `!t: e`, `+!t: e`, `?!t: e`, `^!t: e`, `-!t`, `-?!t` (section 5.4) | the target is sealed    |
+| `<c> { entries }`    | variant block | the entries apply under condition `c` (section 8.2)                                                    |                         |
+| `..operand`          | spread        | copy the keyed value's entries in                                                                      | it is not a keyed value |
+| `..`                 | defaults      | fields left out take their defaults (section 10.3)                                                     |                         |
+| `name = entry`       | bind          | names the entry's target (section 6.1.1)                                                               |                         |
+| `name := expr`       | value bind    | names a value; at the top level, a template (section 6.1.2)                                            | defined twice           |
 
 A target is **set** when the data holds a value for it, even `None`.
 This is about the data alone: a field of a struct is not set until an
@@ -886,9 +885,9 @@ nothing for data whose paths all exist.
 A block `Name? { entries }` builds a keyed value in three steps:
 
 1. Start from the block's **start value**: the left operand when the
-   block is the right side of `~` or `~^` (a *patch block*), the value
+   block is the right side of `~` or `~^` (a _patch block_), the value
    below when the block merges (below), and an empty keyed value
-   otherwise (a *whole-value block*).
+   otherwise (a _whole-value block_).
 2. Apply every spread, in source order, wherever it is written. A
    spread merges the source's entries into the block as `~` does
    (section 6.4), ORs its defaults and scope flags into the block's, and adds its
@@ -911,7 +910,7 @@ Entries inside a block may have paths (`limits.cpu: 2.0`), which
 navigate into what the block holds at that point.
 
 **Merging is deep.** A block with a start value or a spread is a
-*merging block*. In one, an entry `key: { ... }` whose value is written
+_merging block_. In one, an entry `key: { ... }` whose value is written
 as a block merges with what `key` holds: the nested block is a patch
 block with that as its start value, and so on at any depth. So in a
 patch, `limits: { cpu: 2.0 }` changes `cpu` and leaves the rest of
@@ -930,7 +929,7 @@ whole-value block. A value that is not written as a block
 merge.
 
 To replace a value in a merging block, write `^limits: { cpu: 2.0 }`.
-`~^` is a *shallow* merge: the entries of its block set their keys, and
+`~^` is a _shallow_ merge: the entries of its block set their keys, and
 blocks in them do not merge. A whole-value block with no spread does not
 merge:
 `{ a: { x: 1 }, a: { y: 2 } }` is `{ a: { y: 2 } }`.
@@ -976,12 +975,12 @@ of the next. A line break ends the entry only when the next line
 **begins an entry**. Only four tokens can both continue a value and
 start an entry; what follows them, on that same line, decides:
 
-| Line starts with | Begins an entry when | Otherwise it continues the value |
-|---|---|---|
-| `+` | a target and `:` follow: `+b: 2` | `+ 2`, `+ b`, `+ "text"` |
-| `-` | an identifier or string follows: `-b`, `-"odd key"` | `- 2`, `- &x`, `- ["x"]` |
-| `[` | it is an accessor, with any selectors, and `:` follows: `["a b"]: 1` | `[0]`, `["key"].name` |
-| `<` | it is a variant and `{` follows: `<prod> {` | `<prod>`, `<prod>.name` |
+| Line starts with | Begins an entry when                                                 | Otherwise it continues the value |
+| ---------------- | -------------------------------------------------------------------- | -------------------------------- |
+| `+`              | a target and `:` follow: `+b: 2`                                     | `+ 2`, `+ b`, `+ "text"`         |
+| `-`              | an identifier or string follows: `-b`, `-"odd key"`                  | `- 2`, `- &x`, `- ["x"]`         |
+| `[`              | it is an accessor, with any selectors, and `:` follows: `["a b"]: 1` | `[0]`, `["key"].name`            |
+| `<`              | it is a variant and `{` follows: `<prod> {`                          | `<prod>`, `<prod>.name`          |
 
 Any other line needs no such look: `?`, `^`, `..`, a key or a bind can
 only start an entry, and so can `!` with a target and `:` after it
@@ -1045,14 +1044,14 @@ a remove.
 key keeps the value it has. `seal!(value)` (section 6.7) seals everything
 in a value.
 
-| Entry | Meaning |
-|---|---|
-| `!target: expr` | set the target, and seal it |
-| `+!target: expr` | declare it, and seal it |
+| Entry            | Meaning                                             |
+| ---------------- | --------------------------------------------------- |
+| `!target: expr`  | set the target, and seal it                         |
+| `+!target: expr` | declare it, and seal it                             |
 | `?!target: expr` | ensure it, and seal it, whether or not this sets it |
-| `^!target: expr` | replace it, and seal it |
-| `-!target` | remove it, and seal it as unset |
-| `-?!target` | remove it if it is set, and seal it as unset |
+| `^!target: expr` | replace it, and seal it                             |
+| `-!target`       | remove it, and seal it as unset                     |
+| `-?!target`      | remove it if it is set, and seal it as unset        |
 
 ```rust
 // base/units.crod
@@ -1140,16 +1139,16 @@ is about operations, and holds from where it is written.
 
 ### 6.1 References
 
-| Reference | Value | Timing |
-|---|---|---|
-| `&` | the value *below*: the current target's value before this entry applies | early |
-| `&self` | the keyed value this entry is in | late |
-| `&parent` | the keyed value around `&self`; `&parent.&parent` the one around that, and so on | late |
-| `&super` | the same as `&parent`: another spelling of it | late |
-| `&top` | the root entry the keyed value this entry is in belongs to: `web` anywhere inside `web` | late |
-| `&root` | the root | late |
-| `&default` | the Rust default of the current target (section 6.1.3) | fixed |
-| `&name` | a *bind* or *template* (sections 6.1.1, 6.1.2) | late |
+| Reference  | Value                                                                                   | Timing |
+| ---------- | --------------------------------------------------------------------------------------- | ------ |
+| `&`        | the value _below_: the current target's value before this entry applies                 | early  |
+| `&self`    | the keyed value this entry is in                                                        | late   |
+| `&parent`  | the keyed value around `&self`; `&parent.&parent` the one around that, and so on        | late   |
+| `&super`   | the same as `&parent`: another spelling of it                                           | late   |
+| `&top`     | the root entry the keyed value this entry is in belongs to: `web` anywhere inside `web` | late   |
+| `&root`    | the root                                                                                | late   |
+| `&default` | the Rust default of the current target (section 6.1.3)                                  | fixed  |
+| `&name`    | a _bind_ or _template_ (sections 6.1.1, 6.1.2)                                          | late   |
 
 Any reference takes selectors: `&[0]`, `&.limits.cpu`, `&self.port`,
 `&root.web<prod>`. `&.port` is the field `port` of the value below;
@@ -1171,7 +1170,7 @@ and is that entry's value below:
 
 - for a root entry, the value of the target from earlier operations
   (section 7);
-- for an entry inside a block, the block's *current* value at that
+- for an entry inside a block, the block's _current_ value at that
   target, at the moment the entry applies: what the start value,
   spreads and earlier entries have put there;
 - for an entry inside a whole-value block that is itself an entry's
@@ -1179,7 +1178,7 @@ and is that entry's value below:
   through to the enclosing entry's value below. So in
   `web: Service { replicas: & + 1, .. }`, `&` is the old `web.replicas`.
   Precisely: an entry's value below is the block's current value at
-  that key if it exists there, else the *outer value below* at that
+  that key if it exists there, else the _outer value below_ at that
   key, where a whole-value block's outer value below is the value below
   of the entry it is the value of (and nothing if it is elsewhere, such
   as in a list).
@@ -1191,7 +1190,7 @@ and is that entry's value below:
   adds to the list in the `OneOf` below, and `armour: Some(& + 1)` adds to
   `5` or to `Some(5)`. In a list element, `&` is the value below the list.
 
-`&` with nothing below is *missing* (section 6.5).
+`&` with nothing below is _missing_ (section 6.5).
 
 **Self and parent.** Every block has a **location**: the path where its
 value ends up.
@@ -1239,11 +1238,11 @@ block is in, and an error in the bind's own block.
 ```
 
 **Rebinding through spreads.** An entry that a spread copies in is
-evaluated at its *new* location. `&self`, `&parent`, `&top` and binds
+evaluated at its _new_ location. `&self`, `&parent`, `&top` and binds
 in it, and in the blocks nested in it, refer to the value it was copied into,
 not to the one it was written in. `&` stays where the entry was written:
 in a copied entry it is still the value below there. But an entry with
-*nothing* below where it was written, as in a template (section 6.1.2),
+_nothing_ below where it was written, as in a template (section 6.1.2),
 reads the value below where it lands. So `replicas: & + 1` in a template
 adds to the replicas of whatever it is merged into or spread over, and a
 template can be a patch: `stronger := { hp: & + 5 }`, then
@@ -1311,7 +1310,7 @@ service_defaults := {
   same block or an enclosing one), or as a template (section 6.1.2), is
   an error; there is no shadowing. `self`, `parent`, `super`, `top`,
   `root` and `default` cannot be bind names. A bind name and a key may be the same.
-- **Relative.** Like `&parent`, a bind is "*n* blocks up, then this
+- **Relative.** Like `&parent`, a bind is "_n_ blocks up, then this
   target", and follows its entries when a spread copies them
   elsewhere. A value bind (section 6.1.2) is not relative: a copied
   entry that uses one reads the value bound where the entry was
@@ -1397,43 +1396,44 @@ more_cols := { a: [], b: [] },
 - **Type expressions** use the Rust names of the types `crol` implements
   `Schema` for (section 10.9), so a type says what the Rust type is:
 
-  | Written | Schema (section 10.10) |
-  |---|---|
-  | `bool`, `char`, `()`, `i8` … `i128`, `isize`, `u8` … `u128`, `usize`, `f32`, `f64` | `Bool`, `Char`, `Unit`, `I8` … `F64` |
-  | `String`, `str`, `PathBuf`, `Path` | `String` |
-  | `Option<T>` | `Option(T)` |
-  | `Vec<T>`, `VecDeque<T>` | `List(T)` |
-  | `HashSet<T>`, `BTreeSet<T>` | `Set(T)` |
-  | `HashMap<K, V>`, `BTreeMap<K, V>`, `IndexMap<K, V>` | `Map(K, V)` |
-  | `[T; n]` | `Array(T, n)` |
-  | `(A, B)`, `(A,)`; `(A)` is `A` | `Tuple([A, B])` |
-  | `Box<T>`, `Rc<T>`, `Arc<T>`, `Cow<T>` | what `T` is |
-  | `crol::Id`, `crol::Value` | `Id([])`, `Any` |
-  | `crol::IdOr<T>` | `IdOr([], T)`: an id fits, and anything else is checked as `T` |
-  | `Item`, `app::Item`, `Pair<u32, String>` | `Named(...)`: a schema type, its instantiation for a generic one |
+    | Written                                                                            | Schema (section 10.10)                                           |
+    | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+    | `bool`, `char`, `()`, `i8` … `i128`, `isize`, `u8` … `u128`, `usize`, `f32`, `f64` | `Bool`, `Char`, `Unit`, `I8` … `F64`                             |
+    | `String`, `str`, `PathBuf`, `Path`                                                 | `String`                                                         |
+    | `Option<T>`                                                                        | `Option(T)`                                                      |
+    | `Vec<T>`, `VecDeque<T>`                                                            | `List(T)`                                                        |
+    | `HashSet<T>`, `BTreeSet<T>`                                                        | `Set(T)`                                                         |
+    | `HashMap<K, V>`, `BTreeMap<K, V>`, `IndexMap<K, V>`                                | `Map(K, V)`                                                      |
+    | `[T; n]`                                                                           | `Array(T, n)`                                                    |
+    | `(A, B)`, `(A,)`; `(A)` is `A`                                                     | `Tuple([A, B])`                                                  |
+    | `Box<T>`, `Rc<T>`, `Arc<T>`, `Cow<T>`                                              | what `T` is                                                      |
+    | `crol::Id`, `crol::Value`                                                          | `Id([])`, `Any`                                                  |
+    | `crol::IdOr<T>`                                                                    | `IdOr([], T)`: an id fits, and anything else is checked as `T`   |
+    | `Item`, `app::Item`, `Pair<u32, String>`                                           | `Named(...)`: a schema type, its instantiation for a generic one |
 
-  The names that give the same schema type are the same type to tools:
-  `BTreeMap<String, i32>` is checked as `HashMap<String, i32>` is, so which
-  one a type names is for the reader. Every other name is a schema type,
-  resolved like a type name (`use` applies, section 4.1). A name in the
-  table wins over a schema type of that name (one called `Vec`, or a serde
-  rename to `String`); `use(path as Alias)` reaches that type. `crol::Id`,
-  `crol::IdOr` and `crol::Value` are written with their path, so that a
-  schema type called `Id`, `IdOr` or `Value` keeps its name. The same type expressions are what
-  a `use` writes as type arguments.
+    The names that give the same schema type are the same type to tools:
+    `BTreeMap<String, i32>` is checked as `HashMap<String, i32>` is, so which
+    one a type names is for the reader. Every other name is a schema type,
+    resolved like a type name (`use` applies, section 4.1). A name in the
+    table wins over a schema type of that name (one called `Vec`, or a serde
+    rename to `String`); `use(path as Alias)` reaches that type. `crol::Id`,
+    `crol::IdOr` and `crol::Value` are written with their path, so that a
+    schema type called `Id`, `IdOr` or `Value` keeps its name. The same type expressions are what
+    a `use` writes as type arguments.
+
 - **Steps** go into a type, to the type a value at that step has:
-  - `.field`: a field of a struct or struct variant, by its serde name.
-  - `.0`, `.1`, …: an element of a tuple, tuple struct or tuple variant.
-  - `.[]`: an element of a list, set or array, or a value of a map. A map's
-    keys have no step; write their type out.
-  Every step looks through what serde makes transparent (`Box` and the
-  like, `#[serde(transparent)]`), newtypes and `Option`, so
-  `Foo.limits.cpu` works for a `limits: Option<Limits>`. A path whose last
-  segment is a variant of the enum the rest names (`Shape::Circle`) is that
-  variant, and must be followed by a step: `Shape::Circle.radius`,
-  `Shape::Rect.0`. Where the whole path also names a type, it is that
-  type. A path always starts at a type, never at a root key or
-  a field of the data, so it says the same in every layer.
+    - `.field`: a field of a struct or struct variant, by its serde name.
+    - `.0`, `.1`, …: an element of a tuple, tuple struct or tuple variant.
+    - `.[]`: an element of a list, set or array, or a value of a map. A map's
+      keys have no step; write their type out.
+      Every step looks through what serde makes transparent (`Box` and the
+      like, `#[serde(transparent)]`), newtypes and `Option`, so
+      `Foo.limits.cpu` works for a `limits: Option<Limits>`. A path whose last
+      segment is a variant of the enum the rest names (`Shape::Circle`) is that
+      variant, and must be followed by a step: `Shape::Circle.radius`,
+      `Shape::Rect.0`. Where the whole path also names a type, it is that
+      type. A path always starts at a type, never at a root key or
+      a field of the data, so it says the same in every layer.
 - **Path or type.** A path follows the Rust type when it changes; a type
   written out stays as written, and a template checked against an old type
   goes on passing where it is defined. A path fits a template meant for a
@@ -1513,7 +1513,7 @@ struct):
 
 - **Which default.** The target's type is found from the nearest
   enclosing type name and the schema: in `web: Service { limits: { cpu:
-  &default }, .. }`, it is the default of `Service`'s field `limits`, field
+&default }, .. }`, it is the default of `Service`'s field `limits`, field
   `cpu`. A field's default is its own `#[serde(default)]` or
   `#[serde(default = "...")]` if it has one, else the field's value in
   the struct's default (`#[serde(default)]` on the struct). At a type
@@ -1533,7 +1533,7 @@ struct):
   the one it names (section 12.5). Value mode has no defaults.
 - **Missing.** A field without a default, a type without recorded
   defaults, or a target whose type cannot be found makes `&default`
-  *missing*, so `&default ?? 1` falls back (section 6.5). Without a
+  _missing_, so `&default ?? 1` falls back (section 6.5). Without a
   schema at all, and in value mode, `&default` is an error.
 - **Fixed.** Defaults depend neither on layers nor on the context, so
   `&default` is evaluated once per target and never takes part in a
@@ -1548,14 +1548,14 @@ server show them.
 
 From tightest to loosest:
 
-| Level | Operators | Associates |
-|---|---|---|
-| 1 | postfix `.field`, `.0`, `[key]`, `<v>` | left |
-| 2 | unary `-`, `!` | right |
-| 3 | `*`, `/`, `%` | left |
-| 4 | `+`, `-`, `\|` (add to a list) | left |
-| 5 | `~`, `~^` (merge) | left |
-| 6 | `??` (fallback) | left |
+| Level | Operators                              | Associates |
+| ----- | -------------------------------------- | ---------- |
+| 1     | postfix `.field`, `.0`, `[key]`, `<v>` | left       |
+| 2     | unary `-`, `!`                         | right      |
+| 3     | `*`, `/`, `%`                          | left       |
+| 4     | `+`, `-`, `\|` (add to a list)         | left       |
+| 5     | `~`, `~^` (merge)                      | left       |
+| 6     | `??` (fallback)                        | left       |
 
 Parentheses group. `&-1` is `&` minus 1, `-&` negates `&`, and `!&`
 inverts it.
@@ -1569,14 +1569,14 @@ Postfix selectors apply to any expression: `(&root.a ~ { b: 1 }).b`,
 
 ### 6.3 Arithmetic and concatenation
 
-| Operands | `+` | `-` | `*` | `/` | `%` | unary `-` |
-|---|---|---|---|---|---|---|
-| integer, integer | add | subtract | multiply | divide, truncating toward zero | remainder, sign of the left side | negate |
-| float, float | add | subtract | multiply | divide | remainder (`fmod`) | negate |
-| integer, float (either order) | as floats | as floats | as floats | as floats | as floats | |
-| string, string | concatenate | | | | | |
-| string, integer/float/char/boolean (either order) | concatenate the formatted value (section 6.6) | | | | | |
-| list, list | concatenate | remove every left element equal to a right element | | | | |
+| Operands                                          | `+`                                           | `-`                                                | `*`       | `/`                            | `%`                              | unary `-` |
+| ------------------------------------------------- | --------------------------------------------- | -------------------------------------------------- | --------- | ------------------------------ | -------------------------------- | --------- |
+| integer, integer                                  | add                                           | subtract                                           | multiply  | divide, truncating toward zero | remainder, sign of the left side | negate    |
+| float, float                                      | add                                           | subtract                                           | multiply  | divide                         | remainder (`fmod`)               | negate    |
+| integer, float (either order)                     | as floats                                     | as floats                                          | as floats | as floats                      | as floats                        |           |
+| string, string                                    | concatenate                                   |                                                    |           |                                |                                  |           |
+| string, integer/float/char/boolean (either order) | concatenate the formatted value (section 6.6) |                                                    |           |                                |                                  |           |
+| list, list                                        | concatenate                                   | remove every left element equal to a right element |           |                                |                                  |           |
 
 `a | b` takes two lists too: it is `a` with each element of `b` that is
 not equal to one already in it added at the end, in order, so
@@ -1603,13 +1603,13 @@ comparison or a condition: nothing in the language branches on the result.
 `b` is normally a block (a patch), and section 5.2 gives the rules.
 `~` merges at any depth, and `~^` only at the top level. In general:
 
-| `a` | `b` | Result |
-|---|---|---|
-| keyed value | block | the block applied with `a` as its start value |
-| keyed value | other keyed value (e.g. `& ~ &root.x`) | each of `b`'s entries applied over `a`, below, plus its defaults and scope flags and defaulted fields |
-| named tuple `N(...)` | named tuple `N(...)` | `b`, each element merged with `a`'s at its position, as an entry with a key `a` holds |
-| unit name `N` | unit name `N` | `N` |
-| anything else | | error; use `:`, `+`, `-` or a path |
+| `a`                  | `b`                                    | Result                                                                                                |
+| -------------------- | -------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| keyed value          | block                                  | the block applied with `a` as its start value                                                         |
+| keyed value          | other keyed value (e.g. `& ~ &root.x`) | each of `b`'s entries applied over `a`, below, plus its defaults and scope flags and defaulted fields |
+| named tuple `N(...)` | named tuple `N(...)`                   | `b`, each element merged with `a`'s at its position, as an entry with a key `a` holds                 |
+| unit name `N`        | unit name `N`                          | `N`                                                                                                   |
+| anything else        |                                        | error; use `:`, `+`, `-` or a path                                                                    |
 
 - If both sides have a type name they must be equal, else it is an
   error ("cannot merge `Service` with `Limits`"). This also rejects
@@ -1631,7 +1631,7 @@ there are, and values that are not keyed replace.
 ### 6.5 Fallback `a ?? b`
 
 `a ?? b` is `a`, unless evaluating `a` fails because a value is
-*missing*, in which case it is `b`. Missing means:
+_missing_, in which case it is `b`. Missing means:
 
 - `&` with nothing below;
 - a reference whose path does not exist (a key, field, index or variant
@@ -1642,7 +1642,7 @@ there are, and values that are not keyed replace.
 Any other error in `a` (wrong kinds, overflow, a cycle, a type name
 mismatch) is reported, not caught.
 
-`a` is checked *to its own level*: evaluation is lazy (section 7.5),
+`a` is checked _to its own level_: evaluation is lazy (section 7.5),
 and a missing value inside one of `a`'s entries or list elements is not
 caught here; put the `??` inside, where the value is. Examples:
 
@@ -1672,17 +1672,17 @@ values) are an error; write `"..."` around an id's text if needed.
 A macro is written `name!(arguments)`. There are eight, seven of them on
 numbers, and a file cannot define more:
 
-| Macro | Result |
-|---|---|
-| `round!(x)` | `x` to the nearest integer, ties away from zero |
-| `floor!(x)` | the largest integer not above `x` |
-| `ceil!(x)` | the smallest integer not below `x` |
-| `round!(x, step)`, `floor!(x, step)`, `ceil!(x, step)` | the same, to a multiple of `step` |
-| `clamp!(x, min, max)` | `x`, kept between `min` and `max` |
-| `min!(a, b, ...)` | the smallest of two or more numbers |
-| `max!(a, b, ...)` | the largest of two or more numbers |
-| `abs!(x)` | `x` without its sign |
-| `seal!(value)` | `value`, a keyed value, with everything in it sealed (section 5.4) |
+| Macro                                                  | Result                                                             |
+| ------------------------------------------------------ | ------------------------------------------------------------------ |
+| `round!(x)`                                            | `x` to the nearest integer, ties away from zero                    |
+| `floor!(x)`                                            | the largest integer not above `x`                                  |
+| `ceil!(x)`                                             | the smallest integer not below `x`                                 |
+| `round!(x, step)`, `floor!(x, step)`, `ceil!(x, step)` | the same, to a multiple of `step`                                  |
+| `clamp!(x, min, max)`                                  | `x`, kept between `min` and `max`                                  |
+| `min!(a, b, ...)`                                      | the smallest of two or more numbers                                |
+| `max!(a, b, ...)`                                      | the largest of two or more numbers                                 |
+| `abs!(x)`                                              | `x` without its sign                                               |
+| `seal!(value)`                                         | `value`, a keyed value, with everything in it sealed (section 5.4) |
 
 Without a `step`, `round!`, `floor!` and `ceil!` return an integer, and are
 errors when the result does not fit one; an integer argument is returned as
@@ -1776,7 +1776,7 @@ Root entries are classified as follows:
 
 - A **definition** is a root entry (no path) that is a declare, an
   ensure, or a set whose expression does not use the value below. An
-  expression *uses the value below* when it contains a `&` bound to the
+  expression _uses the value below_ when it contains a `&` bound to the
   entry, including `&` in the entries of a whole-value block that is
   the entry's value, and in the left operand of `~` (section 6.1).
 - Everything else is a **patch**: path entries, removes, and sets that
@@ -1816,16 +1816,16 @@ So when a later layer changes `database.port`, every
 
 ### 7.4 Applying a chain
 
-Let `v` be *missing*. Apply each operation in order:
+Let `v` be _missing_. Apply each operation in order:
 
-| Operation | Result |
-|---|---|
-| declare `+k: e` | error if `v` exists; else `e` evaluated (`&` missing) |
-| set `k: e`, replace `^k: e` | `e`, evaluated with `&` = `v` |
-| ensure `?k: e` | `v` if it exists; else `e` (`&` missing) |
-| remove `-k` | error if `v` is missing; else missing |
-| remove if set `-?k` | missing |
-| path entry `k.p…: e` | error if `v` is missing; else `v` with the path entry applied (section 5.1) |
+| Operation                   | Result                                                                      |
+| --------------------------- | --------------------------------------------------------------------------- |
+| declare `+k: e`             | error if `v` exists; else `e` evaluated (`&` missing)                       |
+| set `k: e`, replace `^k: e` | `e`, evaluated with `&` = `v`                                               |
+| ensure `?k: e`              | `v` if it exists; else `e` (`&` missing)                                    |
+| remove `-k`                 | error if `v` is missing; else missing                                       |
+| remove if set `-?k`         | missing                                                                     |
+| path entry `k.p…: e`        | error if `v` is missing; else `v` with the path entry applied (section 5.1) |
 
 The key's final value is `v` after the last operation. If it is missing,
 the key does not exist.
@@ -1842,7 +1842,7 @@ The root has the two marks a block has (section 5.2), for a root struct
 - **A key whose chain ends in a remove** is in the root's defaulted keys, as a
   field removed with `-field` is in a block. An operation after it that sets
   the key takes it out, as in a block. A key is in them per context: `<prod> {
-  -retries }` only in `prod`.
+-retries }` only in `prod`.
 
 Both belong to the composed root. `&root` reads keys, and a spread of it passes
 them on like any other (section 5.2); nothing else about keys changes. A `..`
@@ -1865,8 +1865,8 @@ Each value has two levels:
 
 Operations need only what they use:
 
-| Needs the shape of its operands | Needs the full value of its operands |
-|---|---|
+| Needs the shape of its operands                                   | Needs the full value of its operands                           |
+| ----------------------------------------------------------------- | -------------------------------------------------------------- |
 | `~`, spreads, selectors, path entries, `??` (left side), list `+` | arithmetic, string concatenation, list `-` and `\|` (equality) |
 
 The application deserializing a value needs its full value.
@@ -1917,7 +1917,7 @@ are not part of the data's fingerprint.
 
 ### 7.7 Errors and recovery
 
-Errors do not stop evaluation. A value that fails is *poisoned*; values
+Errors do not stop evaluation. A value that fails is _poisoned_; values
 that need it are poisoned too, and report only "depends on a value that
 failed" at debug level. Evaluating everything therefore reports every
 independent error once. Each diagnostic has:
@@ -1949,7 +1949,6 @@ reading and evaluation have fixed limits, each an error when exceeded:
 
 The limits are part of the format: a later version may raise them, but
 never lower them.
-
 
 ### 7.8 Compiled layers
 
@@ -2141,13 +2140,13 @@ checked and fingerprinted.
 On an entry, a variant selector is a **condition**: the entry applies in
 every context where the condition holds.
 
-| Condition | Holds when |
-|---|---|
-| `<a>` | `a` is active |
-| `<!a>` | `a` is not active |
-| `<a & b>` | both hold |
-| `<a \| b>` | either holds |
-| `<a ^ b>` | exactly one holds |
+| Condition         | Holds when        |
+| ----------------- | ----------------- |
+| `<a>`             | `a` is active     |
+| `<!a>`            | `a` is not active |
+| `<a & b>`         | both hold         |
+| `<a \| b>`        | either holds      |
+| `<a ^ b>`         | exactly one holds |
 | `<(a \| b) & !c>` | parentheses group |
 
 Precedence, tightest first: `!`, `&`, `^`, `|`, as in Rust.
@@ -2206,12 +2205,12 @@ no variant is active, and not where `b` is.
 
 **Specificity** of a condition, like CSS selectors:
 
-| Condition | Specificity |
-|---|---|
-| `a` | 1, plus 1 for each ancestor of `a` |
-| `!a` | 0 |
-| `a & b` | specificity of `a` + specificity of `b` |
-| `a \| b`, `a ^ b` | the lower of the two |
+| Condition         | Specificity                             |
+| ----------------- | --------------------------------------- |
+| `a`               | 1, plus 1 for each ancestor of `a`      |
+| `!a`              | 0                                       |
+| `a & b`           | specificity of `a` + specificity of `b` |
+| `a \| b`, `a ^ b` | the lower of the two                    |
 
 With `prod_eu` under `prod`: `prod` is 1, `prod_eu` is 2, `prod & cache`
 is 2, `prod_eu & cache` is 3, `prod & !cache` is 1.
@@ -2247,11 +2246,11 @@ any other operation.
 },
 ```
 
-| | base | `{prod}` | `{prod_eu}` | `{prod_eu, cache}` |
-|---|---|---|---|---|
-| `web.replicas` | 2 | 9 | 11 | 10 |
-| `web.database_url` | `…db.internal` | `…db.internal` | `…db.eu.internal` | `…db.eu.internal` |
-| `web.cache_url` | `None` | `None` | `None` | `Some(…)` |
+|                    | base           | `{prod}`       | `{prod_eu}`       | `{prod_eu, cache}` |
+| ------------------ | -------------- | -------------- | ----------------- | ------------------ |
+| `web.replicas`     | 2              | 9              | 11                | 10                 |
+| `web.database_url` | `…db.internal` | `…db.internal` | `…db.eu.internal` | `…db.eu.internal`  |
+| `web.cache_url`    | `None`         | `None`         | `None`            | `Some(…)`          |
 
 In `{prod_eu}`: `prod` (1) gives 8, `prod & !cache` (1, later in the
 file) gives 9, then `prod_eu` (2) gives 11.
@@ -2408,27 +2407,27 @@ and a `Serializer` that writes plain value documents.
 
 ### 10.1 Mapping
 
-| serde request | Accepts |
-|---|---|
-| `bool` | boolean |
-| integers (`i8`…`u128`) | integer within the type's range |
-| `f32`, `f64` | float or integer (`f32` rounds to nearest) |
-| `char` | char |
-| `str`, `String` | string; an id is an error (section 10.5) |
-| `bytes`, `byte_buf` | list of integers 0–255 |
-| `option` | `None` → none; `Some(x)` → some(`x`); any other value → some(value) if `implicit_some` (default on) |
-| `unit` | `()` |
-| `unit_struct` | the struct's name, or `()` |
-| `newtype_struct` | `Name(x)` or `x`; a keyed `x` may have the type name `Name` (section 10.2) |
-| `seq` | list |
-| `tuple` | tuple |
-| `tuple_struct` | `Name(a, b)` or `(a, b)` |
-| `map` | keyed value. String keys deserialize into strings, unit enum variants (by name) and newtypes of these; integer keys into integer types; id keys into `crol::Id` and newtypes of it, which take no other key (section 10.5). A type name on it is checked against what wraps it (section 10.2) |
-| `struct` | keyed value whose keys are all strings (section 10.2) |
-| `enum` | `V`, `V(x)`, `V(a, b)`, `V { ... }` (section 10.4) |
-| `identifier` | field and variant names |
-| `any` | the value's natural form: keyed values as maps (type name dropped), named tuples as single-entry maps from name to payload, ids as their text with `@` (`"@web"`, section 10.5), also as keys |
-| `ignored_any` | anything |
+| serde request          | Accepts                                                                                                                                                                                                                                                                                       |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bool`                 | boolean                                                                                                                                                                                                                                                                                       |
+| integers (`i8`…`u128`) | integer within the type's range                                                                                                                                                                                                                                                               |
+| `f32`, `f64`           | float or integer (`f32` rounds to nearest)                                                                                                                                                                                                                                                    |
+| `char`                 | char                                                                                                                                                                                                                                                                                          |
+| `str`, `String`        | string; an id is an error (section 10.5)                                                                                                                                                                                                                                                      |
+| `bytes`, `byte_buf`    | list of integers 0–255                                                                                                                                                                                                                                                                        |
+| `option`               | `None` → none; `Some(x)` → some(`x`); any other value → some(value) if `implicit_some` (default on)                                                                                                                                                                                           |
+| `unit`                 | `()`                                                                                                                                                                                                                                                                                          |
+| `unit_struct`          | the struct's name, or `()`                                                                                                                                                                                                                                                                    |
+| `newtype_struct`       | `Name(x)` or `x`; a keyed `x` may have the type name `Name` (section 10.2)                                                                                                                                                                                                                    |
+| `seq`                  | list                                                                                                                                                                                                                                                                                          |
+| `tuple`                | tuple                                                                                                                                                                                                                                                                                         |
+| `tuple_struct`         | `Name(a, b)` or `(a, b)`                                                                                                                                                                                                                                                                      |
+| `map`                  | keyed value. String keys deserialize into strings, unit enum variants (by name) and newtypes of these; integer keys into integer types; id keys into `crol::Id` and newtypes of it, which take no other key (section 10.5). A type name on it is checked against what wraps it (section 10.2) |
+| `struct`               | keyed value whose keys are all strings (section 10.2)                                                                                                                                                                                                                                         |
+| `enum`                 | `V`, `V(x)`, `V(a, b)`, `V { ... }` (section 10.4)                                                                                                                                                                                                                                            |
+| `identifier`           | field and variant names                                                                                                                                                                                                                                                                       |
+| `any`                  | the value's natural form: keyed values as maps (type name dropped), named tuples as single-entry maps from name to payload, ids as their text with `@` (`"@web"`, section 10.5), also as keys                                                                                                 |
+| `ignored_any`          | anything                                                                                                                                                                                                                                                                                      |
 
 `crol::IdOr<T>` takes an id, or what `T` takes (section 10.5).
 
@@ -2472,12 +2471,12 @@ and for a struct its own. In `Name(x)` the newtype is written out, and `x`
 is what it wraps, with the names that has. What can be checked depends on
 what serde tells the deserializer:
 
-| Rust type | serde gives | A type name is checked |
-|---|---|---|
-| struct, struct variant | the struct's name | always (above) |
-| newtype `struct N(T)` | `deserialize_newtype_struct("N")` | always: `N`, or a name `T` has |
-| `#[serde(transparent)] struct N(T)` | nothing: it forwards to `T` | with a schema: `N`, or a name `T` has. Without one, as for `T` alone |
-| `BTreeMap`, `HashMap`, other maps | nothing | with a schema, where nothing around it names it either: a warning |
+| Rust type                           | serde gives                       | A type name is checked                                               |
+| ----------------------------------- | --------------------------------- | -------------------------------------------------------------------- |
+| struct, struct variant              | the struct's name                 | always (above)                                                       |
+| newtype `struct N(T)`               | `deserialize_newtype_struct("N")` | always: `N`, or a name `T` has                                       |
+| `#[serde(transparent)] struct N(T)` | nothing: it forwards to `T`       | with a schema: `N`, or a name `T` has. Without one, as for `T` alone |
+| `BTreeMap`, `HashMap`, other maps   | nothing                           | with a schema, where nothing around it names it either: a warning    |
 
 ```rust
 #[derive(Deserialize, crol::Schema)]
@@ -2507,7 +2506,7 @@ dashbaord: Scren { +list: List { vim_keys: true } },   // error: `Scren { ... }`
   and tools check the same with the schema alone, and report the same
   errors.
 - **A map that nothing names**, such as a field `stats: BTreeMap<String,
-  u32>` written `stats: Stats { ... }`: the name names no type. It loads,
+u32>` written `stats: Stats { ... }`: the name names no type. It loads,
   and with a schema it is a warning, "the type name `Stats` names nothing:
   this is a map, which has no type name", in `CrolData::warnings()`, from
   `crol::check` and in tools. Without a schema nothing tells a map from a
@@ -2544,10 +2543,10 @@ what they become.
 take their defaults only with `..`, with `#[crol(explicit_defaults)]`
 from `#[derive(crol::Schema)]` (section 10.9):
 
-| On the type | Fields left out without `..` | |
-|---|---|---|
-| nothing | as `require_complete` says | an error by default |
-| `#[crol(explicit_defaults)]` | an error that names them | whatever `require_complete` says |
+| On the type                          | Fields left out without `..`      |                                  |
+| ------------------------------------ | --------------------------------- | -------------------------------- |
+| nothing                              | as `require_complete` says        | an error by default              |
+| `#[crol(explicit_defaults)]`         | an error that names them          | whatever `require_complete` says |
 | `#[crol(explicit_defaults = false)]` | take their defaults, as with `..` | whatever `require_complete` says |
 
 ```rust
@@ -2593,11 +2592,11 @@ data-mode document (section 4.1), whose block is the composed root. `..` is
 written as a root entry, in any layer (section 7.4), and every layer's counts,
 since nothing replaces the root:
 
-| On the root struct | Fields no layer sets, no root `..` | With a root `..` |
-|---|---|---|
-| nothing | as `require_complete` says | take their defaults |
-| `#[crol(explicit_defaults)]` | an error that names them | take their defaults |
-| `#[crol(explicit_defaults = false)]` | take their defaults | the same; it changes nothing |
+| On the root struct                   | Fields no layer sets, no root `..` | With a root `..`             |
+| ------------------------------------ | ---------------------------------- | ---------------------------- |
+| nothing                              | as `require_complete` says         | take their defaults          |
+| `#[crol(explicit_defaults)]`         | an error that names them           | take their defaults          |
+| `#[crol(explicit_defaults = false)]` | take their defaults                | the same; it changes nothing |
 
 - A field removed with `-key` or `-?key`, and set by no layer above, takes
   its default without `..`, as with `-field`.
@@ -2632,13 +2631,13 @@ before `explicit_defaults = false` before nothing).
 
 `deserialize_enum(name, variants, visitor)` accepts:
 
-| Value | Variant | Payload |
-|---|---|---|
-| `V` | `V` | unit |
-| `V(x)` | `V` | newtype `x`, or tuple `(x)` |
-| `V(a, b)` | `V` | tuple |
-| `V { ... }` | `V` | struct variant, **or** newtype variant whose payload is deserialized from `{ ... }` |
-| `V { ... }` as a newtype variant | | the payload struct's type name check accepts `V` |
+| Value                            | Variant | Payload                                                                             |
+| -------------------------------- | ------- | ----------------------------------------------------------------------------------- |
+| `V`                              | `V`     | unit                                                                                |
+| `V(x)`                           | `V`     | newtype `x`, or tuple `(x)`                                                         |
+| `V(a, b)`                        | `V`     | tuple                                                                               |
+| `V { ... }`                      | `V`     | struct variant, **or** newtype variant whose payload is deserialized from `{ ... }` |
+| `V { ... }` as a newtype variant |         | the payload struct's type name check accepts `V`                                    |
 
 The last rule lets a root map of mixed types deserialize into a Rust
 enum:
@@ -2878,7 +2877,7 @@ tools:
   keys, or a map such as `IndexMap<String, Definition>`. The schema to
   go with it is `build::<T>()` for a struct, whose root type is then the
   whole document, and `build::<Definition>()` or `build::<IndexMap<String,
-  Definition>>()` for the map, which mean the same (section 4.1). The error
+Definition>>()` for the map, which mean the same (section 4.1). The error
   carries every diagnostic; warnings are dropped (`compose_data` keeps
   them).
 - `compose_data()` evaluates every key in every evaluated context
@@ -3003,22 +3002,22 @@ are fetched to a cache and read from there.
 
 `CrolConfig<T>`:
 
-| Field | Default | Section |
-|---|---|---|
-| `variants: CrolVariants<T>` | none declared (any name, as `Discrete`) | 8.1 |
-| `root_path: PathBuf` | the working directory | 4.2 |
-| `file_loaders: FileLoaders` | the file system below `root_path` | 10.7 |
-| `load_extends: bool` | `false` | 4.1 |
-| `contexts: Option<Vec<Vec<T>>>` | `None` (every valid context) | 8.1 |
-| `each_variant: bool` | `false` | 8.1 |
-| `max_contexts: usize` | `4096` | 8.1 |
-| `variant_keys: VariantKeys` | `Any` | 8.5 |
-| `implicit_some: bool` | `true` | 10.1 |
-| `allow_unknown_fields: bool` | `false` | 10.2 |
-| `require_complete: bool` | `true` | 10.2 |
-| `keep_lowered: bool` | `true` | 7.8 |
-| `init_defaults: bool` | `false` | 5.1 |
-| `strict_ids: bool` | `false`: an id that names nothing is a warning | 10.5 |
+| Field                           | Default                                        | Section |
+| ------------------------------- | ---------------------------------------------- | ------- |
+| `variants: CrolVariants<T>`     | none declared (any name, as `Discrete`)        | 8.1     |
+| `root_path: PathBuf`            | the working directory                          | 4.2     |
+| `file_loaders: FileLoaders`     | the file system below `root_path`              | 10.7    |
+| `load_extends: bool`            | `false`                                        | 4.1     |
+| `contexts: Option<Vec<Vec<T>>>` | `None` (every valid context)                   | 8.1     |
+| `each_variant: bool`            | `false`                                        | 8.1     |
+| `max_contexts: usize`           | `4096`                                         | 8.1     |
+| `variant_keys: VariantKeys`     | `Any`                                          | 8.5     |
+| `implicit_some: bool`           | `true`                                         | 10.1    |
+| `allow_unknown_fields: bool`    | `false`                                        | 10.2    |
+| `require_complete: bool`        | `true`                                         | 10.2    |
+| `keep_lowered: bool`            | `true`                                         | 7.8     |
+| `init_defaults: bool`           | `false`                                        | 5.1     |
+| `strict_ids: bool`              | `false`: an id that names nothing is a warning | 10.5    |
 
 ### 10.8 Serializer
 
@@ -3261,14 +3260,14 @@ expressions: `"app::Pair<U32, String>"`.
 `doc` (the doc comment, empty if none), `source` (file, relative to the
 Cargo workspace root as `file!()` gives it, and line) and:
 
-| Definition | Rust | Extra fields |
-|---|---|---|
-| `Struct` | struct with named fields | `fields`, `deny_unknown_fields` (default `false`), `default` (the struct's recorded default value, if any), `explicit_defaults` (`Some(true)` or `Some(false)` with the attribute of that value, section 10.3; default `None`), `scope` (`#[crol(scope)]`, section 10.9; default `false`) |
-| `TupleStruct` | `struct P(A, B)` | `fields`: list of type expressions |
-| `Newtype` | `struct N(A)` | `inner`, `scope` (as for a `Struct`); data writes `N(x)` or `x` |
-| `Transparent` | `#[serde(transparent)]` | `inner`, `scope` (as for a `Struct`); data writes only `x` |
-| `UnitStruct` | `struct U;` | |
-| `Enum` | enum | `repr`, `variants` |
+| Definition    | Rust                     | Extra fields                                                                                                                                                                                                                                                                              |
+| ------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Struct`      | struct with named fields | `fields`, `deny_unknown_fields` (default `false`), `default` (the struct's recorded default value, if any), `explicit_defaults` (`Some(true)` or `Some(false)` with the attribute of that value, section 10.3; default `None`), `scope` (`#[crol(scope)]`, section 10.9; default `false`) |
+| `TupleStruct` | `struct P(A, B)`         | `fields`: list of type expressions                                                                                                                                                                                                                                                        |
+| `Newtype`     | `struct N(A)`            | `inner`, `scope` (as for a `Struct`); data writes `N(x)` or `x`                                                                                                                                                                                                                           |
+| `Transparent` | `#[serde(transparent)]`  | `inner`, `scope` (as for a `Struct`); data writes only `x`                                                                                                                                                                                                                                |
+| `UnitStruct`  | `struct U;`              |                                                                                                                                                                                                                                                                                           |
+| `Enum`        | enum                     | `repr`, `variants`                                                                                                                                                                                                                                                                        |
 
 `repr` is `External` (serde's default), `Internal { tag }`,
 `Adjacent { tag, content }` or `Untagged`. `variants` maps each variant's
@@ -3280,13 +3279,13 @@ a struct variant, whether its attribute is on the variant or the enum.
 
 **Fields** map each field's serde name to:
 
-| Field | Meaning | Default |
-|---|---|---|
-| `ty` | its type expression | (required) |
-| `doc` | doc comment | `""` |
-| `aliases` | serde aliases | `[]` |
+| Field     | Meaning                                                                                                                                                        | Default    |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| `ty`      | its type expression                                                                                                                                            | (required) |
+| `doc`     | doc comment                                                                                                                                                    | `""`       |
+| `aliases` | serde aliases                                                                                                                                                  | `[]`       |
 | `default` | `Required` (no default: must be written, even with `..`), `Unrecorded` (has a default, value not recorded), or `Value(v)` (the default value, written as CROL) | `Required` |
-| `flatten` | `#[serde(flatten)]` | `false` |
+| `flatten` | `#[serde(flatten)]`                                                                                                                                            | `false`    |
 
 `Option` fields without a `#[serde(default)]` have
 `default: Value(None)`: serde makes them `None` when absent, so with
@@ -3298,20 +3297,20 @@ its default, unless `explicit_defaults` says otherwise (section 10.3).
 
 **Type expressions:**
 
-| Expression | Rust |
-|---|---|
-| `Bool`, `Char`, `String`, `Unit` | `bool`, `char`, `String`/`str`/`PathBuf`, `()` |
-| `I8` … `I128`, `U8` … `U128`, `F32`, `F64` | the numeric types; integer ranges follow from the type |
-| `Bytes` | `serde_bytes` and the like |
-| `Id(["path", ...])` | `crol::Id`, with the types what it names may have (`Id([])`: any) |
-| `IdOr(["path", ...], ty)` | `crol::IdOr<T>`: an id, checked as `Id([...])` is, or a value written in place, checked as `ty` is. What walks data by type sees through it for a value that is no id: type names, defaults, scopes, constraints, paths |
-| `Option(ty)` | `Option<T>` |
-| `List(ty)`, `Set(ty)` | `Vec`, `VecDeque`, slices; `HashSet`, `BTreeSet` (elements unique) |
-| `Array(ty, n)` | `[T; n]` (a tuple of `n` in serde) |
-| `Tuple([ty, ...])` | tuples |
-| `Map(key, value)` | `HashMap`, `BTreeMap`, `IndexMap`; with `Id([...])` as the key, a map that takes id keys, whose keys are checked as ids are |
-| `Named("path")` | a type in `types` |
-| `Any` | anything; not checked |
+| Expression                                 | Rust                                                                                                                                                                                                                    |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Bool`, `Char`, `String`, `Unit`           | `bool`, `char`, `String`/`str`/`PathBuf`, `()`                                                                                                                                                                          |
+| `I8` … `I128`, `U8` … `U128`, `F32`, `F64` | the numeric types; integer ranges follow from the type                                                                                                                                                                  |
+| `Bytes`                                    | `serde_bytes` and the like                                                                                                                                                                                              |
+| `Id(["path", ...])`                        | `crol::Id`, with the types what it names may have (`Id([])`: any)                                                                                                                                                       |
+| `IdOr(["path", ...], ty)`                  | `crol::IdOr<T>`: an id, checked as `Id([...])` is, or a value written in place, checked as `ty` is. What walks data by type sees through it for a value that is no id: type names, defaults, scopes, constraints, paths |
+| `Option(ty)`                               | `Option<T>`                                                                                                                                                                                                             |
+| `List(ty)`, `Set(ty)`                      | `Vec`, `VecDeque`, slices; `HashSet`, `BTreeSet` (elements unique)                                                                                                                                                      |
+| `Array(ty, n)`                             | `[T; n]` (a tuple of `n` in serde)                                                                                                                                                                                      |
+| `Tuple([ty, ...])`                         | tuples                                                                                                                                                                                                                  |
+| `Map(key, value)`                          | `HashMap`, `BTreeMap`, `IndexMap`; with `Id([...])` as the key, a map that takes id keys, whose keys are checked as ids are                                                                                             |
+| `Named("path")`                            | a type in `types`                                                                                                                                                                                                       |
+| `Any`                                      | anything; not checked                                                                                                                                                                                                   |
 
 `Box`, `Rc`, `Arc`, `Cow` and other wrappers that serde makes
 transparent are left out: `Box<Service>` is `Named("app::Service")`.
@@ -3340,7 +3339,6 @@ a tool that does not know it rejects the files that do, as an unknown
 field, instead of checking them by other rules. A type expression added
 so is such an addition too: `IdOr(...)` did not change `format`, and a
 tool that does not know it rejects the files that use it, as a whole.
-
 
 ### 10.11 Views and queries
 
@@ -3376,7 +3374,6 @@ contexts, reads the evaluated data through these instead:
 A query only reads evaluated data. Data cannot select keys by what they
 hold, since what a patch selects would depend on what patches do.
 
-
 ### 10.12 Constraints
 
 A **constraint** says what a field's value must be, beyond its type.
@@ -3406,11 +3403,11 @@ a set, an array or a map to what it holds. `key_constraint` applies to a
 map's keys. On a newtype or transparent struct, `constraint` applies
 wherever the type is used. The constraints are:
 
-| Constraint | Holds for |
-|---|---|
-| `Min(n)`, `Max(n)` | a number not below, or not above, `n` |
-| `Range(a, b)` | a number from `a` to `b`, inclusive |
-| `OneOf([...])` | one of these values; a string, an id and a unit name count as their text |
+| Constraint              | Holds for                                                                                                       |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `Min(n)`, `Max(n)`      | a number not below, or not above, `n`                                                                           |
+| `Range(a, b)`           | a number from `a` to `b`, inclusive                                                                             |
+| `OneOf([...])`          | one of these values; a string, an id and a unit name count as their text                                        |
 | `Refers(["Type", ...])` | an id, or a string, naming a root value of one of these types; `#[crol(constraints(x = Refers(Type)))]` in Rust |
 
 The schema file records the name on the field or type, and the program's
@@ -3525,13 +3522,13 @@ value that does not borrow the database, so it can be kept and used again. It
 is typed by where it starts and by the type it ends at, and it stands for a
 target's selectors (section 5.1):
 
-| Step | On | Selector |
-|---|---|---|
-| `.field()` | a struct, as serde names the field | `.field` |
-| `.at(i)` | a list | `[i]` |
-| `.key(k)` | a map | `.k` or `["k"]`, as section 3.1 writes it |
-| `.t0()`, `.t1()`, … | a tuple | `.0`, `.1`, … |
-| `.some()` | an `Option` | `?` on the step before it where the path goes on, else none |
+| Step                | On                                 | Selector                                                    |
+| ------------------- | ---------------------------------- | ----------------------------------------------------------- |
+| `.field()`          | a struct, as serde names the field | `.field`                                                    |
+| `.at(i)`            | a list                             | `[i]`                                                       |
+| `.key(k)`           | a map                              | `.k` or `["k"]`, as section 3.1 writes it                   |
+| `.t0()`, `.t1()`, … | a tuple                            | `.0`, `.1`, …                                               |
+| `.some()`           | an `Option`                        | `?` on the step before it where the path goes on, else none |
 
 A step can be taken whatever the data holds. A path that is missing is an error
 where it is used, and that includes a field left out for its default. A write
@@ -3653,18 +3650,18 @@ has to load it.
 
 `crol` (crate `crol-cli`):
 
-| Command | Does |
-|---|---|
-| `crol check [<layer>...]` | read and evaluate the layers (each `name=source` or a source, named after it, where a source is a module path (section 4.2) or a file system path, the module path if both name something; without any, those of the project file, of each of its layer stacks in turn, section 12.4), or one or more value documents (below), each on its own; check them against the schema if one is given or configured; print diagnostics; exit 1 on errors |
-| `crol eval [<layer>...] [--context a,b] [key[.path]]` | print evaluated data as a plain data-mode document (or one value); with a schema, struct fields that take their defaults are written out with the defaults the schema records, each marked `// default` (`--no-defaults` leaves them as the data does) |
-| `crol eval [<layer>...] --all-contexts` | print the base data, then for every other evaluated context a block `<a & b & !c & ...> { ... }` whose condition holds in that context only, with the keys whose value differs (`key: value`) or that are missing (`-key`). A `..` at the root is written in the base, or in the block of a context that has it where the base does not; for a root struct, a removed field as `key: (), -key`. The output is valid CROL and evaluates back to the same data |
-| `crol explain [<layer>...] [--context a,b] key[.path]` | print the operations that produced a value (section 12.3), and for each id in it the scope it resolved in (below) |
-| `crol compile <layer> [-o <file>]` | write a layer as a `.crob` file (section 7.8), by default beside it |
-| `crol fmt [--check] <file>...` | format `.crod` and `.crol` files in place (or check). Formatting does not depend on the mode (section 12.2). It takes files, so a directory is an error |
-| `crol fingerprint [<layer>...]` | print the fingerprint in hex |
-| `crol from-ron <file>` | convert a RON value file to a CROL value document, on standard output, to keep in a `.crol` file |
-| `crol --init`, `crol init` | set up the Cargo project around the working directory for CROL (below) |
-| `crol lsp` | run the language server on standard input and output (section 12.5) |
+| Command                                                | Does                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `crol check [<layer>...]`                              | read and evaluate the layers (each `name=source` or a source, named after it, where a source is a module path (section 4.2) or a file system path, the module path if both name something; without any, those of the project file, of each of its layer stacks in turn, section 12.4), or one or more value documents (below), each on its own; check them against the schema if one is given or configured; print diagnostics; exit 1 on errors             |
+| `crol eval [<layer>...] [--context a,b] [key[.path]]`  | print evaluated data as a plain data-mode document (or one value); with a schema, struct fields that take their defaults are written out with the defaults the schema records, each marked `// default` (`--no-defaults` leaves them as the data does)                                                                                                                                                                                                       |
+| `crol eval [<layer>...] --all-contexts`                | print the base data, then for every other evaluated context a block `<a & b & !c & ...> { ... }` whose condition holds in that context only, with the keys whose value differs (`key: value`) or that are missing (`-key`). A `..` at the root is written in the base, or in the block of a context that has it where the base does not; for a root struct, a removed field as `key: (), -key`. The output is valid CROL and evaluates back to the same data |
+| `crol explain [<layer>...] [--context a,b] key[.path]` | print the operations that produced a value (section 12.3), and for each id in it the scope it resolved in (below)                                                                                                                                                                                                                                                                                                                                            |
+| `crol compile <layer> [-o <file>]`                     | write a layer as a `.crob` file (section 7.8), by default beside it                                                                                                                                                                                                                                                                                                                                                                                          |
+| `crol fmt [--check] <file>...`                         | format `.crod` and `.crol` files in place (or check). Formatting does not depend on the mode (section 12.2). It takes files, so a directory is an error                                                                                                                                                                                                                                                                                                      |
+| `crol fingerprint [<layer>...]`                        | print the fingerprint in hex                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `crol from-ron <file>`                                 | convert a RON value file to a CROL value document, on standard output, to keep in a `.crol` file                                                                                                                                                                                                                                                                                                                                                             |
+| `crol --init`, `crol init`                             | set up the Cargo project around the working directory for CROL (below)                                                                                                                                                                                                                                                                                                                                                                                       |
+| `crol lsp`                                             | run the language server on standard input and output (section 12.5)                                                                                                                                                                                                                                                                                                                                                                                          |
 
 Common flags: `--discrete a,b`, `--group a,b,c` (repeatable), `--open civ` (repeatable), `--parent child=parent`, `--color auto|always|never`,
 `--message-format human|json`, `--project <file>`, `--stack <name>`,
@@ -3908,7 +3905,7 @@ Project {
   outside the layers opts in to the project's schema. A document that
   matches is checked as a value of that type, against `schema`, with the
   project's `options`, in the language server, and in `crol check`, `crol
-  eval` and `crol fingerprint` given that one file. It is an error if the
+eval` and `crol fingerprint` given that one file. It is an error if the
   project has no `schema`, or the schema has no such type.
 - Which schema a `.crol` file gets, first what applies: `--schema` (CLI);
   for the project file, the one `crol` provides; its `#![schema(...)]`, by
@@ -3995,7 +3992,7 @@ Project {
 - **A stack extends only its own files.** An `#![extends(...)]` in a
   document of a stack's layers that names a file or directory in another
   stack's layer directories is an error at its module path, in `crol
-  check` and the editor. Extending a file of no stack, or of the same
+check` and the editor. Extending a file of no stack, or of the same
   stack, works as in section 4.1. The file extended is still checked in
   its own stack, with its own diagnostics.
 - **Ids stay in their stack.** An id names a root key of its own stack only
@@ -4466,17 +4463,17 @@ schema for (10.5).
 
 ### 14.1 Crates
 
-| Crate | Contents |
-|---|---|
-| `crol-syntax` | lexer, error-recovering parser, lossless CST, typed AST, formatter |
-| `crol-eval` | lowering to operations and chains, the evaluator, `Value`, diagnostics, fingerprint |
-| `crol` | facade: `CrolComposer`, `CrolConfig`, `CrolVariants`, `CrolLayer`, `CrolData`, `CrolDb`, serde `Deserializer` and `Serializer`, `from_str`, `to_string` |
-| `crol-derive` | `#[derive(Schema)]`, `#[derive(VariantName)]`, `#[derive(View)]`, `#[derive(Navigable)]` and `croxp!`, re-exported by `crol` with the feature `derive`; the `Schema` trait and model live in `crol` (10.9) |
-| `crol-lsp` | the language server, as a library (section 12.5) |
-| `crol-cli` | the `crol` binary, including `crol lsp` |
-| `tree-sitter-crol` | the tree-sitter grammar and its queries (12.6); not a Rust crate |
-| `editors/zed` | the Zed extension (12.7) |
-| `editors/helix` | the Helix configuration (12.8) |
+| Crate              | Contents                                                                                                                                                                                                   |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `crol-syntax`      | lexer, error-recovering parser, lossless CST, typed AST, formatter                                                                                                                                         |
+| `crol-eval`        | lowering to operations and chains, the evaluator, `Value`, diagnostics, fingerprint                                                                                                                        |
+| `crol`             | facade: `CrolComposer`, `CrolConfig`, `CrolVariants`, `CrolLayer`, `CrolData`, `CrolDb`, serde `Deserializer` and `Serializer`, `from_str`, `to_string`                                                    |
+| `crol-derive`      | `#[derive(Schema)]`, `#[derive(VariantName)]`, `#[derive(View)]`, `#[derive(Navigable)]` and `croxp!`, re-exported by `crol` with the feature `derive`; the `Schema` trait and model live in `crol` (10.9) |
+| `crol-lsp`         | the language server, as a library (section 12.5)                                                                                                                                                           |
+| `crol-cli`         | the `crol` binary, including `crol lsp`                                                                                                                                                                    |
+| `tree-sitter-crol` | the tree-sitter grammar and its queries (12.6); not a Rust crate                                                                                                                                           |
+| `editors/zed`      | the Zed extension (12.7)                                                                                                                                                                                   |
+| `editors/helix`    | the Helix configuration (12.8)                                                                                                                                                                             |
 
 Dependencies are kept small: `serde`, `blake3`, `indexmap`; a CST
 library such as `rowan` in `crol-syntax`; `clap` and a diagnostic
@@ -4658,7 +4655,7 @@ where it is not obvious.
 - Decided: the name is CROL (Composable Rust Object Language), the extensions `.crod` and `.crol`.
 - Decided: variant parents, declared by the application only (8.1, 8.3).
   This lets one variant's patch extend another's for the same key;
-  applying another *key's* patch stays out.
+  applying another _key's_ patch stays out.
 - Decided: a field written by a serde alias is present for the
   completeness rule; the deserializer learns aliases from the schema
   (10.2).
@@ -4667,9 +4664,6 @@ where it is not obvious.
   default, and the attribute comes before `require_complete`; the
   deserializer learns it from the schema, and without one fails rather
   than load what the tools did not check.
-- Decided: no comparisons or conditionals, now or later; input
-  validation belongs on the Rust side (wrapper types, derive
-  attributes). `<v>` is final as the variant selector.
 - Decided: editor support is part of the project: a schema built from
   the type system through a `Schema` trait and derive, and written to a
   file by a test (10.9), not generated from source in `build.rs`, which
@@ -4710,21 +4704,21 @@ where it is not obvious.
 Used for the fingerprint only. All integers in lengths and counts are
 unsigned LEB128. Each value is a tag byte and a payload:
 
-| Tag | Value | Payload |
-|---|---|---|
-| `0x00` | `()` | none |
-| `0x01` | boolean | `0x00` or `0x01` |
-| `0x02` | integer | 16 bytes, two's complement, little-endian |
-| `0x03` | float | 8 bytes, IEEE bits, little-endian |
-| `0x04` | char | 4 bytes, scalar value, little-endian |
-| `0x05` | string | length, UTF-8 bytes |
-| `0x06` | id of one key, not from the root (`@web`) | length, UTF-8 bytes |
-| `0x07` | list | count, values |
-| `0x08` | tuple | count, values |
-| `0x09` | unit name | name |
-| `0x0A` | named tuple | name, count, values |
-| `0x0B` | keyed value | name (empty for none), flag byte (bit 0 the defaults flag, bit 1 the scope flag), count of defaulted keys and the keys (integers ascending, then strings in byte order, then ids, those not from the root first, by their keys), count of entries, then per entry its key and value in insertion order |
-| `0x0C` | any other id (`@a.b`, `@::a`) | `0x01` if from the root else `0x00`, count of keys, then each key as a name |
+| Tag    | Value                                     | Payload                                                                                                                                                                                                                                                                                                |
+| ------ | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `0x00` | `()`                                      | none                                                                                                                                                                                                                                                                                                   |
+| `0x01` | boolean                                   | `0x00` or `0x01`                                                                                                                                                                                                                                                                                       |
+| `0x02` | integer                                   | 16 bytes, two's complement, little-endian                                                                                                                                                                                                                                                              |
+| `0x03` | float                                     | 8 bytes, IEEE bits, little-endian                                                                                                                                                                                                                                                                      |
+| `0x04` | char                                      | 4 bytes, scalar value, little-endian                                                                                                                                                                                                                                                                   |
+| `0x05` | string                                    | length, UTF-8 bytes                                                                                                                                                                                                                                                                                    |
+| `0x06` | id of one key, not from the root (`@web`) | length, UTF-8 bytes                                                                                                                                                                                                                                                                                    |
+| `0x07` | list                                      | count, values                                                                                                                                                                                                                                                                                          |
+| `0x08` | tuple                                     | count, values                                                                                                                                                                                                                                                                                          |
+| `0x09` | unit name                                 | name                                                                                                                                                                                                                                                                                                   |
+| `0x0A` | named tuple                               | name, count, values                                                                                                                                                                                                                                                                                    |
+| `0x0B` | keyed value                               | name (empty for none), flag byte (bit 0 the defaults flag, bit 1 the scope flag), count of defaulted keys and the keys (integers ascending, then strings in byte order, then ids, those not from the root first, by their keys), count of entries, then per entry its key and value in insertion order |
+| `0x0C` | any other id (`@a.b`, `@::a`)             | `0x01` if from the root else `0x00`, count of keys, then each key as a name                                                                                                                                                                                                                            |
 
 A name is a length and UTF-8 bytes. A key is encoded as a value (tag
 `0x02` or `0x05`, and for an id key `0x06` or `0x0C`, the id as the value
