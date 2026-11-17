@@ -208,8 +208,8 @@ Project {
 ```
 
 A project written with `layers` at the top, as above, is a project with one stack,
-called `default`. With `stacks`, `layers`, `schema`, `root`, `options` and `files`
-go in each stack instead; `variants`, `parents` and `constants` stay at the top, for
+called `default`. With `stacks`, `layers`, `schema`, `root`, `options`, `files` and
+`constants` go in each stack instead; `variants` and `parents` stay at the top, for
 every stack.
 
 **Every file belongs to one stack.** A stack has the `.crod` files in its layer
@@ -256,19 +256,23 @@ Project {
 }
 ```
 
-`crol check`, `crol eval` and your editor evaluate `$foo_count` as 42. They are the
-project's, for every stack, as variants are, and they are checked against what each
-stack's schema [declares](schemas.md#constants): a stand-in of the wrong type is an
-error in `project.crol`. Pick values that look like what your program gives, since
+`crol check`, `crol eval` and your editor evaluate `$foo_count` as 42. Stand-ins
+belong to a stack, as its schema does: in a project with
+[several stacks](#several-layer-stacks), each stack gives its own, in its block in
+`stacks`, and a `.crol` file reads those of the stack whose `files` match it. They
+are checked against what the stack's schema [declares](schemas.md#constants): a
+stand-in of the wrong type is an error in `project.crol`, at its name. Pick values that look like what your program gives, since
 they decide what the tools show and check. Your program never reads them; it gives
 its own with `with_constant`. On the command line, [`--const`](cli.md#constants)
 goes over them.
 
 In your editor:
 
-- A `$name` with no stand-in is a warning on that use, and the values that depend
-  on it fail quietly, so that one missing value does not fill the file with errors.
-- After `$`, completion offers the constants of the schema and of the project file.
+- A `$name` with no stand-in is missing, as it is in your program, so `$name ?? 1`
+  is 1. Without `??` it is a warning on that use, and the values that depend on it
+  fail quietly, so that one missing value does not fill the file with errors.
+- After `$`, completion offers the constants of the schema and the stack's
+  stand-ins.
 - Hover on `$name` shows its type and doc from the schema, and its stand-in value.
 - With a schema that declares constants, a `$name` it does not declare is a
   warning: `` constant `x` is not in the schema; it is missing unless the program

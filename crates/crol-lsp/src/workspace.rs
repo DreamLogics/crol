@@ -206,10 +206,10 @@ pub struct Snapshot {
     /// The project, with its directory, for what its `files` say of a
     /// document (`SPEC.md` 12.4).
     project: Option<(Project, PathBuf)>,
-    /// The project's stand-in values of the constants (`SPEC.md` 6.1.4,
-    /// 12.4), which everything is evaluated with: a constant without one is
-    /// a warning on each use, and what reads it fails quietly.
-    constants: Constants,
+    /// What each value document on its own was evaluated with of the
+    /// constants: the stand-in values of the stack whose `files` match it,
+    /// else none (`SPEC.md` 6.1.4, 12.4).
+    document_constants: HashMap<FileId, Constants>,
     /// What each `.crod` document evaluated on its own was evaluated with.
     chains: HashMap<FileId, Chain>,
     /// The path of each file, by its id.
@@ -330,10 +330,18 @@ impl Snapshot {
         (self.stacks.iter()).find(|stack| std::ptr::eq(layers, stack.layers.as_slice()))
     }
 
-    /// The project's stand-in values of the constants (`SPEC.md` 12.4),
-    /// which everything is evaluated with.
-    pub(crate) fn constants(&self) -> &Constants {
-        &self.constants
+    /// The stand-in values of the constants a file is evaluated with
+    /// (`SPEC.md` 12.4): its stack's, for a file in its layers or a value
+    /// document its `files` match, else none. A constant without one is a
+    /// warning where nothing catches it.
+    pub(crate) fn constants_for(&self, file: Option<FileId>) -> &Constants {
+        if let Some(constants) = file.and_then(|f| self.document_constants.get(&f)) {
+            return constants;
+        }
+        match file {
+            Some(file) if self.in_layers(file) => &self.stack_for(Some(file)).options.constants,
+            _ => &self.lone_options.constants,
+        }
     }
 
     /// The schema of a file: its own, for a document on its own, else its
@@ -922,7 +930,7 @@ pub(crate) fn evaluate(
         extra: Vec::new(),
         own_schemas: HashMap::new(),
         project: None,
-        constants: editor_constants(Constants::new()),
+        document_constants: HashMap::new(),
         chains: HashMap::new(),
         paths: Vec::new(),
         by_path: HashMap::new(),
@@ -1043,7 +1051,16 @@ pub(crate) fn evaluate(
             }
             (None, Mode::Data) => Evaluation::default(),
             (None, Mode::Value) => {
-                crol_eval::evaluate_value_with(&snapshot.sources, file, &snapshot.constants)
+                // The stand-ins of the stack whose `files` give it a type
+                // (`SPEC.md` 12.4).
+                let constants = (snapshot.project.as_ref())
+                    .and_then(|(project, dir)| project.file_stack(dir, path))
+                    .map(|(_, stack, _)| editor_constants(stack.constants()))
+                    .unwrap_or_else(|| snapshot.lone_options.constants.clone());
+                let evaluation =
+                    crol_eval::evaluate_value_with(&snapshot.sources, file, &constants);
+                snapshot.document_constants.insert(file, constants);
+                evaluation
             }
         };
         problems.append(&mut loading.problems);
@@ -1190,16 +1207,17 @@ pub(crate) fn evaluate(
     snapshot
 }
 
-/// Checks the project's stand-in values of the constants against what the
-/// schemas of its stacks declare, on the project file (`SPEC.md` 12.4).
+/// Checks each stack's stand-in values of the constants against what its
+/// schema declares, on the project file (`SPEC.md` 12.4).
 fn stand_in_problems(snapshot: &mut Snapshot, project_path: &Path, open: &Buffers) {
-    let declares = |stack: &StackSnapshot| {
+    let checked = |stack: &StackSnapshot| {
         stack
             .schema
             .as_ref()
             .is_some_and(|s| !s.constants.is_empty())
+            && stack.options.constants.names().next().is_some()
     };
-    if !snapshot.stacks.iter().any(declares) || snapshot.constants.names().next().is_none() {
+    if !snapshot.stacks.iter().any(checked) {
         return;
     }
     let canonical = (project_path.canonicalize()).unwrap_or_else(|_| project_path.to_path_buf());
@@ -1209,17 +1227,18 @@ fn stand_in_problems(snapshot: &mut Snapshot, project_path: &Path, open: &Buffer
     };
     let file = snapshot.intern(&canonical.display().to_string(), &text);
     let mut found: Vec<Diagnostic> = Vec::new();
-    for schema in snapshot
-        .stacks
-        .iter()
-        .filter_map(|stack| stack.schema.as_ref())
-    {
-        for problem in crate::constants::stand_in_problems(file, &text, &snapshot.constants, schema)
-        {
-            if !found.iter().any(|f| f.message == problem.message) {
-                found.push(problem);
-            }
-        }
+    for stack in &snapshot.stacks {
+        let Some(schema) = stack.schema.as_ref() else {
+            continue;
+        };
+        let constants = &stack.options.constants;
+        found.extend(crate::constants::stand_in_problems(
+            file,
+            &text,
+            &stack.name,
+            constants,
+            schema,
+        ));
     }
     snapshot.extra.extend(found);
 }
@@ -1429,8 +1448,6 @@ fn load_project(
         .unwrap_or(Path::new("."))
         .to_path_buf();
     let variants = project.variants().map_err(|e| e.to_string())?;
-    snapshot.constants = editor_constants(project.constants()?);
-    let constants = snapshot.constants.clone();
     let mut stacks = Vec::new();
     for (name, stack) in &project.stacks {
         let mut loading = Loading::default();
@@ -1438,7 +1455,7 @@ fn load_project(
         let options = (stack.options.variant_keys()).map(|keys| {
             data_options(&stack.options, variants.clone())
                 .with_variant_keys(keys)
-                .with_constants(constants.clone())
+                .with_constants(editor_constants(stack.constants()))
         });
         match options {
             Ok(options) => {
@@ -1464,7 +1481,7 @@ fn load_project(
     // with the options of its stack if it has only one.
     snapshot.lone_options = DataOptions::default()
         .with_variants(variants.clone())
-        .with_constants(snapshot.constants.clone());
+        .with_constants(editor_constants(Constants::new()));
     if let [(stack, _)] = &stacks[..] {
         snapshot.lone_options = stack.options.clone();
         snapshot.lone_check = stack.check.clone();

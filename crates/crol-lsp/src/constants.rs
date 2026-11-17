@@ -49,13 +49,14 @@ pub(crate) fn drop_absent(diagnostics: &mut Vec<Diagnostic>, undeclared: &[Diagn
     });
 }
 
-/// What is wrong with the project's stand-in values against what `schema`
+/// What is wrong with a stack's stand-in values against what its `schema`
 /// declares: a value that does not fit its type is an error at its name in
 /// the project file. A declared constant without a stand-in value is a
 /// warning where it is used, which the evaluator gives, not an error here.
 pub(crate) fn stand_in_problems(
     project_file: FileId,
     project_text: &str,
+    stack: &str,
     constants: &Constants,
     schema: &SchemaFile,
 ) -> Vec<Diagnostic> {
@@ -66,7 +67,7 @@ pub(crate) fn stand_in_problems(
         };
         let problems = crol::check_constant(value, schema, &declared.ty, &CheckOptions::default());
         if let Some(problem) = problems.iter().find(|d| d.is_error()) {
-            let range = stand_in_range(project_text, name).unwrap_or_default();
+            let range = stand_in_range(project_text, stack, name).unwrap_or_default();
             found.push(Diagnostic::error(
                 Span::new(project_file, range),
                 format!(
@@ -79,9 +80,11 @@ pub(crate) fn stand_in_problems(
     found
 }
 
-/// Where a project file gives `name` its stand-in value: the key in its
-/// `constants`, else `constants` itself.
-fn stand_in_range(text: &str, name: &str) -> Option<TextRange> {
+/// Where a project file gives `name` its stand-in value for `stack`: the key
+/// in the stack's `constants`, else `constants` itself. A project written
+/// with `stacks` gives them in each stack's block, one with a single stack
+/// at the top (`SPEC.md` 12.4).
+fn stand_in_range(text: &str, stack: &str, name: &str) -> Option<TextRange> {
     let root = crol_syntax::parse(text).syntax();
     let key_of = |entry: &ast::Entry| {
         let token = entry.target()?.key()?.token()?;
@@ -100,9 +103,22 @@ fn stand_in_range(text: &str, name: &str) -> Option<TextRange> {
     for block in root.children().filter(|n| n.kind() == SyntaxKind::BLOCK) {
         top.extend(entries_of(&block));
     }
-    let entry = top
-        .into_iter()
-        .find(|e| key_of(e).is_some_and(|(key, _)| key == "constants"))?;
+    let named = |entries: Vec<ast::Entry>, wanted: &str| {
+        entries
+            .into_iter()
+            .find(|e| key_of(e).is_some_and(|(key, _)| key == wanted))
+    };
+    let block_of = |entry: &ast::Entry| {
+        entry
+            .value()
+            .filter(|value| value.syntax().kind() == SyntaxKind::BLOCK)
+            .map(|value| entries_of(value.syntax()))
+    };
+    // The stack's own block, in `stacks`, if the project has one.
+    let own = named(top.clone(), "stacks")
+        .and_then(|stacks| named(block_of(&stacks)?, stack))
+        .and_then(|entry| block_of(&entry));
+    let entry = named(own.unwrap_or(top), "constants")?;
     let own = entry
         .value()
         .filter(|value| value.syntax().kind() == SyntaxKind::BLOCK)
@@ -182,15 +198,23 @@ mod tests {
     #[test]
     fn a_stand_in_is_found_at_its_own_key() {
         let text = "Project {\n    stacks: { a: { constants: 1 } },\n    constants: { limits: { cpu: 2 }, cpu: 3 },\n    ..\n}";
-        let range = stand_in_range(text, "cpu").unwrap();
+        let range = stand_in_range(text, "default", "cpu").unwrap();
         let at = usize::from(range.start());
         assert_eq!(&text[at..at + 8], "cpu: 3 }");
-        let range = stand_in_range(text, "gpu").unwrap();
+        let range = stand_in_range(text, "default", "gpu").unwrap();
         let at = usize::from(range.start());
         assert!(
             text[at..].starts_with("constants: { limits"),
             "{}",
             &text[at..]
         );
+    }
+
+    #[test]
+    fn a_stand_in_is_found_in_its_stack() {
+        let text = "Project {\n    stacks: {\n        a: { constants: { n: 1 }, .. },\n        b: { constants: { n: 2 }, .. },\n    },\n    ..\n}";
+        let range = stand_in_range(text, "b", "n").unwrap();
+        let at = usize::from(range.start());
+        assert_eq!(&text[at..at + 4], "n: 2");
     }
 }

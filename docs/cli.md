@@ -152,12 +152,12 @@ $ crol eval --const 'home="/home/me"' paths.crod
 paths: { data: "/home/me/data", workers: 4 }
 ```
 
-`--const` goes over the stand-in values in the project file's
-[`constants`](projects.md#constants-in-the-project-file). A constant with neither is
+`--const` goes over the stand-in values in the
+[`constants`](projects.md#constants-in-the-project-file) of the stack in use. A constant with neither is
 missing, as it is in your program when it does not give one: `$workers ?? 4` is 4,
 and `$home` alone is an error, `` no constant `home` was given ``. A constant the
 schema declares is an error to leave out, `??` or not. A `.crol` file reads
-constants too.
+constants too: `--const`, and the stand-ins of the stack whose `files` match it.
 
 ## `crol check`
 

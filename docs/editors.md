@@ -25,7 +25,7 @@ finds your [project file](projects.md#how-it-is-found) by itself.
   keys after `&root.`, `&self.` and the like. It knows the type at the cursor at
   any depth: through nested blocks, lists, `Some(...)`, dotted keys and variant
   blocks. After `$`, the [constants](projects.md#constants-in-the-project-file) of
-  the schema and the project file, and hover on one shows its type, doc and
+  the schema and the stack's stand-ins, and hover on one shows its type, doc and
   stand-in value.
   After `#[` it offers `scope` and `type`, and after `#![` the document
   attributes, each with what it does, and only those that fit there: no `type`

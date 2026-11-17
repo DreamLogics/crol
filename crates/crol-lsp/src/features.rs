@@ -696,7 +696,8 @@ pub(crate) fn hover(
     if let Some(constant) = token.parent().and_then(ast::Constant::cast) {
         let name = constant.name()?;
         let schema = snapshot.schema_for(Some(file)).map(|s| s.file);
-        let markdown = crate::constants::about(name.text(), schema, snapshot.constants());
+        let markdown =
+            crate::constants::about(name.text(), schema, snapshot.constants_for(Some(file)));
         let index = LineIndex::new(text);
         let range = constant.syntax().text_range();
         return Some(Hover {

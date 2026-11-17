@@ -495,7 +495,7 @@ impl Completer<'_> {
     /// 6.1.4).
     fn constants(&self) -> Vec<CompletionItem> {
         let schema = self.snapshot.schema_for(self.file).map(|s| s.file);
-        let stand_ins = self.snapshot.constants();
+        let stand_ins = self.snapshot.constants_for(self.file);
         let declared = schema.into_iter().flat_map(|s| s.constants.keys());
         let mut names: Vec<&str> = declared.map(String::as_str).collect();
         names.extend(

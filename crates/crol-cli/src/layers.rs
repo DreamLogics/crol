@@ -86,13 +86,10 @@ impl InputArgs {
         }
     }
 
-    /// The constants to evaluate with (`SPEC.md` 6.1.4): the project's
-    /// stand-ins, then `--const`.
-    pub(crate) fn constants(&self, project: Option<&Project>) -> Result<Constants, String> {
-        let mut constants = match project {
-            Some(project) => project.constants().map_err(|e| e.to_string())?,
-            None => Constants::new(),
-        };
+    /// The constants to evaluate with (`SPEC.md` 6.1.4): the stand-ins of
+    /// the stack in use, then `--const`.
+    pub(crate) fn constants(&self, stack: Option<&ProjectStack>) -> Result<Constants, String> {
+        let mut constants = stack.map_or_else(Constants::new, ProjectStack::constants);
         let mut given = std::collections::HashSet::new();
         for pair in &self.constants {
             let (name, text) = pair
@@ -513,7 +510,7 @@ pub(crate) fn inputs(
     // `&default` reads the schema (`SPEC.md` 6.1.3), and so do constraints.
     options = options.with_defaults(schema.as_ref().map(|s| s.defaults_for(root.as_deref())));
     // What `$name` reads, checked against what the schema declares.
-    let mut constants = match args.constants(project.as_ref()) {
+    let mut constants = match args.constants(stack) {
         Ok(constants) => constants,
         Err(message) => return fail(reporter, message),
     };

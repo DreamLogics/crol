@@ -23,7 +23,7 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   (and `CrolDb::update_constants`) changes them, evaluating again only the keys
   that read one that changed, as `reload` does. `crol check`, `eval`, `explain`
   and `fingerprint` take `--const name=value`, over stand-in values in the
-  project file's `constants`; the language server evaluates with those,
+  `constants` of the project file's stacks; the language server evaluates with those,
   completes and hovers `$name`, and warns of a constant with no stand-in or not
   in the schema. The tree-sitter grammar and the Zed and Helix highlights know
   `$name`.

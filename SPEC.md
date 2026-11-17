@@ -3807,7 +3807,7 @@ Common flags: `--discrete a,b`, `--group a,b,c` (repeatable), `--open civ` (repe
 `check`, `eval`, `explain` and `fingerprint` also take `--const
 name=<value>`, repeatable: a constant (section 6.1.4), its value read as a
 CROL value (`--const foo_count=42`, `--const 'home="/home/me"'`), over the
-project's `constants` (section 12.4). A constant used without a value is
+`constants` of the stack in use (section 12.4). A constant used without a value is
 as in section 6.1.4: missing, or an error if the schema declares it.
 Without layer arguments, every command that needs layers reads them, with
 the variants and options, from the project file.
@@ -4029,9 +4029,11 @@ Project {
   code actions in the editor.
 - `constants` gives the constants the program gives at run time (section
   6.1.4) stand-in values, with which the CLI and the language server
-  evaluate the data. They are the project's, for every stack, as `variants`
-  are, and are checked against what a stack's schema declares. `--const`
-  overrides them (section 11).
+  evaluate the data. They belong to a stack, as its schema does, since the
+  stacks are different programs' data: each stack's are checked against what
+  its schema declares, and a `.crol` file reads those of the stack whose
+  `files` match it. Names are identifiers. `--const` overrides them (section
+  11).
 - `layers` is either `List([...])` or `Command(["my-app", "list-layers"])`.
   A command prints the layer list as a CROL value, for
   applications whose load order is itself data (extensions enabled by
@@ -4120,8 +4122,8 @@ Project {
 }
 ```
 
-- A stack has `layers` (required), `options`, `schema`, `root` and `files`,
-  each as above. A project written with these at the top has one stack,
+- A stack has `layers` (required), `options`, `schema`, `root`, `files` and
+  `constants`, each as above. A project written with these at the top has one stack,
   `default`, and `crol::project::Project::read` puts it in `stacks` under
   that name. A project with `stacks` has none of them at the top, nor
   `options` other than the defaults: that is an error, and so is a project
@@ -4220,13 +4222,14 @@ secondary spans (cycles, two definitions) links to them as related
 information. A problem with the project as a whole is put on the file to
 blame, else on the project file.
 
-**Constants.** The server evaluates with the project's stand-in values
-(section 12.4). A `$name` with none is a warning on the use, and the values
-that depend on it fail quietly (section 7.7), so that one missing value does
-not flood the file. With a schema that declares constants, a `$name` it does
+**Constants.** The server evaluates each stack with its stand-in values
+(section 12.4). A `$name` with none is missing, so `??` takes its default as
+it would in the program; where nothing catches it, it is a warning on the use,
+and the values that depend on it fail quietly (section 7.7), so that one
+missing value does not flood the file. With a schema that declares constants, a `$name` it does
 not declare is a warning: "constant `x` is not in the schema; it is missing
 unless the program gives it". After `$`, completion offers the schema's
-constants and the project's; hover on `$name` shows its declared type and
+constants and the stack's stand-ins; hover on `$name` shows its declared type and
 doc and its stand-in value.
 
 **A layer that does not load** stops nothing, unlike in `crol check`, for

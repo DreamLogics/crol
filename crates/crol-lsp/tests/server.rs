@@ -5990,3 +5990,43 @@ fn a_document_alone_warns_of_a_constant_without_a_value() {
     );
     client.stop();
 }
+
+#[test]
+fn each_stack_evaluates_with_its_own_constants() {
+    let project = r#"Project {
+        stacks: {
+            a: { layers: List([{ name: "base", dir: "a", .. }]), constants: { n: 1 }, .. },
+            b: { layers: List([{ name: "base", dir: "b", .. }]), .. },
+        },
+        ..
+    }"#;
+    let dir = workspace(
+        "lsp-constants-stacks",
+        &[
+            ("project.crol", project),
+            ("a/x.crod", "n: $n\n"),
+            ("b/x.crod", "n: $n\n"),
+        ],
+    );
+    let client = Client::start(&dir);
+    let in_b = uri(&dir.join("b/x.crod"));
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": in_b, "languageId": "crol", "version": 1, "text": "n: $n\n" } }),
+    );
+    // `b` gives `n` no stand-in value: a warning on the use.
+    let diagnostics = client.diagnostics_for(&in_b, |d| !d.is_empty());
+    assert_eq!(
+        messages(&diagnostics),
+        [("no constant `n` was given".to_owned(), 0, 2)]
+    );
+    // `a` gives it one, so its document has nothing to say.
+    let in_a = uri(&dir.join("a/x.crod"));
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": in_a, "languageId": "crol", "version": 1, "text": "n: $n\n" } }),
+    );
+    let diagnostics = client.diagnostics_for(&in_a, |_| true);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    client.stop();
+}

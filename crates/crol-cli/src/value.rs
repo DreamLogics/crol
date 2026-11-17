@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crol::project::{FILE_NAME, Project};
+use crol::project::{FILE_NAME, Project, ProjectStack};
 use crol::schema::SchemaFile;
 use crol::{CheckOptions, Mode};
 use crol_eval::{Evaluation, Sources};
@@ -28,6 +28,8 @@ struct Expected {
     /// The type `files` gives it.
     root: Option<String>,
     options: CheckOptions,
+    /// The stack whose `files` give it its type, for its constants.
+    stack: Option<ProjectStack>,
 }
 
 /// The value document the arguments give: one `.crol` file. Among other
@@ -102,10 +104,10 @@ pub(crate) fn read(path: &Path, args: &InputArgs, reporter: &mut Reporter) -> Op
         Ok(expected) => expected,
         Err(message) => return fail(message),
     };
-    // What `$name` reads (`SPEC.md` 6.1.4): the project's stand-ins, then
-    // `--const`, checked against what the schema declares.
-    let stand_ins = project.as_ref().and_then(|(_, read)| read.as_ref().ok());
-    let mut constants = match args.constants(stand_ins) {
+    // What `$name` reads (`SPEC.md` 6.1.4): the stand-ins of the stack
+    // whose `files` give it its type, then `--const`, checked against what
+    // the schema declares.
+    let mut constants = match args.constants(expected.stack.as_ref()) {
         Ok(constants) => constants,
         Err(message) => return fail(message),
     };
@@ -276,6 +278,7 @@ fn project_files(
         schema: Some(schema),
         root: Some(root),
         options: stack.options.check_options(),
+        stack: Some(stack.clone()),
     })
 }
 

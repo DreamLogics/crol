@@ -113,8 +113,9 @@ involved. Late references read final values, so `a: &root.a + 1` does not mean
 **`` no constant `replicas` was given ``**
 
 The data reads `$replicas`, and nothing gave it a value: not your program's
-`with_constant`, not `--const`, and not the project file's
-[`constants`](projects.md#constants-in-the-project-file). Give it one, or make it
+`with_constant`, not `--const`, and not the
+[`constants`](projects.md#constants-in-the-project-file) of its stack in the project
+file. Give it one, or make it
 optional with a fallback, `$replicas ?? 1`. When the message adds `did you mean`,
 the name is most likely misspelt.
 
@@ -418,8 +419,9 @@ grammar is not built, and one at the queries that they are not in
 **No diagnostics in one layer.** Check whether it is marked `read_only`.
 
 **A warning on every `$name`.** The editor has no value for the constant, and
-leaves what depends on it unevaluated. Give it a stand-in in the project file's
-[`constants`](projects.md#constants-in-the-project-file).
+leaves what depends on it unevaluated. Give it a stand-in in its stack's
+[`constants`](projects.md#constants-in-the-project-file) in the project file, or a
+fallback, `$name ?? 1`. In a project with several stacks, each stack has its own.
 
 ## Asking for help
 

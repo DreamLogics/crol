@@ -1055,3 +1055,27 @@ fn a_project_file_that_does_not_load_is_still_checked() {
     assert!(text.contains("bogus"), "{text}");
     assert!(text.contains("project.crol:1:"), "{text}");
 }
+
+#[test]
+fn each_stack_gives_its_own_constants() {
+    let dir = tree(
+        "constants-stacks",
+        &[
+            (
+                "project.crol",
+                "Project { stacks: { a: { layers: List([{ name: \"base\", dir: \"a\", .. }]), constants: { n: 1 }, .. }, b: { layers: List([{ name: \"base\", dir: \"b\", .. }]), constants: { n: 2 }, .. } }, .. }",
+            ),
+            ("a/x.crod", "n: $n"),
+            ("b/x.crod", "n: $n * 10"),
+        ],
+    );
+    let output = crol(&dir, &["eval", "--stack", "a"]);
+    assert_eq!(stdout(&output), "n: 1\n", "{output:?}");
+    let output = crol(&dir, &["eval", "--stack", "b"]);
+    assert_eq!(stdout(&output), "n: 20\n", "{output:?}");
+    let output = crol(&dir, &["eval", "--stack", "b", "--const", "n=3"]);
+    assert_eq!(stdout(&output), "n: 30\n", "{output:?}");
+    // `crol check` checks each stack with its own.
+    let output = crol(&dir, &["check"]);
+    assert!(output.status.success(), "{output:?}");
+}
