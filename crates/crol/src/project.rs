@@ -510,24 +510,52 @@ impl Project {
 
     /// The stack whose layers hold `path`, a file or directory, for a project
     /// in `dir`: the one with a layer directory that is `path` or above it,
-    /// or a layer file that is it. Runs the layer commands of stacks that
-    /// have one.
+    /// or a layer file that is it, with or without `.crod`, as a module path
+    /// names it. Listed layers are tried first; the layer commands of stacks
+    /// that have one run only if none of those hold it, and a command that
+    /// fails is an error only if no other stack holds it.
     pub fn layer_stack(&self, dir: &Path, path: &Path) -> Result<Option<&str>, Error> {
-        let canonical = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
-        let path = canonical(&std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()));
+        // Absolute on both sides, also where a file does not exist, so that
+        // a relative project directory compares with them.
+        let canonical = |p: &Path| {
+            let p = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
+            p.canonicalize().unwrap_or(p)
+        };
+        let path = canonical(path);
+        let as_module_file = canonical(&path.with_extension("crod"));
         let base = crate::module_path::current_if_empty(dir);
-        for (name, stack) in &self.stacks {
-            for layer in stack.layer_list(dir)? {
+        let holds = |layers: &[ProjectLayer]| {
+            layers.iter().any(|layer| {
                 let module = layer.dir.strip_prefix("::").unwrap_or(&layer.dir);
                 let mut at = base.to_path_buf();
                 at.extend(module.split("::"));
                 let file = canonical(&at.with_extension("crod"));
-                if path == file || path.starts_with(canonical(&at)) {
-                    return Ok(Some(name));
+                path == file || as_module_file == file || path.starts_with(canonical(&at))
+            })
+        };
+        for (name, stack) in &self.stacks {
+            if let ProjectLayers::List(layers) = &stack.layers
+                && holds(layers)
+            {
+                return Ok(Some(name));
+            }
+        }
+        let mut failed = None;
+        for (name, stack) in &self.stacks {
+            if let ProjectLayers::Command(_) = &stack.layers {
+                match stack.layer_list(dir) {
+                    Ok(layers) if holds(&layers) => return Ok(Some(name)),
+                    Ok(_) => {}
+                    Err(error) => {
+                        failed.get_or_insert(error);
+                    }
                 }
             }
         }
-        Ok(None)
+        match failed {
+            Some(error) => Err(error),
+            None => Ok(None),
+        }
     }
 
     /// The declared variants.
@@ -1047,6 +1075,40 @@ mod tests {
         assert_eq!(stack("ui/start.crod"), Some("ui"));
         assert_eq!(stack("other/start.crod"), None);
         assert_eq!(stack("themes/other.crod"), None);
+    }
+
+    #[test]
+    fn a_relative_project_directory_and_a_module_path_find_the_stack() {
+        let project = Project::from_text("project.crol", STACKS).unwrap();
+        for dir in [Path::new(""), Path::new(".")] {
+            let stack = |path: &str| project.layer_stack(dir, Path::new(path)).unwrap();
+            // `ui` names the layer file `ui.crod`, as a module path does.
+            assert_eq!(stack("ui"), Some("ui"), "{dir:?}");
+            assert_eq!(stack("./ui"), Some("ui"), "{dir:?}");
+            assert_eq!(stack("ui.crod"), Some("ui"), "{dir:?}");
+            assert_eq!(stack("themes/user"), Some("theme"), "{dir:?}");
+            assert_eq!(stack("other"), None, "{dir:?}");
+        }
+    }
+
+    #[test]
+    fn a_failing_layer_command_matters_only_if_nothing_else_holds_the_path() {
+        let text = STACKS.replace(
+            r#"List([{ name: "base", dir: "ui", .. }])"#,
+            r#"Command(["crol-test-no-such-program"])"#,
+        );
+        let project = Project::from_text("project.crol", &text).unwrap();
+        let dir = Path::new("/p");
+        assert_eq!(
+            project
+                .layer_stack(dir, &dir.join("themes/user/a.crod"))
+                .unwrap(),
+            Some("theme")
+        );
+        let error = project
+            .layer_stack(dir, &dir.join("ui/a.crod"))
+            .unwrap_err();
+        assert!(error.message().contains("cannot run"), "{error}");
     }
 
     #[test]

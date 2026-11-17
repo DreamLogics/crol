@@ -884,6 +884,29 @@ fn layers_given_choose_their_stack() {
 }
 
 #[test]
+fn a_layer_file_named_by_module_path_chooses_its_stack() {
+    let project = STACKS_PROJECT.replace(r#"dir: "services""#, r#"dir: "web""#);
+    let dir = stacks_tree(
+        "stacks-module-file",
+        &[
+            ("project.crol", &project),
+            ("web.crod", "+web: Service { replicas: 5 }\n"),
+        ],
+    );
+    for project in ["project.crol", "./project.crol"] {
+        for layer in ["web", "base=web", "web.crod"] {
+            let args = ["eval", "--project", project, layer, "web"];
+            let output = crol(&dir, &args);
+            assert!(output.status.success(), "{args:?}: {output:?}");
+            assert!(
+                stdout(&output).contains("replicas: 5"),
+                "{args:?}: {output:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn value_documents_are_checked_in_their_own_stack() {
     let dir = stacks_tree("stacks-values", &[]);
     let both = ["check", "config/app.crol", "config/theme_light.crol"];
