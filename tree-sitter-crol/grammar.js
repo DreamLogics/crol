@@ -14,6 +14,39 @@ const IDENTIFIER = /[A-Za-z][A-Za-z0-9_]*|_[A-Za-z0-9_]+/;
 const ESCAPE = /\\(n|r|t|\\|0|"|'|x[0-7][0-9a-fA-F]|u\{[0-9a-fA-F_]{1,6}\}|\r?\n)/;
 const STRING = seq('"', repeat(choice(/[^"\\]/, ESCAPE)), '"');
 
+/**
+ * A class of the characters of a name (after its first) other than `chars`.
+ * @param {string} chars
+ */
+function nameCharOtherThan(chars) {
+  const all = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_';
+  return `[${[...all].filter(c => !chars.includes(c)).join('')}]`;
+}
+
+/**
+ * The names that begin with the first letter of `word` but are not `word`:
+ * those that leave it at some character, end before it does, or go on after
+ * it. Tree-sitter's patterns have no lookahead, so this spells it out.
+ * @param {string} word
+ */
+function nameOtherThan(word) {
+  const rest = '[A-Za-z0-9_]';
+  let after = `${rest}+`;
+  for (let i = word.length - 1; i > 0; i--) {
+    after = `(${nameCharOtherThan(word[i])}${rest}*|${word[i]}${after})?`;
+  }
+  return `${word[0]}${after}`;
+}
+
+// A constant's name: an identifier other than `true` and `false`, which are
+// an error after `$` (SPEC.md 6.1.4). Nothing else is a keyword there.
+const CONSTANT_NAME = new RegExp([
+  '_[A-Za-z0-9_]+',
+  `${nameCharOtherThan('0123456789_tf')}[A-Za-z0-9_]*`,
+  nameOtherThan('true'),
+  nameOtherThan('false'),
+].join('|'));
+
 const PREC = {
   fallback: 1,
   merge: 2,
@@ -256,6 +289,7 @@ module.exports = grammar({
       $.literal,
       $.id_expr,
       $.reference,
+      $.constant,
       $.block,
       $.list_expr,
       $.tuple_expr,
@@ -292,6 +326,13 @@ module.exports = grammar({
         repeat(alias(token(seq('.', /\s*/, choice('&parent', '&super'))), $.parent)),
       ),
       alias(token(seq('&', IDENTIFIER)), $.bind_name),
+    ),
+
+    // `$name`: its name follows `$` directly, and nothing is a keyword after
+    // it, so `$root` is a constant named `root` (SPEC.md 6.1.4).
+    constant: $ => seq(
+      '$',
+      field('name', alias(token.immediate(CONSTANT_NAME), $.identifier)),
     ),
 
     block: $ => seq(optional(field('type', $.identifier)), $._block_body),

@@ -901,45 +901,45 @@ fn misplaced_parent_and_plus_list() {
 #[test]
 fn reserved_words_and_garbage() {
     check(
-        "true: 1, $ x: 2, y: }",
+        "true: 1, ` x: 2, y: }",
         expect![[r#"
-        DOCUMENT@0..21
-          ENTRY@0..7
-            TARGET@0..4
-              KEY@0..4
-                TRUE_KW@0..4 "true"
-            COLON@4..5 ":"
-            WHITESPACE@5..6 " "
-            LITERAL@6..7
-              INT@6..7 "1"
-          COMMA@7..8 ","
-          WHITESPACE@8..9 " "
-          ERROR@9..10
-            ERROR_TOKEN@9..10 "$"
-          WHITESPACE@10..11 " "
-          ENTRY@11..15
-            TARGET@11..12
-              KEY@11..12
-                IDENT@11..12 "x"
-            COLON@12..13 ":"
-            WHITESPACE@13..14 " "
-            LITERAL@14..15
-              INT@14..15 "2"
-          COMMA@15..16 ","
-          WHITESPACE@16..17 " "
-          ENTRY@17..20
-            TARGET@17..18
-              KEY@17..18
-                IDENT@17..18 "y"
-            COLON@18..19 ":"
-            WHITESPACE@19..20 " "
-          ERROR@20..21
-            R_BRACE@20..21 "}"
-        error 0..4: `true` is reserved; write the key as `"true"`
-        error 9..10: unexpected character `$`
-        error 19..19: expected an expression
-        error 20..21: unexpected `}`
-    "#]],
+            DOCUMENT@0..21
+              ENTRY@0..7
+                TARGET@0..4
+                  KEY@0..4
+                    TRUE_KW@0..4 "true"
+                COLON@4..5 ":"
+                WHITESPACE@5..6 " "
+                LITERAL@6..7
+                  INT@6..7 "1"
+              COMMA@7..8 ","
+              WHITESPACE@8..9 " "
+              ERROR@9..10
+                ERROR_TOKEN@9..10 "`"
+              WHITESPACE@10..11 " "
+              ENTRY@11..15
+                TARGET@11..12
+                  KEY@11..12
+                    IDENT@11..12 "x"
+                COLON@12..13 ":"
+                WHITESPACE@13..14 " "
+                LITERAL@14..15
+                  INT@14..15 "2"
+              COMMA@15..16 ","
+              WHITESPACE@16..17 " "
+              ENTRY@17..20
+                TARGET@17..18
+                  KEY@17..18
+                    IDENT@17..18 "y"
+                COLON@18..19 ":"
+                WHITESPACE@19..20 " "
+              ERROR@20..21
+                R_BRACE@20..21 "}"
+            error 0..4: `true` is reserved; write the key as `"true"`
+            error 9..10: unexpected character ```
+            error 19..19: expected an expression
+            error 20..21: unexpected `}`
+        "#]],
     );
 }
 
@@ -1323,4 +1323,118 @@ fn an_id_key_has_a_name_and_only_keys() {
         error 8..9: unexpected `.`
     "#]],
     );
+}
+
+#[test]
+fn constants() {
+    check("a: $foo_count + $limits.cpu, b: $root", expect![[r#"
+        DOCUMENT@0..37
+          ENTRY@0..27
+            TARGET@0..1
+              KEY@0..1
+                IDENT@0..1 "a"
+            COLON@1..2 ":"
+            WHITESPACE@2..3 " "
+            BINARY_EXPR@3..27
+              CONSTANT@3..13
+                DOLLAR@3..4 "$"
+                IDENT@4..13 "foo_count"
+              WHITESPACE@13..14 " "
+              PLUS@14..15 "+"
+              WHITESPACE@15..16 " "
+              PATH_EXPR@16..27
+                CONSTANT@16..23
+                  DOLLAR@16..17 "$"
+                  IDENT@17..23 "limits"
+                FIELD_SELECTOR@23..27
+                  DOT@23..24 "."
+                  IDENT@24..27 "cpu"
+          COMMA@27..28 ","
+          WHITESPACE@28..29 " "
+          ENTRY@29..37
+            TARGET@29..30
+              KEY@29..30
+                IDENT@29..30 "b"
+            COLON@30..31 ":"
+            WHITESPACE@31..32 " "
+            CONSTANT@32..37
+              DOLLAR@32..33 "$"
+              IDENT@33..37 "root"
+    "#]]);
+}
+
+#[test]
+fn constant_errors() {
+    check("a: $ x, $k: 1, b[$k]: 2, c<$x>: 3, d: $true", expect![[r#"
+        DOCUMENT@0..43
+          ENTRY@0..6
+            TARGET@0..1
+              KEY@0..1
+                IDENT@0..1 "a"
+            COLON@1..2 ":"
+            WHITESPACE@2..3 " "
+            CONSTANT@3..6
+              DOLLAR@3..4 "$"
+              WHITESPACE@4..5 " "
+              IDENT@5..6 "x"
+          COMMA@6..7 ","
+          WHITESPACE@7..8 " "
+          ERROR@8..9
+            DOLLAR@8..9 "$"
+          ENTRY@9..13
+            TARGET@9..10
+              KEY@9..10
+                IDENT@9..10 "k"
+            COLON@10..11 ":"
+            WHITESPACE@11..12 " "
+            LITERAL@12..13
+              INT@12..13 "1"
+          COMMA@13..14 ","
+          WHITESPACE@14..15 " "
+          ENTRY@15..23
+            TARGET@15..20
+              KEY@15..16
+                IDENT@15..16 "b"
+              ACCESSOR@16..20
+                L_BRACK@16..17 "["
+                DOLLAR@17..18 "$"
+                IDENT@18..19 "k"
+                R_BRACK@19..20 "]"
+            COLON@20..21 ":"
+            WHITESPACE@21..22 " "
+            LITERAL@22..23
+              INT@22..23 "2"
+          COMMA@23..24 ","
+          WHITESPACE@24..25 " "
+          ENTRY@25..33
+            TARGET@25..30
+              KEY@25..26
+                IDENT@25..26 "c"
+              VARIANT@26..30
+                L_ANGLE@26..27 "<"
+                ERROR@27..29
+                  DOLLAR@27..28 "$"
+                  IDENT@28..29 "x"
+                R_ANGLE@29..30 ">"
+            COLON@30..31 ":"
+            WHITESPACE@31..32 " "
+            LITERAL@32..33
+              INT@32..33 "3"
+          COMMA@33..34 ","
+          WHITESPACE@34..35 " "
+          ENTRY@35..43
+            TARGET@35..36
+              KEY@35..36
+                IDENT@35..36 "d"
+            COLON@36..37 ":"
+            WHITESPACE@37..38 " "
+            CONSTANT@38..43
+              DOLLAR@38..39 "$"
+              TRUE_KW@39..43 "true"
+        error 5..6: a constant's name must follow `$` directly
+        error 8..9: a key cannot be a constant: keys are fixed when a document is read (SPEC.md 6.1.4)
+        error 17..18: a key in a path cannot be a constant: keys are fixed when a document is read
+        error 27..28: a condition names variants; a constant cannot be one
+        error 39..43: `true` and `false` cannot be constant names
+    "#]]);
 }

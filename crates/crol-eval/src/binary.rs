@@ -25,7 +25,7 @@ use crate::value::{IdPath, Key};
 const MAGIC: &[u8; 4] = b"CROB";
 
 /// The version of the format: files of another are refused, and made again.
-pub const FORMAT: u32 = 9;
+pub const FORMAT: u32 = 10;
 
 /// The magic, the format, the hash of the rest of the file, the hash of the
 /// documents and the size of what is compressed.
@@ -216,6 +216,10 @@ impl Writer<'_> {
                 self.id(*id);
             }
             RefKind::Top => self.out.push(7),
+            RefKind::Constant(name) => {
+                self.out.push(8);
+                self.string(name);
+            }
         }
     }
 
@@ -746,6 +750,7 @@ impl Reader<'_> {
             },
             6 => RefKind::ValueBind(self.bind_id()?),
             7 => RefKind::Top,
+            8 => RefKind::Constant(self.string()?),
             _ => return Err(Corrupt),
         })
     }

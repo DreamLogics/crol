@@ -958,6 +958,7 @@ ast_enum!(
         Literal(Literal),
         Id(IdExpr),
         Reference(Reference),
+        Constant(Constant),
         Block(Block),
         List(ListExpr),
         Tuple(TupleExpr),
@@ -1054,6 +1055,20 @@ impl Reference {
                 _ => ReferenceKind::Bind(t),
             },
         }
+    }
+}
+
+ast_node!(
+    /// `$name`: a constant the program gives (`SPEC.md` 6.1.4). In
+    /// `$limits.cpu`, the selectors are a [`PathExpr`] around it.
+    Constant,
+    CONSTANT
+);
+
+impl Constant {
+    /// The name after `$`.
+    pub fn name(&self) -> Option<SyntaxToken> {
+        token(&self.0, IDENT)
     }
 }
 

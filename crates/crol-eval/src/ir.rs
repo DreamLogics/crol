@@ -207,6 +207,10 @@ pub(crate) enum RefKind {
     Bind { up: usize, target: Box<[Selector]> },
     /// `&name` for a value bind or template.
     ValueBind(BindId),
+    /// `$name`: a constant the program gives (`SPEC.md` 6.1.4). It is kept
+    /// by name, never as a value, so that one compiled layer serves any
+    /// constants.
+    Constant(Arc<str>),
 }
 
 /// Whose default `&default` is (`SPEC.md` 6.1.3): a field path from the

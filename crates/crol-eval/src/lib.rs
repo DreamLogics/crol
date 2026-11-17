@@ -26,6 +26,7 @@ use indexmap::IndexMap;
 
 pub mod binary;
 mod cond;
+mod constants;
 mod diagnostic;
 mod eval;
 pub mod fingerprint;
@@ -38,6 +39,7 @@ mod source;
 mod value;
 mod variants;
 
+pub use constants::{Constants, closest};
 pub use diagnostic::{Diagnostic, Related, Severity};
 pub use order::{LayerTarget, layer_target};
 pub use source::{FileId, Location, SourceFile, Sources, Span};
@@ -126,6 +128,8 @@ pub struct DataOptions {
     /// Where `&default` finds defaults (`SPEC.md` 6.1.3); without one,
     /// `&default` is an error.
     pub defaults: Option<Defaults>,
+    /// What `$name` reads (`SPEC.md` 6.1.4).
+    pub constants: Constants,
     /// Let a path go through a field left out, from its default
     /// (`SPEC.md` 5.1). Needs `defaults`.
     pub init_defaults: bool,
@@ -163,6 +167,7 @@ impl Default for DataOptions {
             variant_keys: VariantKeys::Any,
             evaluate_every_key: false,
             defaults: None,
+            constants: Constants::new(),
             init_defaults: false,
             merge_root: false,
             threads: None,
@@ -224,6 +229,12 @@ impl DataOptions {
     /// Sets [`DataOptions::defaults`].
     pub fn with_defaults(mut self, defaults: Option<Defaults>) -> Self {
         self.defaults = defaults;
+        self
+    }
+
+    /// Sets [`DataOptions::constants`].
+    pub fn with_constants(mut self, constants: Constants) -> Self {
+        self.constants = constants;
         self
     }
 
@@ -674,16 +685,10 @@ pub fn evaluate_changed(
     variants: &Variants,
     contexts: &[ContextData],
 ) -> Option<Update> {
-    if let Some(defaults) = &options.defaults
-        && (defaults.0.has_constraints() || defaults.0.has_sealed())
-    {
+    if !can_evaluate_again(options, before) || !can_evaluate_again(options, after) {
         return None;
     }
-    if options.variant_keys != VariantKeys::Any || before.layer_names != after.layer_names {
-        return None;
-    }
-    // Values keep no seals, so a key kept from before would lose them.
-    if before.lowered.has_seals() || after.lowered.has_seals() {
+    if before.layer_names != after.layer_names {
         return None;
     }
     // The documents in both are in the same order, and those in one of them
@@ -723,14 +728,83 @@ pub fn evaluate_changed(
         .map(|op| op.key.clone())
         .collect();
     let lowered = &after.lowered;
-    let input = eval::DataInput {
+    let input = data_input(after, options, None);
+    let again = eval::evaluate_again(
+        &lowered.ir,
+        &input,
+        &dirty,
+        &Default::default(),
+        variants,
+        contexts,
+    )?;
+    Some(Update {
+        again,
+        root_span: lowered.root_span,
+    })
+}
+
+/// Works out what evaluating `compiled` with `options` gives from its
+/// evaluation with other constants (`SPEC.md` 6.1.4), whose contexts after
+/// the base are `contexts`, with `variants`: only the keys that read a
+/// constant in `changed`, directly or not, are evaluated again, in the
+/// contexts where they can differ from the base. `options` are those of the
+/// evaluation before but for [`DataOptions::constants`], which are the new
+/// ones.
+///
+/// `None` where that cannot be done and everything is to be evaluated again,
+/// for the reasons of [`evaluate_changed`].
+pub fn evaluate_changed_constants(
+    compiled: &Compiled,
+    options: &DataOptions,
+    variants: &Variants,
+    contexts: &[ContextData],
+    changed: &std::collections::BTreeSet<Arc<str>>,
+) -> Option<Update> {
+    if !can_evaluate_again(options, compiled) {
+        return None;
+    }
+    let lowered = &compiled.lowered;
+    let input = data_input(compiled, options, None);
+    let again = eval::evaluate_again(
+        &lowered.ir,
+        &input,
+        &Default::default(),
+        changed,
+        variants,
+        contexts,
+    )?;
+    Some(Update {
+        again,
+        root_span: lowered.root_span,
+    })
+}
+
+/// Whether evaluating `compiled` again with `options` can keep the values of
+/// keys from before (`SPEC.md` 7.9).
+fn can_evaluate_again(options: &DataOptions, compiled: &Compiled) -> bool {
+    if let Some(defaults) = &options.defaults
+        && (defaults.0.has_constraints() || defaults.0.has_sealed())
+    {
+        return false;
+    }
+    // Values keep no seals, so a key kept from before would lose them.
+    options.variant_keys == VariantKeys::Any && !compiled.lowered.has_seals()
+}
+
+fn data_input<'a>(
+    compiled: &'a Compiled,
+    options: &'a DataOptions,
+    known_base: Option<&'a Value>,
+) -> eval::DataInput<'a> {
+    let lowered = &compiled.lowered;
+    eval::DataInput {
         ops: &lowered.ops,
         templates: &lowered.templates,
         root_defaults: &lowered.root_defaults,
         declared: &lowered.declared,
         root_span: lowered.root_span,
-        layer_names: &after.layer_names,
-        orders: &after.orders,
+        layer_names: &compiled.layer_names,
+        orders: &compiled.orders,
         variants: &options.variants,
         contexts: options.contexts.as_deref(),
         each_variant: options.each_variant,
@@ -738,16 +812,12 @@ pub fn evaluate_changed(
         variant_keys: options.variant_keys,
         evaluate_every_key: options.evaluate_every_key,
         defaults: options.defaults.as_ref().map(|d| &*d.0),
+        constants: &options.constants,
         init_defaults: options.init_defaults,
         merge_root: options.merge_root,
-        known_base: None,
+        known_base,
         only: None,
-    };
-    let again = eval::evaluate_again(&lowered.ir, &input, &dirty, variants, contexts)?;
-    Some(Update {
-        again,
-        root_span: lowered.root_span,
-    })
+    }
 }
 
 /// Evaluates [`DataOptions::contexts`] given the base root as it was evaluated
@@ -764,26 +834,7 @@ fn evaluate_lowered(
 ) -> Evaluation {
     let lowered = &compiled.lowered;
     let mut diagnostics = Vec::new();
-    let input = eval::DataInput {
-        ops: &lowered.ops,
-        templates: &lowered.templates,
-        root_defaults: &lowered.root_defaults,
-        declared: &lowered.declared,
-        root_span: lowered.root_span,
-        layer_names: &compiled.layer_names,
-        orders: &compiled.orders,
-        variants: &options.variants,
-        contexts: options.contexts.as_deref(),
-        each_variant: options.each_variant,
-        max_contexts: options.max_contexts,
-        variant_keys: options.variant_keys,
-        evaluate_every_key: options.evaluate_every_key,
-        defaults: options.defaults.as_ref().map(|d| &*d.0),
-        init_defaults: options.init_defaults,
-        merge_root: options.merge_root,
-        known_base,
-        only: None,
-    };
+    let input = data_input(compiled, options, known_base);
     let threads = match options.threads {
         Some(threads) => threads.max(1),
         None if lowered.ir.exprs.len() >= THREADED_EXPRS => std::thread::available_parallelism()
@@ -1087,6 +1138,7 @@ fn explain_input<'a>(
         variant_keys: options.variant_keys,
         evaluate_every_key: false,
         defaults: options.defaults.as_ref().map(|d| &*d.0),
+        constants: &options.constants,
         init_defaults: options.init_defaults,
         merge_root: options.merge_root,
         known_base: None,
@@ -1230,6 +1282,11 @@ fn check_constraints(
 /// Evaluates a file as a value-mode document (`SPEC.md` 4): one value, with
 /// no layers. Syntax errors stop evaluation; other errors are all reported.
 pub fn evaluate_value(sources: &Sources, file: FileId) -> Evaluation {
+    evaluate_value_with(sources, file, &Constants::new())
+}
+
+/// [`evaluate_value`], where `$name` reads `constants` (`SPEC.md` 6.1.4).
+pub fn evaluate_value_with(sources: &Sources, file: FileId, constants: &Constants) -> Evaluation {
     let parse = crol_syntax::parse(sources.file(file).text());
     if !parse.errors().is_empty() {
         let diagnostics = parse
@@ -1249,7 +1306,7 @@ pub fn evaluate_value(sources: &Sources, file: FileId) -> Evaluation {
             ..Evaluation::default()
         };
     }
-    let (value, mut errors) = eval::evaluate(&lowered.ir, lowered.root);
+    let (value, mut errors) = eval::evaluate(&lowered.ir, lowered.root, constants);
     diagnostics.append(&mut errors);
     let value = value.filter(|_| !diagnostics.iter().any(Diagnostic::is_error));
     Evaluation {

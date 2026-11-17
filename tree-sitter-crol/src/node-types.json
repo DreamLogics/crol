@@ -58,6 +58,10 @@
           "named": true
         },
         {
+          "type": "constant",
+          "named": true
+        },
+        {
           "type": "id_expr",
           "named": true
         },
@@ -149,6 +153,10 @@
           },
           {
             "type": "block",
+            "named": true
+          },
+          {
+            "type": "constant",
             "named": true
           },
           {
@@ -249,6 +257,10 @@
           },
           {
             "type": "block",
+            "named": true
+          },
+          {
+            "type": "constant",
             "named": true
           },
           {
@@ -458,6 +470,22 @@
     }
   },
   {
+    "type": "constant",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "defaults",
     "named": true,
     "fields": {}
@@ -481,6 +509,10 @@
         },
         {
           "type": "block",
+          "named": true
+        },
+        {
+          "type": "constant",
           "named": true
         },
         {
@@ -616,6 +648,10 @@
           },
           {
             "type": "block",
+            "named": true
+          },
+          {
+            "type": "constant",
             "named": true
           },
           {
@@ -815,6 +851,10 @@
           "named": true
         },
         {
+          "type": "constant",
+          "named": true
+        },
+        {
           "type": "id_expr",
           "named": true
         },
@@ -976,6 +1016,10 @@
           "named": true
         },
         {
+          "type": "constant",
+          "named": true
+        },
+        {
           "type": "id_expr",
           "named": true
         },
@@ -1032,6 +1076,10 @@
         "types": [
           {
             "type": "block",
+            "named": true
+          },
+          {
+            "type": "constant",
             "named": true
           },
           {
@@ -1110,6 +1158,10 @@
           },
           {
             "type": "block",
+            "named": true
+          },
+          {
+            "type": "constant",
             "named": true
           },
           {
@@ -1272,6 +1324,10 @@
             "named": true
           },
           {
+            "type": "constant",
+            "named": true
+          },
+          {
             "type": "id_expr",
             "named": true
           },
@@ -1367,6 +1423,10 @@
         },
         {
           "type": "block",
+          "named": true
+        },
+        {
+          "type": "constant",
           "named": true
         },
         {
@@ -1642,6 +1702,10 @@
             "named": true
           },
           {
+            "type": "constant",
+            "named": true
+          },
+          {
             "type": "id_expr",
             "named": true
           },
@@ -1794,6 +1858,10 @@
   },
   {
     "type": "#",
+    "named": false
+  },
+  {
+    "type": "$",
     "named": false
   },
   {

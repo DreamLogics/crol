@@ -1737,6 +1737,13 @@ impl Lowerer {
                 None => self.ir.add_expr(ExprKind::Error, span),
             },
             ast::Expr::Reference(reference) => self.reference(reference, span),
+            ast::Expr::Constant(constant) => match constant.name() {
+                Some(name) => {
+                    let name = self.name(name.text());
+                    self.ir.add_expr(ExprKind::Ref(RefKind::Constant(name)), span)
+                }
+                None => self.ir.add_expr(ExprKind::Error, span),
+            },
             ast::Expr::Block(block) => {
                 let name = block
                     .type_name()
@@ -1881,6 +1888,12 @@ impl Lowerer {
                 "a variant selector cannot follow `&` or `&default`, which do not depend on the context"
                     .to_owned(),
             );
+        }
+        if let ast::Expr::Constant(constant) = base {
+            let name = constant.name().map_or_else(String::new, |n| n.text().to_owned());
+            return Some(format!(
+                "a variant selector cannot follow `${name}`: a constant is the same in every context"
+            ));
         }
         for variant in variants {
             if variant.conditions().count() > 1 {

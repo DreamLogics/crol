@@ -641,6 +641,7 @@ mod tests {
             root: String::new(),
             types: types.into_iter().map(|(p, d)| (p.to_owned(), d)).collect(),
             constraints: Default::default(),
+            constants: Default::default(),
         }
     }
 

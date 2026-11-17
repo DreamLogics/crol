@@ -103,6 +103,7 @@ fn starts_expr(kind: SyntaxKind) -> bool {
             | FALSE_KW
             | AT
             | AMP
+            | DOLLAR
             | L_BRACE
             | L_BRACK
             | L_PAREN
@@ -769,6 +770,13 @@ impl Parser<'_> {
                 self.error_bump(format!("unexpected `{}`", self.nth_text(0)));
                 continue;
             }
+            if kind == DOLLAR {
+                // `$x: 1`: what follows is read as the entry it would be.
+                self.error_bump(
+                    "a key cannot be a constant: keys are fixed when a document is read (SPEC.md 6.1.4)",
+                );
+                continue;
+            }
             let before = self.nth_index(0);
             self.entry();
             if self.nth_index(0) == before {
@@ -1277,6 +1285,15 @@ impl Parser<'_> {
                 self.bump();
                 self.bump();
             }
+            DOLLAR => {
+                self.error(
+                    "a key in a path cannot be a constant: keys are fixed when a document is read",
+                );
+                self.bump();
+                if self.at(IDENT) {
+                    self.bump();
+                }
+            }
             IDENT => {
                 let name = self.nth_text(0).to_owned();
                 self.error(format!(
@@ -1363,6 +1380,15 @@ impl Parser<'_> {
                     }
                 }
                 self.expect(R_PAREN, "`)`");
+                self.finish();
+            }
+            DOLLAR => {
+                self.error("a condition names variants; a constant cannot be one");
+                self.start(ERROR);
+                self.bump();
+                if self.at(IDENT) && self.current_is_adjacent() {
+                    self.bump();
+                }
                 self.finish();
             }
             _ => self.error_missing("expected a variant name"),
@@ -1465,6 +1491,7 @@ impl Parser<'_> {
             }
             AT => self.id(),
             AMP => self.reference(),
+            DOLLAR => self.constant(),
             L_BRACE => {
                 self.start(BLOCK);
                 self.block_body();
@@ -1620,6 +1647,26 @@ impl Parser<'_> {
         } else if matches!(self.current(), TRUE_KW | FALSE_KW) && self.current_is_adjacent() {
             self.error("`true` and `false` cannot be bind names");
             self.bump();
+        }
+        self.finish();
+    }
+
+    /// `$name`: a constant (`SPEC.md` 6.1.4). Nothing is a keyword after
+    /// `$`, so `$root` is a constant named `root`.
+    fn constant(&mut self) {
+        self.start(CONSTANT);
+        self.bump(); // `$`
+        match self.current() {
+            IDENT if self.current_is_adjacent() => self.bump(),
+            IDENT if !matches!(self.nth(1), COLON | COLON_EQ | EQ) && !self.at_next_entry() => {
+                self.error("a constant's name must follow `$` directly");
+                self.bump();
+            }
+            TRUE_KW | FALSE_KW if self.current_is_adjacent() => {
+                self.error("`true` and `false` cannot be constant names");
+                self.bump();
+            }
+            _ => self.error_missing("expected a constant's name after `$`"),
         }
         self.finish();
     }
