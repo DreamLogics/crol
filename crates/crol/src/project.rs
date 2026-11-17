@@ -515,12 +515,10 @@ impl Project {
     /// that have one run only if none of those hold it, and a command that
     /// fails is an error only if no other stack holds it.
     pub fn layer_stack(&self, dir: &Path, path: &Path) -> Result<Option<&str>, Error> {
-        // Absolute on both sides, also where a file does not exist, so that
-        // a relative project directory compares with them.
-        let canonical = |p: &Path| {
-            let p = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
-            p.canonicalize().unwrap_or(p)
-        };
+        // Canonical on both sides, also where a file does not exist, so that
+        // a relative project directory, a symbolic link above the project
+        // (`/var` on macOS) or Windows' `\\?\` form compare alike.
+        let canonical = |p: &Path| canonical_lenient(p);
         let path = canonical(path);
         let as_module_file = canonical(&path.with_extension("crod"));
         let base = crate::module_path::current_if_empty(dir);
@@ -657,6 +655,26 @@ fn claim_span(
         _ => return None,
     };
     Some(get(items.get(index)?, field)?.span)
+}
+
+/// A path made absolute and canonical as far as it exists: the nearest
+/// ancestor that exists, canonical, with the rest of the path after it.
+fn canonical_lenient(path: &Path) -> PathBuf {
+    let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut rest = Vec::new();
+    let mut at = path.as_path();
+    loop {
+        if let Ok(found) = at.canonicalize() {
+            return rest.into_iter().rev().fold(found, |p, name| p.join(name));
+        }
+        match (at.parent(), at.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_owned());
+                at = parent;
+            }
+            _ => return path,
+        }
+    }
 }
 
 /// Whether two layer directories, module paths from the project's
@@ -1181,6 +1199,36 @@ mod tests {
         // The range is that of the module path.
         let (range, _) = project.cross_stack_extends(dir, "theme", &dark, text)[0].clone();
         assert_eq!(&text[range], "::ui");
+    }
+
+    /// As on macOS, where the temporary directory is below the link `/var`:
+    /// the project's directory as written goes through a link, the
+    /// document's path is canonical, and what an `extends` names may not
+    /// exist as written.
+    #[cfg(unix)]
+    #[test]
+    fn stacks_are_found_through_a_link_above_the_project() {
+        let root = std::env::temp_dir().join(format!("crol-stack-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for dir in ["real/themes/user", "real/ui"] {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        std::fs::write(root.join("real/themes/user/dark.crod"), "").unwrap();
+        std::fs::write(root.join("real/ui/start.crod"), "").unwrap();
+        std::os::unix::fs::symlink(root.join("real"), root.join("link")).unwrap();
+        let project = Project::from_text("project.crol", STACKS).unwrap();
+        let dir = root.join("link");
+        let dark = root
+            .join("real/themes/user/dark.crod")
+            .canonicalize()
+            .unwrap();
+        assert_eq!(project.layer_stack(&dir, &dark).unwrap(), Some("theme"));
+        let found = project.cross_stack_extends(&dir, "theme", &dark, "#![extends(::ui::start)]\n");
+        assert_eq!(found.len(), 1, "{found:?}");
+        let found =
+            project.cross_stack_extends(&dir, "theme", &dark, "#![extends(super::super::ui)]\n");
+        assert_eq!(found.len(), 1, "{found:?}");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
