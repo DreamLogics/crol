@@ -828,6 +828,9 @@ impl Parser<'_> {
             // An id starts an entry only as its key: elsewhere it is a value
             // that is out of place.
             AT => self.has_entry_shape(0),
+            // `$k:`, a constant as a key: an error, but the line is meant as
+            // an entry (`SPEC.md` 6.1.4).
+            DOLLAR => self.has_entry_shape(0),
             kind => starts_key(kind),
         }
     }
@@ -845,6 +848,9 @@ impl Parser<'_> {
         let same_line = |n: usize| !self.nth_starts_line(n);
         match self.nth(n) {
             QUESTION | CARET | DOT2 => true,
+            // `$` cannot continue a value, so `$key:` is an entry, if one in
+            // error.
+            DOLLAR => same_line(n + 1) && self.has_target_and_colon(n + 1),
             POUND => same_line(n + 1) && self.nth(n + 1) == L_BRACK,
             PLUS if self.nth(n + 1) == BANG => same_line(n + 1) && self.has_entry_shape(n + 1),
             PLUS => same_line(n + 1) && self.has_target_and_colon(n + 1),

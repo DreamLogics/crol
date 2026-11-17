@@ -108,6 +108,48 @@ A value needs itself to be computed, and the message lists the references
 involved. Late references read final values, so `a: &root.a + 1` does not mean
 "add one to the old `a`". For that, use `&`: `a: & + 1`.
 
+## Constants
+
+**`` no constant `replicas` was given ``**
+
+The data reads `$replicas`, and nothing gave it a value: not your program's
+`with_constant`, not `--const`, and not the project file's
+[`constants`](projects.md#constants-in-the-project-file). Give it one, or make it
+optional with a fallback, `$replicas ?? 1`. When the message adds `did you mean`,
+the name is most likely misspelt.
+
+**`` the schema declares constant `replicas`, which was not given ``**
+
+The [schema](schemas.md#constants) says that your program always gives `replicas`,
+so leaving it out is an error, even where the data writes `$replicas ?? 1`. Give it,
+with `with_constant` in your program or a stand-in in `project.crol` for the tools,
+or take the declaration out of the schema if it is optional.
+
+**`` constant `replicas` does not fit the schema: expected u32, ... ``**
+
+The value given is not of the type the schema declares. In your program, check the
+value passed to `with_constant`; in the tools, the stand-in in `project.crol` or the
+value after `--const`, which is read as CROL: `--const 'home="/home/me"'` keeps the
+quotes that make it a string.
+
+**`` a variant selector cannot follow `$replicas`: a constant is the same in every context ``**
+
+A constant has one value, so `$replicas<prod>` has nothing to switch to. Write
+what differs in `prod` as data: `<prod> { web.replicas: $replicas * 2 }`.
+
+**`` a key cannot be a constant: keys are fixed when a document is read ``**
+
+`$` can only be a value. Keys, paths and conditions decide which entries there are,
+and that is settled before any value is known. `web.ports[$i]: 80` gives
+`` a key in a path cannot be a constant ``, and `web<$env>.port: 80`
+`` a condition names variants; a constant cannot be one ``. To choose an
+environment at run time, [pick a variant](recipes.md#choosing-the-environment-at-run-time)
+in your program instead.
+
+**`` a constant's name must follow `$` directly ``**
+
+Write `$replicas`, with no space after the `$`.
+
 ## Types
 
 **`` `Service` is missing the field `port`; write it, or end the block with `..` to leave out fields that have defaults ``**
@@ -374,6 +416,10 @@ grammar is not built, and one at the queries that they are not in
 `~/.config/helix/runtime/queries/crol`. See [the setup](editors.md#helix).
 
 **No diagnostics in one layer.** Check whether it is marked `read_only`.
+
+**A warning on every `$name`.** The editor has no value for the constant, and
+leaves what depends on it unevaluated. Give it a stand-in in the project file's
+[`constants`](projects.md#constants-in-the-project-file).
 
 ## Asking for help
 

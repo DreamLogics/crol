@@ -1,0 +1,8 @@
++web: Service {
+    replicas: $replicas ?? 1,
+    limits: Limits { ..$limits, cpu: $limits.cpu * 2 },
+    port: $ports[0],
+    second: $pair.1,
+    root: $root,
+}
+web.replicas: & + $replicas

@@ -672,6 +672,56 @@ The check compares values, so it does not matter how the value changed: through 
 path, by defining the key again, or through a reference to something a higher layer
 changed. Your editor leaves sealed fields out of completion in higher layers.
 
+## Constants
+
+The [constants](language.md#constants) your program gives are not in the data, and
+tools cannot run your program to find out what they are. The schema can say, with a
+type for each:
+
+```rust,no_run
+// tests/schema.rs
+#[test]
+fn crol_schema() {
+    crol::schema::build::<fleet::Definition>()
+        .with_constant::<u32>("replicas")
+        .with_documented_constant::<String>("home", "The user's home directory.")
+        .check_file("crol/schema.crol")
+        .unwrap();
+}
+```
+
+`SchemaFile::check_file` is `crol::schema::check_file` for a schema you built
+further. The file then records the constants, by name:
+
+```console
+$ CROL_UPDATE_SCHEMA=1 cargo test
+$ grep -A 3 '^    constants' crol/schema.crol
+    constants: {
+        home: { ty: String, doc: "The user's home directory." },
+        replicas: { ty: U32, .. },
+    },
+```
+
+A schema file without constants has no `constants`, and looks as it did before.
+
+Give your program the same schema, with `CrolComposer::schema` or
+`CrolReader::schema`. Then **a declared constant must be given**, whether or not
+the data uses it, and `??` does not change that. Composing without one fails once,
+with `` the schema declares constant `replicas`, which was not given ``, rather than
+at every place that reads it. A value of the wrong type fails where it is given:
+`` constant `replicas` does not fit the schema: expected u32, ... ``. A constant the
+schema does not declare can still be given, and works as without a schema.
+
+Tools read the declarations from the schema file. Your editor completes the
+constants after `$`, and hover on `$replicas` shows its type and doc. With
+a schema that declares constants, a `$name` it does not declare gets a warning,
+since that is most likely a typo. The values themselves come from the
+[project file](projects.md#constants-in-the-project-file).
+
+`crol::check_constant` checks one value against a type, and `crol::check_constants`
+checks a set against what a schema declares, for tools of your own that evaluate
+with `crol-eval`.
+
 ## What else the loader learns from a schema
 
 serde tells a deserializer nothing about attributes, so three more things reach

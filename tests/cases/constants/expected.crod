@@ -1,0 +1,24 @@
+web: Service {
+    replicas: 6,
+    image: "web:1.4",
+    limits: Limits { cpu: 2, memory_mb: 512 },
+    port: 80,
+    debug: false,
+}
+db: Service {
+    replicas: 1,
+    limits: Limits { cpu: 2, memory_mb: 2048 },
+    port: 5443,
+}
+cpu_total: 12
+
+<!dev & prod> {
+    web: Service {
+        replicas: 18,
+        image: "web:1.4",
+        limits: Limits { cpu: 2, memory_mb: 512 },
+        port: 80,
+        debug: false,
+    },
+    cpu_total: 36,
+}

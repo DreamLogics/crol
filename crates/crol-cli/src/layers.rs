@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use crol::project::{FILE_NAME, Project, ProjectStack};
 use crol::schema::SchemaFile;
 use crol::{CheckOptions, CrolComposer, CrolConfig, FileLoaders, LayerSource, Mode};
-use crol_eval::{DataOptions, Diagnostic, Evaluation, Layer, Sources, Span, Variants};
+use crol_eval::{Constants, DataOptions, Diagnostic, Evaluation, Layer, Sources, Span, Variants};
 
 use crate::diagnostics::Reporter;
 
@@ -49,6 +49,12 @@ pub(crate) struct InputArgs {
     /// crates only.
     #[arg(long)]
     offline: bool,
+
+    /// Give a constant, which data reads as `$name`, a value written in
+    /// CROL: `--const foo_count=42`, `--const 'home="/home/me"'`.
+    /// Repeatable; it overrides the project's `constants`.
+    #[arg(long = "const", value_name = "NAME=VALUE")]
+    constants: Vec<String>,
 }
 
 impl InputArgs {
@@ -78,6 +84,27 @@ impl InputArgs {
             stack: Some(name.to_owned()),
             ..self.clone()
         }
+    }
+
+    /// The constants to evaluate with (`SPEC.md` 6.1.4): the project's
+    /// stand-ins, then `--const`.
+    pub(crate) fn constants(&self, project: Option<&Project>) -> Result<Constants, String> {
+        let mut constants = match project {
+            Some(project) => project.constants().map_err(|e| e.to_string())?,
+            None => Constants::new(),
+        };
+        for pair in &self.constants {
+            let (name, text) = pair
+                .split_once('=')
+                .ok_or_else(|| format!("`--const {pair}` is not `name=value`"))?;
+            if !crol_eval::is_identifier(name) {
+                return Err(format!("`--const {pair}`: `{name}` is not an identifier"));
+            }
+            let value = crol::RawValue::from_text(text)
+                .map_err(|message| format!("`--const {pair}`: {message}"))?;
+            constants.insert(name, value.0);
+        }
+        Ok(constants)
     }
 
     pub(crate) fn declares_variants(&self) -> bool {
@@ -480,6 +507,13 @@ pub(crate) fn inputs(
     });
     // `&default` reads the schema (`SPEC.md` 6.1.3), and so do constraints.
     options = options.with_defaults(schema.as_ref().map(|s| s.defaults_for(root.as_deref())));
+    // What `$name` reads, checked against what the schema declares.
+    let mut constants = match args.constants(project.as_ref()) {
+        Ok(constants) => constants,
+        Err(message) => return fail(reporter, message),
+    };
+    warnings.extend(crol::check_constants(&mut constants, schema.as_ref()));
+    options = options.with_constants(constants);
     Some(Inputs {
         sources,
         layers,

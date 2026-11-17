@@ -1,0 +1,7 @@
+variants: [Grouped(["dev", "prod"])],
+constants: {
+    replicas: 3,
+    image: "web:1.4",
+    limits: Limits { cpu: 2, memory_mb: 512 },
+    ports: [80, 443],
+},

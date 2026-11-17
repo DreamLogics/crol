@@ -177,7 +177,8 @@ A lone `_` is not an identifier. Identifiers are case-sensitive.
   only inside a document attribute (sections 4.1, 4.2).
 - `self`, `parent`, `super`, `top`, `root` and `default` are keywords
   only directly after `&` (`&self`, `&parent`, `&super`, `&top`, `&root`,
-  `&default`). Everywhere else they are ordinary identifiers, so a field
+  `&default`). Nothing is a keyword after `$` (section 6.1.4): `$root` is a
+  constant named `root`. Everywhere else they are ordinary identifiers, so a field
   may be called `parent`, `top` or `root`. A self-relative reference to
   such a field is written `&self.parent`. (`super` is also a keyword in a
   document attribute, as above.)
@@ -202,15 +203,17 @@ result counts as a literal.
 ### 2.5 Punctuation and adjacency
 
 ```
-{ } [ ] ( ) < > , : ; :: := . .. + - * / % ~ ~^ | & ^ @ ? ?? = # !
+{ } [ ] ( ) < > , : ; :: := . .. + - * / % ~ ~^ | & ^ @ ? ?? = # ! $
 ```
 
-Three adjacency rules, all to keep one-token lookahead:
+Four adjacency rules, all to keep one-token lookahead:
 
 - In a reference, a name or keyword must follow `&` directly:
   `&port`, `&root`, `.&parent`. `& port` is an error ("a reference name must follow
   `&` directly"); `& + 1` is `&` plus 1.
 - In an id, the identifier or string must follow `@` directly.
+- In a constant, the name must follow `$` directly: `$port`. `$ port` is
+  an error ("a constant's name must follow `$` directly").
 - In a target, a `?` between steps has no space on either side (section 5.1):
   apart from them, it is the `?` of an entry.
 
@@ -1150,6 +1153,7 @@ is about operations, and holds from where it is written.
 | `&root` | the root | late |
 | `&default` | the Rust default of the current target (section 6.1.3) | fixed |
 | `&name` | a *bind* or *template* (sections 6.1.1, 6.1.2) | late |
+| `$name` | a *constant* the program gives (section 6.1.4) | fixed |
 
 Any reference takes selectors: `&[0]`, `&.limits.cpu`, `&self.port`,
 `&root.web<prod>`. `&.port` is the field `port` of the value below;
@@ -1544,6 +1548,67 @@ fields out and lets serde fill them while deserializing; `..&default`
 writes them into the evaluated data, where `crol eval` and the language
 server show them.
 
+#### 6.1.4 Constants
+
+`$name` is a **constant**: a value the program gives, not the data. It is
+how data depends on what is known only when the program runs:
+
+```rust
+let services: BTreeMap<String, Service> = CrolComposer::new()
+    .load(Path::new("data/base"))?
+    .with_variant("prod")?
+    .with_constant("foo_count", 42)?
+    .with_constant("limits", Limits { cpu: 2, memory_mb: 512 })?
+    .compose()?;
+```
+
+```rust
++web: Service {
+    replicas: $replicas ?? 1,           // an optional input with a default
+    limits: Limits { ..$limits, cpu: 4 },
+    port: $ports[0],
+},
+web.replicas: & + $foo_count,
+```
+
+- **Syntax.** The name follows `$` directly (section 2.5), and nothing is
+  a keyword after it: `$root` is a constant named `root`. `true` and
+  `false` are reserved everywhere (section 2.3), so `$true` is an error. Selectors work as
+  on any reference: `$limits.cpu`, `$ports[0]`, `$pair.1`. Constants have a
+  sigil of their own, so a constant never clashes with a bind or template
+  (`&name`), which come from the data.
+- **Where.** In any expression, templates and value binds included, in both
+  modes. Not as a key or target, in a path's accessor (`&root.x[$k]`), in a
+  condition, in a document attribute or as a bind name: keys and chains are
+  fixed when a document is read (section 7.2), so they cannot depend on a
+  value given at run time.
+- **Fixed**, like `&default` (section 6.1.3): the same value in every layer
+  and every context, evaluated once and never part of a cycle. A variant
+  selector on it (`$x<prod>`) is an error (section 8.4). It is not `&`, so
+  `field: $x` is a definition and `field: & + $x` a patch (section 7.2).
+- **The value** is what `crol::to_value` makes of the Rust value (section
+  10.8), placed where `$name` is written, which errors point at. A struct
+  keeps its type name, so `..$limits` and `& ~ $limits` follow the usual
+  rules for type names (section 6.4), and a `crol::Id` is an id, resolved
+  where it lands (section 3.2). A value from the program has no seals,
+  defaults flag or scope flag.
+- **Not given.** A constant the program does not give is *missing*
+  (section 6.5), so `$replicas ?? 1` is an optional input with its default
+  in the data. Without `??` it is an error, "no constant `replicas` was
+  given", with the names given that look like it.
+- **Declared.** A schema may declare the constants the program gives, each
+  with its type (section 10.9). A declared constant must be given, whether
+  or not the data uses it and whatever `??` is around it: composing
+  reports "the schema declares constant `replicas`, which was not given"
+  once, and uses of it fail quietly (section 7.7). The language server,
+  which has stand-in values rather than the program's, warns at the use
+  instead (section 12.5). A value that does not fit
+  the declared type is an error where it is given.
+- **An input.** Constants are an input of evaluation, as layers and options
+  are (section 7.6). They are not in the fingerprint themselves, as templates
+  are not; their effect on values is. A compiled layer keeps `$name` by name,
+  so one `.crob` file serves any constants (section 7.8).
+
 ### 6.2 Operators
 
 From tightest to loosest:
@@ -1637,7 +1702,9 @@ there are, and values that are not keyed replace.
 - a reference whose path does not exist (a key, field, index or variant
   value that is not there);
 - a spread of a missing value;
-- `&default` where no default is recorded (section 6.1.3).
+- `&default` where no default is recorded (section 6.1.3);
+- a constant the program did not give (section 6.1.4), unless the schema
+  declares it.
 
 Any other error in `a` (wrong kinds, overflow, a cycle, a type name
 mismatch) is reported, not caught.
@@ -1887,11 +1954,12 @@ and this is a cycle (the shape of `a` needs the shape of `a`):
 
 ### 7.6 Determinism
 
-Evaluating the same layers, with the same options, gives the same data
-on every platform:
+Evaluating the same layers, with the same options and constants (section
+6.1.4), gives the same data on every platform:
 
 - No operation reads the environment, the clock, the file system (after
-  loading) or randomness. File loaders (section 10.7) run while loading
+  loading) or randomness. What the program knows at run time comes in only
+  as constants, which it gives before evaluating. File loaders (section 10.7) run while loading
   and never during evaluation: the layers hold the text they gave.
 - Integer arithmetic is exact or an error. Float arithmetic is IEEE 754
   binary64 with round-to-nearest-even and no fused multiply-add; float
@@ -1906,7 +1974,9 @@ whose value differs from the base. The canonical encoding is defined in
 appendix B. It is taken over evaluated values, so two data sets with
 different sources but the same values have the same fingerprint, and any
 difference in values (or in the library version's behaviour) shows as a
-mismatch. A value document has a fingerprint too, over its one value, as
+mismatch. Constants are not in it, as templates are not; the values they
+give are, so the same sources with other constants have another
+fingerprint. A value document has a fingerprint too, over its one value, as
 `crol fingerprint` prints it (section 11).
 
 `CrolData::key_fingerprints()` gives a BLAKE3-256 hash for each root key,
@@ -1993,7 +2063,8 @@ is an error, like a `.crol` file there (section 4).
   expression holds only earlier ones, how deep expressions nest, and that every
   span is in its document, so that no file can make loading panic or loop.
 
-A file keeps ids as written, with every key and whether they start from the
+A file keeps constants by name, never their values, so one compiled layer
+serves any constants (section 6.1.4). A file keeps ids as written, with every key and whether they start from the
 root, id keys among them, and the scope flags `#[scope]` gives (section
 6.1.2): ids are resolved when the data is loaded, not when it is compiled.
 
@@ -2034,6 +2105,17 @@ fingerprint included; only the time differs.
 `Reloaded::evaluated` says how many root keys were evaluated again, or
 `None` where everything was. `crol_eval::evaluate_changed` is the same for
 compiled layers.
+
+**Other constants.** `CrolData::update_constants` (section 10.7) changes the
+constants and evaluates again in the same way: the keys evaluated again are
+those with an operation that reads a constant that changed, directly or
+through a template, and the keys that read them, by the rules above, in the
+contexts where they can differ. A constant set to the value it has changes
+nothing. The result, order and fingerprint included, is what composing again
+with the new constants gives. A changed constant is no changed document:
+`reload` and `update_constants` are independent, and each keeps what the
+other gave. `crol_eval::evaluate_changed_constants` is the same for compiled
+layers.
 
 ---
 
@@ -2283,7 +2365,8 @@ In a reference, a variant selector does not test a condition but
 Only names, `!` and `&` are allowed there; `|`, `^`, `+` and
 parentheses are errors, since they do not name one context. A variant
 selector may follow any late reference (`&root.db<dev>`, `&self<dev>`,
-a bind); on `&` (early) and `&default` (fixed) it is an error.
+a bind); on `&` (early), and on `&default` and a constant (fixed), it is an
+error.
 
 ### 8.5 Keys only in some contexts
 
@@ -2345,6 +2428,7 @@ postfix      ::= primary selector*
 primary      ::= literal
                | id
                | reference
+               | constant                          (* $name, section 6.1.4 *)
                | block                             (* Service { ... }, { ... } *)
                | list
                | tuple
@@ -2353,6 +2437,7 @@ primary      ::= literal
                | identifier                        (* None, Red *)
                | "(" expr ")"
 reference    ::= "&" ( identifier | "self" | "top" | "root" | "default" | parents )?
+constant     ::= "$" identifier                  (* the name directly after "$" *)
 parents      ::= up ( "." "&" up )*
 up           ::= "parent" | "super"
 bind         ::= identifier "="
@@ -2869,6 +2954,14 @@ tools:
   of what the others loaded, and it returns what became of each
   (`ExtendsLoad`: the document, the module path and its range, the layers
   it added, and the error). It takes `&mut self`.
+- `with_constant(name, value)` gives the data a constant, which it reads
+  as `$name` (section 6.1.4). The value is any `Serialize`, converted as
+  `crol::to_value` converts it. It may be called before or after `load`,
+  and fails for a name that is not an identifier, a name given twice, a
+  value that does not serialize (a float that is not finite among them),
+  and a value that does not fit the type the schema declares for the name;
+  `compose` checks the last for a schema given after it, and that every
+  constant the schema declares is given.
 - `with_variant(v)` makes `v` active in the context to compose (section
   8.1). It fails for an undeclared variant (when variants are declared), or a second choice in a group
   that is not an ancestor or descendant of the first. Without any, the
@@ -2899,11 +2992,29 @@ let hash: [u8; 32] = data.fingerprint();
 let raw: &crol::Value = data.value("web", &ctx).unwrap();
 let history = data.explain("web.limits.memory_mb", &ctx); // section 12.3
 
+// Other constants, evaluating again only what reads them (sections 6.1.4, 7.9)
+let reloaded: Reloaded = data
+    .update_constants()
+    .set("foo_count", 43)?
+    .remove("debug_level")?          // missing again; an error if the schema declares it
+    .apply()?;
+
 // Single documents (value mode)
 let config: Config = crol::from_str(text)?;
 let config: Config = crol::from_str_with_schema(text, &schema)?;  // 10.3
+let config: Config = crol::CrolReader::new()
+    .schema(schema)                  // optional, as from_str_with_schema
+    .with_constant("home", home_dir)?
+    .from_str(text)?;                // also from_str_with_ids
 let text: String = crol::to_string_pretty(&config, crol::PrettyConfig::default())?;
 ```
+
+`CrolData` keeps its constants: `reload`, `evaluate` and `compose_db` use
+them, and `update_constants` changes them; `CrolDb::update_constants` does
+the same for a database. `update_constants().set` fails as `with_constant`
+does, but for a name given before. `crol::from_str`, `from_str_with_schema`
+and `from_str_with_ids` are shorthands for `CrolReader`, with no constants:
+every `$name` in them is missing.
 
 With typed variants (section 8.1), `CrolComposer<Env>`, `with_variant`,
 `CrolData<Env>` and `context` take `Env` values instead of names.
@@ -3152,6 +3263,23 @@ pub trait Schema {
   which tools accept without checks. A hand-written `Deserialize` can come
   with a hand-written `Schema`.
 
+**Constants.** The program can declare the constants it gives the data
+(section 6.1.4), with their types:
+
+```rust
+let schema = crol::schema::build::<Definition>()
+    .with_constant::<u32>("foo_count")
+    .with_documented_constant::<Limits>("limits", "What each service may use.");
+```
+
+The types they use join the schema's. A declared constant must be given
+and fit its type, and tools learn the constants from the schema file
+without the program running: completion and hover with the type and doc,
+and the type of `$name` where it is used (section 12.5).
+`crol::check_constant` checks a value against a type, and
+`crol::check_constants` checks constants against what a schema declares,
+for tools that evaluate with `crol-eval` directly.
+
 **Writing the schema file.** Building the schema runs code, so it is
 written by the application, not by `build.rs`. The usual way is a test,
 which `cargo test` and CI run anyway:
@@ -3163,7 +3291,9 @@ fn crol_schema() {
 }
 ```
 
-`check_file` builds the schema of `Definition` and everything it uses.
+`check_file` builds the schema of `Definition` and everything it uses;
+`SchemaFile::check_file(path)` does the same for a schema built further, as
+with constants (below).
 It fails if the file differs, and writes it instead when
 `CROL_UPDATE_SCHEMA=1` is set (or the file does not exist). So the file
 is never silently out of date in CI. `crol::schema::build::<T>()` returns
@@ -3251,6 +3381,11 @@ Schema {
 schema whose `format` they do not know. `root` is the path of the root
 type. `types` maps each named type's path to its definition, in a fixed
 order (sorted by path), so the file is stable for version control.
+`constants`, written only when the program declares some, maps each
+constant's name to `{ ty, doc }`, its type expression and doc (section
+6.1.4): `constants: { foo_count: { ty: U32, .. }, limits: { ty:
+Named("app::Limits"), doc: "..." } }`. Like `explicit_defaults`, it
+changed no `format` (below).
 
 **Paths** are the Rust module path followed by the type's name as data
 writes it (`app::net::Config`, section 4.1). A generic type used with
@@ -3669,6 +3804,11 @@ has to load it.
 Common flags: `--discrete a,b`, `--group a,b,c` (repeatable), `--open civ` (repeatable), `--parent child=parent`, `--color auto|always|never`,
 `--message-format human|json`, `--project <file>`, `--stack <name>`,
 `--schema <file>`, `--offline` (section 4.1).
+`check`, `eval`, `explain` and `fingerprint` also take `--const
+name=<value>`, repeatable: a constant (section 6.1.4), its value read as a
+CROL value (`--const foo_count=42`, `--const 'home="/home/me"'`), over the
+project's `constants` (section 12.4). A constant used without a value is
+as in section 6.1.4: missing, or an error if the schema declares it.
 Without layer arguments, every command that needs layers reads them, with
 the variants and options, from the project file.
 
@@ -3870,6 +4010,7 @@ Project {
     ]),
     variants: [Grouped(["dev", "prod", "prod_eu"]), Discrete("cache")],
     parents: { prod_eu: "prod" },
+    constants: { foo_count: 42, home: "/home/me" },  // stand-ins (below)
     options: { implicit_some: true, allow_unknown_fields: false, .. },
     schema: Some("crol::schema"),
     root: Some("app::Definition"),     // the root type (section 4.1)
@@ -3886,6 +4027,11 @@ Project {
   system. `read_only` layers
   (generated data, vendored data) are loaded but get no diagnostics or
   code actions in the editor.
+- `constants` gives the constants the program gives at run time (section
+  6.1.4) stand-in values, with which the CLI and the language server
+  evaluate the data. They are the project's, for every stack, as `variants`
+  are, and are checked against what a stack's schema declares. `--const`
+  overrides them (section 11).
 - `layers` is either `List([...])` or `Command(["my-app", "list-layers"])`.
   A command prints the layer list as a CROL value, for
   applications whose load order is itself data (extensions enabled by
@@ -4073,6 +4219,15 @@ of writable layers, not only open ones, and every diagnostic that has
 secondary spans (cycles, two definitions) links to them as related
 information. A problem with the project as a whole is put on the file to
 blame, else on the project file.
+
+**Constants.** The server evaluates with the project's stand-in values
+(section 12.4). A `$name` with none is a warning on the use, and the values
+that depend on it fail quietly (section 7.7), so that one missing value does
+not flood the file. With a schema that declares constants, a `$name` it does
+not declare is a warning: "constant `x` is not in the schema; it is missing
+unless the program gives it". After `$`, completion offers the schema's
+constants and the project's; hover on `$name` shows its declared type and
+doc and its stand-in value.
 
 **A layer that does not load** stops nothing, unlike in `crol check`, for
 which it is an error. The problem is put on the file to blame, else on the
@@ -4384,7 +4539,8 @@ their own configuration:
 comma or line break between entries, a missing comma before `-12` or
 `-[key]` after a remove or a variant block, or between elements,
 unbalanced brackets, a file that is not UTF-8, `...`, a space
-after `&` or `@`, `1u8`, `1.`, a
+after `&`, `@` or `$`, `1u8`, `1.`, a constant as a key, in an accessor or
+in a condition (6.1.4), a
 type name on the outer braces of a data-mode document; an identifier in
 brackets (`[port]`); `.&parent` or `.&super` other than after `&parent`
 or `&super`.
@@ -4421,12 +4577,12 @@ before a remove, spread or variant block; selectors after an id other than
 `.name` and `["key"]` (5.1); an id as a root key (3.1); an entry bind at the
 top level of a data-mode document; a bind on a remove, variant block,
 spread, `..`, variant entry or inside a variant block; a variant
-selector on `&` or `&default`.
+selector on `&`, `&default` or a constant.
 
 **Evaluation**: `+` on something that is set; `-` or a path on something
 that is not; declare or ensure on a list index or tuple element, set
 on a missing index, removing a tuple element; a missing value referenced
-outside `??`, or spread; `&default` without a schema; operators on the wrong kinds; integer overflow;
+outside `??`, or spread; a constant not given, outside `??` (6.1.4); `&default` without a schema; operators on the wrong kinds; integer overflow;
 division by zero; a non-finite float; `~` on lists, scalars, different
 type names; `.0` on a keyed value; an
 integer key at the root; a spread of something that is not keyed;
@@ -4442,7 +4598,11 @@ is open; with one, a variant the data does not declare either is an error
 when composing) or a second choice in a group; more contexts than `max_contexts` without
 `contexts`; an invalid or unevaluated context in `contexts` or
 `CrolData::context`; variants declared twice; a parent cycle, or a parent
-of another kind or group.
+of another kind or group; `with_constant` (and `CrolReader::with_constant`,
+`update_constants().set`) with a name that is not an identifier, given twice,
+a value that does not serialize or holds a float that is not finite, or one
+that does not fit the type the schema declares; a constant the schema declares
+that is not given, or removed with `update_constants().remove` (6.1.4).
 
 **Application** (deserializer and options): an integer key in a struct;
 unknown fields; missing
@@ -4456,7 +4616,8 @@ nothing; variant key rules (8.5). And the application's own checks.
 name on a map that nothing names (10.2), in `CrolData::warnings()`
 and in tools. In tools: a document whose `schema` differs from the
 project's; an `extends` naming something that is neither a lower layer
-nor in the document's own layer; and an id that names something only
+nor in the document's own layer; a constant with no stand-in value, and one
+the schema does not declare where it declares some (12.5); and an id that names something only
 through a `#[crol(scope)]` type, which the application's loader needs the
 schema for (10.5).
 

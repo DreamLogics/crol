@@ -962,3 +962,65 @@ fn a_file_two_stacks_claim_is_an_error_at_both() {
         assert!(text.contains(wanted), "{text}");
     }
 }
+
+// ---- Constants (`SPEC.md` 6.1.4, 11, 12.4) ----
+
+#[test]
+fn constants_come_from_the_project_and_the_command_line() {
+    let dir = tree(
+        "constants",
+        &[
+            (
+                "project.crol",
+                "Project { layers: List([{ name: \"base\", dir: \"data\", .. }]), constants: { count: 1, home: \"/p\" }, .. }",
+            ),
+            (
+                "data/a.crod",
+                "count: $count + 1\nhome: $home\nother: $other ?? 0\n",
+            ),
+            ("v.crol", "a: $count * 10"),
+        ],
+    );
+    let output = crol(&dir, &["eval"]);
+    assert_eq!(
+        stdout(&output),
+        "count: 2\nhome: \"/p\"\nother: 0\n",
+        "{output:?}"
+    );
+    let output = crol(
+        &dir,
+        &["eval", "--const", "count=5", "--const", "other=[1]"],
+    );
+    assert_eq!(
+        stdout(&output),
+        "count: 6\nhome: \"/p\"\nother: [1]\n",
+        "{output:?}"
+    );
+    // A value document of the project gets them too.
+    let output = crol(&dir, &["eval", "v.crol", "--const", "count=3"]);
+    assert_eq!(stdout(&output), "a: 30\n", "{output:?}");
+    for command in ["check", "explain", "fingerprint"] {
+        let mut args = vec![command, "--const", "count=x=1"];
+        if command == "explain" {
+            args.push("count");
+        }
+        let output = crol(&dir, &args);
+        assert!(failed(&output), "{command}: {output:?}");
+    }
+}
+
+#[test]
+fn a_constant_without_a_value_is_missing() {
+    let dir = tree("constants-missing", &[("a.crod", "count: $count + 1")]);
+    let output = crol(&dir, &["check", "a.crod"]);
+    assert!(failed(&output), "{output:?}");
+    assert!(
+        stderr(&output).contains("no constant `count` was given"),
+        "{output:?}"
+    );
+    let output = crol(&dir, &["check", "a.crod", "--const", "count"]);
+    assert!(
+        stderr(&output).contains("is not `name=value`"),
+        "{output:?}"
+    );
+}

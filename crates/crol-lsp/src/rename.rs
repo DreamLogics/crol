@@ -903,7 +903,7 @@ impl<'a> World<'a> {
         }
         let evaluation = match self.chain {
             Some((layers, options)) => crol_eval::evaluate_data(&sources, layers, options),
-            None => crol_eval::evaluate_value(&sources, self.file),
+            None => crol_eval::evaluate_value_with(&sources, self.file, self.snapshot.constants()),
         };
         let before: Vec<&str> = (self.snapshot.evaluation_of(self.file).into_iter())
             .flat_map(|e| &e.diagnostics)

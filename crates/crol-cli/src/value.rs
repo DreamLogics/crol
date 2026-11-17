@@ -90,11 +90,29 @@ pub(crate) fn read(path: &Path, args: &InputArgs, reporter: &mut Reporter) -> Op
     };
     let mut sources = Sources::new();
     let file = sources.add(path.display().to_string(), text.as_str());
-    let mut evaluation = crol_eval::evaluate_value(&sources, file);
     let expected = match expected(path, &text, args) {
         Ok(expected) => expected,
         Err(message) => return fail(message),
     };
+    // What `$name` reads (`SPEC.md` 6.1.4): the project's stand-ins, then
+    // `--const`, checked against what the schema declares.
+    let project = match project_path(args) {
+        Some(project_path) => match Project::read(&project_path) {
+            Ok(project) => Some(project),
+            Err(error) => return fail(error.to_string()),
+        },
+        None => None,
+    };
+    let mut constants = match args.constants(project.as_ref()) {
+        Ok(constants) => constants,
+        Err(message) => return fail(message),
+    };
+    let declared = crol::check_constants(&mut constants, expected.schema.as_ref());
+    let mut evaluation = crol_eval::evaluate_value_with(&sources, file, &constants);
+    if declared.iter().any(crol_eval::Diagnostic::is_error) {
+        evaluation.value = None;
+    }
+    evaluation.diagnostics.splice(0..0, declared);
     let root = checked(&mut evaluation, &expected);
     // Without a schema, ids that name nothing in the document (`SPEC.md`
     // 10.5); with one, the check reports them.

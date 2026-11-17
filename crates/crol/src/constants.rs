@@ -44,6 +44,15 @@ pub(crate) fn check_type(name: &str, value: &Value, schema: &SchemaFile) -> Resu
     }
 }
 
+/// Checks constants against what a schema declares (`SPEC.md` 6.1.4), as
+/// the composer does, for tools that evaluate with `crol-eval` directly: a
+/// declared constant that is not given is an error, once, and is
+/// [failed](Constants::fail) so that reading it is quiet; a value that does
+/// not fit its type is an error.
+pub fn check_constants(constants: &mut Constants, schema: Option<&SchemaFile>) -> Vec<Diagnostic> {
+    check_declared(constants, schema)
+}
+
 /// What is wrong with `constants` against what `schema` declares: each
 /// declared constant that was not given is an error, reported once, and
 /// reading it fails quietly from then on, so that `??` does not catch it.

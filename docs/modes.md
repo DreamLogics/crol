@@ -171,6 +171,7 @@ web: port 80
 | `<prod> { ... }`               | error: there are no contexts | works                                   |
 | `#![extends(...)]`             | error: there are no layers | works                                     |
 | `&default`                     | error: there is no schema  | works, with `CrolComposer::schema`        |
+| `$home`                        | works, with `CrolReader::with_constant` | works, with `CrolComposer::with_constant` |
 
 `&self`, `&root` and `&` work the same way in both. At the top level, `&self`
 and `&root` are the same thing, and `&` has nothing below it.

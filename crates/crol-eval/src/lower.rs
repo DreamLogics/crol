@@ -1740,7 +1740,8 @@ impl Lowerer {
             ast::Expr::Constant(constant) => match constant.name() {
                 Some(name) => {
                     let name = self.name(name.text());
-                    self.ir.add_expr(ExprKind::Ref(RefKind::Constant(name)), span)
+                    self.ir
+                        .add_expr(ExprKind::Ref(RefKind::Constant(name)), span)
                 }
                 None => self.ir.add_expr(ExprKind::Error, span),
             },
@@ -1890,7 +1891,9 @@ impl Lowerer {
             );
         }
         if let ast::Expr::Constant(constant) = base {
-            let name = constant.name().map_or_else(String::new, |n| n.text().to_owned());
+            let name = constant
+                .name()
+                .map_or_else(String::new, |n| n.text().to_owned());
             return Some(format!(
                 "a variant selector cannot follow `${name}`: a constant is the same in every context"
             ));

@@ -36,7 +36,10 @@ fn constants() -> Constants {
     );
     constants.insert(
         "pair",
-        Value::new(ValueKind::Tuple(vec![int(1), string("b")]), Span::detached()),
+        Value::new(
+            ValueKind::Tuple(vec![int(1), string("b")]),
+            Span::detached(),
+        ),
     );
     constants.insert("root", int(7));
     constants
@@ -122,11 +125,7 @@ fn a_constant_not_given_is_missing() {
 fn a_failed_constant_is_not_caught() {
     let mut constants = constants();
     constants.fail("declared");
-    check_value(
-        "a: $declared ?? 1, b: 2",
-        &constants,
-        expect![""],
-    );
+    check_value("a: $declared ?? 1, b: 2", &constants, expect![""]);
 }
 
 #[test]

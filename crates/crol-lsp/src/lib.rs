@@ -18,6 +18,7 @@
 mod actions;
 mod attributes;
 mod completion;
+mod constants;
 mod convert;
 mod docs;
 mod features;
@@ -248,7 +249,7 @@ impl Server {
                 // Where a key or value starts, not only where a path goes
                 // on: editors ask on these and on word characters only.
                 trigger_characters: Some(
-                    [".", "&", "<", "@", ":", " ", "{", "[", "(", ","]
+                    [".", "&", "$", "<", "@", ":", " ", "{", "[", "(", ","]
                         .map(str::to_owned)
                         .to_vec(),
                 ),

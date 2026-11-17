@@ -40,6 +40,7 @@ New here? Start with [getting started](getting-started.md).
 | read one config file into a struct                 | [Getting started](getting-started.md#load-it-into-rust) |
 | override settings without editing the shared file  | [Layers](layers.md)                                     |
 | have different values in dev and production        | [Variants](variants.md)                                 |
+| use a value my program knows only when it runs     | [Constants](language.md#constants)                      |
 | know why `from_str` rejects what `compose` accepts | [Modes](modes.md#side-by-side)                          |
 | get completion in my editor                        | [Schemas](schemas.md), then [Editors](editors.md)       |
 | change data from my program and save it            | [Databases](rust.md#changing-data-with-a-database)      |

@@ -38,6 +38,10 @@ pub struct Project {
     /// Variant parents: child to parent.
     #[serde(default)]
     pub parents: IndexMap<String, String>,
+    /// Stand-in values of the constants the program gives (`SPEC.md`
+    /// 6.1.4), for every stack, which tools evaluate the data with.
+    #[serde(default)]
+    pub constants: IndexMap<String, crate::RawValue>,
     /// How the data of a project with one stack is evaluated and checked.
     #[serde(default)]
     pub options: ProjectOptions,
@@ -609,6 +613,20 @@ impl Project {
         found
     }
 
+    /// The stand-in values of the constants (`SPEC.md` 6.1.4, 12.4).
+    pub fn constants(&self) -> Result<crol_eval::Constants, Error> {
+        let mut constants = crol_eval::Constants::new();
+        for (name, value) in &self.constants {
+            if !crol_eval::is_identifier(name) {
+                return Err(Error::new(format!(
+                    "project: the constant name `{name}` is not an identifier"
+                )));
+            }
+            constants.insert(name.as_str(), value.0.clone());
+        }
+        Ok(constants)
+    }
+
     /// The declared variants.
     pub fn variants(&self) -> Result<crol_eval::Variants, Error> {
         let mut variants = crol_eval::Variants::new();
@@ -778,6 +796,7 @@ impl Schema for Project {
             let layers = registry.describe::<ProjectLayers>();
             let variants = registry.describe::<Vec<Variant>>();
             let parents = registry.describe::<IndexMap<String, String>>();
+            let constants = registry.describe::<IndexMap<String, crate::RawValue>>();
             let options = registry.describe::<ProjectOptions>();
             let files = registry.describe::<Vec<FilePattern>>();
             let stacks = registry.describe::<IndexMap<String, ProjectStack>>();
@@ -789,6 +808,7 @@ impl Schema for Project {
                     ("layers", field(TypeExpr::Option(Box::new(layers)), "The layers, lowest first, of a project with one stack.", none())),
                     ("variants", field(variants, "The variants (`SPEC.md` 8.1), of every stack.", recorded_default(&Vec::<Variant>::new()))),
                     ("parents", field(parents, "Variant parents: child to parent.", recorded_default(&IndexMap::<String, String>::new()))),
+                    ("constants", field(constants, "Stand-in values of the constants the program gives (`SPEC.md` 6.1.4), for every stack, which tools evaluate the data with.", recorded_default(&IndexMap::<String, String>::new()))),
                     ("options", field(options, "How the data of a project with one stack is evaluated and checked.", recorded_default(&ProjectOptions::default()))),
                     ("schema", field(TypeExpr::Option(Box::new(TypeExpr::String)), "The schema of a project with one stack: a module path written as a string, a URL, or a crate.", none())),
                     ("root", field(TypeExpr::Option(Box::new(TypeExpr::String)), "The path of the type of root values of a project with one stack; default: the schema's root.", none())),

@@ -365,7 +365,8 @@ development: "db.local"
 ```
 
 Only names, `!` and `&` are allowed there, since the reference has to name
-exactly one context.
+exactly one context. A [constant](language.md#constants) takes no selector:
+`$replicas` is the same in every context, so `$replicas<prod>` is an error.
 
 ## Keys that exist only in some contexts
 

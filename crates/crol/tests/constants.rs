@@ -141,7 +141,9 @@ fn the_schema_records_its_constants() {
     assert!(text.contains("constants:"), "{text}");
     assert_eq!(crol::schema::SchemaFile::from_text(&text).unwrap(), schema);
     // A schema without constants is written as it always was.
-    let plain = crol::schema::build::<BTreeMap<String, Service>>().to_text().unwrap();
+    let plain = crol::schema::build::<BTreeMap<String, Service>>()
+        .to_text()
+        .unwrap();
     assert!(!plain.contains("constants: {"), "{plain}");
 }
 
@@ -218,7 +220,12 @@ fn composed(constants: &[(&str, i64)]) -> CrolData {
 #[test]
 fn updating_constants_gives_what_composing_again_gives() {
     let mut data = composed(&[("count", 1)]);
-    let reloaded = data.update_constants().set("count", 5).unwrap().apply().unwrap();
+    let reloaded = data
+        .update_constants()
+        .set("count", 5)
+        .unwrap()
+        .apply()
+        .unwrap();
     let fresh = composed(&[("count", 5)]);
     assert_eq!(data.fingerprint(), fresh.fingerprint());
     assert_eq!(data.key_fingerprints(), fresh.key_fingerprints());
@@ -231,7 +238,12 @@ fn updating_constants_gives_what_composing_again_gives() {
     assert_eq!(c["n"], 5);
 
     // The same value again changes nothing.
-    let reloaded = data.update_constants().set("count", 5).unwrap().apply().unwrap();
+    let reloaded = data
+        .update_constants()
+        .set("count", 5)
+        .unwrap()
+        .apply()
+        .unwrap();
     assert_eq!(reloaded.changed, []);
     assert_eq!(reloaded.evaluated, Some(0));
 
@@ -245,8 +257,15 @@ fn updating_constants_gives_what_composing_again_gives() {
         .unwrap()
         .apply()
         .unwrap();
-    assert_eq!(data.fingerprint(), composed(&[("count", 2), ("other", 9)]).fingerprint());
-    data.update_constants().remove("other").unwrap().apply().unwrap();
+    assert_eq!(
+        data.fingerprint(),
+        composed(&[("count", 2), ("other", 9)]).fingerprint()
+    );
+    data.update_constants()
+        .remove("other")
+        .unwrap()
+        .apply()
+        .unwrap();
     assert_eq!(data.fingerprint(), composed(&[("count", 2)]).fingerprint());
 }
 
@@ -254,8 +273,16 @@ fn updating_constants_gives_what_composing_again_gives() {
 fn a_failed_update_keeps_the_data() {
     let mut data = composed(&[("count", 1)]);
     let before = data.fingerprint();
-    let error = data.update_constants().remove("count").unwrap().apply().unwrap_err();
-    assert!(error.to_string().contains("no constant `count` was given"), "{error}");
+    let error = data
+        .update_constants()
+        .remove("count")
+        .unwrap()
+        .apply()
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("no constant `count` was given"),
+        "{error}"
+    );
     assert_eq!(data.fingerprint(), before);
     assert_eq!(data.get::<BTreeMap<String, i64>>("a").unwrap()["n"], 2);
 }
@@ -280,14 +307,25 @@ fn a_declared_constant_cannot_be_removed() {
         .unwrap()
         .with_constant("limits", limits())
         .unwrap()
-        .load_layer(layer("base", "+web: Service { replicas: $replicas, limits: $limits }"))
+        .load_layer(layer(
+            "base",
+            "+web: Service { replicas: $replicas, limits: $limits }",
+        ))
         .compose_data()
         .unwrap();
     let error = data.update_constants().remove("replicas").err().unwrap();
-    assert!(error.to_string().contains("declared in the schema"), "{error}");
+    assert!(
+        error.to_string().contains("declared in the schema"),
+        "{error}"
+    );
     let error = data.update_constants().set("replicas", "x").err().unwrap();
     assert!(error.to_string().contains("does not fit"), "{error}");
-    let reloaded = data.update_constants().set("replicas", 4).unwrap().apply().unwrap();
+    let reloaded = data
+        .update_constants()
+        .set("replicas", 4)
+        .unwrap()
+        .apply()
+        .unwrap();
     assert_eq!(reloaded.evaluated, Some(1));
 }
 
@@ -312,7 +350,10 @@ fn value_mode_reads_constants_through_a_reader() {
 
     // The shorthands give no constants.
     let error = crol::from_str::<BTreeMap<String, u32>>("a: $home").unwrap_err();
-    assert!(error.to_string().contains("no constant `home` was given"), "{error}");
+    assert!(
+        error.to_string().contains("no constant `home` was given"),
+        "{error}"
+    );
     let workers: BTreeMap<String, u32> = crol::from_str("a: $workers ?? 2").unwrap();
     assert_eq!(workers["a"], 2);
 

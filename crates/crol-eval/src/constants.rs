@@ -212,6 +212,9 @@ mod tests {
             constants.absent_message("foo_cuont"),
             "no constant `foo_cuont` was given; did you mean `$foo_count`?"
         );
-        assert_eq!(constants.absent_message("zzz"), "no constant `zzz` was given");
+        assert_eq!(
+            constants.absent_message("zzz"),
+            "no constant `zzz` was given"
+        );
     }
 }

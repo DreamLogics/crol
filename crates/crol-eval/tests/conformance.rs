@@ -8,7 +8,8 @@
 //! - `options.crol` (optional): options, as a value-mode document:
 //!   `variants: [Grouped(["dev", "prod"]), Discrete("cache")]`, `parents: {
 //!   prod_eu: "prod" }`, `contexts: [["prod", "cache"]]`, `variant_keys:
-//!   NoNewKeys`, `max_contexts: 16`, and
+//!   NoNewKeys`, `max_contexts: 16`, `constants: { count: 2 }` for what
+//!   `$name` reads (`SPEC.md` 6.1.4), and
 //!   `schema: "services"` for `crol`'s test of the schema checks;
 //! - `expected.crod`: the evaluated data as `crol eval --all-contexts`
 //!   prints it, if evaluation succeeds;
@@ -126,6 +127,14 @@ fn options(case: &Path) -> DataOptions {
                         panic!("parents map names to names")
                     };
                     parents.push((child.clone(), parent.clone()));
+                }
+            }
+            ("constants", ValueKind::Keyed(map)) => {
+                for (name, value) in &map.entries {
+                    let Key::Str(name) = name else {
+                        panic!("constants map names to values")
+                    };
+                    options.constants.insert(name.clone(), value.clone());
                 }
             }
             // For `crol`'s conformance test.

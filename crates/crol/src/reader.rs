@@ -63,7 +63,9 @@ impl CrolReader {
     /// does.
     pub fn with_constant(mut self, name: &str, value: impl Serialize) -> Result<Self, Error> {
         if self.constants.get(name).is_some() {
-            return Err(Error::new(format!("reader: constant `{name}` is given twice")));
+            return Err(Error::new(format!(
+                "reader: constant `{name}` is given twice"
+            )));
         }
         let value = crate::constants::constant_value(name, &value, self.schema.as_ref())?;
         self.constants.insert(name, value);

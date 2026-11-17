@@ -313,6 +313,7 @@
 
 mod check;
 mod compose;
+mod constants;
 mod constraints;
 mod db;
 mod de;
@@ -325,10 +326,9 @@ mod loader;
 mod mode;
 mod module_path;
 mod path;
-mod constants;
 pub mod project;
-mod reader;
 mod raw;
+mod reader;
 #[cfg(feature = "_remote")]
 mod remote;
 mod resolve;
@@ -348,14 +348,14 @@ pub use compose::{
     CrolComposer, CrolConfig, CrolContext, CrolData, CrolLayer, CrolVariants, DocumentChange,
     ExtendsLoad, KeyChange, LayerSource, Reloaded, Variant, VariantName, changed_keys,
 };
+pub use constants::{ConstantsUpdate, check_constants};
+pub use crol_eval::Constants;
 pub use crol_eval::{ExplainStep, StepKind, VariantKeys};
 pub use crol_eval::{Key, Keyed, Sources, Span, Value, ValueKind};
-pub use constants::ConstantsUpdate;
-pub use reader::CrolReader;
-pub use crol_eval::Constants;
 pub use db::{CrolDb, Cursor, Select, Transaction};
 pub use error::Error;
 pub use fill::{fill_defaults, fill_defaults_value};
+pub use reader::CrolReader;
 
 /// The error type of `crol`, as the specification names it.
 pub type CrolError = Error;

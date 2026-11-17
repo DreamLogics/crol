@@ -1,0 +1,3 @@
+// `field: $x` is a definition, `field: & + $x` a patch.
+web.replicas: & + $replicas
++cpu_total: &root.web.limits.cpu * &root.web.replicas

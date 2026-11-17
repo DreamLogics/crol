@@ -452,6 +452,9 @@ explains why that difference is the heart of CROL.
 There is no implicit lookup. `&port` never means "`port` from somewhere
 around here". It names a bind, or it is an error that suggests `&self.port`.
 
+One more kind of value reads from elsewhere, and it does not start with `&`:
+`$name` reads a [constant](#constants) that your program gives.
+
 ### The root entry you are in
 
 `&root` is the whole document, so from inside `web` you would write
@@ -770,6 +773,81 @@ at 1 if not.
 `??` catches only missing values. Other errors, such as adding a string to a
 list, are still reported.
 
+## Constants
+
+Some values are known only when your program runs: the user's home directory,
+a count from the command line, the ports it was given. `$name` reads a
+_constant_, a value the program gives the data. The name follows `$` directly:
+
+```crol
+// example.crod
++web: {
+    replicas: $replicas ?? 1,
+    data_dir: $home + "/data",
+    port: $ports[0],
+    limits: { ..$limits, cpu: 4 },
+}
+```
+
+Your program gives them with
+[`with_constant`](rust.md#constants-from-your-program), and `crol` with `--const`,
+each value written as CROL:
+
+```console
+$ crol eval --const 'home="/home/me"' --const 'ports=[80, 443]' --const 'limits={ cpu: 2, memory_mb: 512 }' example.crod
+web: {
+    replicas: 1,
+    data_dir: "/home/me/data",
+    port: 80,
+    limits: { cpu: 4, memory_mb: 512 },
+}
+```
+
+Selectors work as on a reference: `$limits.cpu`, `$ports[0]`, `$pair.1`. And so
+does everything else a value can take part in: arithmetic, `~`, spreads and
+templates.
+
+**A constant that is not given is missing**, like a reference to a key that is not
+there. So `$replicas ?? 1` is an optional input, with its default in the data.
+Without `??`, it is an error that suggests names that were given:
+``no constant `replica` was given; did you mean `$replicas`?``. A
+[schema](schemas.md#constants) can say which constants the program always gives.
+
+**A constant is the same everywhere**: in every layer, every file and every
+context. It reads nothing from the data, so it is never part of a cycle. A
+variant selector on one, `$replicas<prod>`, is an error: there is no other
+context to switch to. For a value that differs in `prod`, write the difference
+in the data, `<prod> { web.replicas: $replicas * 2 }`, or give the program two
+constants.
+
+**It is not `&`**, so it does not make an entry a patch. At the top level,
+`workers: $workers` is a [definition](layers.md#definitions-and-patches), which
+replaces what is below, and `workers: & + $extra_workers` a patch, which builds
+on it:
+
+```crol
+// example.crod
++workers: 2
+workers: & + $extra_workers
+```
+
+**Only values can be constants.** `$` cannot go in a key, a path, a condition,
+an attribute or a bind's name, so all of these are errors:
+
+```crol
+$replicas: 1            // a key
+web.ports[$index]: 80   // a step of a path
+web<$env>.port: 80      // a condition
+```
+
+Keys and conditions say which entries there are and what they change, and that
+is settled when a file is read, before any value is known. A value that the
+program gives can only be a value.
+
+After `$`, nothing is a keyword: `$root` is the constant `root`, not `&root`.
+Constants have their own sign so that they never clash with the binds and
+templates the data defines.
+
 ## Ids
 
 An id, written `@web`, is a value that names a key. Use one wherever one
@@ -905,11 +983,12 @@ CROL is data with a little arithmetic, not a programming language. Apart from th
 [built-in macros](#arithmetic-and-strings), there are no functions, and there are
 no conditionals, comparisons, loops or imports, and a file cannot
 read the environment, the clock or other files. That is what makes evaluation
-predictable: the same files give the same data, on every machine.
+predictable: the same files, with the same constants, give the same data, on
+every machine.
 
 - For values that differ per environment, use [variants](variants.md).
-- For values that come from outside, such as secrets, have your program fill
-  them in after loading, or generate a layer.
+- For values that come from outside, such as a directory or a secret, have your
+  program read them and give them as [constants](#constants).
 - For validation, such as ranges or rules across fields, use Rust: wrapper
   types with their own `Deserialize`, or a check after loading.
 

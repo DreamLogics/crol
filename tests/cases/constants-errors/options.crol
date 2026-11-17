@@ -1,0 +1,2 @@
+variants: [Discrete("prod")],
+constants: { replicas: 3, limits: Limits { cpu: 2 } },

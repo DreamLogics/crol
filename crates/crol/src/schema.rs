@@ -872,9 +872,12 @@ pub fn build<T: Schema + ?Sized>() -> SchemaFile {
 /// Writes the schema of `T` to `path`, for an application's own
 /// `--export-schema`.
 pub fn write<T: Schema + ?Sized>(path: impl AsRef<Path>) -> Result<(), Error> {
-    let path = path.as_ref();
+    write_text(&build::<T>(), path.as_ref())
+}
+
+fn write_text(schema: &SchemaFile, path: &Path) -> Result<(), Error> {
     Mode::Value.check_path(path)?;
-    let text = build::<T>().to_text()?;
+    let text = schema.to_text()?;
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)
             .map_err(|e| Error::new(format!("cannot create {}: {e}", parent.display())))?;
@@ -889,14 +892,42 @@ pub fn write<T: Schema + ?Sized>(path: impl AsRef<Path>) -> Result<(), Error> {
 /// never silently out of date in CI. A relative path is from the crate's
 /// directory when run by `cargo test`.
 pub fn check_file<T: Schema + ?Sized>(path: impl AsRef<Path>) -> Result<(), Error> {
-    let mut path = path.as_ref().to_path_buf();
+    build::<T>().check_file(path)
+}
+
+impl SchemaFile {
+    /// [`check_file`] for a schema built further, as with
+    /// [`with_constant`](Self::with_constant): fails if the file at `path`
+    /// is not this schema, and writes it instead when `CROL_UPDATE_SCHEMA=1`
+    /// is set or the file does not exist.
+    ///
+    /// ```no_run
+    /// # use std::collections::BTreeMap;
+    /// crol::schema::build::<BTreeMap<String, u16>>()
+    ///     .with_constant::<u32>("foo_count")
+    ///     .check_file("crol/schema.crol")
+    ///     .unwrap();
+    /// ```
+    pub fn check_file(&self, path: impl AsRef<Path>) -> Result<(), Error> {
+        check_text(self, path.as_ref())
+    }
+
+    /// Writes the schema to `path`, for an application's own
+    /// `--export-schema`.
+    pub fn write(&self, path: impl AsRef<Path>) -> Result<(), Error> {
+        write_text(self, path.as_ref())
+    }
+}
+
+fn check_text(schema: &SchemaFile, path: &Path) -> Result<(), Error> {
+    let mut path = path.to_path_buf();
     if path.is_relative()
         && let Ok(dir) = std::env::var("CARGO_MANIFEST_DIR")
     {
         path = PathBuf::from(dir).join(path);
     }
     Mode::Value.check_path(&path)?;
-    let expected = build::<T>().to_text()?;
+    let expected = schema.to_text()?;
     let update = std::env::var("CROL_UPDATE_SCHEMA").is_ok_and(|v| v == "1");
     match std::fs::read_to_string(&path) {
         Ok(actual) if actual == expected => Ok(()),
@@ -904,7 +935,7 @@ pub fn check_file<T: Schema + ?Sized>(path: impl AsRef<Path>) -> Result<(), Erro
             "{} is not the schema of the types; run the test with CROL_UPDATE_SCHEMA=1 to update it",
             path.display()
         ))),
-        _ => write::<T>(&path),
+        _ => write_text(schema, &path),
     }
 }
 

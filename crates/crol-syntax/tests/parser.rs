@@ -1327,7 +1327,9 @@ fn an_id_key_has_a_name_and_only_keys() {
 
 #[test]
 fn constants() {
-    check("a: $foo_count + $limits.cpu, b: $root", expect![[r#"
+    check(
+        "a: $foo_count + $limits.cpu, b: $root",
+        expect![[r#"
         DOCUMENT@0..37
           ENTRY@0..27
             TARGET@0..1
@@ -1360,12 +1362,15 @@ fn constants() {
             CONSTANT@32..37
               DOLLAR@32..33 "$"
               IDENT@33..37 "root"
-    "#]]);
+    "#]],
+    );
 }
 
 #[test]
 fn constant_errors() {
-    check("a: $ x, $k: 1, b[$k]: 2, c<$x>: 3, d: $true", expect![[r#"
+    check(
+        "a: $ x, $k: 1, b[$k]: 2, c<$x>: 3, d: $true",
+        expect![[r#"
         DOCUMENT@0..43
           ENTRY@0..6
             TARGET@0..1
@@ -1436,5 +1441,16 @@ fn constant_errors() {
         error 17..18: a key in a path cannot be a constant: keys are fixed when a document is read
         error 27..28: a condition names variants; a constant cannot be one
         error 39..43: `true` and `false` cannot be constant names
-    "#]]);
+    "#]],
+    );
+}
+
+#[test]
+fn a_constant_as_a_key_on_its_own_line() {
+    let parse = crol_syntax::parse("a: 1\n$k: 2\nb: 3");
+    let errors: Vec<&str> = parse.errors().iter().map(|e| e.message()).collect();
+    assert_eq!(
+        errors,
+        ["a key cannot be a constant: keys are fixed when a document is read (SPEC.md 6.1.4)"]
+    );
 }

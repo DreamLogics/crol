@@ -2061,7 +2061,12 @@ pub(crate) fn evaluate_again(
     // did (`SPEC.md` 7.9).
     let mut dirty = dirty.clone();
     for (key, plan) in &plan.keys {
-        if plan.reads.constants.iter().any(|name| constants.contains(name)) {
+        if plan
+            .reads
+            .constants
+            .iter()
+            .any(|name| constants.contains(name))
+        {
             dirty.insert(key.clone());
         }
     }

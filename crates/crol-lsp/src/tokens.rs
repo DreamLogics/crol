@@ -25,7 +25,8 @@ const BIND: u32 = 3;
 const REFERENCE: u32 = 4;
 
 /// The modifiers, as bits in legend order. `early` is `&`, the value below;
-/// `late` every other reference (`SPEC.md` 7.3).
+/// `late` every other reference (`SPEC.md` 7.3); `readonly` a constant the
+/// program gives, `$name` (`SPEC.md` 6.1.4).
 fn modifiers() -> Vec<SemanticTokenModifier> {
     vec![
         SemanticTokenModifier::DECLARATION,
@@ -33,6 +34,7 @@ fn modifiers() -> Vec<SemanticTokenModifier> {
         SemanticTokenModifier::MODIFICATION,
         SemanticTokenModifier::new("early"),
         SemanticTokenModifier::new("late"),
+        SemanticTokenModifier::READONLY,
     ]
 }
 const DECLARATION: u32 = 1;
@@ -40,6 +42,7 @@ const DEFINITION: u32 = 1 << 1;
 const PATCH: u32 = 1 << 2;
 const EARLY: u32 = 1 << 3;
 const LATE: u32 = 1 << 4;
+const READONLY: u32 = 1 << 5;
 
 pub(crate) fn legend() -> SemanticTokensLegend {
     SemanticTokensLegend {
@@ -165,6 +168,16 @@ fn classify(node: &SyntaxNode, found: &mut Vec<(TextRange, u32, u32)>) {
             VARIANT,
             0,
         ),
+        // `$name`: a variable that does not change (`SPEC.md` 6.1.4).
+        SyntaxKind::CONSTANT => {
+            for token in node
+                .children_with_tokens()
+                .filter_map(|it| it.into_token())
+                .filter(|t| !t.kind().is_trivia())
+            {
+                push(Some(token), BIND, READONLY);
+            }
+        }
         SyntaxKind::REFERENCE => {
             let Some(reference) = ast::Reference::cast(node.clone()) else {
                 return;
