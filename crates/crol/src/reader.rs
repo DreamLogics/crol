@@ -84,29 +84,41 @@ impl CrolReader {
         &self,
         text: &str,
     ) -> Result<(T, Vec<IdUse>), Error> {
-        let mut sources = Sources::new();
-        let file = sources.add(self.name.as_deref().unwrap_or("<string>"), text);
-        let mut constants = self.constants.clone();
-        let mut diagnostics =
-            crate::constants::check_declared(&mut constants, self.schema.as_ref());
-        let mut evaluation = evaluate_value_with(&sources, file, &constants);
-        diagnostics.append(&mut evaluation.diagnostics);
-        let value = evaluation
-            .value
-            .filter(|_| !diagnostics.iter().any(crol_eval::Diagnostic::is_error));
-        let Some(value) = value else {
-            return Err(Error::from_diagnostics(&sources, &diagnostics));
-        };
-        let options = de::Options {
-            structs: self
-                .schema
-                .as_ref()
-                .map(|schema| std::sync::Arc::new(de::Structs::from_schema(schema))),
-            ..de::Options::default()
-        };
-        // A value document has no schema for scopes, so only `#[scope]`
-        // makes them.
-        let resolver = resolve::Resolver::new(&value, None);
-        crate::deserialize_resolved(&value, &sources, options, None, Some(resolver))
+        read(
+            self.name.as_deref().unwrap_or("<string>"),
+            text,
+            self.schema.as_ref(),
+            &self.constants,
+        )
     }
+}
+
+/// Reads a value-mode document with a schema and constants, borrowed: what
+/// [`CrolReader`] and [`crate::from_str_with_schema`] do.
+pub(crate) fn read<T: for<'de> Deserialize<'de>>(
+    name: &str,
+    text: &str,
+    schema: Option<&SchemaFile>,
+    constants: &Constants,
+) -> Result<(T, Vec<IdUse>), Error> {
+    let mut sources = Sources::new();
+    let file = sources.add(name, text);
+    let mut constants = constants.clone();
+    let mut diagnostics = crate::constants::check_declared(&mut constants, schema);
+    let mut evaluation = evaluate_value_with(&sources, file, &constants);
+    diagnostics.append(&mut evaluation.diagnostics);
+    let value = evaluation
+        .value
+        .filter(|_| !diagnostics.iter().any(crol_eval::Diagnostic::is_error));
+    let Some(value) = value else {
+        return Err(Error::from_diagnostics(&sources, &diagnostics));
+    };
+    let options = de::Options {
+        structs: schema.map(|schema| std::sync::Arc::new(de::Structs::from_schema(schema))),
+        ..de::Options::default()
+    };
+    // A value document has no schema for scopes, so only `#[scope]`
+    // makes them.
+    let resolver = resolve::Resolver::new(&value, None);
+    crate::deserialize_resolved(&value, &sources, options, None, Some(resolver))
 }

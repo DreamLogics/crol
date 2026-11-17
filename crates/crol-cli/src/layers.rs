@@ -93,12 +93,17 @@ impl InputArgs {
             Some(project) => project.constants().map_err(|e| e.to_string())?,
             None => Constants::new(),
         };
+        let mut given = std::collections::HashSet::new();
         for pair in &self.constants {
             let (name, text) = pair
                 .split_once('=')
                 .ok_or_else(|| format!("`--const {pair}` is not `name=value`"))?;
             if !crol_eval::is_identifier(name) {
                 return Err(format!("`--const {pair}`: `{name}` is not an identifier"));
+            }
+            // As `with_constant`: one name, one value.
+            if !given.insert(name) {
+                return Err(format!("`--const` gives the constant `{name}` twice"));
             }
             let value = crol::RawValue::from_text(text)
                 .map_err(|message| format!("`--const {pair}`: {message}"))?;

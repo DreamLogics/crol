@@ -90,18 +90,27 @@ fn stand_in_range(text: &str, name: &str) -> Option<TextRange> {
             token.text_range(),
         ))
     };
-    let entry = root
-        .descendants()
-        .filter_map(ast::Entry::cast)
+    // The entries of a block itself, not those nested in their values.
+    let entries_of = |node: &crol_syntax::SyntaxNode| -> Vec<ast::Entry> {
+        node.children().filter_map(ast::Entry::cast).collect()
+    };
+    // The project's own entries: at the top of the document, or in the
+    // `Project { ... }` that is its value.
+    let mut top = entries_of(&root);
+    for block in root.children().filter(|n| n.kind() == SyntaxKind::BLOCK) {
+        top.extend(entries_of(&block));
+    }
+    let entry = top
+        .into_iter()
         .find(|e| key_of(e).is_some_and(|(key, _)| key == "constants"))?;
-    let own = entry.value().and_then(|value| {
-        value
-            .syntax()
-            .descendants()
-            .filter(|n| n.kind() == SyntaxKind::ENTRY)
-            .filter_map(ast::Entry::cast)
-            .find_map(|e| key_of(&e).filter(|(key, _)| key == name))
-    });
+    let own = entry
+        .value()
+        .filter(|value| value.syntax().kind() == SyntaxKind::BLOCK)
+        .and_then(|value| {
+            entries_of(value.syntax())
+                .iter()
+                .find_map(|e| key_of(e).filter(|(key, _)| key == name))
+        });
     own.or_else(|| key_of(&entry)).map(|(_, range)| range)
 }
 
@@ -165,3 +174,23 @@ fn stand_in(value: &Value) -> String {
 
 /// The longest stand-in value written inline.
 const MAX_INLINE: usize = 60;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_stand_in_is_found_at_its_own_key() {
+        let text = "Project {\n    stacks: { a: { constants: 1 } },\n    constants: { limits: { cpu: 2 }, cpu: 3 },\n    ..\n}";
+        let range = stand_in_range(text, "cpu").unwrap();
+        let at = usize::from(range.start());
+        assert_eq!(&text[at..at + 8], "cpu: 3 }");
+        let range = stand_in_range(text, "gpu").unwrap();
+        let at = usize::from(range.start());
+        assert!(
+            text[at..].starts_with("constants: { limits"),
+            "{}",
+            &text[at..]
+        );
+    }
+}

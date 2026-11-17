@@ -406,7 +406,7 @@ pub fn from_str_with_schema<T: for<'de> Deserialize<'de>>(
     text: &str,
     schema: &schema::SchemaFile,
 ) -> Result<T> {
-    CrolReader::new().schema(schema.clone()).from_str(text)
+    reader::read("<string>", text, Some(schema), &Constants::new()).map(|(value, _)| value)
 }
 
 /// [`from_str`] for text that has a name, such as a file's, which errors

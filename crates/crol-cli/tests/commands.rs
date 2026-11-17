@@ -1024,3 +1024,34 @@ fn a_constant_without_a_value_is_missing() {
         "{output:?}"
     );
 }
+
+#[test]
+fn a_constant_given_twice_is_an_error() {
+    let dir = tree("constants-twice", &[("a.crod", "n: $n")]);
+    let output = crol(
+        &dir,
+        &["check", "a.crod", "--const", "n=1", "--const", "n=2"],
+    );
+    assert!(failed(&output), "{output:?}");
+    assert!(
+        stderr(&output).contains("gives the constant `n` twice"),
+        "{output:?}"
+    );
+}
+
+#[test]
+fn a_project_file_that_does_not_load_is_still_checked() {
+    let dir = tree(
+        "constants-broken-project",
+        &[(
+            "project.crol",
+            "Project { layers: List([]), constants: { x: 1 }, bogus: 1, .. }",
+        )],
+    );
+    let output = crol(&dir, &["check", "project.crol"]);
+    assert!(failed(&output), "{output:?}");
+    // The schema's diagnostic, at its place in the file.
+    let text = stderr(&output);
+    assert!(text.contains("bogus"), "{text}");
+    assert!(text.contains("project.crol:1:"), "{text}");
+}

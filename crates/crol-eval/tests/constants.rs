@@ -178,3 +178,16 @@ fn templates_read_constants() {
         "#]],
     );
 }
+
+#[test]
+fn tools_let_a_fallback_catch_a_constant_without_a_value() {
+    let constants = Constants::new().with_absent_warning(true);
+    check_value(
+        "a: $x ?? 3, b: ($y ?? 1) + 1",
+        &constants,
+        expect![[r#"
+            a: 3
+            b: 2
+        "#]],
+    );
+}
