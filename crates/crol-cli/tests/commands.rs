@@ -757,3 +757,208 @@ fn explain_says_which_scope_an_id_resolved_in() {
     "#]]
     .assert_eq(&explain(&["ui.crod", "port"]));
 }
+
+// ---- Layer stacks (`SPEC.md` 11, 12.4) ----
+
+const THEME_SCHEMA: &str = r#"Schema {
+    format: 1,
+    root: "app::Themes",
+    types: {
+        "app::Themes": Transparent {
+            name: "Themes",
+            source: ("src/lib.rs", 2),
+            inner: Map(String, Named("app::Theme")),
+            ..
+        },
+        "app::Theme": Struct {
+            name: "Theme",
+            source: ("src/lib.rs", 1),
+            fields: { color: { ty: String, .. } },
+            ..
+        },
+    },
+}"#;
+
+const STACKS_PROJECT: &str = r#"Project {
+    stacks: {
+        services: {
+            layers: List([{ name: "base", dir: "services", .. }]),
+            schema: Some("service_schema"),
+            files: [{ glob: "config::app", type: "Service" }],
+            ..
+        },
+        themes: {
+            layers: List([{ name: "base", dir: "themes", .. }]),
+            schema: Some("theme_schema"),
+            files: [{ glob: "config::theme_*", type: "Theme" }],
+            ..
+        },
+    },
+    ..
+}"#;
+
+fn stacks_tree(name: &str, extra: &[(&str, &str)]) -> PathBuf {
+    let mut files = vec![
+        ("project.crol", STACKS_PROJECT),
+        ("service_schema.crol", SERVICE_SCHEMA),
+        ("theme_schema.crol", THEME_SCHEMA),
+        ("services/web.crod", "+web: Service { replicas: 2 }\n"),
+        ("themes/dark.crod", "+dark: Theme { color: \"black\" }\n"),
+        ("config/app.crol", "Service { replicas: 3 }\n"),
+        ("config/theme_light.crol", "Theme { color: \"white\" }\n"),
+    ];
+    // A later file replaces an earlier one of the same path.
+    for (path, text) in extra {
+        files.retain(|(p, _)| p != path);
+        files.push((path, text));
+    }
+    tree(name, &files)
+}
+
+#[test]
+fn check_checks_every_stack_against_its_own_schema() {
+    let dir = stacks_tree("stacks-check", &[]);
+    let output = crol(&dir, &["check"]);
+    assert!(output.status.success(), "{output:?}");
+
+    let dir = stacks_tree(
+        "stacks-check-bad",
+        &[("themes/dark.crod", "+dark: Theme { color: 3 }\n")],
+    );
+    let output = crol(&dir, &["check"]);
+    assert!(failed(&output), "{output:?}");
+    let text = stderr(&output);
+    assert!(text.contains("dark.crod"), "{text}");
+    assert!(!text.contains("web.crod"), "{text}");
+    // Only the stack asked for.
+    let output = crol(&dir, &["check", "--stack", "services"]);
+    assert!(output.status.success(), "{output:?}");
+}
+
+#[test]
+fn eval_needs_one_stack() {
+    let dir = stacks_tree("stacks-eval", &[]);
+    let output = crol(&dir, &["eval"]);
+    assert!(failed(&output), "{output:?}");
+    assert!(
+        stderr(&output).contains(
+            "the project has several layer stacks, `services`, `themes`; choose one with `--stack`"
+        ),
+        "{output:?}"
+    );
+    let output = crol(&dir, &["eval", "--stack", "themes"]);
+    assert!(output.status.success(), "{output:?}");
+    assert!(stdout(&output).contains("black"), "{output:?}");
+    assert!(!stdout(&output).contains("replicas"), "{output:?}");
+
+    let output = crol(&dir, &["eval", "--stack", "menus"]);
+    assert!(failed(&output), "{output:?}");
+    assert!(
+        stderr(&output).contains("there is no stack `menus`; the stacks are `services`, `themes`"),
+        "{output:?}"
+    );
+}
+
+#[test]
+fn layers_given_choose_their_stack() {
+    let dir = stacks_tree(
+        "stacks-layers",
+        &[("themes/dark.crod", "+dark: Theme { color: 3 }\n")],
+    );
+    let output = crol(&dir, &["check", "--project", "project.crol", "themes"]);
+    assert!(failed(&output), "{output:?}");
+    assert!(stderr(&output).contains("dark.crod"), "{output:?}");
+    let output = crol(&dir, &["check", "--project", "project.crol", "services"]);
+    assert!(output.status.success(), "{output:?}");
+    let output = crol(
+        &dir,
+        &["eval", "--project", "project.crol", "services", "./themes"],
+    );
+    assert!(failed(&output), "{output:?}");
+    assert!(
+        stderr(&output).contains(
+            "the layers given are in the layer stacks `services`, `themes`; choose one with `--stack`"
+        ),
+        "{output:?}"
+    );
+}
+
+#[test]
+fn an_extends_into_another_stack_is_an_error() {
+    let dir = stacks_tree(
+        "stacks-extends",
+        &[(
+            "themes/dark.crod",
+            "#![extends(::services::web)]\n\n+dark: Theme { color: \"black\" }\n",
+        )],
+    );
+    let output = crol(&dir, &["check"]);
+    assert!(failed(&output), "{output:?}");
+    let text = stderr(&output);
+    assert!(
+        text.contains("extends: `::services::web` is in the layers of the stack `services`; the layers of `themes` extend only files of their own stack"),
+        "{text}"
+    );
+    assert!(text.contains("dark.crod:1:"), "{text}");
+    // The stack it reaches into is fine on its own.
+    let output = crol(&dir, &["check", "--stack", "services"]);
+    assert!(output.status.success(), "{output:?}");
+}
+
+#[test]
+fn a_layer_file_named_by_module_path_chooses_its_stack() {
+    let project = STACKS_PROJECT.replace(r#"dir: "services""#, r#"dir: "web""#);
+    let dir = stacks_tree(
+        "stacks-module-file",
+        &[
+            ("project.crol", &project),
+            ("web.crod", "+web: Service { replicas: 5 }\n"),
+        ],
+    );
+    for project in ["project.crol", "./project.crol"] {
+        for layer in ["web", "base=web", "web.crod"] {
+            let args = ["eval", "--project", project, layer, "web"];
+            let output = crol(&dir, &args);
+            assert!(output.status.success(), "{args:?}: {output:?}");
+            assert!(
+                stdout(&output).contains("replicas: 5"),
+                "{args:?}: {output:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn value_documents_are_checked_in_their_own_stack() {
+    let dir = stacks_tree("stacks-values", &[]);
+    let both = ["check", "config/app.crol", "config/theme_light.crol"];
+    let output = crol(&dir, &both);
+    assert!(output.status.success(), "{output:?}");
+    let output = crol(&dir, &["eval", "config/theme_light.crol"]);
+    assert!(output.status.success(), "{output:?}");
+
+    let dir = stacks_tree(
+        "stacks-values-bad",
+        &[("config/theme_light.crol", "Theme { color: 3 }\n")],
+    );
+    let output = crol(&dir, &both);
+    assert!(failed(&output), "{output:?}");
+    let text = stderr(&output);
+    assert!(text.contains("theme_light.crol"), "{text}");
+    assert!(!text.contains("app.crol"), "{text}");
+}
+
+#[test]
+fn a_file_two_stacks_claim_is_an_error_at_both() {
+    let project = STACKS_PROJECT.replace("config::theme_*", "config::*");
+    let dir = stacks_tree("stacks-overlap", &[("project.crol", &project)]);
+    let output = crol(&dir, &["check"]);
+    assert!(failed(&output), "{output:?}");
+    let text = stderr(&output);
+    for wanted in [
+        "`config::app` of stack `services` matches files that `config::*` of stack `themes` claims too",
+        "`config::*` of stack `themes` matches files that `config::app` of stack `services` claims too",
+    ] {
+        assert!(text.contains(wanted), "{text}");
+    }
+}

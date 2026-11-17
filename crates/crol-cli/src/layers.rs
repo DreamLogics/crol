@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crol::project::{FILE_NAME, Project};
+use crol::project::{FILE_NAME, Project, ProjectStack};
 use crol::schema::SchemaFile;
 use crol::{CheckOptions, CrolComposer, CrolConfig, FileLoaders, LayerSource, Mode};
 use crol_eval::{DataOptions, Diagnostic, Evaluation, Layer, Sources, Span, Variants};
@@ -36,6 +36,11 @@ pub(crate) struct InputArgs {
     #[arg(long, value_name = "FILE")]
     project: Option<PathBuf>,
 
+    /// The project's layer stack to use, for a project with several; it
+    /// gives the layers, schema, root and options.
+    #[arg(long, value_name = "NAME")]
+    stack: Option<String>,
+
     /// A schema file to check the data against.
     #[arg(long, value_name = "FILE")]
     schema: Option<PathBuf>,
@@ -60,6 +65,19 @@ impl InputArgs {
     /// `--offline`.
     pub(crate) fn offline(&self) -> bool {
         self.offline
+    }
+
+    /// `--stack`.
+    pub(crate) fn stack(&self) -> Option<&str> {
+        self.stack.as_deref()
+    }
+
+    /// The same, with the stack `name`.
+    pub(crate) fn with_stack(&self, name: &str) -> Self {
+        Self {
+            stack: Some(name.to_owned()),
+            ..self.clone()
+        }
     }
 
     pub(crate) fn declares_variants(&self) -> bool {
@@ -99,8 +117,8 @@ pub(crate) struct Inputs {
     /// The type of root values, if the project names one.
     pub(crate) root: Option<String>,
     pub(crate) check: CheckOptions,
-    /// Warnings about the inputs, such as documents that name another
-    /// schema.
+    /// What is wrong with the inputs: warnings, such as for documents that
+    /// name another schema, and errors for an `extends` into another stack.
     pub(crate) warnings: Vec<Diagnostic>,
 }
 
@@ -129,6 +147,78 @@ pub(crate) fn no_layers_for(key: &str, args: &InputArgs) -> Option<String> {
     })
 }
 
+/// The project's stack to evaluate (`SPEC.md` 12.4): `--stack`, else its
+/// only one, else the one whose layer directories hold the layers given;
+/// else an error that lists them, as `cargo run` does with several binaries.
+fn choose_stack<'p>(
+    project: &'p Project,
+    dir: &Path,
+    arguments: &[String],
+    args: &InputArgs,
+) -> Result<(&'p str, &'p ProjectStack), String> {
+    if let Some(name) = &args.stack {
+        project.stack(name).map_err(|e| e.to_string())?;
+        let (name, stack) = project.stacks.get_key_value(name.as_str()).expect("found");
+        return Ok((name, stack));
+    }
+    let only = |name: &'p str| Ok((name, &project.stacks[name]));
+    if let [name] = project.stack_names()[..] {
+        return only(name);
+    }
+    let mut found: Vec<&str> = Vec::new();
+    for argument in arguments {
+        let source = match argument.split_once('=') {
+            Some((name, source)) if crol_eval::is_identifier(name) => source,
+            _ => argument.as_str(),
+        };
+        let path = if is_module_path(source) && !Path::new(source).exists() {
+            let module = source.strip_prefix("::").unwrap_or(source);
+            let mut path = dir.to_path_buf();
+            path.extend(module.split("::"));
+            path
+        } else {
+            PathBuf::from(source)
+        };
+        if let Some(name) = project.layer_stack(dir, &path).map_err(|e| e.to_string())?
+            && !found.contains(&name)
+        {
+            found.push(name);
+        }
+    }
+    let listed = |names: &[&str]| {
+        let names: Vec<String> = names.iter().map(|n| format!("`{n}`")).collect();
+        names.join(", ")
+    };
+    match found[..] {
+        [name] => only(name),
+        [] => Err(format!(
+            "the project has several layer stacks, {}; choose one with `--stack`",
+            project.listed_stacks()
+        )),
+        _ => Err(format!(
+            "the layers given are in the layer stacks {}; choose one with `--stack`",
+            listed(&found)
+        )),
+    }
+}
+
+/// The stacks `crol check` without layers goes through one by one: every
+/// stack of the project, if it has several and `--stack` names none. `None`
+/// for the one evaluation [`inputs`] makes, which also reports what is
+/// wrong with the project.
+pub(crate) fn every_stack(args: &InputArgs) -> Option<Vec<String>> {
+    if args.stack.is_some() {
+        return None;
+    }
+    let path = match &args.project {
+        Some(path) => path.clone(),
+        None => Project::find(&std::env::current_dir().ok()?)?,
+    };
+    let project = Project::read(&path).ok()?;
+    let names = project.stack_names();
+    (names.len() > 1).then(|| names.into_iter().map(str::to_owned).collect())
+}
+
 /// The layers, variants, options and schema: from the arguments, or with no
 /// layer arguments from the project file. Returns `None` after reporting an
 /// error.
@@ -148,17 +238,33 @@ pub(crate) fn inputs(
             .ok()
             .and_then(|dir| Project::find(&dir)),
     };
+    let wanted = arguments.is_empty() || args.project.is_some() || args.stack.is_some();
     let project = match &project_path {
-        Some(path) if arguments.is_empty() || args.project.is_some() => match Project::read(path) {
+        Some(path) if wanted => match Project::read(path) {
             Ok(project) => Some(project),
             Err(error) => return fail(reporter, error.to_string()),
         },
         _ => None,
     };
+    if project.is_none() && args.stack.is_some() {
+        return fail(
+            reporter,
+            format!(
+                "`--stack` names a stack of the project, and there is no {FILE_NAME} in this directory or above"
+            ),
+        );
+    }
     let project_dir = project_path
         .as_deref()
         .map(|p| crol::directory_of(p).to_path_buf())
         .unwrap_or_default();
+    let (stack_name, stack) = match &project {
+        Some(project) => match choose_stack(project, &project_dir, arguments, args) {
+            Ok((name, stack)) => (Some(name), Some(stack)),
+            Err(message) => return fail(reporter, message),
+        },
+        None => (None, None),
+    };
 
     // The root directory module paths start from (`SPEC.md` 4.2).
     let root_dir = if project.is_some() {
@@ -183,13 +289,13 @@ pub(crate) fn inputs(
         ..CrolConfig::default()
     };
     if arguments.is_empty() {
-        let Some(project) = &project else {
+        let Some(stack) = stack else {
             return fail(
                 reporter,
                 format!("no layers given, and no {FILE_NAME} in this directory or above"),
             );
         };
-        let layers = match project.layer_list(&project_dir) {
+        let layers = match stack.layer_list(&project_dir) {
             Ok(layers) => layers,
             Err(error) => return fail(reporter, error.to_string()),
         };
@@ -250,9 +356,9 @@ pub(crate) fn inputs(
     let mut check = CheckOptions::default();
     let mut root = None;
     let mut schema_path = args.schema.clone();
-    let mut used = "the one given with `--schema`";
-    if let Some(project) = &project {
-        let project_options = &project.options;
+    let mut used = "the one given with `--schema`".to_owned();
+    if let Some(stack) = stack {
+        let project_options = &stack.options;
         options = options
             .with_init_defaults(project_options.init_defaults)
             .with_each_variant(project_options.each_variant)
@@ -262,15 +368,16 @@ pub(crate) fn inputs(
             Ok(rule) => options = options.with_variant_keys(rule),
             Err(error) => return fail(reporter, error.to_string()),
         }
-        check.implicit_some = project_options.implicit_some;
-        check.allow_unknown_fields = project_options.allow_unknown_fields;
-        check.require_complete = project_options.require_complete;
-        root.clone_from(&project.root);
+        check = project_options.check_options();
+        root.clone_from(&stack.root);
         if schema_path.is_none() {
-            match project.schema_path(&project_dir, !args.offline) {
+            match stack.schema_path(&project_dir, !args.offline) {
                 Ok(path) => {
                     schema_path = path;
-                    used = "the project's";
+                    used = match project.as_ref().map(|p| p.stacks.len()) {
+                        Some(1) => "the project's".to_owned(),
+                        _ => format!("that of the stack `{}`", stack_name.unwrap_or_default()),
+                    };
                 }
                 Err(error) => return fail(reporter, error.to_string()),
             }
@@ -342,11 +449,23 @@ pub(crate) fn inputs(
                             Path::new(display),
                             &root_dir,
                             given,
-                            used,
+                            &used,
                             !args.offline,
                         )
                     {
                         warnings.push(Diagnostic::warning(Span::new(file, range), message));
+                    }
+                    // A stack extends only its own files (`SPEC.md` 12.4).
+                    if let (Some(project), Some(stack)) = (&project, stack_name) {
+                        let found = project.cross_stack_extends(
+                            &project_dir,
+                            stack,
+                            Path::new(display),
+                            text,
+                        );
+                        for (range, message) in found {
+                            warnings.push(Diagnostic::error(Span::new(file, range), message));
+                        }
                     }
                     (relative.to_owned(), file)
                 })

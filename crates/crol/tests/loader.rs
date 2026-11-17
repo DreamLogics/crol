@@ -475,7 +475,7 @@ fn schemas_and_project_files_read_through_loaders() {
         .text()
         .unwrap();
     let project: crol::project::Project = crol::from_str(&project).unwrap();
-    let crol::project::ProjectLayers::List(layers) = &project.layers else {
+    let Some(crol::project::ProjectLayers::List(layers)) = &project.layers else {
         panic!();
     };
     let layer = loaders

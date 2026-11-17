@@ -106,28 +106,91 @@ impl FileLoader for BufferLoader {
 /// return diagnostics, published with the others (`SPEC.md` 12.5).
 pub type Checks = Box<dyn Fn(&Snapshot) -> Vec<Diagnostic> + Send>;
 
-/// The latest evaluation.
-pub struct Snapshot {
-    /// Every file read.
-    pub sources: Sources,
-    /// The project's layers; empty without a project.
+/// A layer stack of the project, evaluated (`SPEC.md` 12.4).
+pub struct StackSnapshot {
+    /// The stack's name.
+    pub name: String,
+    /// Its layers.
     pub layers: Vec<Layer>,
     /// The options the layers were evaluated with.
     pub options: DataOptions,
-    /// The project's evaluation; empty without a project.
+    /// The evaluation of the layers.
     pub evaluation: Evaluation,
-    /// The project's layers compiled, for looking up one key at a time;
-    /// `None` if they do not compile.
+    /// The layers compiled, for looking up one key at a time; `None` if
+    /// they do not compile.
     compiled: Option<Compiled>,
     /// What looking up keys in `compiled` takes.
     explain_plan: OnceLock<Result<ExplainPlan, Vec<Diagnostic>>>,
-    /// The doc comments of root keys in the project's layers.
+    /// The doc comments of root keys in the layers.
     root_docs: OnceLock<HashMap<String, String>>,
-    /// Whether any document of the project's layers has a doc comment.
+    /// Whether any document of the layers has a doc comment.
     has_docs: OnceLock<bool>,
     /// While the layers do not evaluate (as while a document is being
     /// typed): the latest evaluation of them that did, for completion.
     pub last_good: Option<Evaluation>,
+    /// The stack's schema, if it names one and it loaded.
+    pub schema: Option<SchemaFile>,
+    /// The type path of the stack's root type, with the schema.
+    pub root_type: Option<String>,
+    /// What checking against the schema takes of the stack's options.
+    check: CheckOptions,
+    /// The files of the layers the stack lists, not those `extends` brings in.
+    listed: HashSet<FileId>,
+}
+
+impl StackSnapshot {
+    fn new(name: &str) -> Self {
+        Self {
+            name: name.to_owned(),
+            layers: Vec::new(),
+            options: DataOptions::default(),
+            evaluation: Evaluation::default(),
+            compiled: None,
+            explain_plan: OnceLock::new(),
+            root_docs: OnceLock::new(),
+            has_docs: OnceLock::new(),
+            last_good: None,
+            schema: None,
+            root_type: None,
+            check: CheckOptions::default(),
+            listed: HashSet::new(),
+        }
+    }
+
+    /// Whether the file is in one of the stack's layers.
+    pub fn holds(&self, file: FileId) -> bool {
+        (self.layers.iter()).any(|l| l.documents.iter().any(|(_, f)| *f == file))
+    }
+
+    /// Whether any document of the layers has a doc comment.
+    pub(crate) fn has_docs(&self, find: impl FnOnce() -> bool) -> bool {
+        *self.has_docs.get_or_init(find)
+    }
+
+    /// The doc comments of root keys in the layers.
+    pub(crate) fn root_docs(
+        &self,
+        find: impl FnOnce() -> HashMap<String, String>,
+    ) -> &HashMap<String, String> {
+        self.root_docs.get_or_init(find)
+    }
+}
+
+/// The latest evaluation.
+pub struct Snapshot {
+    /// Every file read.
+    pub sources: Sources,
+    /// The project's layer stacks, each evaluated on its own; none without
+    /// a project.
+    pub stacks: Vec<StackSnapshot>,
+    /// What stands for a stack where there is none.
+    no_stack: StackSnapshot,
+    /// What documents on their own are evaluated with of the project: its
+    /// variants, and the options of its stack if it has only one.
+    lone_options: DataOptions,
+    /// What they are checked with: the options of its stack if it has only
+    /// one.
+    lone_check: CheckOptions,
     /// While a document on its own does not evaluate: the latest evaluation
     /// of it that did, by its path (ids do not outlive a snapshot).
     last_good_documents: HashMap<PathBuf, Evaluation>,
@@ -136,10 +199,6 @@ pub struct Snapshot {
     pub documents: Vec<(FileId, Evaluation)>,
     /// Diagnostics from the schema and the application's checks.
     pub extra: Vec<Diagnostic>,
-    /// The project's schema, if it names one.
-    pub schema: Option<SchemaFile>,
-    /// The type path of the project's root type, with the schema.
-    pub root_type: Option<String>,
     /// The schemas of documents evaluated on their own, with the type of
     /// each one's value: the one it names, or the project file's.
     own_schemas: HashMap<FileId, OwnSchema>,
@@ -241,8 +300,33 @@ impl DocumentSchema<'_> {
 }
 
 impl Snapshot {
-    /// The schema of a file: its own, for a document on its own, else the
-    /// project's.
+    /// The stack whose layers hold the file, if any does: first one that
+    /// lists it in its own layers, then one that `extends` brought it into.
+    pub fn stack_of(&self, file: FileId) -> Option<&StackSnapshot> {
+        (self
+            .stacks
+            .iter()
+            .find(|stack| stack.listed.contains(&file)))
+        .or_else(|| self.stacks.iter().find(|stack| stack.holds(file)))
+    }
+
+    /// The stack of a file, for a file in one; with no file, the first
+    /// stack. What stands for none, else.
+    pub(crate) fn stack_for(&self, file: Option<FileId>) -> &StackSnapshot {
+        let stack = match file {
+            Some(file) => self.stack_of(file),
+            None => self.stacks.first(),
+        };
+        stack.unwrap_or(&self.no_stack)
+    }
+
+    /// The stack whose layers these are, if they are a stack's.
+    pub(crate) fn stack_with_layers(&self, layers: &[Layer]) -> Option<&StackSnapshot> {
+        (self.stacks.iter()).find(|stack| std::ptr::eq(layers, stack.layers.as_slice()))
+    }
+
+    /// The schema of a file: its own, for a document on its own, else its
+    /// stack's.
     pub(crate) fn schema_for(&self, file: Option<FileId>) -> Option<DocumentSchema<'_>> {
         if let Some(own) = file.and_then(|f| self.own_schemas.get(&f)) {
             return Some(DocumentSchema {
@@ -254,9 +338,10 @@ impl Snapshot {
         if file.is_some_and(|f| !self.in_layers(f)) {
             return None;
         }
+        let stack = self.stack_for(file);
         Some(DocumentSchema {
-            file: self.schema.as_ref()?,
-            root: self.root_type.as_deref(),
+            file: stack.schema.as_ref()?,
+            root: stack.root_type.as_deref(),
             value_mode: false,
         })
     }
@@ -320,7 +405,7 @@ impl Snapshot {
     pub(crate) fn last_good_of(&self, file: Option<FileId>) -> Option<&Evaluation> {
         match file {
             Some(file) if !self.in_layers(file) => self.last_good_documents.get(self.path(file)?),
-            _ => self.last_good.as_ref(),
+            _ => self.stack_for(file).last_good.as_ref(),
         }
     }
 
@@ -342,19 +427,27 @@ impl Snapshot {
                 self.last_good_documents.insert(path.to_path_buf(), good);
             }
         }
-        if self.evaluation.value.is_none() {
+        for stack in &mut self.stacks {
+            if stack.evaluation.value.is_some() {
+                continue;
+            }
+            let Some(at) = previous.stacks.iter().position(|s| s.name == stack.name) else {
+                continue;
+            };
+            let previous = previous.stacks.swap_remove(at);
             // Better than what is below a layer that did not load, if that
             // is all there is now.
-            self.last_good = match previous.evaluation.value {
+            stack.last_good = match previous.evaluation.value {
                 Some(_) => Some(previous.evaluation),
-                None => self.last_good.take().or(previous.last_good),
+                None => stack.last_good.take().or(previous.last_good),
             };
         }
     }
 
-    /// What the project's `files` say of a value document: the project's
-    /// schema, with the type to check it as; nothing if no glob matches it
-    /// (`SPEC.md` 12.4).
+    /// What the project's `files` say of a value document: the schema of
+    /// the stack whose `files` match it, with the type to check it as and
+    /// the stack's check options; nothing if no glob matches it (`SPEC.md`
+    /// 12.4).
     #[allow(clippy::type_complexity)]
     fn project_files(
         &self,
@@ -363,25 +456,40 @@ impl Snapshot {
     ) -> Option<(
         Result<SchemaFile, (crol_syntax::TextRange, String)>,
         Option<String>,
+        CheckOptions,
     )> {
         let (project, dir) = self.project.as_ref()?;
         if mode != Mode::Value {
             return None;
         }
-        let type_name = project.file_type(dir, path)?;
-        let failed = |why: String| {
-            let message =
-                format!("project: `files` gives this document the type `{type_name}`, {why}");
-            Some((Err((Default::default(), message)), None))
+        let (name, written, type_name) = project.file_stack(dir, path)?;
+        let stack = self.stacks.iter().find(|s| s.name == name)?;
+        let (of_stack, owner) = match project.stacks.len() {
+            1 => (String::new(), "project".to_owned()),
+            _ => (format!(" of the stack `{name}`"), format!("stack `{name}`")),
         };
-        let Some(schema) = &self.schema else {
-            return failed(match project.schema {
-                Some(_) => "and the project's schema did not load".to_owned(),
-                None => "and the project has no schema".to_owned(),
+        let failed = |why: String| {
+            let message = format!(
+                "project: `files`{of_stack} gives this document the type `{type_name}`, {why}"
+            );
+            Some((
+                Err((Default::default(), message)),
+                None,
+                stack.check.clone(),
+            ))
+        };
+        let Some(schema) = &stack.schema else {
+            return failed(match written.schema {
+                Some(_) => format!("and the {owner}'s schema did not load"),
+                None => format!("and the {owner} has no schema"),
             });
         };
         match schema.type_path(type_name) {
-            Some(root) => Some((Ok(schema.clone()), Some(root.to_owned()))),
+            Some(root) => Some((
+                Ok(schema.clone()),
+                Some(root.to_owned()),
+                stack.check.clone(),
+            )),
             None => failed("which the schema does not have".to_owned()),
         }
     }
@@ -399,18 +507,18 @@ impl Snapshot {
         path: &str,
         context: &[String],
     ) -> Result<Vec<ExplainStep>, Vec<Diagnostic>> {
-        if !std::ptr::eq(layers, self.layers.as_slice()) {
+        let Some(stack) = self.stack_with_layers(layers) else {
             return crol_eval::explain(&self.sources, layers, options, path, context);
+        };
+        if stack.evaluation.has_errors() {
+            return Err(stack.evaluation.diagnostics.clone());
         }
-        if self.evaluation.has_errors() {
-            return Err(self.evaluation.diagnostics.clone());
-        }
-        let Some(compiled) = &self.compiled else {
+        let Some(compiled) = &stack.compiled else {
             return Err(Vec::new());
         };
-        let plan = self
+        let plan = stack
             .explain_plan
-            .get_or_init(|| crol_eval::explain_plan(compiled, &self.evaluation.variants, options));
+            .get_or_init(|| crol_eval::explain_plan(compiled, &stack.evaluation.variants, options));
         match plan {
             Ok(plan) => crol_eval::explain_compiled(compiled, plan, options, path, context),
             Err(diagnostics) => Err(diagnostics.clone()),
@@ -423,24 +531,11 @@ impl Snapshot {
             && (layer.documents.iter()).all(|(_, file)| self.read_only.contains(file))
     }
 
-    /// Whether any document of the project's layers has a doc comment.
-    pub(crate) fn project_has_docs(&self, find: impl FnOnce() -> bool) -> bool {
-        *self.has_docs.get_or_init(find)
-    }
-
-    /// The doc comments of root keys in the project's layers.
-    pub(crate) fn project_root_docs(
-        &self,
-        find: impl FnOnce() -> HashMap<String, String>,
-    ) -> &HashMap<String, String> {
-        self.root_docs.get_or_init(find)
-    }
-
-    /// The evaluated data a file is in: the project's for a file in its
+    /// The evaluated data a file is in: its stack's for a file in a stack's
     /// layers, else the document's own.
     pub(crate) fn data_of(&self, file: FileId) -> Option<&crol_eval::Value> {
-        if self.in_layers(file) {
-            return self.evaluation.value.as_ref();
+        if let Some(stack) = self.stack_of(file) {
+            return stack.evaluation.value.as_ref();
         }
         let (_, evaluation) = self.documents.iter().find(|(f, _)| *f == file)?;
         evaluation.value.as_ref()
@@ -469,11 +564,12 @@ impl Snapshot {
         root: &'a crol_eval::Value,
     ) -> crol::IdResolver<'a> {
         let mut resolver = crol::IdResolver::new(root);
-        if self.in_layers(file)
-            && let Some(schema) = &self.schema
+        // An id names a root key of its own stack only (`SPEC.md` 12.4).
+        if let Some(stack) = self.stack_of(file)
+            && let Some(schema) = &stack.schema
         {
             resolver = resolver.schema(schema);
-            if let Some(root) = &self.root_type {
+            if let Some(root) = &stack.root_type {
                 resolver = resolver.root_type(root);
             }
         }
@@ -498,8 +594,8 @@ impl Snapshot {
     }
 
     pub(crate) fn chain_of(&self, file: FileId) -> Option<(&[Layer], &DataOptions)> {
-        if self.in_layers(file) {
-            return Some((&self.layers, &self.options));
+        if let Some(stack) = self.stack_of(file) {
+            return Some((&stack.layers, &stack.options));
         }
         let chain = self.chains.get(&file)?;
         Some((&chain.layers, &chain.options))
@@ -510,11 +606,10 @@ impl Snapshot {
         self.paths.get(file.index()).map(PathBuf::as_path)
     }
 
-    /// Whether the file is evaluated as part of the project's layers.
+    /// Whether the file is evaluated as part of the layers of one of the
+    /// project's stacks.
     pub fn in_layers(&self, file: FileId) -> bool {
-        self.layers
-            .iter()
-            .any(|l| l.documents.iter().any(|(_, f)| *f == file))
+        self.stack_of(file).is_some()
     }
 
     /// Whether the file is in a read-only layer, which gets no diagnostics
@@ -525,8 +620,8 @@ impl Snapshot {
 
     /// The evaluation a file belongs to.
     pub fn evaluation_of(&self, file: FileId) -> Option<&Evaluation> {
-        if self.in_layers(file) {
-            return Some(&self.evaluation);
+        if let Some(stack) = self.stack_of(file) {
+            return Some(&stack.evaluation);
         }
         self.documents
             .iter()
@@ -537,10 +632,8 @@ impl Snapshot {
     /// Every diagnostic, as LSP diagnostics by file.
     pub(crate) fn diagnostics(&self, encoding: Encoding) -> Vec<(Uri, Vec<lsp_types::Diagnostic>)> {
         let mut by_file: HashMap<FileId, Vec<lsp_types::Diagnostic>> = HashMap::new();
-        let all = self
-            .evaluation
-            .diagnostics
-            .iter()
+        let all = (self.stacks.iter())
+            .flat_map(|stack| &stack.evaluation.diagnostics)
             .chain(self.documents.iter().flat_map(|(_, e)| &e.diagnostics))
             .chain(&self.extra);
         for diagnostic in all {
@@ -599,43 +692,51 @@ impl Snapshot {
     }
 }
 
+/// A layer, by the names of its stack and of it.
+type LayerKey = (String, String);
+
 /// Read-only layers in their binary form (`SPEC.md` 7.8), by name, kept
 /// between evaluations: they are the bulk of a large project, and do not
 /// change as a document is edited, so they need not be parsed each time. They
 /// get no diagnostics, which is all that is lost.
 #[derive(Default)]
 pub(crate) struct Binaries {
-    /// What lowering a layer gave, with what identifies its documents.
-    layers: HashMap<String, ([u8; 32], Arc<[u8]>)>,
+    /// What lowering a layer gave, with what identifies its documents, by
+    /// the names of its stack and of it.
+    layers: HashMap<LayerKey, ([u8; 32], Arc<[u8]>)>,
     /// Layers that have no binary form, as they use a template of another,
     /// by what identifies their documents.
     refused: HashSet<[u8; 32]>,
 }
 
 impl Binaries {
-    /// For each of the snapshot's layers, what is kept of it, if that is
-    /// made from just these documents.
-    fn for_layers<'a>(&'a self, snapshot: &Snapshot) -> Vec<Option<&'a [u8]>> {
+    /// For each of a stack's layers, what is kept of it, if that is made
+    /// from just these documents.
+    fn for_layers<'a>(
+        &'a self,
+        snapshot: &Snapshot,
+        stack: &StackSnapshot,
+    ) -> Vec<Option<&'a [u8]>> {
         let of_layer = |layer: &Layer| {
-            let (hash, lowered) = self.layers.get(&layer.name)?;
+            let key = (stack.name.clone(), layer.name.clone());
+            let (hash, lowered) = self.layers.get(&key)?;
             (*hash == hash_of(snapshot, layer)).then_some(&**lowered)
         };
-        snapshot.layers.iter().map(of_layer).collect()
+        stack.layers.iter().map(of_layer).collect()
     }
 
     /// Encodes the snapshot's read-only layers that are not kept yet, from
     /// what [`Binaries::wanted`] said.
     pub(crate) fn keep(&mut self, wanted: Wanted) {
-        for (layer, hash) in &wanted.layers {
-            let bytes = crol_eval::encode_layer(&wanted.sources, layer);
+        for (key, layer, hash) in wanted.layers {
+            let bytes = crol_eval::encode_layer(&wanted.sources, &layer);
             let read = bytes.ok().map(|b| crol_eval::binary::read_layer(&b));
             match read {
                 Some(Ok(binary)) => {
-                    self.layers
-                        .insert(layer.name.clone(), (*hash, binary.lowered));
+                    self.layers.insert(key, (hash, binary.lowered));
                 }
                 _ => {
-                    self.refused.insert(*hash);
+                    self.refused.insert(hash);
                 }
             }
         }
@@ -643,14 +744,18 @@ impl Binaries {
 
     /// What to encode of a snapshot, if anything, to do after it is sent.
     pub(crate) fn wanted(&self, snapshot: &Snapshot) -> Wanted {
-        let layers = (snapshot.layers.iter())
-            .filter(|layer| snapshot.is_read_only_layer(layer))
-            .map(|layer| (layer, hash_of(snapshot, layer)))
-            .filter(|(layer, hash)| {
-                let kept = self.layers.get(&layer.name).map(|(kept, _)| kept);
+        let layers = (snapshot.stacks.iter())
+            .flat_map(|stack| stack.layers.iter().map(move |layer| (stack, layer)))
+            .filter(|(_, layer)| snapshot.is_read_only_layer(layer))
+            .map(|(stack, layer)| {
+                let key = (stack.name.clone(), layer.name.clone());
+                (key, layer, hash_of(snapshot, layer))
+            })
+            .filter(|(key, _, hash)| {
+                let kept = self.layers.get(key).map(|(kept, _)| kept);
                 kept != Some(hash) && !self.refused.contains(hash)
             })
-            .map(|(layer, hash)| (layer.clone(), hash))
+            .map(|(key, layer, hash)| (key, layer.clone(), hash))
             .collect();
         Wanted {
             sources: snapshot.sources.clone(),
@@ -662,7 +767,7 @@ impl Binaries {
 /// Layers to encode, with their text.
 pub(crate) struct Wanted {
     sources: Sources,
-    layers: Vec<(Layer, [u8; 32])>,
+    layers: Vec<(LayerKey, Layer, [u8; 32])>,
 }
 
 /// What identifies a layer's documents in its binary form.
@@ -797,19 +902,13 @@ pub(crate) fn evaluate(
 ) -> Snapshot {
     let mut snapshot = Snapshot {
         sources: Sources::new(),
-        layers: Vec::new(),
-        options: DataOptions::default(),
-        evaluation: Evaluation::default(),
-        compiled: None,
-        explain_plan: OnceLock::new(),
-        root_docs: OnceLock::new(),
-        has_docs: OnceLock::new(),
-        last_good: None,
+        stacks: Vec::new(),
+        no_stack: StackSnapshot::new(""),
+        lone_options: DataOptions::default(),
+        lone_check: CheckOptions::default(),
         last_good_documents: HashMap::new(),
         documents: Vec::new(),
         extra: Vec::new(),
-        schema: None,
-        root_type: None,
         own_schemas: HashMap::new(),
         project: None,
         chains: HashMap::new(),
@@ -830,140 +929,23 @@ pub(crate) fn evaluate(
         (None, Some(root)) => Project::find(root),
         (None, None) => None,
     };
-    let mut check = CheckOptions::default();
-    let mut loading = Loading::default();
     if let Some(project_path) = &project_path {
-        let loaded = load_project(
-            &mut snapshot,
-            project_path,
-            &canonical_open,
-            remote,
-            &mut loading,
-        );
-        match loaded {
-            Ok((schema, root_type, options)) => {
-                snapshot.schema = schema;
-                snapshot.root_type = root_type;
-                check = options;
+        match load_project(&mut snapshot, project_path, &canonical_open, remote) {
+            // Each stack is evaluated and checked on its own (`SPEC.md`
+            // 12.4).
+            Ok(stacks) => {
+                for (mut stack, mut loading) in stacks {
+                    problems.append(&mut loading.problems);
+                    if !stack.layers.is_empty() {
+                        evaluate_stack(&mut snapshot, &mut stack, &loading, binaries);
+                    }
+                    snapshot.stacks.push(stack);
+                }
             }
             Err(found) => problems.push(found),
         }
     }
-    problems.append(&mut loading.problems);
-    if !snapshot.layers.is_empty() {
-        // A layer's `schema.crod` changes the schema (`SPEC.md` 10.12).
-        if let Some(schema) = snapshot.schema.take() {
-            let (schema, found) = schema.patched(&mut snapshot.sources, &snapshot.layers);
-            snapshot.extra.extend(found);
-            snapshot.schema = Some(schema);
-        }
-        // `&default` reads the project's schema (`SPEC.md` 6.1.3).
-        snapshot.options = snapshot.options.clone().with_defaults(
-            snapshot
-                .schema
-                .as_ref()
-                .map(|s| s.defaults_for(snapshot.root_type.as_deref())),
-        );
-        let lowered = binaries.for_layers(&snapshot);
-        let (mut compiled, mut diagnostics) =
-            crol_eval::compile_binary(&snapshot.sources, &snapshot.layers, &lowered);
-        // What is wrong may be what was kept, and it would not show: there
-        // are no diagnostics in a read-only layer.
-        if compiled.is_none() && lowered.iter().any(Option::is_some) {
-            (compiled, diagnostics) = crol_eval::compile(&snapshot.sources, &snapshot.layers);
-        }
-        snapshot.evaluation = match &compiled {
-            Some(compiled) => {
-                let mut evaluation = crol_eval::evaluate_compiled(compiled, &snapshot.options);
-                diagnostics.append(&mut evaluation.diagnostics);
-                evaluation.diagnostics = diagnostics;
-                evaluation
-            }
-            None => Evaluation {
-                diagnostics,
-                ..Evaluation::default()
-            },
-        };
-        snapshot.compiled = compiled;
-        // What does not evaluate above a gap says little: keep what is below
-        // it, until there is better.
-        if let Some((gap, _)) = &loading.gap
-            && snapshot.evaluation.value.is_none()
-        {
-            let below = &snapshot.layers[..*gap];
-            let evaluation = crol_eval::evaluate_data(&snapshot.sources, below, &snapshot.options);
-            snapshot.last_good = evaluation.value.is_some().then_some(evaluation);
-        }
-        if let (Some(schema), Some(base)) = (&snapshot.schema, &snapshot.evaluation.value) {
-            let view = crol::DataView {
-                base,
-                contexts: &snapshot.evaluation.contexts,
-                variants: &snapshot.evaluation.variants,
-            };
-            let mut found = crol::check_view(view, schema, snapshot.root_type.as_deref(), &check);
-            // What is wrong with the root as a whole is on the top document
-            // (`SPEC.md` 4.1). A read-only one gets no diagnostics, so it
-            // goes on the top one that does.
-            let writable = (snapshot.layers.iter().rev())
-                .flat_map(|layer| layer.documents.iter().rev())
-                .map(|(_, file)| *file)
-                .find(|file| !snapshot.read_only.contains(file));
-            for diagnostic in &mut found {
-                if let Some(file) = writable
-                    && diagnostic.span.range.is_empty()
-                    && snapshot.read_only.contains(&diagnostic.span.file)
-                {
-                    diagnostic.span.file = file;
-                }
-            }
-            snapshot.extra.extend(found);
-        }
-        // What ids name (`SPEC.md` 10.5): without a schema, those that name
-        // nothing; with one, the check above reports those.
-        if let Some(base) = &snapshot.evaluation.value {
-            let view = crol::DataView {
-                base,
-                contexts: &snapshot.evaluation.contexts,
-                variants: &snapshot.evaluation.variants,
-            };
-            let found = crol::check_ids(
-                view,
-                snapshot.schema.as_ref(),
-                snapshot.root_type.as_deref(),
-            );
-            snapshot.extra.extend(found);
-        }
-        // Above a gap, an error may only say what is missing.
-        if let Some((gap, why)) = &loading.gap {
-            let above: HashSet<FileId> = snapshot.layers[*gap..]
-                .iter()
-                .flat_map(|l| l.documents.iter().map(|(_, file)| *file))
-                .collect();
-            let why = format!("{why}, which may be why");
-            let suspect = |file| above.contains(&file);
-            soften(&mut snapshot.evaluation.diagnostics, &why, suspect);
-            soften(&mut snapshot.extra, &why, suspect);
-        }
-        let found = extends_problems(
-            &loading.followed,
-            &snapshot.evaluation.diagnostics,
-            &snapshot.sources,
-        );
-        snapshot.extra.extend(found);
-        // What is extended and is no lower layer goes below this one all
-        // the same, as in `crol check`, where the project's layers should
-        // have said so (`SPEC.md` 4.1).
-        for extends in loading.followed.iter().filter(|e| !e.files.is_empty()) {
-            let span = crol_eval::Span::new(extends.file, extends.range);
-            snapshot.extra.push(Diagnostic::warning(
-                span,
-                format!(
-                    "extends: `{}` is not a lower layer of the project; add it to the project's layers",
-                    extends.written
-                ),
-            ));
-        }
-    }
+    let check = snapshot.lone_check.clone();
     // Open documents that are in no layer are evaluated on their own, each
     // time in one order.
     let mut open_files: Vec<(&PathBuf, &String)> = canonical_open.iter().collect();
@@ -1009,6 +991,7 @@ pub(crate) fn evaluate(
         // What the project's `files` give a value document that names no
         // schema (`SPEC.md` 12.4).
         let mut given_type = None;
+        let mut check = check.clone();
         let schema = if is_project_file {
             Some(Ok(crol::schema::build::<Project>()))
         } else {
@@ -1022,8 +1005,9 @@ pub(crate) fn evaluate(
                     )
                 })
                 .or_else(|| {
-                    let (schema, root) = snapshot.project_files(path, mode)?;
+                    let (schema, root, options) = snapshot.project_files(path, mode)?;
                     given_type = root;
+                    check = options;
                     Some(schema)
                 })
         };
@@ -1033,7 +1017,7 @@ pub(crate) fn evaluate(
                 // (`SPEC.md` 6.1.3).
                 let own = schema.as_ref().and_then(|s| s.as_ref().ok());
                 let options = snapshot
-                    .options
+                    .lone_options
                     .clone()
                     .with_defaults(own.map(SchemaFile::defaults));
                 let evaluation = crol_eval::evaluate_data(&snapshot.sources, layers, &options);
@@ -1244,28 +1228,203 @@ fn extended_schema(
     None
 }
 
-/// Loads the project's layers into the snapshot, through the composer `crol
-/// check` uses, with what they extend; returns its schema, root type and
-/// check options.
+/// Evaluates a stack's layers, loaded, and checks them against its schema;
+/// what that finds goes into the snapshot.
+fn evaluate_stack(
+    snapshot: &mut Snapshot,
+    stack: &mut StackSnapshot,
+    loading: &Loading,
+    binaries: &Binaries,
+) {
+    // A layer's `schema.crod` changes the schema (`SPEC.md` 10.12).
+    if let Some(schema) = stack.schema.take() {
+        let (schema, found) = schema.patched(&mut snapshot.sources, &stack.layers);
+        snapshot.extra.extend(found);
+        stack.schema = Some(schema);
+    }
+    // `&default` reads the project's schema (`SPEC.md` 6.1.3).
+    stack.options = stack.options.clone().with_defaults(
+        stack
+            .schema
+            .as_ref()
+            .map(|s| s.defaults_for(stack.root_type.as_deref())),
+    );
+    let lowered = binaries.for_layers(snapshot, stack);
+    let (mut compiled, mut diagnostics) =
+        crol_eval::compile_binary(&snapshot.sources, &stack.layers, &lowered);
+    // What is wrong may be what was kept, and it would not show: there
+    // are no diagnostics in a read-only layer.
+    if compiled.is_none() && lowered.iter().any(Option::is_some) {
+        (compiled, diagnostics) = crol_eval::compile(&snapshot.sources, &stack.layers);
+    }
+    stack.evaluation = match &compiled {
+        Some(compiled) => {
+            let mut evaluation = crol_eval::evaluate_compiled(compiled, &stack.options);
+            diagnostics.append(&mut evaluation.diagnostics);
+            evaluation.diagnostics = diagnostics;
+            evaluation
+        }
+        None => Evaluation {
+            diagnostics,
+            ..Evaluation::default()
+        },
+    };
+    stack.compiled = compiled;
+    // What does not evaluate above a gap says little: keep what is below
+    // it, until there is better.
+    if let Some((gap, _)) = &loading.gap
+        && stack.evaluation.value.is_none()
+    {
+        let below = &stack.layers[..*gap];
+        let evaluation = crol_eval::evaluate_data(&snapshot.sources, below, &stack.options);
+        stack.last_good = evaluation.value.is_some().then_some(evaluation);
+    }
+    if let (Some(schema), Some(base)) = (&stack.schema, &stack.evaluation.value) {
+        let view = crol::DataView {
+            base,
+            contexts: &stack.evaluation.contexts,
+            variants: &stack.evaluation.variants,
+        };
+        let mut found = crol::check_view(view, schema, stack.root_type.as_deref(), &stack.check);
+        // What is wrong with the root as a whole is on the top document
+        // (`SPEC.md` 4.1). A read-only one gets no diagnostics, so it
+        // goes on the top one that does.
+        let writable = (stack.layers.iter().rev())
+            .flat_map(|layer| layer.documents.iter().rev())
+            .map(|(_, file)| *file)
+            .find(|file| !snapshot.read_only.contains(file));
+        for diagnostic in &mut found {
+            if let Some(file) = writable
+                && diagnostic.span.range.is_empty()
+                && snapshot.read_only.contains(&diagnostic.span.file)
+            {
+                diagnostic.span.file = file;
+            }
+        }
+        snapshot.extra.extend(found);
+    }
+    // What ids name (`SPEC.md` 10.5): without a schema, those that name
+    // nothing; with one, the check above reports those.
+    if let Some(base) = &stack.evaluation.value {
+        let view = crol::DataView {
+            base,
+            contexts: &stack.evaluation.contexts,
+            variants: &stack.evaluation.variants,
+        };
+        let found = crol::check_ids(view, stack.schema.as_ref(), stack.root_type.as_deref());
+        snapshot.extra.extend(found);
+    }
+    // Above a gap, an error may only say what is missing.
+    if let Some((gap, why)) = &loading.gap {
+        let above: HashSet<FileId> = stack.layers[*gap..]
+            .iter()
+            .flat_map(|l| l.documents.iter().map(|(_, file)| *file))
+            .collect();
+        let why = format!("{why}, which may be why");
+        let suspect = |file| above.contains(&file);
+        soften(&mut stack.evaluation.diagnostics, &why, suspect);
+        soften(&mut snapshot.extra, &why, suspect);
+    }
+    let found = extends_problems(
+        &loading.followed,
+        &stack.evaluation.diagnostics,
+        &snapshot.sources,
+    );
+    snapshot.extra.extend(found);
+    // What is extended and is no lower layer goes below this one all
+    // the same, as in `crol check`, where the project's layers should
+    // have said so (`SPEC.md` 4.1).
+    for extends in loading.followed.iter().filter(|e| !e.files.is_empty()) {
+        let span = crol_eval::Span::new(extends.file, extends.range);
+        snapshot.extra.push(Diagnostic::warning(
+            span,
+            format!(
+                "extends: `{}` is not a lower layer of the project; add it to the project's layers",
+                extends.written
+            ),
+        ));
+    }
+}
+
+/// Reads the project and loads the layers of each of its stacks into the
+/// snapshot, each with what loading it found; a stack whose schema does
+/// not load is evaluated without one.
 fn load_project(
     snapshot: &mut Snapshot,
     project_path: &Path,
     open: &Buffers,
     remote: &RemoteStatus,
-    loading: &mut Loading,
-) -> Result<(Option<SchemaFile>, Option<String>, CheckOptions), Problem> {
+) -> Result<Vec<(StackSnapshot, Loading)>, Problem> {
     let project = Project::read(project_path)?;
     let dir = project_path
         .parent()
         .unwrap_or(Path::new("."))
         .to_path_buf();
-    let mut options = DataOptions::default()
-        .with_variants(project.variants().map_err(|e| e.to_string())?)
-        .with_init_defaults(project.options.init_defaults)
-        .with_each_variant(project.options.each_variant)
-        .with_max_contexts(project.options.max_contexts)
-        .with_contexts(project.options.contexts.clone());
-    options = options.with_variant_keys(project.options.variant_keys().map_err(|e| e.to_string())?);
+    let variants = project.variants().map_err(|e| e.to_string())?;
+    let mut stacks = Vec::new();
+    for (name, stack) in &project.stacks {
+        let mut loading = Loading::default();
+        let mut loaded = StackSnapshot::new(name);
+        let options = (stack.options.variant_keys())
+            .map(|keys| data_options(&stack.options, variants.clone()).with_variant_keys(keys));
+        match options {
+            Ok(options) => {
+                let found = load_stack(
+                    snapshot,
+                    &mut loaded,
+                    (project_path, &dir, &project),
+                    stack,
+                    options,
+                    open,
+                    remote,
+                    &mut loading,
+                );
+                if let Err(problem) = found {
+                    loading.problems.push(problem);
+                }
+            }
+            Err(error) => loading.problems.push(error.into()),
+        }
+        stacks.push((loaded, loading));
+    }
+    // A document on its own is evaluated with the project's variants, and
+    // with the options of its stack if it has only one.
+    snapshot.lone_options = DataOptions::default().with_variants(variants.clone());
+    if let [(stack, _)] = &stacks[..] {
+        snapshot.lone_options = stack.options.clone();
+        snapshot.lone_check = stack.check.clone();
+    }
+    snapshot.project = Some((project, dir));
+    Ok(stacks)
+}
+
+/// The data options a stack's options give, with the project's variants.
+fn data_options(
+    options: &crol::project::ProjectOptions,
+    variants: crol_eval::Variants,
+) -> DataOptions {
+    DataOptions::default()
+        .with_variants(variants)
+        .with_init_defaults(options.init_defaults)
+        .with_each_variant(options.each_variant)
+        .with_max_contexts(options.max_contexts)
+        .with_contexts(options.contexts.clone())
+}
+
+/// Loads a stack's layers into the snapshot, through the composer `crol
+/// check` uses, with what they extend, and reads its schema.
+#[allow(clippy::too_many_arguments)]
+fn load_stack(
+    snapshot: &mut Snapshot,
+    loaded: &mut StackSnapshot,
+    (project_path, dir, project): (&Path, &Path, &Project),
+    stack: &crol::project::ProjectStack,
+    options: DataOptions,
+    open: &Buffers,
+    remote: &RemoteStatus,
+    loading: &mut Loading,
+) -> Result<(), Problem> {
+    let dir = dir.to_path_buf();
     let left_out = LeftOut::default();
     let loaders = BufferLoader::loaders(&dir, open, Some(project_path), &left_out);
     let mut composer = CrolComposer::with_cfg(CrolConfig::<String> {
@@ -1275,19 +1434,22 @@ fn load_project(
         ..Default::default()
     });
     let mut loads = Vec::new();
-    // Each layer of the project, with where it is among the composer's.
+    // Each layer of the stack, with where it is among the composer's.
     let mut listed = Vec::new();
-    for layer in project.layer_list(&dir).map_err(|e| e.to_string())? {
+    loaded.options = options;
+    loaded.check = stack.options.check_options();
+    loaded.root_type = stack.root.clone();
+    for layer in stack.layer_list(&dir).map_err(|e| e.to_string())? {
         // A layer that does not load does not stop the ones after it. They
         // are evaluated without it, and may be wrong where they build on
         // it (`SPEC.md` 12.5).
         let index = composer.layers().len();
-        let loaded = loaders
+        let found = loaders
             .resolve(&layer.dir, &dir)
             .and_then(|source| source.load(layer.name.clone()));
-        match loaded {
-            Ok(loaded) => {
-                let found = composer.load_layer_tolerant(loaded);
+        match found {
+            Ok(found) => {
+                let found = composer.load_layer_tolerant(found);
                 let index = composer.layers().len() - 1;
                 if found.iter().any(|load| load.error.is_some()) {
                     let why = format!("what layer `{}` extends did not all load", layer.name);
@@ -1306,48 +1468,60 @@ fn load_project(
         }
         loading.left_out(&left_out);
     }
-    snapshot.layers = snapshot.intern_layers(composer.layers());
-    let layer_files = |snapshot: &Snapshot, index: usize| -> Vec<FileId> {
-        let documents = &snapshot.layers[index].documents;
+    loaded.layers = snapshot.intern_layers(composer.layers());
+    let layers = &loaded.layers;
+    let layer_files = |index: usize| -> Vec<FileId> {
+        let documents = &layers[index].documents;
         documents.iter().map(|(_, file)| *file).collect()
     };
     // Extended documents get no diagnostics of their own (`SPEC.md` 4.1),
     // but for one the user is editing.
-    let mut extended: HashSet<FileId> = snapshot
-        .layers
+    let mut extended: HashSet<FileId> = layers
         .iter()
         .flat_map(|l| l.documents.iter().map(|(_, file)| *file))
         .collect();
     for (index, read_only) in &listed {
-        for file in layer_files(snapshot, *index) {
+        for file in layer_files(*index) {
             extended.remove(&file);
+            loaded.listed.insert(file);
             if *read_only {
                 snapshot.read_only.insert(file);
             }
         }
     }
+    // A file of another stack's layers, which it should not extend, gets
+    // its diagnostics there.
     extended.retain(|file| {
-        snapshot
-            .path(*file)
-            .is_none_or(|path| !open.contains_key(path))
+        let Some(path) = snapshot.path(*file) else {
+            return true;
+        };
+        let elsewhere = project.layer_stack(&dir, path).ok().flatten();
+        !open.contains_key(path) && elsewhere.is_none_or(|other| other == loaded.name)
     });
     snapshot.read_only.extend(extended);
-    let mut found = snapshot.followed(loads, &snapshot.layers.clone());
+    // A stack extends only its own files (`SPEC.md` 12.4).
+    for file in loaded.listed.iter().copied().collect::<Vec<_>>() {
+        let Some(path) = snapshot.path(file).map(Path::to_path_buf) else {
+            continue;
+        };
+        let text = snapshot.sources.file(file).text();
+        for (range, message) in project.cross_stack_extends(&dir, &loaded.name, &path, text) {
+            let span = crol_eval::Span::new(file, range);
+            snapshot.extra.push(Diagnostic::error(span, message));
+        }
+    }
+    let mut found = snapshot.followed(loads, layers);
     for extends in &mut found {
-        // Only what is no layer of the project is brought in by `extends`.
+        // Only what is no layer of the stack is brought in by `extends`.
         extends.files.retain(|file| {
-            !listed.iter().any(|(index, _)| {
-                snapshot.layers[*index]
-                    .documents
-                    .iter()
-                    .any(|d| d.1 == *file)
-            })
+            !listed
+                .iter()
+                .any(|(index, _)| layers[*index].documents.iter().any(|d| d.1 == *file))
         });
     }
     loading.followed.append(&mut found);
-    snapshot.options = options;
-    let schema_path = project.schema_path(&dir, false);
-    let schema_path = match project.schema.clone() {
+    let schema_path = stack.schema_path(&dir, false);
+    let schema_path = match stack.schema.clone() {
         Some(source) if source.starts_with("https://") || source.starts_with("crate:") => {
             let key = (source, dir.clone());
             let status = remote.get(&key).cloned();
@@ -1357,27 +1531,23 @@ fn load_project(
         _ => schema_path.map_err(|e| e.to_string()),
     };
     let schema_path = schema_path.map_err(Problem::from)?;
-    // Every document in a layer should agree with the project's schema.
+    // Every document in a layer should agree with the stack's schema.
     if let Some(schema_path) = &schema_path {
-        let files: Vec<FileId> = snapshot
-            .layers
-            .iter()
+        let files: Vec<FileId> = (loaded.layers.iter())
             .flat_map(|l| l.documents.iter().map(|(_, file)| *file))
             .collect();
+        let used = match project.stacks.len() > 1 {
+            true => format!("that of the stack `{}`", loaded.name),
+            false => "the project's".to_owned(),
+        };
         for file in files {
             let Some(path) = snapshot.path(file).map(Path::to_path_buf) else {
                 continue;
             };
             let text = snapshot.sources.file(file).text();
             let remote = crol::schema::attribute_remote(text);
-            let disagrees = crol::schema::attribute_disagrees(
-                text,
-                &path,
-                &dir,
-                schema_path,
-                "the project's",
-                false,
-            );
+            let disagrees =
+                crol::schema::attribute_disagrees(text, &path, &dir, schema_path, &used, false);
             if let Some(source) = remote {
                 let dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
                 snapshot.remote.push((source, dir));
@@ -1388,17 +1558,11 @@ fn load_project(
             }
         }
     }
-    let schema = match schema_path {
+    loaded.schema = match schema_path {
         Some(path) => Some(SchemaFile::read(&path)?),
         None => None,
     };
-    let mut check = CheckOptions::default();
-    check.implicit_some = project.options.implicit_some;
-    check.allow_unknown_fields = project.options.allow_unknown_fields;
-    check.require_complete = project.options.require_complete;
-    let root = project.root.clone();
-    snapshot.project = Some((project, dir));
-    Ok((schema, root, check))
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1434,7 +1598,7 @@ mod tests {
             &Binaries::default(),
         );
         assert_eq!(snapshot.problem, None);
-        assert_eq!(snapshot.layers.len(), 1);
+        assert_eq!(snapshot.stacks[0].layers.len(), 1);
         let file = snapshot.file_of(&root.join("data/web.crod")).unwrap();
         assert_eq!(snapshot.sources.file(file).text(), "+port: 81,");
         assert!(snapshot.in_layers(file));
@@ -1450,6 +1614,187 @@ mod tests {
         );
         let file = snapshot.file_of(&root.join("data/web.crod")).unwrap();
         assert_eq!(snapshot.sources.file(file).text(), "+port: 80,");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A schema whose root is a map of structs `name` with one field.
+    fn one_field_schema(name: &str, field: &str, ty: &str) -> String {
+        format!(
+            r#"Schema {{
+    format: 1,
+    root: "app::{name}s",
+    types: {{
+        "app::{name}s": Transparent {{
+            name: "{name}s",
+            source: ("src/lib.rs", 2),
+            inner: Map(String, Named("app::{name}")),
+            ..
+        }},
+        "app::{name}": Struct {{
+            name: "{name}",
+            source: ("src/lib.rs", 1),
+            fields: {{ {field}: {{ ty: {ty}, .. }} }},
+            ..
+        }},
+    }},
+}}"#
+        )
+    }
+
+    #[test]
+    fn an_extends_into_another_stack_is_an_error_there() {
+        let root = directory("stacks-extends");
+        let project = r#"Project {
+    stacks: {
+        services: { layers: List([{ name: "base", dir: "services", .. }]), schema: Some("service_schema"), .. },
+        themes: { layers: List([{ name: "base", dir: "themes", .. }]), schema: Some("theme_schema"), .. },
+    },
+    ..
+}"#;
+        let files = [
+            ("project.crol", project.to_owned()),
+            (
+                "service_schema.crol",
+                one_field_schema("Service", "replicas", "U32"),
+            ),
+            (
+                "theme_schema.crol",
+                one_field_schema("Theme", "color", "String"),
+            ),
+            (
+                "services/web.crod",
+                "+web: Service { replicas: -1 }\n".to_owned(),
+            ),
+            (
+                "themes/dark.crod",
+                "#![extends(::services::web)]\n\n+dark: Theme { color: \"black\" }\n".to_owned(),
+            ),
+        ];
+        for (path, text) in &files {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        let snapshot = evaluate(
+            Some(&root),
+            &Settings::default(),
+            &HashMap::new(),
+            None,
+            &RemoteStatus::new(),
+            &Binaries::default(),
+        );
+        let web = snapshot.file_of(&root.join("services/web.crod")).unwrap();
+        let dark = snapshot.file_of(&root.join("themes/dark.crod")).unwrap();
+        let on = |file| -> Vec<String> {
+            (snapshot.stacks.iter())
+                .flat_map(|s| &s.evaluation.diagnostics)
+                .chain(&snapshot.extra)
+                .filter(|d| d.is_error() && d.span.file == file)
+                .map(|d| d.message.clone())
+                .collect()
+        };
+        let wanted = "extends: `::services::web` is in the layers of the stack `services`; the layers of `themes` extend only files of their own stack";
+        assert!(on(dark).iter().any(|m| m == wanted), "{:?}", on(dark));
+        // The file it reaches into is still its own stack's, with its
+        // diagnostics.
+        assert_eq!(snapshot.stack_of(web).unwrap().name, "services");
+        assert!(!snapshot.is_read_only(web));
+        assert!(on(web).iter().any(|m| m.contains("-1")), "{:?}", on(web));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn each_stack_is_evaluated_against_its_own_schema() {
+        let root = directory("stacks");
+        let files = [
+            (
+                "project.crol",
+                r#"Project {
+    stacks: {
+        services: {
+            layers: List([{ name: "base", dir: "services", .. }]),
+            schema: Some("service_schema"),
+            ..
+        },
+        themes: {
+            layers: List([{ name: "base", dir: "themes", .. }]),
+            schema: Some("theme_schema"),
+            files: [{ glob: "config::*", type: "Theme" }],
+            ..
+        },
+    },
+    ..
+}"#
+                .to_owned(),
+            ),
+            (
+                "service_schema.crol",
+                one_field_schema("Service", "replicas", "U32"),
+            ),
+            (
+                "theme_schema.crol",
+                one_field_schema("Theme", "color", "String"),
+            ),
+            (
+                "services/web.crod",
+                "+web: Service { replicas: 2 }\n".to_owned(),
+            ),
+            ("themes/dark.crod", "+dark: Theme { color: 3 }\n".to_owned()),
+            ("config/light.crol", "Theme { color: 4 }\n".to_owned()),
+        ];
+        for (path, text) in &files {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        let light = root.join("config/light.crol").canonicalize().unwrap();
+        let open = HashMap::from([(light.clone(), "Theme { color: 4 }\n".to_owned())]);
+        let snapshot = evaluate(
+            Some(&root),
+            &Settings::default(),
+            &open,
+            None,
+            &RemoteStatus::new(),
+            &Binaries::default(),
+        );
+        assert_eq!(snapshot.problem, None);
+        let names: Vec<&str> = snapshot.stacks.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["services", "themes"]);
+        let web = snapshot.file_of(&root.join("services/web.crod")).unwrap();
+        let dark = snapshot.file_of(&root.join("themes/dark.crod")).unwrap();
+        let light = snapshot.file_of(&light).unwrap();
+        assert_eq!(snapshot.stack_of(web).unwrap().name, "services");
+        assert_eq!(snapshot.stack_of(dark).unwrap().name, "themes");
+        assert_eq!(
+            snapshot.schema_for(Some(web)).unwrap().file.root,
+            "app::Services"
+        );
+        assert_eq!(
+            snapshot.schema_for(Some(dark)).unwrap().file.root,
+            "app::Themes"
+        );
+        // The data of each stack is its own.
+        let keys = |file| {
+            let crol_eval::ValueKind::Keyed(keyed) = &snapshot.data_of(file).unwrap().kind else {
+                panic!()
+            };
+            keyed
+                .entries
+                .keys()
+                .map(|k| k.to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(keys(web), ["web"]);
+        assert_eq!(keys(dark), ["dark"]);
+        // Each is checked against its own schema; a value document against
+        // the schema of the stack whose `files` match it.
+        let errors: Vec<_> = (snapshot.stacks.iter())
+            .flat_map(|s| &s.evaluation.diagnostics)
+            .chain(&snapshot.extra)
+            .filter(|d| d.is_error())
+            .map(|d| d.span.file)
+            .collect();
+        assert_eq!(errors, [dark, light], "{:?}", snapshot.extra);
         let _ = std::fs::remove_dir_all(&root);
     }
 

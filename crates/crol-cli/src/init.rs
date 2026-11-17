@@ -18,6 +18,14 @@ Project {
     // `dir` is a module path from this file: `data::base` is the directory `data/base`.
     layers: List([{ name: "base", dir: "data::base", .. }]),
 
+    // Data of unrelated kinds, such as themes and screens, can each have their own
+    // layers and schema, one generated per kind: put them in `stacks` instead of
+    // `layers` and `schema`, and choose one with `crol eval --stack theme`.
+    // stacks: {
+    //     theme: { layers: List([{ name: "base", dir: "themes", .. }]), schema: Some("crol::theme_schema"), .. },
+    //     ui: { layers: List([{ name: "base", dir: "ui", .. }]), schema: Some("crol::ui_schema"), .. },
+    // },
+
     // Variants of the data, such as `[Grouped(["dev", "prod"]), Discrete("cache")]`.
     variants: [],
 

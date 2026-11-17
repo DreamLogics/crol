@@ -39,6 +39,18 @@ pub(crate) fn argument(arguments: &[String]) -> Option<&Path> {
     }
 }
 
+/// The value documents the arguments give, for `crol check`: one or more
+/// `.crol` files and nothing else, each checked on its own, in its own
+/// stack (`SPEC.md` 11, 12.4).
+pub(crate) fn arguments(arguments: &[String]) -> Option<Vec<&Path>> {
+    let documents: Vec<&Path> = arguments
+        .iter()
+        .filter(|one| Mode::of(one) == Some(Mode::Value) && !is_named(one))
+        .map(Path::new)
+        .collect();
+    (!documents.is_empty() && documents.len() == arguments.len()).then_some(documents)
+}
+
 /// Whether a layer argument is written `name=source`.
 fn is_named(argument: &str) -> bool {
     argument
@@ -194,38 +206,48 @@ fn expected(path: &Path, text: &str, args: &InputArgs) -> Result<Expected, Strin
 }
 
 /// What the project's `files` say of a document that says nothing itself:
-/// the project's schema and options, with the type of the first glob that
-/// matches. Nothing, if none does (`SPEC.md` 12.4).
+/// the schema and options of the stack whose `files` match it, with the
+/// type of its first glob that matches; with `--stack`, of that stack only.
+/// Nothing, if none does (`SPEC.md` 12.4).
 fn project_files(project_path: &Path, path: &Path, args: &InputArgs) -> Result<Expected, String> {
     let project = Project::read(project_path).map_err(|e| e.to_string())?;
     let dir = crol::directory_of(project_path);
-    let Some(type_name) = project.file_type(dir, path) else {
+    let found = match args.stack() {
+        Some(name) => {
+            let stack = project.stack(name).map_err(|e| e.to_string())?;
+            stack
+                .file_type(dir, path)
+                .map(|type_name| (name, stack, type_name))
+        }
+        None => project.file_stack(dir, path),
+    };
+    let Some((name, stack, type_name)) = found else {
         return Ok(Expected::default());
+    };
+    let (of_stack, owner) = match project.stacks.len() {
+        1 => (String::new(), "project"),
+        _ => (format!(" of the stack `{name}`"), "stack"),
     };
     let named = || {
         format!(
-            "{}: `files` gives {} the type `{type_name}`",
+            "{}: `files`{of_stack} gives {} the type `{type_name}`",
             project_path.display(),
             path.display()
         )
     };
-    let schema = project
+    let schema = stack
         .schema_path(dir, !args.offline())
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("{}, and the project has no schema", named()))?;
+        .ok_or_else(|| format!("{}, and the {owner} has no schema", named()))?;
     let schema = SchemaFile::read(schema).map_err(|e| e.to_string())?;
     let root = schema
         .type_path(type_name)
         .ok_or_else(|| format!("{}, which the schema does not have", named()))?
         .to_owned();
-    let mut options = CheckOptions::default();
-    options.implicit_some = project.options.implicit_some;
-    options.allow_unknown_fields = project.options.allow_unknown_fields;
-    options.require_complete = project.options.require_complete;
     Ok(Expected {
         schema: Some(schema),
         root: Some(root),
-        options,
+        options: stack.options.check_options(),
     })
 }
 

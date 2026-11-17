@@ -129,6 +129,31 @@ document.
 If you would rather have a flag than a test, `crol::schema::write::<T>(path)`
 writes the file unconditionally, for an `--export-schema` option of your own.
 
+### Several schemas
+
+A project whose data comes in unrelated kinds, such as themes and UI definitions,
+has a [layer stack](projects.md#several-layer-stacks) for each, and a schema for
+each stack, from its own root type. Generate each with its own `check_file`, and
+commit them all:
+
+```rust,ignore
+// tests/schema.rs
+#[test]
+fn theme_schema() {
+    crol::schema::check_file::<app::Theme>("crol/theme_schema.crol").unwrap();
+}
+
+#[test]
+fn ui_schema() {
+    crol::schema::check_file::<app::Screen>("crol/ui_schema.crol").unwrap();
+}
+```
+
+Each stack names its own in `project.crol`, and a crate can
+[publish several](#remote-schemas). Your program already builds one
+`CrolComposer` for each kind of data, and gives each its schema, so nothing changes
+there.
+
 ### Attributes
 
 Serde's attributes are understood: `rename`, `rename_all`, `alias`, `default`,
@@ -334,6 +359,26 @@ in this order:
 1. the current Cargo workspace and its dependencies;
 2. the local Cargo registry cache (`~/.cargo/registry/src`);
 3. crates.io, taking the highest matching version.
+
+**Several schemas from a crate.** A crate can publish more than one schema, and
+`#` after the version picks one, by name or by path. Names come from `schemas`, next
+to the default:
+
+```toml
+[package.metadata.crol]
+schema = "crol/schema.crol"                                   # crate:fleet@2.1
+schemas = { theme = "crol/theme.crol", ui = "crol/ui.crol" }  # crate:fleet@2.1#theme
+```
+
+```crol
+#![schema("crate:fleet@2.1#theme")]              // the name `theme` in the metadata
+#![schema("crate:fleet@2.1#crol/theme.crol")]    // the file at that path in the package
+```
+
+What follows `#` is a path if it ends in `.crol`, and a name otherwise. A name lets
+the crate move the file without breaking its users; a path works for any crate
+that ships the file, with or without the metadata. A URL already points at one
+file, so it needs nothing of the kind.
 
 `crate:crol` is built in: it is the schema of CROL's own schema files. `crol
 check` and your editor check a schema file against it without looking anything

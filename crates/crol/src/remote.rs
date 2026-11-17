@@ -33,6 +33,108 @@ const USER_AGENT: &str = concat!(
     " (https://github.com/DreamLogics/crol)"
 );
 
+/// Which of a crate's schemas a `crate:` source names, by what follows `#`
+/// (`SPEC.md` 4.1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Pick {
+    /// No `#`: the one `schema` names, or [`DEFAULT_SCHEMA`].
+    Default,
+    /// `#theme`: the one `schemas` names `theme`.
+    Name(String),
+    /// `#crol/theme.crol`: the file at that path in the package.
+    Path(PathBuf),
+}
+
+impl Pick {
+    /// What follows `#`, if anything: a path if it ends in `.crol`, a name
+    /// otherwise.
+    fn parse(text: Option<&str>) -> Result<Self, Error> {
+        let Some(text) = text else {
+            return Ok(Self::Default);
+        };
+        if text.ends_with(".crol") {
+            return Ok(Self::Path(package_path(text, || format!("`#{text}`"))?));
+        }
+        let valid = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
+        if text.is_empty() || !text.chars().all(valid) {
+            return Err(Error::new(format!(
+                "schema: `#{text}` is neither a schema name nor a path ending in `.crol`"
+            )));
+        }
+        Ok(Self::Name(text.to_owned()))
+    }
+
+    /// The directory below the cache's `crates` that a downloaded schema of
+    /// this pick is cached in.
+    fn cache_dir(&self, crates: &Path) -> PathBuf {
+        match self {
+            Self::Default => crates.to_path_buf(),
+            Self::Name(name) => crates.join(format!("name-{name}")),
+            Self::Path(path) => {
+                let path = path.to_string_lossy().replace('\\', "/");
+                let hash = blake3::hash(path.as_bytes()).to_hex();
+                crates.join(format!("path-{}", &hash[..16]))
+            }
+        }
+    }
+}
+
+/// What a crate's `[package.metadata.crol]` table says, from TOML or from
+/// `cargo metadata`.
+struct Table {
+    /// `schema`: the default schema.
+    schema: Option<String>,
+    /// `schemas`: schemas by name.
+    schemas: Vec<(String, String)>,
+}
+
+impl Table {
+    fn from_toml(table: &toml::Value) -> Self {
+        let schemas = table.get("schemas").and_then(toml::Value::as_table);
+        Self {
+            schema: table
+                .get("schema")
+                .and_then(|s| s.as_str())
+                .map(str::to_owned),
+            schemas: (schemas.into_iter().flatten())
+                .filter_map(|(name, path)| Some((name.clone(), path.as_str()?.to_owned())))
+                .collect(),
+        }
+    }
+
+    fn from_json(table: &serde_json::Value) -> Self {
+        let schemas = table.get("schemas").and_then(serde_json::Value::as_object);
+        Self {
+            schema: table
+                .get("schema")
+                .and_then(|s| s.as_str())
+                .map(str::to_owned),
+            schemas: (schemas.into_iter().flatten())
+                .filter_map(|(name, path)| Some((name.clone(), path.as_str()?.to_owned())))
+                .collect(),
+        }
+    }
+}
+
+/// A path in a package, as Cargo writes it: relative, and inside it.
+fn package_path(text: &str, what: impl Fn() -> String) -> Result<PathBuf, Error> {
+    let path = PathBuf::from(text);
+    Mode::Value
+        .check_path(&path)
+        .map_err(|e| Error::new(format!("schema: {}: {e}", what())))?;
+    if !path
+        .components()
+        .all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
+    {
+        return Err(Error::new(format!(
+            "schema: {} names a schema outside its package: `{}`",
+            what(),
+            path.display()
+        )));
+    }
+    Ok(path)
+}
+
 /// Where schemas are cached and Cargo keeps its registry.
 pub(crate) struct Dirs {
     pub(crate) cache: PathBuf,
@@ -294,6 +396,11 @@ async fn krate(
     dirs: &Dirs,
     http: &impl Http,
 ) -> Result<PathBuf, Error> {
+    let (spec, pick) = match spec.split_once('#') {
+        Some((spec, pick)) => (spec, Some(pick)),
+        None => (spec, None),
+    };
+    let pick = Pick::parse(pick)?;
     let (name, req) = spec.split_once('@').unwrap_or((spec, "*"));
     let valid = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
     if name.is_empty() || name.len() > 64 || !name.chars().all(valid) {
@@ -302,7 +409,7 @@ async fn krate(
     let req = VersionReq::parse(req)
         .map_err(|e| Error::new(format!("schema: `{req}` is not a version requirement: {e}")))?;
     let own = Version::parse(env!("CARGO_PKG_VERSION")).expect("crol's version");
-    if same_name(name, "crol") && req.matches(&own) {
+    if same_name(name, "crol") && req.matches(&own) && pick == Pick::Default {
         let path = dirs.cache.join("crates").join(format!("crol-{own}.crol"));
         // A build of this version may have written another schema, so what
         // is there counts only if it is this one.
@@ -312,13 +419,13 @@ async fn krate(
         }
         return Ok(path);
     }
-    if let Some(found) = in_workspace(name, &req, dir) {
+    if let Some(found) = in_workspace(name, &req, &pick, dir) {
         return found;
     }
-    if let Some(found) = in_registry_cache(name, &req, dirs) {
+    if let Some(found) = in_registry_cache(name, &req, &pick, dirs) {
         return found;
     }
-    from_crates_io(name, &req, fetch, dirs, http).await
+    from_crates_io(name, &req, &pick, fetch, dirs, http).await
 }
 
 /// Cargo treats `-` and `_` in crate names as the same.
@@ -331,7 +438,12 @@ fn same_name(a: &str, b: &str) -> bool {
 
 /// The schema of the highest matching package `cargo metadata` lists, for
 /// a directory in a Cargo workspace.
-fn in_workspace(name: &str, req: &VersionReq, dir: &Path) -> Option<Result<PathBuf, Error>> {
+fn in_workspace(
+    name: &str,
+    req: &VersionReq,
+    pick: &Pick,
+    dir: &Path,
+) -> Option<Result<PathBuf, Error>> {
     // A relative path has no ancestors above where it starts.
     let dir = std::path::absolute(current_if_empty(dir)).ok()?;
     if !dir.ancestors().any(|d| d.join("Cargo.toml").is_file()) {
@@ -362,13 +474,17 @@ fn in_workspace(name: &str, req: &VersionReq, dir: &Path) -> Option<Result<PathB
         })
         .max_by(|a, b| a.0.cmp(&b.0))?;
     let package_dir = Path::new(package["manifest_path"].as_str()?).parent()?;
-    let table = package["metadata"].get("crol");
-    let schema = table.map(|t| t.get("schema").and_then(|s| s.as_str()));
-    Some(schema_path(name, &version, schema).map(|p| package_dir.join(p)))
+    let table = package["metadata"].get("crol").map(Table::from_json);
+    Some(schema_path(name, &version, table, pick).map(|p| package_dir.join(p)))
 }
 
 /// The schema of the highest matching version in `~/.cargo/registry/src`.
-fn in_registry_cache(name: &str, req: &VersionReq, dirs: &Dirs) -> Option<Result<PathBuf, Error>> {
+fn in_registry_cache(
+    name: &str,
+    req: &VersionReq,
+    pick: &Pick,
+    dirs: &Dirs,
+) -> Option<Result<PathBuf, Error>> {
     let src = dirs.cargo_home.as_ref()?.join("registry").join("src");
     let mut best: Option<(Version, PathBuf)> = None;
     for registry in std::fs::read_dir(src).ok()?.flatten() {
@@ -399,47 +515,67 @@ fn in_registry_cache(name: &str, req: &VersionReq, dirs: &Dirs) -> Option<Result
         Ok(text) => text,
         Err(e) => return Some(Err(Error::new(format!("schema: {}: {e}", dir.display())))),
     };
-    Some(manifest_schema(name, &version, &manifest).map(|p| dir.join(p)))
+    Some(manifest_schema(name, &version, &manifest, pick).map(|p| dir.join(p)))
 }
 
 /// The schema path in a crate's `Cargo.toml`.
-fn manifest_schema(name: &str, version: &Version, manifest: &str) -> Result<PathBuf, Error> {
+fn manifest_schema(
+    name: &str,
+    version: &Version,
+    manifest: &str,
+    pick: &Pick,
+) -> Result<PathBuf, Error> {
     let manifest: toml::Table = toml::from_str(manifest)
         .map_err(|e| Error::new(format!("schema: the manifest of `{name}` {version}: {e}")))?;
     let table = manifest
         .get("package")
         .and_then(|p| p.get("metadata"))
-        .and_then(|m| m.get("crol"));
-    let schema = table.map(|t| t.get("schema").and_then(|s| s.as_str()));
-    schema_path(name, version, schema)
+        .and_then(|m| m.get("crol"))
+        .map(Table::from_toml);
+    schema_path(name, version, table, pick)
 }
 
-/// The schema path a crate's `[package.metadata.crol]` table gives:
-/// `None` without the table, `Some(None)` for its default.
+/// The path in the package of the schema `pick` names, by a crate's
+/// `[package.metadata.crol]` table, if it has one. A path needs none.
 fn schema_path(
     name: &str,
     version: &Version,
-    table: Option<Option<&str>>,
+    table: Option<Table>,
+    pick: &Pick,
 ) -> Result<PathBuf, Error> {
-    let Some(schema) = table else {
-        return Err(Error::new(format!(
-            "schema: `{name}` {version} publishes no schema; it has no `[package.metadata.crol]`"
-        )));
+    let what = || format!("`{name}` {version}");
+    let path = match (pick, table) {
+        (Pick::Path(path), _) => return Ok(path.clone()),
+        (_, None) => {
+            return Err(Error::new(format!(
+                "schema: {} publishes no schema; it has no `[package.metadata.crol]`",
+                what()
+            )));
+        }
+        (Pick::Default, Some(table)) => table.schema.unwrap_or_else(|| DEFAULT_SCHEMA.to_owned()),
+        (Pick::Name(wanted), Some(table)) => {
+            let found = table.schemas.iter().find(|(n, _)| n == wanted);
+            match found {
+                Some((_, path)) => path.clone(),
+                None => {
+                    let names: Vec<String> = table
+                        .schemas
+                        .iter()
+                        .map(|(n, _)| format!("`{n}`"))
+                        .collect();
+                    let named = match names.is_empty() {
+                        true => "it names none in `schemas`".to_owned(),
+                        false => format!("it names {}", names.join(", ")),
+                    };
+                    return Err(Error::new(format!(
+                        "schema: {} has no schema called `{wanted}`; {named}",
+                        what()
+                    )));
+                }
+            }
+        }
     };
-    let path = PathBuf::from(schema.unwrap_or(DEFAULT_SCHEMA));
-    Mode::Value
-        .check_path(&path)
-        .map_err(|e| Error::new(format!("schema: `{name}` {version}: {e}")))?;
-    if !path
-        .components()
-        .all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
-    {
-        return Err(Error::new(format!(
-            "schema: `{name}` {version} names a schema outside its package: `{}`",
-            path.display()
-        )));
-    }
-    Ok(path)
+    package_path(&path, what)
 }
 
 /// The schema of the highest matching version on crates.io, downloaded
@@ -447,11 +583,12 @@ fn schema_path(
 async fn from_crates_io(
     name: &str,
     req: &VersionReq,
+    pick: &Pick,
     fetch: bool,
     dirs: &Dirs,
     http: &impl Http,
 ) -> Result<PathBuf, Error> {
-    let cache = dirs.cache.join("crates");
+    let cache = pick.cache_dir(&dirs.cache.join("crates"));
     let mut failed = None;
     if fetch {
         match index_versions(name, http).await {
@@ -469,7 +606,7 @@ async fn from_crates_io(
                 if path.is_file() {
                     return Ok(path);
                 }
-                match download(&name, &version, http).await {
+                match download(&name, &version, pick, http).await {
                     Ok(text) => {
                         write(&path, &text)?;
                         return Ok(path);
@@ -541,21 +678,27 @@ async fn index_versions(name: &str, http: &impl Http) -> Result<Vec<(String, Ver
 }
 
 /// Downloads a crate and takes its schema out.
-async fn download(name: &str, version: &Version, http: &impl Http) -> Result<Vec<u8>, Error> {
+async fn download(
+    name: &str,
+    version: &Version,
+    pick: &Pick,
+    http: &impl Http,
+) -> Result<Vec<u8>, Error> {
     let url = format!("https://static.crates.io/crates/{name}/{name}-{version}.crate");
     let packed = http
         .get(&url, MAX_CRATE)
         .await
         .map_err(|e| Error::new(format!("schema: cannot download `{name}` {version}: {e}")))?;
-    schema_in_package(name, version, &packed)
+    schema_in_package(name, version, &packed, pick)
 }
 
-/// A packaged crate's schema: the file its `Cargo.toml` names. Nothing is
-/// unpacked to disk.
-pub(crate) fn schema_in_package(
+/// A packaged crate's schema: the file `pick` names, by its `Cargo.toml`
+/// unless it is a path. Nothing is unpacked to disk.
+fn schema_in_package(
     name: &str,
     version: &Version,
     packed: &[u8],
+    pick: &Pick,
 ) -> Result<Vec<u8>, Error> {
     let root = PathBuf::from(format!("{name}-{version}"));
     let broken = |e: std::io::Error| {
@@ -584,8 +727,13 @@ pub(crate) fn schema_in_package(
             "schema: the package of `{name}` {version} has no `{file}`"
         ))
     };
-    let manifest = find(&root.join("Cargo.toml"))?.ok_or_else(|| missing("Cargo.toml"))?;
-    let schema = manifest_schema(name, version, &String::from_utf8_lossy(&manifest))?;
+    let schema = match pick {
+        Pick::Path(path) => path.clone(),
+        _ => {
+            let manifest = find(&root.join("Cargo.toml"))?.ok_or_else(|| missing("Cargo.toml"))?;
+            manifest_schema(name, version, &String::from_utf8_lossy(&manifest), pick)?
+        }
+    };
     find(&root.join(&schema))?.ok_or_else(|| missing(&schema.to_string_lossy()))
 }
 
@@ -743,18 +891,104 @@ mod tests {
         };
         add("app-1.2.3/src/lib.rs", "");
         add("app-1.2.3/schema/app.crol", "Schema {}");
+        add("app-1.2.3/schema/theme.crol", "Schema { theme }");
+        add("app-1.2.3/other.crol", "Schema { other }");
         add(
             "app-1.2.3/Cargo.toml",
-            "[package]\nname = \"app\"\n[package.metadata.crol]\nschema = \"schema/app.crol\"\n",
+            "[package]\nname = \"app\"\n[package.metadata.crol]\nschema = \"schema/app.crol\"\nschemas = { theme = \"schema/theme.crol\" }\n",
         );
         let tar = tar.into_inner().unwrap();
         let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
         gz.write_all(&tar).unwrap();
         let packed = gz.finish().unwrap();
+        let schema =
+            |pick| schema_in_package("app", &version, &packed, &Pick::parse(pick).unwrap());
+        assert_eq!(schema(None).unwrap(), b"Schema {}");
+        assert_eq!(schema(Some("theme")).unwrap(), b"Schema { theme }");
+        assert_eq!(schema(Some("other.crol")).unwrap(), b"Schema { other }");
         assert_eq!(
-            schema_in_package("app", &version, &packed).unwrap(),
-            b"Schema {}"
+            schema(Some("ui")).unwrap_err().message(),
+            "schema: `app` 1.2.3 has no schema called `ui`; it names `theme`"
         );
-        assert!(schema_in_package("app", &version, b"not a package").is_err());
+        assert_eq!(
+            schema(Some("ui.crol")).unwrap_err().message(),
+            "schema: the package of `app` 1.2.3 has no `ui.crol`"
+        );
+        assert!(schema_in_package("app", &version, b"not a package", &Pick::Default).is_err());
+    }
+
+    #[test]
+    fn a_crate_publishes_several_schemas() {
+        let dirs = dirs("several");
+        let src = dirs
+            .cargo_home
+            .as_ref()
+            .unwrap()
+            .join("registry/src/index.crates.io-1");
+        let dir = src.join("fleet-2.1.0");
+        file(
+            &dir.join("Cargo.toml"),
+            "[package]\nname = \"fleet\"\n\n[package.metadata.crol]\nschemas = { theme = \"crol/theme.crol\", ui = \"crol/ui.crol\" }\n",
+        );
+        file(&dir.join("crol/schema.crol"), "");
+        file(&dir.join("crol/theme.crol"), "");
+        let bare = src.join("bare-1.0.0");
+        file(&bare.join("Cargo.toml"), "[package]\nname = \"bare\"\n");
+        let resolve = |source| block_on(resolve_in(source, &outside(), false, &dirs, &Offline));
+        assert_eq!(
+            resolve("crate:fleet@2.1").unwrap(),
+            dir.join("crol/schema.crol")
+        );
+        assert_eq!(
+            resolve("crate:fleet@2.1#theme").unwrap(),
+            dir.join("crol/theme.crol")
+        );
+        assert_eq!(resolve("crate:fleet#ui").unwrap(), dir.join("crol/ui.crol"));
+        assert_eq!(
+            resolve("crate:fleet@2.1#crol/theme.crol").unwrap(),
+            dir.join("crol/theme.crol")
+        );
+        // A path needs no metadata.
+        assert_eq!(
+            resolve("crate:bare#a/b.crol").unwrap(),
+            bare.join("a/b.crol")
+        );
+        assert_eq!(
+            resolve("crate:fleet#menu").unwrap_err().message(),
+            "schema: `fleet` 2.1.0 has no schema called `menu`; it names `theme`, `ui`"
+        );
+        assert_eq!(
+            resolve("crate:bare#theme").unwrap_err().message(),
+            "schema: `bare` 1.0.0 publishes no schema; it has no `[package.metadata.crol]`"
+        );
+        for (source, message) in [
+            (
+                "crate:fleet#",
+                "`#` is neither a schema name nor a path ending in `.crol`",
+            ),
+            (
+                "crate:fleet#a.crod",
+                "`#a.crod` is neither a schema name nor a path ending in `.crol`",
+            ),
+            (
+                "crate:fleet#../a.crol",
+                "`#../a.crol` names a schema outside its package",
+            ),
+            (
+                "crate:fleet#/a.crol",
+                "`#/a.crol` names a schema outside its package",
+            ),
+        ] {
+            let error = resolve(source).unwrap_err();
+            assert!(error.message().contains(message), "{source}: {error}");
+        }
+        assert_ne!(
+            Pick::parse(Some("theme"))
+                .unwrap()
+                .cache_dir(Path::new("c")),
+            Pick::parse(Some("a/theme.crol"))
+                .unwrap()
+                .cache_dir(Path::new("c")),
+        );
     }
 }
