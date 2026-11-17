@@ -558,6 +558,59 @@ impl Project {
         }
     }
 
+    /// The errors for the `#![extends(...)]` of the document at `document`,
+    /// with `text`, that name a file of another stack's layers, if the
+    /// document is in the layers of `stack`, for a project in `dir`: each
+    /// with where its module path is written. A stack's layers extend only
+    /// files of their own or of no stack (`SPEC.md` 12.4).
+    pub fn cross_stack_extends(
+        &self,
+        dir: &Path,
+        stack: &str,
+        document: &Path,
+        text: &str,
+    ) -> Vec<(crol_syntax::TextRange, String)> {
+        if self.stacks.len() < 2 {
+            return Vec::new();
+        }
+        let attributes = crate::compose::extends_attributes(text);
+        if attributes.is_empty() || self.layer_stack(dir, document).ok().flatten() != Some(stack) {
+            return Vec::new();
+        }
+        let base = crate::module_path::current_if_empty(dir);
+        let mut found = Vec::new();
+        for (written, range) in attributes {
+            let (mut at, rest) = match written.strip_prefix("::") {
+                Some(rest) => (base.to_path_buf(), rest),
+                None => (
+                    document
+                        .parent()
+                        .map_or_else(|| base.to_path_buf(), Path::to_path_buf),
+                    written.as_str(),
+                ),
+            };
+            for segment in rest.split("::") {
+                match segment {
+                    "super" => {
+                        at.pop();
+                    }
+                    name => at.push(name),
+                }
+            }
+            if let Ok(Some(other)) = self.layer_stack(dir, &at)
+                && other != stack
+            {
+                found.push((
+                    range,
+                    format!(
+                        "extends: `{written}` is in the layers of the stack `{other}`; the layers of `{stack}` extend only files of their own stack"
+                    ),
+                ));
+            }
+        }
+        found
+    }
+
     /// The declared variants.
     pub fn variants(&self) -> Result<crol_eval::Variants, Error> {
         let mut variants = crol_eval::Variants::new();
@@ -1089,6 +1142,45 @@ mod tests {
             assert_eq!(stack("themes/user"), Some("theme"), "{dir:?}");
             assert_eq!(stack("other"), None, "{dir:?}");
         }
+    }
+
+    #[test]
+    fn a_stack_extends_only_its_own_files() {
+        let project = Project::from_text("project.crol", STACKS).unwrap();
+        let dir = Path::new("/p");
+        let dark = dir.join("themes/user/dark.crod");
+        let found = |text: &str| -> Vec<String> {
+            (project
+                .cross_stack_extends(dir, "theme", &dark, text)
+                .into_iter())
+            .map(|(_, message)| message)
+            .collect()
+        };
+        let wanted = |written: &str| {
+            format!(
+                "extends: `{written}` is in the layers of the stack `ui`; the layers of `theme` extend only files of their own stack"
+            )
+        };
+        for written in ["::ui", "::ui::screens::start", "super::super::ui"] {
+            let text = format!("#![extends({written})]\n");
+            assert_eq!(found(&text), [wanted(written)], "{written}");
+        }
+        // Its own stack's files, and those of no stack.
+        for written in ["light", "super::base::colors", "::shared::colors"] {
+            let text = format!("#![extends({written})]\n");
+            assert_eq!(found(&text), Vec::<String>::new(), "{written}");
+        }
+        // Only a document of that stack is asked about.
+        let text = "#![extends(::ui)]\n";
+        let other = dir.join("shared/a.crod");
+        assert!(
+            project
+                .cross_stack_extends(dir, "theme", &other, text)
+                .is_empty()
+        );
+        // The range is that of the module path.
+        let (range, _) = project.cross_stack_extends(dir, "theme", &dark, text)[0].clone();
+        assert_eq!(&text[range], "::ui");
     }
 
     #[test]

@@ -884,6 +884,28 @@ fn layers_given_choose_their_stack() {
 }
 
 #[test]
+fn an_extends_into_another_stack_is_an_error() {
+    let dir = stacks_tree(
+        "stacks-extends",
+        &[(
+            "themes/dark.crod",
+            "#![extends(::services::web)]\n\n+dark: Theme { color: \"black\" }\n",
+        )],
+    );
+    let output = crol(&dir, &["check"]);
+    assert!(failed(&output), "{output:?}");
+    let text = stderr(&output);
+    assert!(
+        text.contains("extends: `::services::web` is in the layers of the stack `services`; the layers of `themes` extend only files of their own stack"),
+        "{text}"
+    );
+    assert!(text.contains("dark.crod:1:"), "{text}");
+    // The stack it reaches into is fine on its own.
+    let output = crol(&dir, &["check", "--stack", "services"]);
+    assert!(output.status.success(), "{output:?}");
+}
+
+#[test]
 fn a_layer_file_named_by_module_path_chooses_its_stack() {
     let project = STACKS_PROJECT.replace(r#"dir: "services""#, r#"dir: "web""#);
     let dir = stacks_tree(

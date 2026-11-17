@@ -134,6 +134,8 @@ pub struct StackSnapshot {
     pub root_type: Option<String>,
     /// What checking against the schema takes of the stack's options.
     check: CheckOptions,
+    /// The files of the layers the stack lists, not those `extends` brings in.
+    listed: HashSet<FileId>,
 }
 
 impl StackSnapshot {
@@ -151,6 +153,7 @@ impl StackSnapshot {
             schema: None,
             root_type: None,
             check: CheckOptions::default(),
+            listed: HashSet::new(),
         }
     }
 
@@ -297,9 +300,14 @@ impl DocumentSchema<'_> {
 }
 
 impl Snapshot {
-    /// The stack whose layers hold the file, if any does.
+    /// The stack whose layers hold the file, if any does: first one that
+    /// lists it in its own layers, then one that `extends` brought it into.
     pub fn stack_of(&self, file: FileId) -> Option<&StackSnapshot> {
-        self.stacks.iter().find(|stack| stack.holds(file))
+        (self
+            .stacks
+            .iter()
+            .find(|stack| stack.listed.contains(&file)))
+        .or_else(|| self.stacks.iter().find(|stack| stack.holds(file)))
     }
 
     /// The stack of a file, for a file in one; with no file, the first
@@ -1364,7 +1372,7 @@ fn load_project(
                 let found = load_stack(
                     snapshot,
                     &mut loaded,
-                    (project_path, &dir, project.stacks.len() > 1),
+                    (project_path, &dir, &project),
                     stack,
                     options,
                     open,
@@ -1409,7 +1417,7 @@ fn data_options(
 fn load_stack(
     snapshot: &mut Snapshot,
     loaded: &mut StackSnapshot,
-    (project_path, dir, several): (&Path, &Path, bool),
+    (project_path, dir, project): (&Path, &Path, &Project),
     stack: &crol::project::ProjectStack,
     options: DataOptions,
     open: &Buffers,
@@ -1475,17 +1483,33 @@ fn load_stack(
     for (index, read_only) in &listed {
         for file in layer_files(*index) {
             extended.remove(&file);
+            loaded.listed.insert(file);
             if *read_only {
                 snapshot.read_only.insert(file);
             }
         }
     }
+    // A file of another stack's layers, which it should not extend, gets
+    // its diagnostics there.
     extended.retain(|file| {
-        snapshot
-            .path(*file)
-            .is_none_or(|path| !open.contains_key(path))
+        let Some(path) = snapshot.path(*file) else {
+            return true;
+        };
+        let elsewhere = project.layer_stack(&dir, path).ok().flatten();
+        !open.contains_key(path) && elsewhere.is_none_or(|other| other == loaded.name)
     });
     snapshot.read_only.extend(extended);
+    // A stack extends only its own files (`SPEC.md` 12.4).
+    for file in loaded.listed.iter().copied().collect::<Vec<_>>() {
+        let Some(path) = snapshot.path(file).map(Path::to_path_buf) else {
+            continue;
+        };
+        let text = snapshot.sources.file(file).text();
+        for (range, message) in project.cross_stack_extends(&dir, &loaded.name, &path, text) {
+            let span = crol_eval::Span::new(file, range);
+            snapshot.extra.push(Diagnostic::error(span, message));
+        }
+    }
     let mut found = snapshot.followed(loads, layers);
     for extends in &mut found {
         // Only what is no layer of the stack is brought in by `extends`.
@@ -1512,7 +1536,7 @@ fn load_stack(
         let files: Vec<FileId> = (loaded.layers.iter())
             .flat_map(|l| l.documents.iter().map(|(_, file)| *file))
             .collect();
-        let used = match several {
+        let used = match project.stacks.len() > 1 {
             true => format!("that of the stack `{}`", loaded.name),
             false => "the project's".to_owned(),
         };
@@ -1615,6 +1639,68 @@ mod tests {
     }},
 }}"#
         )
+    }
+
+    #[test]
+    fn an_extends_into_another_stack_is_an_error_there() {
+        let root = directory("stacks-extends");
+        let project = r#"Project {
+    stacks: {
+        services: { layers: List([{ name: "base", dir: "services", .. }]), schema: Some("service_schema"), .. },
+        themes: { layers: List([{ name: "base", dir: "themes", .. }]), schema: Some("theme_schema"), .. },
+    },
+    ..
+}"#;
+        let files = [
+            ("project.crol", project.to_owned()),
+            (
+                "service_schema.crol",
+                one_field_schema("Service", "replicas", "U32"),
+            ),
+            (
+                "theme_schema.crol",
+                one_field_schema("Theme", "color", "String"),
+            ),
+            (
+                "services/web.crod",
+                "+web: Service { replicas: -1 }\n".to_owned(),
+            ),
+            (
+                "themes/dark.crod",
+                "#![extends(::services::web)]\n\n+dark: Theme { color: \"black\" }\n".to_owned(),
+            ),
+        ];
+        for (path, text) in &files {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        let snapshot = evaluate(
+            Some(&root),
+            &Settings::default(),
+            &HashMap::new(),
+            None,
+            &RemoteStatus::new(),
+            &Binaries::default(),
+        );
+        let web = snapshot.file_of(&root.join("services/web.crod")).unwrap();
+        let dark = snapshot.file_of(&root.join("themes/dark.crod")).unwrap();
+        let on = |file| -> Vec<String> {
+            (snapshot.stacks.iter())
+                .flat_map(|s| &s.evaluation.diagnostics)
+                .chain(&snapshot.extra)
+                .filter(|d| d.is_error() && d.span.file == file)
+                .map(|d| d.message.clone())
+                .collect()
+        };
+        let wanted = "extends: `::services::web` is in the layers of the stack `services`; the layers of `themes` extend only files of their own stack";
+        assert!(on(dark).iter().any(|m| m == wanted), "{:?}", on(dark));
+        // The file it reaches into is still its own stack's, with its
+        // diagnostics.
+        assert_eq!(snapshot.stack_of(web).unwrap().name, "services");
+        assert!(!snapshot.is_read_only(web));
+        assert!(on(web).iter().any(|m| m.contains("-1")), "{:?}", on(web));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -214,7 +214,10 @@ go in each stack instead; `variants` and `parents` stay at the top, for every st
 directories and the `.crol` files its `files` match. A file that two stacks would
 claim, because their globs could match the same file or one layer directory holds
 another's, is an error in `project.crol`, reported at both places. Within one
-stack, globs may overlap, and the first that matches decides, as before.
+stack, globs may overlap, and the first that matches decides, as before. For the
+same reason, a stack's documents cannot `#![extends(...)]` a file of another
+stack's layers: that is an error at the attribute. Shared defaults that both
+need go in a directory that is no stack's layer, which either can extend.
 
 **Commands work out the stack.** `crol check` checks every stack, one after the
 other, and `crol check config/theme_dark.crol` checks that file in the stack whose

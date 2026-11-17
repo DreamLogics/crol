@@ -117,8 +117,8 @@ pub(crate) struct Inputs {
     /// The type of root values, if the project names one.
     pub(crate) root: Option<String>,
     pub(crate) check: CheckOptions,
-    /// Warnings about the inputs, such as documents that name another
-    /// schema.
+    /// What is wrong with the inputs: warnings, such as for documents that
+    /// name another schema, and errors for an `extends` into another stack.
     pub(crate) warnings: Vec<Diagnostic>,
 }
 
@@ -454,6 +454,18 @@ pub(crate) fn inputs(
                         )
                     {
                         warnings.push(Diagnostic::warning(Span::new(file, range), message));
+                    }
+                    // A stack extends only its own files (`SPEC.md` 12.4).
+                    if let (Some(project), Some(stack)) = (&project, stack_name) {
+                        let found = project.cross_stack_extends(
+                            &project_dir,
+                            stack,
+                            Path::new(display),
+                            text,
+                        );
+                        for (range, message) in found {
+                            warnings.push(Diagnostic::error(Span::new(file, range), message));
+                        }
                     }
                     (relative.to_owned(), file)
                 })

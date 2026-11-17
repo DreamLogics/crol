@@ -16,7 +16,8 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
   `files`, checked and composed on its own, so that themes and UI definitions, say,
   get schemas of their own. A project with `layers` at the top is one stack,
   `default`. A file that two stacks could claim, by their globs or layer
-  directories, is an error at both. `crol check` checks every stack, and a `.crol`
+  directories, is an error at both, and so is an `#![extends(...)]` from one
+  stack's layers into another's. `crol check` checks every stack, and a `.crol`
   file in the stack whose `files` match it; `crol eval` and the other commands stop
   and list the stacks unless `--stack` names one or the layers given are in one.
   `crol check` takes several `.crol` files at once. The language server checks

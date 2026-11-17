@@ -3992,6 +3992,12 @@ Project {
   one is the other or above it, by their module paths; those a layer
   command prints are not compared. Within one stack, globs may overlap, and
   the first that matches decides, as above.
+- **A stack extends only its own files.** An `#![extends(...)]` in a
+  document of a stack's layers that names a file or directory in another
+  stack's layer directories is an error at its module path, in `crol
+  check` and the editor. Extending a file of no stack, or of the same
+  stack, works as in section 4.1. The file extended is still checked in
+  its own stack, with its own diagnostics.
 - **Ids stay in their stack.** An id names a root key of its own stack only
   (section 10.5). A stack that needs a value of another's has its own type
   for it; the checker never loads a second schema to resolve an id, and
