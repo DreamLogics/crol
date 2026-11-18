@@ -962,3 +962,120 @@ fn a_file_two_stacks_claim_is_an_error_at_both() {
         assert!(text.contains(wanted), "{text}");
     }
 }
+
+// ---- Constants (`SPEC.md` 6.1.4, 11, 12.4) ----
+
+#[test]
+fn constants_come_from_the_project_and_the_command_line() {
+    let dir = tree(
+        "constants",
+        &[
+            (
+                "project.crol",
+                "Project { layers: List([{ name: \"base\", dir: \"data\", .. }]), constants: { count: 1, home: \"/p\" }, .. }",
+            ),
+            (
+                "data/a.crod",
+                "count: $count + 1\nhome: $home\nother: $other ?? 0\n",
+            ),
+            ("v.crol", "a: $count * 10"),
+        ],
+    );
+    let output = crol(&dir, &["eval"]);
+    assert_eq!(
+        stdout(&output),
+        "count: 2\nhome: \"/p\"\nother: 0\n",
+        "{output:?}"
+    );
+    let output = crol(
+        &dir,
+        &["eval", "--const", "count=5", "--const", "other=[1]"],
+    );
+    assert_eq!(
+        stdout(&output),
+        "count: 6\nhome: \"/p\"\nother: [1]\n",
+        "{output:?}"
+    );
+    // A value document of the project gets them too.
+    let output = crol(&dir, &["eval", "v.crol", "--const", "count=3"]);
+    assert_eq!(stdout(&output), "a: 30\n", "{output:?}");
+    for command in ["check", "explain", "fingerprint"] {
+        let mut args = vec![command, "--const", "count=x=1"];
+        if command == "explain" {
+            args.push("count");
+        }
+        let output = crol(&dir, &args);
+        assert!(failed(&output), "{command}: {output:?}");
+    }
+}
+
+#[test]
+fn a_constant_without_a_value_is_missing() {
+    let dir = tree("constants-missing", &[("a.crod", "count: $count + 1")]);
+    let output = crol(&dir, &["check", "a.crod"]);
+    assert!(failed(&output), "{output:?}");
+    assert!(
+        stderr(&output).contains("no constant `count` was given"),
+        "{output:?}"
+    );
+    let output = crol(&dir, &["check", "a.crod", "--const", "count"]);
+    assert!(
+        stderr(&output).contains("is not `name=value`"),
+        "{output:?}"
+    );
+}
+
+#[test]
+fn a_constant_given_twice_is_an_error() {
+    let dir = tree("constants-twice", &[("a.crod", "n: $n")]);
+    let output = crol(
+        &dir,
+        &["check", "a.crod", "--const", "n=1", "--const", "n=2"],
+    );
+    assert!(failed(&output), "{output:?}");
+    assert!(
+        stderr(&output).contains("gives the constant `n` twice"),
+        "{output:?}"
+    );
+}
+
+#[test]
+fn a_project_file_that_does_not_load_is_still_checked() {
+    let dir = tree(
+        "constants-broken-project",
+        &[(
+            "project.crol",
+            "Project { layers: List([]), constants: { x: 1 }, bogus: 1, .. }",
+        )],
+    );
+    let output = crol(&dir, &["check", "project.crol"]);
+    assert!(failed(&output), "{output:?}");
+    // The schema's diagnostic, at its place in the file.
+    let text = stderr(&output);
+    assert!(text.contains("bogus"), "{text}");
+    assert!(text.contains("project.crol:1:"), "{text}");
+}
+
+#[test]
+fn each_stack_gives_its_own_constants() {
+    let dir = tree(
+        "constants-stacks",
+        &[
+            (
+                "project.crol",
+                "Project { stacks: { a: { layers: List([{ name: \"base\", dir: \"a\", .. }]), constants: { n: 1 }, .. }, b: { layers: List([{ name: \"base\", dir: \"b\", .. }]), constants: { n: 2 }, .. } }, .. }",
+            ),
+            ("a/x.crod", "n: $n"),
+            ("b/x.crod", "n: $n * 10"),
+        ],
+    );
+    let output = crol(&dir, &["eval", "--stack", "a"]);
+    assert_eq!(stdout(&output), "n: 1\n", "{output:?}");
+    let output = crol(&dir, &["eval", "--stack", "b"]);
+    assert_eq!(stdout(&output), "n: 20\n", "{output:?}");
+    let output = crol(&dir, &["eval", "--stack", "b", "--const", "n=3"]);
+    assert_eq!(stdout(&output), "n: 30\n", "{output:?}");
+    // `crol check` checks each stack with its own.
+    let output = crol(&dir, &["check"]);
+    assert!(output.status.success(), "{output:?}");
+}

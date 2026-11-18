@@ -93,6 +93,26 @@ pub fn check_value(
     checker.found
 }
 
+/// Checks a constant's value against the type the schema declares for it
+/// (`SPEC.md` 6.1.4), with the rules of the deserializer. Ids are not
+/// checked: they resolve where the constant is used.
+pub fn check_constant(
+    value: &Value,
+    schema: &SchemaFile,
+    ty: &TypeExpr,
+    options: &CheckOptions,
+) -> Vec<Diagnostic> {
+    let variants = Variants::default();
+    let data = DataView {
+        base: value,
+        contexts: &[],
+        variants: &variants,
+    };
+    let mut checker = Checker::new(schema, options, data, None, ResolveAs::Nowhere);
+    checker.value(value, ty, Path::Root(""), TypeNames::default());
+    checker.found
+}
+
 /// The type a value-mode document's top-level type name chooses in a schema,
 /// as the path to give [`check_value`]: `None` if it has no name, or the
 /// name is not one type's (`SPEC.md` 4.1).
@@ -422,6 +442,9 @@ enum ResolveAs<'a> {
     Data(Option<&'a str>),
     /// A value document of the type at this path.
     Value(&'a str),
+    /// A value with no place of its own, as a constant, whose ids are not
+    /// checked.
+    Nowhere,
 }
 
 struct Checker<'a> {
@@ -960,6 +983,7 @@ impl<'a> Checker<'a> {
                 Resolver::with_root_type(root, Some(self.schema), root_type)
             }
             ResolveAs::Value(ty) => Resolver::for_value(root, Some(self.schema), ty),
+            ResolveAs::Nowhere => return,
         };
         let Some(target) = resolver
             .resolve(id, location)

@@ -2051,6 +2051,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "constant"
+        },
+        {
+          "type": "SYMBOL",
           "name": "block"
         },
         {
@@ -2331,6 +2335,31 @@
           },
           "named": true,
           "value": "bind_name"
+        }
+      ]
+    },
+    "constant": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "$"
+        },
+        {
+          "type": "FIELD",
+          "name": "name",
+          "content": {
+            "type": "ALIAS",
+            "content": {
+              "type": "IMMEDIATE_TOKEN",
+              "content": {
+                "type": "PATTERN",
+                "value": "_[A-Za-z0-9_]+|[ABCDEFGHIJKLMNOPQRSTUVWXYZabcdeghijklmnopqrsuvwxyz][A-Za-z0-9_]*|t([ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqstuvwxyz0123456789_][A-Za-z0-9_]*|r([ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstvwxyz0123456789_][A-Za-z0-9_]*|u([ABCDEFGHIJKLMNOPQRSTUVWXYZabcdfghijklmnopqrstuvwxyz0123456789_][A-Za-z0-9_]*|e[A-Za-z0-9_]+)?)?)?|f([ABCDEFGHIJKLMNOPQRSTUVWXYZbcdefghijklmnopqrstuvwxyz0123456789_][A-Za-z0-9_]*|a([ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz0123456789_][A-Za-z0-9_]*|l([ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrtuvwxyz0123456789_][A-Za-z0-9_]*|s([ABCDEFGHIJKLMNOPQRSTUVWXYZabcdfghijklmnopqrstuvwxyz0123456789_][A-Za-z0-9_]*|e[A-Za-z0-9_]+)?)?)?)?"
+              }
+            },
+            "named": true,
+            "value": "identifier"
+          }
         }
       ]
     },

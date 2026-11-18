@@ -620,7 +620,7 @@ fn one_line(value: &Value) -> Option<String> {
 const MAX_VALUE: usize = 80;
 
 /// `text` as Markdown inline code, whatever backticks it holds.
-fn code(text: &str) -> String {
+pub(crate) fn code(text: &str) -> String {
     let longest = text
         .split(|c| c != '`')
         .map(str::len)
@@ -692,6 +692,22 @@ pub(crate) fn hover(
     }
     let path = convert::uri_to_path(uri)?;
     let file = snapshot.file_of(&path)?;
+    // `$name` (`SPEC.md` 6.1.4): its type and doc, and its stand-in value.
+    if let Some(constant) = token.parent().and_then(ast::Constant::cast) {
+        let name = constant.name()?;
+        let schema = snapshot.schema_for(Some(file)).map(|s| s.file);
+        let markdown =
+            crate::constants::about(name.text(), schema, snapshot.constants_for(Some(file)));
+        let index = LineIndex::new(text);
+        let range = constant.syntax().text_range();
+        return Some(Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: markdown,
+            }),
+            range: Some(convert::range(text, &index, range, encoding)),
+        });
+    }
     if let Some(type_ref) = token.parent_ancestors().find_map(ast::TypeRef::cast) {
         return type_hover(snapshot, file, &type_ref, &token, text, encoding);
     }
@@ -876,7 +892,10 @@ fn is_reference(token: &SyntaxToken) -> bool {
     token.parent_ancestors().any(|n| {
         matches!(
             n.kind(),
-            SyntaxKind::REFERENCE | SyntaxKind::PATH_EXPR | SyntaxKind::ID_EXPR
+            SyntaxKind::REFERENCE
+                | SyntaxKind::PATH_EXPR
+                | SyntaxKind::ID_EXPR
+                | SyntaxKind::CONSTANT
         )
     })
 }

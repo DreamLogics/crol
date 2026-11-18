@@ -18,6 +18,7 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 
 use crate::cond::Resolved;
+use crate::constants::Constants;
 use crate::diagnostic::Diagnostic;
 use crate::ir::*;
 use crate::source::Span;
@@ -866,6 +867,8 @@ pub(crate) struct Evaluator<'ir> {
     base_created: Vec<usize>,
     /// Where `&default` finds defaults.
     defaults: Option<&'ir dyn DefaultsProvider>,
+    /// What `$name` reads (`SPEC.md` 6.1.4).
+    constants: &'ir Constants,
     /// Whether paths start from the defaults of the fields left out.
     init_defaults: bool,
     /// Whether a block as a root key's value merges with the value below.
@@ -898,6 +901,10 @@ pub(crate) struct Evaluator<'ir> {
     scope_cache: Option<ScopeCache>,
     /// What ensures met where a target is sealed (`SPEC.md` 5.4).
     seals: SealNotes,
+    /// Where a constant that tools have no value for was read: missing, so
+    /// that `??` catches it, but a warning where nothing does (`SPEC.md`
+    /// 12.5).
+    absent: std::collections::HashSet<Span>,
 }
 
 /// What `?target` entries met with seals (`SPEC.md` 5.4), gathered over
@@ -1079,10 +1086,21 @@ pub trait DefaultsProvider: std::fmt::Debug + Send + Sync {
 
 /// A shape for a value that is already computed, such as a default.
 fn shaped_from_value(value: &Value) -> Rc<Shaped> {
+    shaped_from(value, None)
+}
+
+/// [`shaped_from_value`], with `span` for the value and everything in it: a
+/// constant's value is reported where it is used, in one pass.
+fn shaped_from_value_at(value: &Value, span: Span) -> Rc<Shaped> {
+    shaped_from(value, Some(span))
+}
+
+fn shaped_from(value: &Value, at: Option<Span>) -> Rc<Shaped> {
+    let span_of = |v: &Value| at.unwrap_or(v.span);
     let cells = |items: &[Value]| {
         items
             .iter()
-            .map(|v| Cell::done(shaped_from_value(v)))
+            .map(|v| Cell::done(shaped_from(v, at)))
             .collect()
     };
     let shape = match &value.kind {
@@ -1110,9 +1128,10 @@ fn shaped_from_value(value: &Value) -> Rc<Shaped> {
                             .entries
                             .keys()
                             .filter_map(|key| match key {
-                                Key::Id(id) => {
-                                    Some((Named::Written(id.clone()), (key.clone(), value.span)))
-                                }
+                                Key::Id(id) => Some((
+                                    Named::Written(id.clone()),
+                                    (key.clone(), span_of(value)),
+                                )),
                                 _ => None,
                             })
                             .collect(),
@@ -1123,7 +1142,7 @@ fn shaped_from_value(value: &Value) -> Rc<Shaped> {
                 .entries
                 .iter()
                 .map(|(k, v)| {
-                    let cell = Cell::done(shaped_from_value(v));
+                    let cell = Cell::done(shaped_from(v, at));
                     (
                         k.clone(),
                         Slot {
@@ -1143,7 +1162,7 @@ fn shaped_from_value(value: &Value) -> Rc<Shaped> {
     };
     Rc::new(Shaped {
         shape,
-        span: value.span,
+        span: span_of(value),
     })
 }
 
@@ -1163,8 +1182,13 @@ fn literal_shape(kind: &ExprKind) -> Shape {
 }
 
 /// Evaluates a lowered value-mode document.
-pub(crate) fn evaluate(ir: &Ir, root: ExprId) -> (Option<Value>, Vec<Diagnostic>) {
+pub(crate) fn evaluate(
+    ir: &Ir,
+    root: ExprId,
+    constants: &Constants,
+) -> (Option<Value>, Vec<Diagnostic>) {
     let mut evaluator = Evaluator {
+        constants,
         ir,
         diagnostics: Vec::new(),
         stack: Vec::new(),
@@ -1186,6 +1210,7 @@ pub(crate) fn evaluate(ir: &Ir, root: ExprId) -> (Option<Value>, Vec<Diagnostic>
         id_keys: false,
         scope_cache: None,
         seals: SealNotes::default(),
+        absent: std::collections::HashSet::new(),
     };
     let root_cell = Rc::new(Cell {
         state: RefCell::new(State::Running),
@@ -1260,6 +1285,7 @@ pub(crate) struct DataInput<'a> {
     pub(crate) variant_keys: VariantKeys,
     pub(crate) evaluate_every_key: bool,
     pub(crate) defaults: Option<&'a dyn DefaultsProvider>,
+    pub(crate) constants: &'a Constants,
     pub(crate) init_defaults: bool,
     pub(crate) merge_root: bool,
     /// The base root, if it was evaluated before.
@@ -1382,6 +1408,8 @@ struct Reads {
     climbs: bool,
     /// A spread or a merge, which copies entries.
     copies: bool,
+    /// The constants read (`SPEC.md` 6.1.4).
+    constants: Vec<Arc<str>>,
 }
 
 /// Collects what an expression reads (`depth`: the number of blocks around
@@ -1409,6 +1437,7 @@ fn collect_reads(
                 _ => out.whole = true,
             },
             RefKind::ValueBind(id) => templates.add(ir, *id, out),
+            RefKind::Constant(name) => out.constants.push(name.clone()),
             RefKind::Parent(up) | RefKind::Bind { up, .. } if *up > 0 => out.climbs = true,
             _ => {}
         },
@@ -1513,6 +1542,7 @@ impl TemplateReads {
         self.in_progress.remove(&id);
         let reads = &self.done[&id];
         out.keys.extend(reads.keys.iter().cloned());
+        out.constants.extend(reads.constants.iter().cloned());
         out.whole |= reads.whole;
         out.switch |= reads.switch;
         out.climbs |= reads.climbs;
@@ -1811,6 +1841,7 @@ fn evaluate_raw(
         share: false,
         base_created: Vec::new(),
         defaults: input.defaults,
+        constants: input.constants,
         init_defaults: input.init_defaults,
         merge_root: input.merge_root,
         cells: RefCell::new(Vec::new()),
@@ -1823,6 +1854,7 @@ fn evaluate_raw(
         id_keys: false,
         scope_cache: None,
         seals: SealNotes::default(),
+        absent: std::collections::HashSet::new(),
     };
     // Errors in the static structure of the chains are reported once.
     evaluator.check_chains(input, &planned, None);
@@ -2005,6 +2037,7 @@ pub(crate) fn evaluate_again(
     ir: &Ir,
     input: &DataInput<'_>,
     dirty: &std::collections::HashSet<Arc<str>>,
+    constants: &BTreeSet<Arc<str>>,
     variants: &Variants,
     before: &[ContextData],
 ) -> Option<Again> {
@@ -2029,6 +2062,20 @@ pub(crate) fn evaluate_again(
     {
         return None;
     }
+    // A key that reads a constant that changed is as one whose operations
+    // did (`SPEC.md` 7.9).
+    let mut dirty = dirty.clone();
+    for (key, plan) in &plan.keys {
+        if plan
+            .reads
+            .constants
+            .iter()
+            .any(|name| constants.contains(name))
+        {
+            dirty.insert(key.clone());
+        }
+    }
+    let dirty = &dirty;
     let affected = plan.affected(dirty);
     let lazy: std::collections::HashSet<Arc<str>> = plan
         .keys
@@ -2046,6 +2093,7 @@ pub(crate) fn evaluate_again(
         share: true,
         base_created: Vec::new(),
         defaults: input.defaults,
+        constants: input.constants,
         init_defaults: input.init_defaults,
         merge_root: input.merge_root,
         cells: RefCell::new(Vec::new()),
@@ -2058,6 +2106,7 @@ pub(crate) fn evaluate_again(
         id_keys: false,
         scope_cache: None,
         seals: SealNotes::default(),
+        absent: std::collections::HashSet::new(),
     };
     // The chains of the other keys are as they were, and had no errors.
     evaluator.check_chains(input, &planned, Some(dirty));
@@ -2334,6 +2383,7 @@ pub(crate) fn explain_planned(
         share: false,
         base_created: Vec::new(),
         defaults: input.defaults,
+        constants: input.constants,
         init_defaults: input.init_defaults,
         merge_root: input.merge_root,
         cells: RefCell::new(Vec::new()),
@@ -2346,6 +2396,7 @@ pub(crate) fn explain_planned(
         id_keys: false,
         scope_cache: None,
         seals: SealNotes::default(),
+        absent: std::collections::HashSet::new(),
     };
     let id = evaluator.context_state(&context);
     Ok(requests
@@ -2544,6 +2595,8 @@ impl<'a> DataPlan<'a> {
             }
             reads.keys.sort();
             reads.keys.dedup();
+            reads.constants.sort();
+            reads.constants.dedup();
             for read in &reads.keys {
                 dependents
                     .entry(read.clone())
@@ -3858,7 +3911,7 @@ impl Evaluator<'_> {
         let stored = match result {
             Ok(shaped) => Ok(shaped),
             Err(Fail::Missing(span, message)) => {
-                let mut diagnostic = Diagnostic::error(span, message);
+                let mut diagnostic = self.missing_diagnostic(span, message);
                 diagnostic.context = cell.location.as_ref().map(Location::describe);
                 self.diagnostics.push(diagnostic);
                 Err(Poisoned)
@@ -4356,6 +4409,7 @@ impl Evaluator<'_> {
                 }
                 Ok(value)
             }
+            RefKind::Constant(name) => self.constant(name, span),
             RefKind::ValueBind(id) => {
                 let mut link = env.vbinds.as_ref();
                 while let Some(l) = link {
@@ -4368,6 +4422,23 @@ impl Evaluator<'_> {
                 Err(self.fail(span, "internal error: a value bind is not in scope"))
             }
         }
+    }
+
+    /// `$name` (`SPEC.md` 6.1.4): the value the program gave, as if it were
+    /// written where it is used. One that is not given is missing, unless
+    /// its error is reported elsewhere; where tools want a warning, it is
+    /// still missing, for `??`, and a warning if nothing catches it.
+    fn constant(&mut self, name: &str, span: Span) -> Eval<Rc<Shaped>> {
+        if let Some(value) = self.constants.get(name) {
+            return Ok(shaped_from_value_at(value, span));
+        }
+        if self.constants.is_failed(name) {
+            return Err(Fail::Poison);
+        }
+        if self.constants.absent_warning() {
+            self.absent.insert(span);
+        }
+        Err(Fail::Missing(span, self.constants.absent_message(name)))
     }
 
     /// The location of the block `up` levels out from the innermost.
@@ -6290,9 +6361,23 @@ impl Evaluator<'_> {
     /// A failure that is reported: one that nothing here can catch.
     fn reported<T>(&mut self, result: Eval<T>) -> Eval<T> {
         result.map_err(|fail| match fail {
-            Fail::Missing(span, message) => self.fail(span, message),
+            Fail::Missing(span, message) => {
+                let diagnostic = self.missing_diagnostic(span, message);
+                self.report(diagnostic);
+                Fail::Poison
+            }
             Fail::Poison => Fail::Poison,
         })
+    }
+
+    /// What a missing value that nothing caught reports: an error, or a
+    /// warning for a constant tools have no value for (`SPEC.md` 12.5).
+    fn missing_diagnostic(&self, span: Span, message: String) -> Diagnostic {
+        if self.absent.contains(&span) {
+            Diagnostic::warning(span, message)
+        } else {
+            Diagnostic::error(span, message)
+        }
     }
 
     /// The shape of `cell`. While it is being computed from an earlier value

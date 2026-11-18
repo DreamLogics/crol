@@ -11,6 +11,22 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Added
 
+- Constants the program gives (#36, `SPEC.md` 6.1.4): `$name` reads a value
+  given with `CrolComposer::with_constant("foo_count", 42)?`, any `Serialize`,
+  the same in every layer and context: `field: & + $foo_count`. Selectors work
+  as on references (`$limits.cpu`, `$ports[0]`). A constant not given is
+  missing, so `$replicas ?? 1` is an optional input; a constant the schema
+  declares (`schema::build::<T>().with_constant::<u32>("foo_count")`, recorded
+  as `constants` in the schema file) must be given and fit its type. Value
+  mode reads constants through `crol::CrolReader`, of which `from_str` and its
+  siblings are shorthands. `CrolData::update_constants().set(..)?.remove(..)?.apply()?`
+  (and `CrolDb::update_constants`) changes them, evaluating again only the keys
+  that read one that changed, as `reload` does. `crol check`, `eval`, `explain`
+  and `fingerprint` take `--const name=value`, over stand-in values in the
+  `constants` of the project file's stacks; the language server evaluates with those,
+  completes and hovers `$name`, and warns of a constant with no stand-in or not
+  in the schema. The tree-sitter grammar and the Zed and Helix highlights know
+  `$name`.
 - Several layer stacks per project (#29, `SPEC.md` 12.4): `stacks` in `project.crol`
   maps names to stacks, each with its own `layers`, `schema`, `root`, `options` and
   `files`, checked and composed on its own, so that themes and UI definitions, say,
@@ -42,9 +58,14 @@ Before 1.0, any release may change the format (`SPEC.md` 14.6).
 
 ### Changed
 
-- The `.crob` format is version 9, for seals and the macros `min!`, `max!` and
-  `abs!`: files of version 8 are compiled again. A build of `main` from between
-  the two changes reports a version 9 file that uses the new macros as corrupt.
+- The `.crob` format is version 10, for constants (`$name`, kept by name); it was
+  version 9 for seals and the macros `min!`, `max!` and `abs!`. Files of an
+  earlier version are compiled again. A build of `main` from between the seal
+  and macro changes reports a version 9 file that uses the new macros as corrupt.
+- `$` is a token: `$name` is a constant, and `$` elsewhere is an error as it was.
+  `crol_eval::DataOptions` has the field `constants`, `SchemaFile` the field
+  `constants` and `Project` the field `constants`, so code that builds them
+  with every field written needs them.
 - `Project` has the field `stacks`, and `layers` is optional, so a project file
   that writes every field without `..` now needs `..`. In Rust, `layer_list`,
   `file_type` and `schema_path` are methods of `ProjectStack`, and

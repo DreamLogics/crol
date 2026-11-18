@@ -1,0 +1,3 @@
+1-base/errors.crod:1:11: no constant `replica` was given; did you mean `$replicas`?
+1-base/errors.crod:3:10: ~: cannot merge `Other` with `Limits`
+1-base/errors.crod:4:17: .gpu: there is no such value

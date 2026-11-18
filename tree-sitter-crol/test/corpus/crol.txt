@@ -418,6 +418,97 @@ web.limits: { cpu: &top.port, a: &super.&parent.x, topic: &topic }
           (bind_name))))))
 
 ==================
+Constants
+==================
+
+a: $name
+b: $limits.cpu
+c: $ports[0] + $pair.1
+d: & + $x
+e: $x ?? 1
+f: { cpu: $root, g: [$self, $trueish], h: max!($a) }
+
+---
+
+(document
+  (entry
+    (target
+      (key
+        (identifier)))
+    (constant
+      (identifier)))
+  (entry
+    (target
+      (key
+        (identifier)))
+    (path_expr
+      (constant
+        (identifier))
+      (field_selector
+        (identifier))))
+  (entry
+    (target
+      (key
+        (identifier)))
+    (binary_expr
+      (path_expr
+        (constant
+          (identifier))
+        (accessor
+          (integer)))
+      (path_expr
+        (constant
+          (identifier))
+        (index_selector
+          (tuple_index)))))
+  (entry
+    (target
+      (key
+        (identifier)))
+    (binary_expr
+      (reference)
+      (constant
+        (identifier))))
+  (entry
+    (target
+      (key
+        (identifier)))
+    (binary_expr
+      (constant
+        (identifier))
+      (literal
+        (integer))))
+  (entry
+    (target
+      (key
+        (identifier)))
+    (block
+      (entry
+        (target
+          (key
+            (identifier)))
+        (constant
+          (identifier)))
+      (entry
+        (target
+          (key
+            (identifier)))
+        (list_expr
+          (constant
+            (identifier))
+          (constant
+            (identifier))))
+      (entry
+        (target
+          (key
+            (identifier)))
+        (macro_call
+          (identifier)
+          (arg_list
+            (constant
+              (identifier))))))))
+
+==================
 Id keys
 ==================
 

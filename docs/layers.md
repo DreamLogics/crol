@@ -299,6 +299,9 @@ doubled: 2048
 Each `&` sees the chain up to its own entry, while `&root.memory` saw the
 outcome of all of them.
 
+A [constant](language.md#constants), `$name`, is neither: it reads nothing from
+the data, and is the same in every layer.
+
 A reference that ends up needing its own result is a cycle, and an error
 listing every step. Since values are computed only when needed, fields of one
 value can freely refer to each other, as `url` and `port` do.
@@ -421,6 +424,8 @@ A few things to keep in mind:
 - It does not update itself. Compile it again when its documents change: a `.crob`
   file holds what they said then. A module path prefers the text, if both are there.
 - It cannot use a template of another layer, since it is compiled alone.
+- It keeps each `$name` by name, not its value, so one file serves any
+  [constants](language.md#constants).
 - It lives outside a layer's directory: inside one, it is an error.
 - Its format can change between versions of `crol`. An old file is refused with a
   message, and you compile it again.

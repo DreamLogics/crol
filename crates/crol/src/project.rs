@@ -38,6 +38,11 @@ pub struct Project {
     /// Variant parents: child to parent.
     #[serde(default)]
     pub parents: IndexMap<String, String>,
+    /// Stand-in values of the constants the program gives (`SPEC.md`
+    /// 6.1.4), which tools evaluate the data of a project with one stack
+    /// with.
+    #[serde(default)]
+    pub constants: IndexMap<String, crate::RawValue>,
     /// How the data of a project with one stack is evaluated and checked.
     #[serde(default)]
     pub options: ProjectOptions,
@@ -79,6 +84,10 @@ pub struct ProjectStack {
     /// Value-mode documents and their types.
     #[serde(default)]
     pub files: Vec<FilePattern>,
+    /// Stand-in values of the constants the program gives (`SPEC.md`
+    /// 6.1.4), which tools evaluate the stack's data with.
+    #[serde(default)]
+    pub constants: IndexMap<String, crate::RawValue>,
 }
 
 /// Where the layers come from.
@@ -377,19 +386,21 @@ impl Project {
             || self.schema.is_some()
             || self.root.is_some()
             || !self.files.is_empty()
+            || !self.constants.is_empty()
             || self.options != ProjectOptions::default();
         if !self.stacks.is_empty() {
             if at_top {
                 return Err(Error::new(
-                    "project: with `stacks`, `layers`, `options`, `schema`, `root` and `files` belong in each stack",
+                    "project: with `stacks`, `layers`, `options`, `schema`, `root`, `files` and `constants` belong in each stack",
                 ));
             }
-            for name in self.stacks.keys() {
+            for (name, stack) in &self.stacks {
                 if !crol_eval::is_identifier(name) {
                     return Err(Error::new(format!(
                         "project: the stack name `{name}` is not an identifier"
                     )));
                 }
+                check_constant_names(&stack.constants)?;
             }
             return Ok(());
         }
@@ -402,7 +413,9 @@ impl Project {
             schema: self.schema.take(),
             root: self.root.take(),
             files: std::mem::take(&mut self.files),
+            constants: std::mem::take(&mut self.constants),
         };
+        check_constant_names(&stack.constants)?;
         self.stacks.insert(DEFAULT_STACK.to_owned(), stack);
         Ok(())
     }
@@ -689,6 +702,16 @@ fn layer_dirs_overlap(a: &str, b: &str) -> bool {
 }
 
 impl ProjectStack {
+    /// The stand-in values of the stack's constants (`SPEC.md` 6.1.4,
+    /// 12.4).
+    pub fn constants(&self) -> crol_eval::Constants {
+        let mut constants = crol_eval::Constants::new();
+        for (name, value) in &self.constants {
+            constants.insert(name.as_str(), value.0.clone());
+        }
+        constants
+    }
+
     /// The type `files` gives the value document at `path`, for a project in
     /// `dir`: that of the first glob that matches (`SPEC.md` 12.4). The file
     /// need not exist: this only looks at its name, so that nothing depends
@@ -770,6 +793,19 @@ impl ProjectStack {
     }
 }
 
+/// Every constant a stack gives a stand-in value must be one data can name.
+fn check_constant_names(constants: &IndexMap<String, crate::RawValue>) -> Result<(), Error> {
+    match constants
+        .keys()
+        .find(|name| !crol_eval::is_identifier(name))
+    {
+        Some(name) => Err(Error::new(format!(
+            "project: the constant name `{name}` is not an identifier"
+        ))),
+        None => Ok(()),
+    }
+}
+
 // ---- The project file's schema (`SPEC.md` 12.4) ----
 
 impl Schema for Project {
@@ -778,6 +814,7 @@ impl Schema for Project {
             let layers = registry.describe::<ProjectLayers>();
             let variants = registry.describe::<Vec<Variant>>();
             let parents = registry.describe::<IndexMap<String, String>>();
+            let constants = registry.describe::<IndexMap<String, crate::RawValue>>();
             let options = registry.describe::<ProjectOptions>();
             let files = registry.describe::<Vec<FilePattern>>();
             let stacks = registry.describe::<IndexMap<String, ProjectStack>>();
@@ -789,6 +826,7 @@ impl Schema for Project {
                     ("layers", field(TypeExpr::Option(Box::new(layers)), "The layers, lowest first, of a project with one stack.", none())),
                     ("variants", field(variants, "The variants (`SPEC.md` 8.1), of every stack.", recorded_default(&Vec::<Variant>::new()))),
                     ("parents", field(parents, "Variant parents: child to parent.", recorded_default(&IndexMap::<String, String>::new()))),
+                    ("constants", field(constants, "Stand-in values of the constants the program gives (`SPEC.md` 6.1.4), which tools evaluate the data of a project with one stack with.", recorded_default(&IndexMap::<String, String>::new()))),
                     ("options", field(options, "How the data of a project with one stack is evaluated and checked.", recorded_default(&ProjectOptions::default()))),
                     ("schema", field(TypeExpr::Option(Box::new(TypeExpr::String)), "The schema of a project with one stack: a module path written as a string, a URL, or a crate.", none())),
                     ("root", field(TypeExpr::Option(Box::new(TypeExpr::String)), "The path of the type of root values of a project with one stack; default: the schema's root.", none())),
@@ -805,6 +843,7 @@ impl Schema for ProjectStack {
     fn describe(registry: &mut Registry) -> TypeRef {
         registry.add("crol::project::ProjectStack", |registry| {
             let layers = registry.describe::<ProjectLayers>();
+            let constants = registry.describe::<IndexMap<String, crate::RawValue>>();
             let options = registry.describe::<ProjectOptions>();
             let files = registry.describe::<Vec<FilePattern>>();
             let none = || crate::schema::none_value();
@@ -817,6 +856,7 @@ impl Schema for ProjectStack {
                     ("schema", field(TypeExpr::Option(Box::new(TypeExpr::String)), "The schema: a module path written as a string, a URL, or a crate.", none())),
                     ("root", field(TypeExpr::Option(Box::new(TypeExpr::String)), "The path of the type of root values; default: the schema's root.", none())),
                     ("files", field(files, "Value-mode documents and their types.", recorded_default(&Vec::<FilePattern>::new()))),
+                    ("constants", field(constants, "Stand-in values of the constants the program gives (`SPEC.md` 6.1.4), which tools evaluate the stack's data with.", recorded_default(&IndexMap::<String, String>::new()))),
                 ],
                 None,
             )
@@ -1313,7 +1353,15 @@ mod tests {
         for (text, message) in [
             (
                 r#"Project { stacks: { a: { layers: List([]), .. } }, schema: Some("x"), .. }"#,
-                "with `stacks`, `layers`, `options`, `schema`, `root` and `files` belong in each stack",
+                "with `stacks`, `layers`, `options`, `schema`, `root`, `files` and `constants` belong in each stack",
+            ),
+            (
+                r#"Project { stacks: { a: { layers: List([]), .. } }, constants: { n: 1 }, .. }"#,
+                "`files` and `constants` belong in each stack",
+            ),
+            (
+                r#"Project { stacks: { a: { layers: List([]), constants: { "a b": 1 }, .. } }, .. }"#,
+                "the constant name `a b` is not an identifier",
             ),
             (
                 r#"Project { stacks: { "a b": { layers: List([]), .. } }, .. }"#,
@@ -1326,12 +1374,38 @@ mod tests {
         }
     }
 
+    #[test]
+    fn each_stack_has_its_own_constants() {
+        let text = r#"Project {
+            stacks: {
+                a: { layers: List([]), constants: { n: 1 }, .. },
+                b: { layers: List([]), .. },
+            },
+            ..
+        }"#;
+        let project = Project::from_text("p.crol", text).unwrap();
+        let n = |stack: &str| {
+            project.stacks[stack]
+                .constants()
+                .get("n")
+                .map(|v| v.kind_name())
+        };
+        assert_eq!(n("a"), Some("an integer"));
+        assert_eq!(n("b"), None);
+        // Written at the top, they are the one stack's.
+        let text = r#"Project { layers: List([]), constants: { n: 1 }, .. }"#;
+        let project = Project::from_text("p.crol", text).unwrap();
+        assert!(project.stacks[DEFAULT_STACK].constants().get("n").is_some());
+        assert!(project.constants.is_empty());
+    }
+
     fn project_with(globs: &[&str]) -> ProjectStack {
         ProjectStack {
             layers: ProjectLayers::List(Vec::new()),
             options: ProjectOptions::default(),
             schema: None,
             root: None,
+            constants: IndexMap::new(),
             files: globs
                 .iter()
                 .map(|glob| FilePattern {

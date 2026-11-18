@@ -1103,6 +1103,7 @@ fn schema_files_of_every_shape_pass_their_own_schema() {
             .map(|def| (def.name().to_owned(), def))
             .collect(),
         constraints: Default::default(),
+        constants: Default::default(),
     };
     check(&schema.to_text().unwrap());
     assert_eq!(

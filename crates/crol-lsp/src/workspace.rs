@@ -12,9 +12,10 @@ use crol::{
     FsLoader, Loaded, LoaderError, Mode, ModulePath, SourceId,
 };
 use crol_eval::{
-    Compiled, DataOptions, Diagnostic, Evaluation, ExplainPlan, ExplainStep, FileId, Layer,
-    Severity, Sources,
+    Compiled, Constants, DataOptions, Diagnostic, Evaluation, ExplainPlan, ExplainStep, FileId,
+    Layer, Severity, Sources,
 };
+use crol_syntax::ast::AstNode as _;
 use lsp_types::Uri;
 
 use crate::Settings;
@@ -205,6 +206,10 @@ pub struct Snapshot {
     /// The project, with its directory, for what its `files` say of a
     /// document (`SPEC.md` 12.4).
     project: Option<(Project, PathBuf)>,
+    /// What each value document on its own was evaluated with of the
+    /// constants: the stand-in values of the stack whose `files` match it,
+    /// else none (`SPEC.md` 6.1.4, 12.4).
+    document_constants: HashMap<FileId, Constants>,
     /// What each `.crod` document evaluated on its own was evaluated with.
     chains: HashMap<FileId, Chain>,
     /// The path of each file, by its id.
@@ -323,6 +328,20 @@ impl Snapshot {
     /// The stack whose layers these are, if they are a stack's.
     pub(crate) fn stack_with_layers(&self, layers: &[Layer]) -> Option<&StackSnapshot> {
         (self.stacks.iter()).find(|stack| std::ptr::eq(layers, stack.layers.as_slice()))
+    }
+
+    /// The stand-in values of the constants a file is evaluated with
+    /// (`SPEC.md` 12.4): its stack's, for a file in its layers or a value
+    /// document its `files` match, else none. A constant without one is a
+    /// warning where nothing catches it.
+    pub(crate) fn constants_for(&self, file: Option<FileId>) -> &Constants {
+        if let Some(constants) = file.and_then(|f| self.document_constants.get(&f)) {
+            return constants;
+        }
+        match file {
+            Some(file) if self.in_layers(file) => &self.stack_for(Some(file)).options.constants,
+            _ => &self.lone_options.constants,
+        }
     }
 
     /// The schema of a file: its own, for a document on its own, else its
@@ -904,13 +923,14 @@ pub(crate) fn evaluate(
         sources: Sources::new(),
         stacks: Vec::new(),
         no_stack: StackSnapshot::new(""),
-        lone_options: DataOptions::default(),
+        lone_options: DataOptions::default().with_constants(editor_constants(Constants::new())),
         lone_check: CheckOptions::default(),
         last_good_documents: HashMap::new(),
         documents: Vec::new(),
         extra: Vec::new(),
         own_schemas: HashMap::new(),
         project: None,
+        document_constants: HashMap::new(),
         chains: HashMap::new(),
         paths: Vec::new(),
         by_path: HashMap::new(),
@@ -944,6 +964,7 @@ pub(crate) fn evaluate(
             }
             Err(found) => problems.push(found),
         }
+        stand_in_problems(&mut snapshot, project_path, &canonical_open);
     }
     let check = snapshot.lone_check.clone();
     // Open documents that are in no layer are evaluated on their own, each
@@ -1029,7 +1050,18 @@ pub(crate) fn evaluate(
                 evaluation
             }
             (None, Mode::Data) => Evaluation::default(),
-            (None, Mode::Value) => crol_eval::evaluate_value(&snapshot.sources, file),
+            (None, Mode::Value) => {
+                // The stand-ins of the stack whose `files` give it a type
+                // (`SPEC.md` 12.4).
+                let constants = (snapshot.project.as_ref())
+                    .and_then(|(project, dir)| project.file_stack(dir, path))
+                    .map(|(_, stack, _)| editor_constants(stack.constants()))
+                    .unwrap_or_else(|| snapshot.lone_options.constants.clone());
+                let evaluation =
+                    crol_eval::evaluate_value_with(&snapshot.sources, file, &constants);
+                snapshot.document_constants.insert(file, constants);
+                evaluation
+            }
         };
         problems.append(&mut loading.problems);
         let followed = &loading.followed;
@@ -1111,6 +1143,9 @@ pub(crate) fn evaluate(
                 }
                 // The document's `#[type(...)]` binds (`SPEC.md` 6.1.2).
                 let document = crol_syntax::parse(text).document();
+                let found = crate::constants::undeclared(file, document.syntax(), &schema);
+                crate::constants::drop_absent(&mut evaluation.diagnostics, &found);
+                snapshot.extra.extend(found);
                 let found = crol::typed::check_document(file, &document, &schema, &check);
                 snapshot.extra.extend(found);
                 // Where typed templates are used: of every layer below and
@@ -1170,6 +1205,42 @@ pub(crate) fn evaluate(
         snapshot.extra.extend(found);
     }
     snapshot
+}
+
+/// Checks each stack's stand-in values of the constants against what its
+/// schema declares, on the project file (`SPEC.md` 12.4).
+fn stand_in_problems(snapshot: &mut Snapshot, project_path: &Path, open: &Buffers) {
+    let checked = |stack: &StackSnapshot| {
+        stack
+            .schema
+            .as_ref()
+            .is_some_and(|s| !s.constants.is_empty())
+            && stack.options.constants.names().next().is_some()
+    };
+    if !snapshot.stacks.iter().any(checked) {
+        return;
+    }
+    let canonical = (project_path.canonicalize()).unwrap_or_else(|_| project_path.to_path_buf());
+    let text = match open.get(&canonical) {
+        Some(text) => text.clone(),
+        None => std::fs::read_to_string(&canonical).unwrap_or_default(),
+    };
+    let file = snapshot.intern(&canonical.display().to_string(), &text);
+    let mut found: Vec<Diagnostic> = Vec::new();
+    for stack in &snapshot.stacks {
+        let Some(schema) = stack.schema.as_ref() else {
+            continue;
+        };
+        let constants = &stack.options.constants;
+        found.extend(crate::constants::stand_in_problems(
+            file,
+            &text,
+            &stack.name,
+            constants,
+            schema,
+        ));
+    }
+    snapshot.extra.extend(found);
 }
 
 /// The schema a document names with `#![schema(...)]`, read; an error at
@@ -1303,6 +1374,22 @@ fn evaluate_stack(
         }
         snapshot.extra.extend(found);
     }
+    // `$name`s the schema does not declare (`SPEC.md` 6.1.4).
+    if let Some(schema) = stack.schema.as_ref().filter(|s| !s.constants.is_empty()) {
+        let files = (stack.layers.iter())
+            .flat_map(|layer| layer.documents.iter().map(|(_, file)| *file))
+            .filter(|file| !snapshot.read_only.contains(file));
+        let mut found = Vec::new();
+        for file in files {
+            let text = snapshot.sources.file(file).text();
+            if text.contains('$') {
+                let root = crol_syntax::parse(text).syntax();
+                found.extend(crate::constants::undeclared(file, &root, schema));
+            }
+        }
+        crate::constants::drop_absent(&mut stack.evaluation.diagnostics, &found);
+        snapshot.extra.extend(found);
+    }
     // What ids name (`SPEC.md` 10.5): without a schema, those that name
     // nothing; with one, the check above reports those.
     if let Some(base) = &stack.evaluation.value {
@@ -1365,8 +1452,11 @@ fn load_project(
     for (name, stack) in &project.stacks {
         let mut loading = Loading::default();
         let mut loaded = StackSnapshot::new(name);
-        let options = (stack.options.variant_keys())
-            .map(|keys| data_options(&stack.options, variants.clone()).with_variant_keys(keys));
+        let options = (stack.options.variant_keys()).map(|keys| {
+            data_options(&stack.options, variants.clone())
+                .with_variant_keys(keys)
+                .with_constants(editor_constants(stack.constants()))
+        });
         match options {
             Ok(options) => {
                 let found = load_stack(
@@ -1389,13 +1479,23 @@ fn load_project(
     }
     // A document on its own is evaluated with the project's variants, and
     // with the options of its stack if it has only one.
-    snapshot.lone_options = DataOptions::default().with_variants(variants.clone());
+    snapshot.lone_options = DataOptions::default()
+        .with_variants(variants.clone())
+        .with_constants(editor_constants(Constants::new()));
     if let [(stack, _)] = &stacks[..] {
         snapshot.lone_options = stack.options.clone();
         snapshot.lone_check = stack.check.clone();
     }
     snapshot.project = Some((project, dir));
     Ok(stacks)
+}
+
+/// What the editor evaluates with of the project's stand-in values of the
+/// constants: a constant without one is a warning on each use, and what
+/// reads it fails quietly, so that one does not flood a file with errors
+/// (`SPEC.md` 6.1.4, 12.5).
+fn editor_constants(constants: Constants) -> Constants {
+    constants.with_absent_warning(true)
 }
 
 /// The data options a stack's options give, with the project's variants.

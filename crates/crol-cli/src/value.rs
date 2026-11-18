@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crol::project::{FILE_NAME, Project};
+use crol::project::{FILE_NAME, Project, ProjectStack};
 use crol::schema::SchemaFile;
 use crol::{CheckOptions, Mode};
 use crol_eval::{Evaluation, Sources};
@@ -28,6 +28,8 @@ struct Expected {
     /// The type `files` gives it.
     root: Option<String>,
     options: CheckOptions,
+    /// The stack whose `files` give it its type, for its constants.
+    stack: Option<ProjectStack>,
 }
 
 /// The value document the arguments give: one `.crol` file. Among other
@@ -90,11 +92,31 @@ pub(crate) fn read(path: &Path, args: &InputArgs, reporter: &mut Reporter) -> Op
     };
     let mut sources = Sources::new();
     let file = sources.add(path.display().to_string(), text.as_str());
-    let mut evaluation = crol_eval::evaluate_value(&sources, file);
-    let expected = match expected(path, &text, args) {
+    // The project file, read once. One that does not load gives no
+    // constants, so that checking it, or a document that needs nothing of
+    // it, still reports what is wrong where it is.
+    let project = project_path(args).map(|project_path| {
+        let read = Project::read(&project_path);
+        (project_path, read)
+    });
+    let found = project.as_ref().map(|(path, read)| (path.as_path(), read));
+    let expected = match expected(path, &text, args, found) {
         Ok(expected) => expected,
         Err(message) => return fail(message),
     };
+    // What `$name` reads (`SPEC.md` 6.1.4): the stand-ins of the stack
+    // whose `files` give it its type, then `--const`, checked against what
+    // the schema declares.
+    let mut constants = match args.constants(expected.stack.as_ref()) {
+        Ok(constants) => constants,
+        Err(message) => return fail(message),
+    };
+    let declared = crol::check_constants(&mut constants, expected.schema.as_ref());
+    let mut evaluation = crol_eval::evaluate_value_with(&sources, file, &constants);
+    if declared.iter().any(crol_eval::Diagnostic::is_error) {
+        evaluation.value = None;
+    }
+    evaluation.diagnostics.splice(0..0, declared);
     let root = checked(&mut evaluation, &expected);
     // Without a schema, ids that name nothing in the document (`SPEC.md`
     // 10.5); with one, the check reports them.
@@ -167,7 +189,12 @@ pub(crate) fn typed_binds(
 /// What a document is checked against: `--schema`, for a project or schema
 /// file the schema `crol` provides for it (`SPEC.md` 12.4, 10.10), the schema
 /// it names, or the type the project's `files` give it.
-fn expected(path: &Path, text: &str, args: &InputArgs) -> Result<Expected, String> {
+fn expected(
+    path: &Path,
+    text: &str,
+    args: &InputArgs,
+    project: Option<(&Path, &Result<Project, crol::Error>)>,
+) -> Result<Expected, String> {
     let schema_only = |schema| Expected {
         schema: Some(schema),
         ..Default::default()
@@ -187,19 +214,17 @@ fn expected(path: &Path, text: &str, args: &InputArgs) -> Result<Expected, Strin
     if crol::schema::is_schema_file(text) {
         return Ok(schema_only(crol::schema::build::<SchemaFile>()));
     }
-    let project_path = project_path(args);
     let working = std::env::current_dir().unwrap_or_default();
-    let root = project_path
-        .as_deref()
-        .map(crol::directory_of)
+    let root = project
+        .map(|(project_path, _)| crol::directory_of(project_path))
         .map_or(working, Path::to_path_buf);
     match crol::schema::attribute_path(text, path, &root, !args.offline()) {
         Some((_, Ok(schema))) => SchemaFile::read(schema)
             .map(schema_only)
             .map_err(|e| format!("{}: {e}", path.display())),
         Some((_, Err(error))) => Err(format!("{}: {error}", path.display())),
-        None => match project_path {
-            Some(project) => project_files(&project, path, args),
+        None => match project {
+            Some((project_path, read)) => project_files(project_path, read, path, args),
             None => Ok(Expected::default()),
         },
     }
@@ -209,8 +234,13 @@ fn expected(path: &Path, text: &str, args: &InputArgs) -> Result<Expected, Strin
 /// the schema and options of the stack whose `files` match it, with the
 /// type of its first glob that matches; with `--stack`, of that stack only.
 /// Nothing, if none does (`SPEC.md` 12.4).
-fn project_files(project_path: &Path, path: &Path, args: &InputArgs) -> Result<Expected, String> {
-    let project = Project::read(project_path).map_err(|e| e.to_string())?;
+fn project_files(
+    project_path: &Path,
+    project: &Result<Project, crol::Error>,
+    path: &Path,
+    args: &InputArgs,
+) -> Result<Expected, String> {
+    let project = project.as_ref().map_err(|e| e.to_string())?;
     let dir = crol::directory_of(project_path);
     let found = match args.stack() {
         Some(name) => {
@@ -248,6 +278,7 @@ fn project_files(project_path: &Path, path: &Path, args: &InputArgs) -> Result<E
         schema: Some(schema),
         root: Some(root),
         options: stack.options.check_options(),
+        stack: Some(stack.clone()),
     })
 }
 

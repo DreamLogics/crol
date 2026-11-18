@@ -7,12 +7,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crol_eval::{
-    Compiled, Context, ContextData, DataOptions, Diagnostic, ExplainStep, Key, Layer, Sources,
-    Value, ValueKind, VariantKeys, Variants, evaluate_compiled, evaluate_contexts,
+    Compiled, Constants, Context, ContextData, DataOptions, Diagnostic, ExplainStep, Key, Layer,
+    Sources, Value, ValueKind, VariantKeys, Variants, evaluate_compiled, evaluate_contexts,
 };
 use crol_syntax::TextRange;
 use crol_syntax::ast::{self, AstNode};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::de;
 use crate::error::Error;
@@ -600,6 +600,8 @@ pub struct CrolComposer<T = String> {
     chosen: Vec<T>,
     /// The document `load_active` named.
     active: Option<crate::db::Active>,
+    /// What `$name` reads (`SPEC.md` 6.1.4).
+    constants: Constants,
 }
 
 impl Default for CrolComposer<String> {
@@ -627,6 +629,7 @@ impl<T: VariantName> CrolComposer<T> {
             active: None,
             schema: None,
             structs: None,
+            constants: Constants::new(),
         }
     }
 
@@ -775,6 +778,41 @@ impl<T: VariantName> CrolComposer<T> {
         self.structs = Some(std::sync::Arc::new(de::Structs::from_schema(&schema)));
         self.schema = Some(schema);
         self
+    }
+
+    /// Gives the data a constant, which it reads as `$name` (`SPEC.md`
+    /// 6.1.4): the same value in every layer and every context. The value
+    /// is converted as [`crate::to_value`] converts it, so a struct keeps its
+    /// type name, and a [`crate::Id`] is an id, resolved where the data uses
+    /// it. It may be given before or after the layers are loaded.
+    ///
+    /// Fails for a name that is not an identifier, a name given twice, a
+    /// value that does not serialize (a float that is not finite among
+    /// them), and a value that does not fit the type the schema declares for
+    /// the name (`SPEC.md` 10.9); for a schema given after this, `compose`
+    /// checks that.
+    ///
+    /// ```
+    /// use crol::{CrolComposer, CrolLayer};
+    ///
+    /// let layer = CrolLayer::from_sources("base", [("a.crod", "replicas: $replicas ?? 1")]);
+    /// let replicas: u32 = CrolComposer::new()
+    ///     .load_layer(layer)
+    ///     .with_constant("replicas", 3)?
+    ///     .compose_data()?
+    ///     .get("replicas")?;
+    /// assert_eq!(replicas, 3);
+    /// # Ok::<(), crol::Error>(())
+    /// ```
+    pub fn with_constant(mut self, name: &str, value: impl Serialize) -> Result<Self, Error> {
+        if self.constants.get(name).is_some() {
+            return Err(Error::new(format!(
+                "composer: constant `{name}` is given twice"
+            )));
+        }
+        let value = crate::constants::constant_value(name, &value, self.schema.as_ref())?;
+        self.constants.insert(name, value);
+        Ok(self)
     }
 
     /// Makes a variant active in the context to compose (`SPEC.md` 8.1).
@@ -993,6 +1031,10 @@ impl<T: VariantName> CrolComposer<T> {
                 None
             }
         };
+        // A constant the schema declares must be given (`SPEC.md` 6.1.4):
+        // that is reported once, and evaluation goes on for the rest.
+        let mut constants = std::mem::take(&mut self.constants);
+        let mut found = crate::constants::check_declared(&mut constants, self.schema.as_ref());
         let options = DataOptions::default()
             .with_init_defaults(self.config.init_defaults)
             .with_variants(variants)
@@ -1001,8 +1043,11 @@ impl<T: VariantName> CrolComposer<T> {
             .with_max_contexts(self.config.max_contexts)
             .with_threads(self.config.threads)
             .with_variant_keys(self.config.variant_keys)
-            .with_defaults(schema);
+            .with_defaults(schema)
+            .with_constants(constants);
         let (compiled, mut diagnostics) = compile_lowered(&sources, &layers, &lowered);
+        found.append(&mut diagnostics);
+        let mut diagnostics = found;
         let Some(compiled) = compiled else {
             return Err(Error::from_diagnostics(&sources, &diagnostics));
         };
@@ -1014,7 +1059,8 @@ impl<T: VariantName> CrolComposer<T> {
         let mut evaluation = evaluate_compiled(&compiled, &options);
         diagnostics.append(&mut evaluation.diagnostics);
         evaluation.diagnostics = diagnostics;
-        let Some(base) = evaluation.value.take() else {
+        let base = evaluation.value.take();
+        let Some(base) = base.filter(|_| !evaluation.has_errors()) else {
             return Err(Error::from_diagnostics(&sources, &evaluation.diagnostics));
         };
         let chosen: Vec<_> = self
@@ -1608,6 +1654,50 @@ impl<T: VariantName> CrolData<T> {
     /// watches. If the result does not load, the error is returned and the
     /// data stays as it was. Unchanged documents are not read again.
     pub fn reload(&mut self, changes: &[DocumentChange<'_>]) -> Result<Reloaded, Error> {
+        self.reload_with(changes, None)
+    }
+
+    /// Changes the constants the data reads as `$name` (`SPEC.md` 6.1.4),
+    /// and evaluates again only what reads one that changed:
+    /// `data.update_constants().set("foo_count", 43)?.apply()?`.
+    pub fn update_constants(&mut self) -> crate::ConstantsUpdate<'_, T> {
+        crate::ConstantsUpdate::new(self)
+    }
+
+    /// The constants the data reads (`SPEC.md` 6.1.4).
+    pub fn constants(&self) -> &Constants {
+        &self.data_options.constants
+    }
+
+    pub(crate) fn schema_file(&self) -> Option<&crate::schema::SchemaFile> {
+        self.schema.as_deref()
+    }
+
+    /// Evaluates again with other constants, as [`reload`](Self::reload)
+    /// does with other documents.
+    pub(crate) fn reload_constants(&mut self, constants: Constants) -> Result<Reloaded, Error> {
+        self.reload_with(&[], Some(constants))
+    }
+
+    fn reload_with(
+        &mut self,
+        changes: &[DocumentChange<'_>],
+        constants: Option<Constants>,
+    ) -> Result<Reloaded, Error> {
+        // The constants that changed, where they are what changes.
+        let changed_constants = match &constants {
+            Some(constants) => {
+                let changed = self.data_options.constants.changed(constants);
+                if changed.is_empty() {
+                    return Ok(Reloaded {
+                        changed: Vec::new(),
+                        evaluated: Some(0),
+                    });
+                }
+                Some(changed)
+            }
+            None => None,
+        };
         let changed: Vec<&str> = changes.iter().map(|change| change.layer).collect();
         self.lower_unchanged(&changed);
         let mut sources = self.sources.clone();
@@ -1647,6 +1737,9 @@ impl<T: VariantName> CrolData<T> {
             }
         }
         let mut options = self.data_options.clone();
+        if let Some(constants) = constants {
+            options.constants = constants;
+        }
         if let Some(schema) = &self.schema {
             let (schema, found) = schema.patched(&mut sources, &layers);
             if found.iter().any(Diagnostic::is_error) {
@@ -1677,14 +1770,21 @@ impl<T: VariantName> CrolData<T> {
                 .iter()
                 .any(|change| change.path == crol_eval::SCHEMA_DOCUMENT);
         let update = (!schema_changed)
-            .then(|| {
-                crol_eval::evaluate_changed(
+            .then(|| match &changed_constants {
+                Some(changed) => crol_eval::evaluate_changed_constants(
+                    &compiled,
+                    &evaluated,
+                    &self.variants,
+                    &self.contexts,
+                    changed,
+                ),
+                None => crol_eval::evaluate_changed(
                     &self.compiled,
                     &compiled,
                     &evaluated,
                     &self.variants,
                     &self.contexts,
-                )
+                ),
             })
             .flatten();
         if let Some(update) = update {

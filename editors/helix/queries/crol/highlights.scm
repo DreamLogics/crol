@@ -45,6 +45,10 @@
 (bind name: (identifier) @variable)
 (value_bind name: (identifier) @variable)
 
+; Constants: `$name`.
+(constant "$" @constant)
+(constant name: (identifier) @constant)
+
 ; Variants.
 (cond_name (identifier) @label)
 (variant ["<" ">"] @punctuation.special)

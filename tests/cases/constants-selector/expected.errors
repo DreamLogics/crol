@@ -1,0 +1,1 @@
+1-base/a.crod:1:12: a variant selector cannot follow `$replicas`: a constant is the same in every context

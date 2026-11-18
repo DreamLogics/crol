@@ -73,6 +73,8 @@ pub enum SyntaxKind {
     EQ,
     POUND,
     BANG,
+    /// `$`, before a constant's name (`SPEC.md` 6.1.4).
+    DOLLAR,
 
     /// Text the lexer could not make into a token.
     ERROR_TOKEN,
@@ -155,6 +157,8 @@ pub enum SyntaxKind {
     ID_EXPR,
     /// `&`, `&name`, `&self`, `&parent.&parent`, `&root`, `&default`
     REFERENCE,
+    /// `$name`: a constant the program gives (`SPEC.md` 6.1.4).
+    CONSTANT,
     /// `Name? { entries }`
     BLOCK,
     /// `[a, b]`
@@ -298,6 +302,7 @@ const KINDS: [SyntaxKind; __LAST as usize] = [
     EQ,
     POUND,
     BANG,
+    DOLLAR,
     ERROR_TOKEN,
     DOCUMENT,
     ATTRIBUTE,
@@ -335,6 +340,7 @@ const KINDS: [SyntaxKind; __LAST as usize] = [
     LITERAL,
     ID_EXPR,
     REFERENCE,
+    CONSTANT,
     BLOCK,
     LIST_EXPR,
     TUPLE_EXPR,

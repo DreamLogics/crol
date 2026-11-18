@@ -5783,3 +5783,250 @@ fn renaming_is_refused_for_keys_that_are_ids() {
     );
     renames.client.stop();
 }
+
+// ---- Constants (`SPEC.md` 6.1.4, 12.4, 12.5) ----
+
+const CONSTANTS_SCHEMA: &str = r#"Schema {
+    format: 1,
+    root: "app::Config",
+    types: {
+        "app::Config": Struct {
+            name: "Config",
+            source: ("src/lib.rs", 1),
+            fields: {
+                total: { ty: U32, .. },
+                home: { ty: String, .. },
+                twice: { ty: String, .. },
+                other: { ty: U32, .. },
+            },
+            ..
+        },
+    },
+    constants: {
+        count: { ty: U32, doc: "How many to run." },
+        home: { ty: String },
+    },
+}"#;
+
+const CONSTANTS_DATA: &str =
+    "total: $count + 1,\nhome: $home,\ntwice: $home + \"/x\",\nother: $other,\n";
+
+/// A project whose schema declares `$count` and `$home`, with `constants`
+/// in its project file.
+fn constants_project(name: &str, constants: &str) -> PathBuf {
+    let project = format!(
+        r#"Project {{ layers: List([{{ name: "base", dir: "base", .. }}]), schema: Some("schema"), constants: {{ {constants} }}, .. }}"#
+    );
+    workspace(
+        name,
+        &[
+            ("project.crol", &project),
+            ("schema.crol", CONSTANTS_SCHEMA),
+            ("base/a.crod", CONSTANTS_DATA),
+        ],
+    )
+}
+
+/// The message (without what was being evaluated), line and severity of
+/// each diagnostic, sorted.
+fn messages(diagnostics: &[Value]) -> Vec<(String, u64, u64)> {
+    let mut found: Vec<(String, u64, u64)> = diagnostics
+        .iter()
+        .map(|d| {
+            let message = d["message"].as_str().unwrap();
+            (
+                message.split('\n').next().unwrap().to_owned(),
+                d["range"]["start"]["line"].as_u64().unwrap(),
+                d["severity"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    found.sort();
+    found
+}
+
+#[test]
+fn constants_without_a_stand_in_value_are_a_warning_on_the_use() {
+    let dir = constants_project("lsp-constants-warnings", "count: 2");
+    let client = Client::start(&dir);
+    let base = uri(&dir.join("base/a.crod"));
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": base, "languageId": "crol", "version": 1, "text": CONSTANTS_DATA } }),
+    );
+    // `$home` is declared and has no stand-in value: a warning on each use,
+    // and nothing on what reads it. `$other` is not declared: one warning,
+    // which says so.
+    let diagnostics = client.diagnostics_for(&base, |d| !d.is_empty());
+    assert_eq!(
+        messages(&diagnostics),
+        [
+            (
+                "constant `other` is not in the schema; it is missing unless the program gives it"
+                    .to_owned(),
+                3,
+                2
+            ),
+            ("no constant `home` was given".to_owned(), 1, 2),
+            ("no constant `home` was given".to_owned(), 2, 2),
+        ],
+    );
+    // A stand-in value in the project file takes the warning away; one that
+    // does not fit the declared type is an error at its name there.
+    let project = uri(&dir.join("project.crol"));
+    let text = r#"Project { layers: List([{ name: "base", dir: "base", .. }]), schema: Some("schema"), constants: { count: "many", home: "/p" }, .. }"#;
+    std::fs::write(dir.join("project.crol"), text).unwrap();
+    client.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({ "changes": [{ "uri": project, "type": 2 }] }),
+    );
+    // Both are published at once, in either order.
+    let (mut on_base, mut on_project) = (None, None);
+    while on_base.is_none() || on_project.is_none() {
+        let message = (client.connection.receiver)
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap();
+        if let Message::Notification(n) = message
+            && n.method == "textDocument/publishDiagnostics"
+        {
+            let diagnostics = n.params["diagnostics"].as_array().unwrap().clone();
+            if n.params["uri"] == base {
+                on_base = Some(diagnostics);
+            } else if n.params["uri"] == project && !diagnostics.is_empty() {
+                on_project = Some(diagnostics);
+            }
+        }
+    }
+    let diagnostics = on_base.unwrap();
+    assert!(
+        !format!("{diagnostics:?}").contains("`home`"),
+        "{diagnostics:?}"
+    );
+    let diagnostics = on_project.unwrap();
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    let message = diagnostics[0]["message"].as_str().unwrap();
+    assert!(
+        message.starts_with("constant `count`: the stand-in value does not fit the schema"),
+        "{message}"
+    );
+    let column = text.find("count: \"many\"").unwrap();
+    assert_eq!(diagnostics[0]["range"]["start"]["character"], column);
+    client.stop();
+}
+
+#[test]
+fn constants_complete_and_hover_from_the_schema_and_the_project() {
+    let dir = constants_project("lsp-constants-features", "count: 2, extra: [1, 2]");
+    let mut client = Client::start(&dir);
+    let mut buffer = Buffer::open(&client, &dir, "base/a.crod");
+    // After `$`, and on a name partly typed: the declared ones and those
+    // with stand-in values, each once.
+    for marked in ["total: $|", "total: $co|", "total: 1 + $|"] {
+        let items = buffer.complete(&mut client, marked);
+        let mut found = labels(&items);
+        found.sort();
+        assert_eq!(found, ["count", "extra", "home"], "{marked}");
+        let count = items.iter().find(|i| i["label"] == "count").unwrap();
+        assert_eq!(count["detail"], "u32");
+        let doc = count["documentation"]["value"].as_str().unwrap();
+        assert!(
+            doc.contains("How many to run.") && doc.contains("`2`"),
+            "{doc}"
+        );
+    }
+    assert_eq!(
+        buffer.hover(&mut client, "total: $co|unt + 1"),
+        "constant `$count`: `u32`\n\nHow many to run.\n\nStand-in value: `2`"
+    );
+    assert_eq!(
+        buffer.hover(&mut client, "home: $|home"),
+        "constant `$home`: `String`\n\nNo stand-in value: the project's `constants` give none."
+    );
+    assert_eq!(
+        buffer.hover(&mut client, "other: $ex|tra"),
+        "constant `$extra`\n\nStand-in value: `[1, 2]`\n\n\
+         Not in the schema: it is missing unless the program gives it."
+    );
+    client.stop();
+}
+
+#[test]
+fn constants_have_a_semantic_token() {
+    let dir = workspace("lsp-constants-tokens", &[("a.crol", "a: $limits.cpu\n")]);
+    let mut client = Client::start(&dir);
+    let buffer = Buffer::open(&client, &dir, "a.crol");
+    let result = client.request(
+        "textDocument/semanticTokens/full",
+        json!({ "textDocument": { "uri": buffer.uri } }),
+    );
+    let data: Vec<u64> = result["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n.as_u64().unwrap())
+        .collect();
+    // `a`, then `$` and `limits`: variables (3), read-only (bit 5).
+    assert_eq!(data, [0, 0, 1, 0, 0, 0, 3, 1, 3, 32, 0, 1, 6, 3, 32]);
+    client.stop();
+}
+
+#[test]
+fn a_document_alone_warns_of_a_constant_without_a_value() {
+    let text = "a: $count + 1\nb: $count\n";
+    let dir = workspace("lsp-constants-alone", &[("a.crol", text)]);
+    let client = Client::start(&dir);
+    let file = uri(&dir.join("a.crol"));
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": file, "languageId": "crol", "version": 1, "text": text } }),
+    );
+    let diagnostics = client.diagnostics_for(&file, |_| true);
+    assert_eq!(
+        messages(&diagnostics),
+        [
+            ("no constant `count` was given".to_owned(), 0, 2),
+            ("no constant `count` was given".to_owned(), 1, 2),
+        ],
+    );
+    client.stop();
+}
+
+#[test]
+fn each_stack_evaluates_with_its_own_constants() {
+    let project = r#"Project {
+        stacks: {
+            a: { layers: List([{ name: "base", dir: "a", .. }]), constants: { n: 1 }, .. },
+            b: { layers: List([{ name: "base", dir: "b", .. }]), .. },
+        },
+        ..
+    }"#;
+    let dir = workspace(
+        "lsp-constants-stacks",
+        &[
+            ("project.crol", project),
+            ("a/x.crod", "n: $n\n"),
+            ("b/x.crod", "n: $n\n"),
+        ],
+    );
+    let client = Client::start(&dir);
+    let in_b = uri(&dir.join("b/x.crod"));
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": in_b, "languageId": "crol", "version": 1, "text": "n: $n\n" } }),
+    );
+    // `b` gives `n` no stand-in value: a warning on the use.
+    let diagnostics = client.diagnostics_for(&in_b, |d| !d.is_empty());
+    assert_eq!(
+        messages(&diagnostics),
+        [("no constant `n` was given".to_owned(), 0, 2)]
+    );
+    // `a` gives it one, so its document has nothing to say.
+    let in_a = uri(&dir.join("a/x.crod"));
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": in_a, "languageId": "crol", "version": 1, "text": "n: $n\n" } }),
+    );
+    let diagnostics = client.diagnostics_for(&in_a, |_| true);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    client.stop();
+}

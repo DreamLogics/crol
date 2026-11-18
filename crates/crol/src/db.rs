@@ -420,6 +420,13 @@ impl<R, V: VariantName> CrolDb<R, V> {
         self.data.evaluate(variants).map(|_| ())
     }
 
+    /// Changes the constants the data reads as `$name` (`SPEC.md` 6.1.4),
+    /// as [`CrolData::update_constants`] does: what reads one that changed is
+    /// evaluated again. A transaction started after it sees the new values.
+    pub fn update_constants(&mut self) -> crate::ConstantsUpdate<'_, V> {
+        self.data.update_constants()
+    }
+
     /// Reads values, in the base context unless `with_variant` says.
     pub fn select(&self) -> Select<'_, R, V> {
         Select {

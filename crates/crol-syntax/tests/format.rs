@@ -765,3 +765,14 @@ fn id_keys_are_kept_as_written() {
         "#]],
     );
 }
+
+#[test]
+fn constants() {
+    check(
+        "a:$x+$limits.cpu ,b : [ $p [0] ,$q.1 ]",
+        expect![[r#"
+        a: $x + $limits.cpu
+        b: [$p[0], $q.1]
+    "#]],
+    );
+}

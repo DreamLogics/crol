@@ -180,6 +180,7 @@ impl Lexer<'_> {
             '#' => POUND,
             ';' => SEMI,
             '!' => BANG,
+            '$' => DOLLAR,
             c => {
                 self.error(
                     start,
@@ -645,14 +646,14 @@ line" "skip \
     #[test]
     fn unexpected_characters() {
         check(
-            "a $ é",
+            "a ` é",
             expect![[r#"
                 IDENT "a"
                 WHITESPACE " "
-                ERROR_TOKEN "$"
+                ERROR_TOKEN "`"
                 WHITESPACE " "
                 ERROR_TOKEN "é"
-                error 2..3: unexpected character `$`
+                error 2..3: unexpected character ```
                 error 4..6: unexpected character `é`
             "#]],
         );

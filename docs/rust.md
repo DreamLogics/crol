@@ -10,6 +10,7 @@ to use what you get back.
 | ------------------------------------- | --------------------------------------------------- |
 | one document (`.crol`)                | [`crol::from_str`](modes.md#value-mode-a-file-is-a-value) |
 | one document and a [schema](schemas.md) | `crol::from_str_with_schema`                      |
+| one document and [constants](#constants-from-your-program) | `crol::CrolReader`             |
 | layers, variants or several files (`.crod`) | `CrolComposer`, then `compose` or `compose_data` |
 | layers your program changes and saves | [`CrolComposer`, then `compose_db`](#changing-data-with-a-database) |
 
@@ -543,6 +544,7 @@ The most useful methods:
 | `fingerprint()`                    | a BLAKE3 hash of all evaluated data                |
 | `key_fingerprints()`               | one for each root key; `crol::changed_keys` compares two |
 | `reload(changes)`                  | [applies changes to documents](#reloading)         |
+| `constants()`, `update_constants()` | the [constants](#constants-from-your-program), and a way to change them |
 
 The fingerprint covers values, not source text. Two data sets written
 differently but with the same values have the same fingerprint, on every
@@ -593,6 +595,127 @@ that changed. It also keeps what each layer that did not change lowers to as a w
 which spares putting that layer's documents together again. The first reload works that
 out, and so takes longer. A layer that uses a template of another layer is not kept as a
 whole, and `keep_lowered: false` turns this off.
+
+## Constants from your program
+
+A file cannot read the environment or the command line, but your program can, and
+it can hand what it finds to the data. `with_constant(name, value)` gives a
+[constant](language.md#constants), which the data reads as `$name`. The value is
+anything that implements `Serialize`:
+
+```rust
+// src/main.rs
+use crol::{CrolComposer, CrolLayer, Id};
+use serde::{Deserialize, Serialize};
+
+#[derive(Deserialize, Serialize)]
+struct Limits {
+    cpu: u32,
+    memory_mb: u32,
+}
+
+#[derive(Deserialize)]
+struct Service {
+    replicas: u32,
+    limits: Limits,
+    depends_on: Vec<Id>,
+}
+
+fn main() -> Result<(), crol::Error> {
+    let text = r#"
+        +db: Service { replicas: 1, limits: $limits, depends_on: [] }
+        +web: Service {
+            replicas: $replicas ?? 1,
+            limits: Limits { ..$limits, cpu: 4 },
+            depends_on: [$database],
+        }
+    "#;
+    let mut data = CrolComposer::new()
+        .load_layer(CrolLayer::from_sources("base", [("a.crod", text)]))
+        .with_constant("limits", Limits { cpu: 2, memory_mb: 512 })?
+        .with_constant("database", Id::key("db"))?
+        .compose_data()?;
+    let web: Service = data.get("web")?;
+    println!(
+        "{} replicas, {} cpu, {} MB, after {}",
+        web.replicas, web.limits.cpu, web.limits.memory_mb, web.depends_on[0]
+    );
+
+    let reloaded = data.update_constants().set("replicas", 3)?.apply()?;
+    println!("{:?}, {:?} evaluated", reloaded.changed, reloaded.evaluated);
+    println!("{} replicas", data.get::<Service>("web")?.replicas);
+    Ok(())
+}
+```
+
+```console
+$ cargo run
+1 replicas, 4 cpu, 512 MB, after @db
+[Changed("web")], Some(1) evaluated
+3 replicas
+```
+
+A constant is converted as `crol::to_value` converts it, so it is what the data
+would hold if you wrote the value out:
+
+- **A struct keeps its type name.** `$limits` is a `Limits { ... }`, so
+  `Limits { ..$limits }` spreads it, and `Other { .. } ~ $limits` is an error, as for
+  any two type names.
+- **A `crol::Id` is an id**, which names a key where it lands, through the
+  [scopes](language.md#scopes) there, like an id written in the file.
+- Errors point at the `$name` in the file, since the program's value has no place
+  of its own.
+
+`with_constant` may come before or after `load`. It fails for a name that is not an
+identifier, a name given twice, a value that does not serialize, such as a float
+that is not finite, and a value that does not fit the type a
+[schema declares](schemas.md#constants) for it.
+
+**Changing them.** `CrolData` keeps its constants: `data.constants()` gives them,
+and `reload` and `evaluate` use them. `update_constants()` changes them, with `set`
+and `remove`, and `apply` evaluates again only the keys that read a constant that
+changed, and the keys that read those, as [`reload`](#reloading) does. Here only
+`web` reads `$replicas`, so `evaluated` is `Some(1)`. A constant set to the value it
+has changes nothing, and `remove` makes `$name` missing again. The result is what
+composing again with the new constants would give, and if it does not load, the
+data stays as it was. `reload` keeps the constants, and `update_constants` keeps
+the documents.
+
+A [database](#changing-data-with-a-database) has the same, `db.update_constants()`,
+and a transaction started after it sees the new values.
+
+**A single document** reads constants through `crol::CrolReader`. `crol::from_str`
+and its siblings are shorthands for a reader with no constants, where every `$name`
+is missing:
+
+```rust
+// src/main.rs
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct Settings {
+    data_dir: String,
+    workers: u32,
+}
+
+fn main() -> Result<(), crol::Error> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let settings: Settings = crol::CrolReader::new()
+        .with_constant("home", &home)?
+        .from_str(r#"data_dir: $home + "/data", workers: $workers ?? 4"#)?;
+    println!("{}, {} workers", settings.data_dir, settings.workers);
+    Ok(())
+}
+```
+
+```console
+$ HOME=/home/me cargo run
+/home/me/data, 4 workers
+```
+
+`schema(...)` gives the reader a schema, as `from_str_with_schema` does, `named(...)`
+the name errors give the text, and `from_str_with_ids` returns the
+[ids](#ids) too.
 
 ## Views and queries
 

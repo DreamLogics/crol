@@ -119,6 +119,7 @@ These work on `check`, `eval`, `explain` and `fingerprint`:
 | `--group a,b,c`           | declare a [group of alternatives](variants.md#declaring-variants); repeatable |
 | `--discrete a,b`          | declare flags                                                     |
 | `--parent child=parent`   | give a variant a parent; repeatable                               |
+| `--const name=value`      | give a [constant](#constants); repeatable                         |
 | `--project <file>`        | use this project file                                             |
 | `--schema <file>`         | check against this [schema](schemas.md) file                      |
 | `--offline`               | fetch no remote schemas; use cached copies and local crates       |
@@ -132,6 +133,31 @@ Every command also takes these:
 | --------------------------------------- | ------------------------------------------------------ |
 | `--color auto\|always\|never`           | when to colour diagnostics                             |
 | `--message-format human\|json`          | how to print diagnostics, see [below](#machine-readable-diagnostics) |
+
+### Constants
+
+`--const` gives the data a [constant](language.md#constants), as your program does
+with `with_constant`. The value is read as CROL, so a string needs its quotes, and
+the shell needs them kept:
+
+```crol
+// paths.crod
++paths: { data: $home + "/data", workers: $workers ?? 4 }
+```
+
+```console
+$ crol eval --const 'home="/home/me"' --const workers=8 paths.crod
+paths: { data: "/home/me/data", workers: 8 }
+$ crol eval --const 'home="/home/me"' paths.crod
+paths: { data: "/home/me/data", workers: 4 }
+```
+
+`--const` goes over the stand-in values in the
+[`constants`](projects.md#constants-in-the-project-file) of the stack in use. A constant with neither is
+missing, as it is in your program when it does not give one: `$workers ?? 4` is 4,
+and `$home` alone is an error, `` no constant `home` was given ``. A constant the
+schema declares is an error to leave out, `??` or not. A `.crol` file reads
+constants too: `--const`, and the stand-ins of the stack whose `files` match it.
 
 ## `crol check`
 

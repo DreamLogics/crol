@@ -97,12 +97,12 @@ An unknown environment is an error rather than a silent fallback.
 
 ## Secrets and other values from outside
 
-Keep secrets out of files, and add them as an in-memory layer on top.
-`crol::to_string` takes care of quoting:
+Keep secrets out of files. Your program reads them, and gives them to the data as
+[constants](language.md#constants):
 
 ```crol
 // config.crod
-+database: { host: "db.internal", password: "" }
++database: { host: "db.internal", password: $db_password }
 url: "postgres://app:" + &root.database.password + "@" + &root.database.host
 ```
 
@@ -110,7 +110,7 @@ url: "postgres://app:" + &root.database.password + "@" + &root.database.host
 // src/main.rs
 use std::path::Path;
 
-use crol::{CrolComposer, CrolLayer};
+use crol::CrolComposer;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -127,11 +127,10 @@ struct Config {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let password = std::env::var("DB_PASSWORD")?;
-    let secrets = format!("database.password: {}", crol::to_string(&password)?);
 
     let config: Config = CrolComposer::new()
         .load(Path::new("config.crod"))?
-        .load_layer(CrolLayer::from_sources("secrets", [("secrets.crod", secrets)]))
+        .with_constant("db_password", &password)?
         .compose()?;
 
     assert_eq!(config.database.password, password);
@@ -145,7 +144,15 @@ $ DB_PASSWORD='s3"cret' cargo run
 db.internal via postgres://app:s3"cret@db.internal
 ```
 
-Because `url` uses late references, it picks up the password from the top layer.
+The value goes in as a string, so it needs no quoting, and it is in no file. For the
+tools, give `db_password` a harmless stand-in in the
+[project file](projects.md#constants-in-the-project-file).
+
+If the data does not say `$db_password`, add the secret as an in-memory layer on top
+instead, with `crol::to_string` to quote it:
+`format!("database.password: {}", crol::to_string(&password)?)`, loaded with
+`CrolLayer::from_sources`. Late references, such as those in `url`, pick it up from
+there.
 
 ## Embedding defaults in the binary
 

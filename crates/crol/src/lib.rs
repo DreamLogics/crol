@@ -313,6 +313,7 @@
 
 mod check;
 mod compose;
+mod constants;
 mod constraints;
 mod db;
 mod de;
@@ -327,6 +328,7 @@ mod module_path;
 mod path;
 pub mod project;
 mod raw;
+mod reader;
 #[cfg(feature = "_remote")]
 mod remote;
 mod resolve;
@@ -339,16 +341,21 @@ mod writer;
 use crol_eval::evaluate_value;
 use serde::{Deserialize, Serialize};
 
-pub use check::{CheckOptions, DataView, check, check_ids, check_value, check_view, value_type};
+pub use check::{
+    CheckOptions, DataView, check, check_constant, check_ids, check_value, check_view, value_type,
+};
 pub use compose::{
     CrolComposer, CrolConfig, CrolContext, CrolData, CrolLayer, CrolVariants, DocumentChange,
     ExtendsLoad, KeyChange, LayerSource, Reloaded, Variant, VariantName, changed_keys,
 };
+pub use constants::{ConstantsUpdate, check_constants};
+pub use crol_eval::Constants;
 pub use crol_eval::{ExplainStep, StepKind, VariantKeys};
 pub use crol_eval::{Key, Keyed, Sources, Span, Value, ValueKind};
 pub use db::{CrolDb, Cursor, Select, Transaction};
 pub use error::Error;
 pub use fill::{fill_defaults, fill_defaults_value};
+pub use reader::CrolReader;
 
 /// The error type of `crol`, as the specification names it.
 pub type CrolError = Error;
@@ -384,8 +391,11 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 /// which names are aliases of one field are in the schema, so a struct
 /// must write every field or `..`, whatever its type says. Use
 /// [`from_str_with_schema`] for those (`SPEC.md` 10.3).
+///
+/// Every `$name` in it is missing (`SPEC.md` 6.1.4): [`CrolReader`] gives
+/// constants.
 pub fn from_str<T: for<'de> Deserialize<'de>>(text: &str) -> Result<T> {
-    from_str_with_ids(text).map(|(value, _)| value)
+    CrolReader::new().from_str(text)
 }
 
 /// [`from_str`] with a schema, as `CrolComposer::schema` gives one to the
@@ -396,26 +406,24 @@ pub fn from_str_with_schema<T: for<'de> Deserialize<'de>>(
     text: &str,
     schema: &schema::SchemaFile,
 ) -> Result<T> {
-    let options = de::Options {
-        structs: Some(std::sync::Arc::new(de::Structs::from_schema(schema))),
-        ..de::Options::default()
-    };
-    from_text("<string>", text, options).map(|(value, _)| value)
+    reader::read("<string>", text, Some(schema), &Constants::new()).map(|(value, _)| value)
 }
 
 /// [`from_str`] for text that has a name, such as a file's, which errors
 /// then point at.
 pub(crate) fn from_named_str<T: for<'de> Deserialize<'de>>(name: &str, text: &str) -> Result<T> {
-    from_text(name, text, de::Options::default()).map(|(value, _)| value)
+    CrolReader::new().named(name).from_str(text)
 }
 
 /// Like [`from_str`], and also returns every id the deserializer produced,
 /// so that the application can check what they name (`SPEC.md` 10.5).
 pub fn from_str_with_ids<T: for<'de> Deserialize<'de>>(text: &str) -> Result<(T, Vec<IdUse>)> {
-    from_text("<string>", text, de::Options::default())
+    CrolReader::new().from_str_with_ids(text)
 }
 
-fn from_text<T: for<'de> Deserialize<'de>>(
+/// Reads a value-mode document with no constants and these deserializer
+/// options, for crol's own files.
+pub(crate) fn from_text<T: for<'de> Deserialize<'de>>(
     name: &str,
     text: &str,
     options: de::Options,

@@ -1,0 +1,15 @@
+// A constant is the same in every layer and every context.
+defaults := { replicas: $replicas, image: $image }
+
++web: Service {
+    ..&defaults,
+    limits: $limits,
+    port: $ports[0],
+    debug: $debug ?? false,
+}
++db: Service {
+    replicas: 1,
+    limits: $limits ~ { memory_mb: 2048 },
+    port: $ports[1] + 5000,
+}
+<prod> { web.replicas: & * $replicas }

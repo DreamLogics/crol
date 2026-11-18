@@ -192,6 +192,7 @@ fn is_expr(kind: SyntaxKind) -> bool {
         LITERAL
             | ID_EXPR
             | REFERENCE
+            | CONSTANT
             | BLOCK
             | LIST_EXPR
             | TUPLE_EXPR
@@ -623,7 +624,7 @@ impl Formatter {
     /// that must break.
     fn flat(&self, node: &SyntaxNode) -> Option<String> {
         Some(match node.kind() {
-            LITERAL | UNIT_NAME | REFERENCE => {
+            LITERAL | UNIT_NAME | REFERENCE | CONSTANT => {
                 significant_tokens(node).map(|t| t.to_string()).collect()
             }
             // `@`, `::` and the name, which are adjacent.

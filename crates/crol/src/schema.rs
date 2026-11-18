@@ -102,6 +102,10 @@ pub struct SchemaFile {
     /// The constraints the program defines, by name (`SPEC.md` 10.12).
     #[serde(default)]
     pub constraints: BTreeMap<String, ConstraintDef>,
+    /// The constants the program gives, by name (`SPEC.md` 6.1.4): each
+    /// must be given, and fit its type.
+    #[serde(default)]
+    pub constants: BTreeMap<String, ConstantDef>,
 }
 
 /// By hand, so that a schema without constraints is written as it always
@@ -109,13 +113,17 @@ pub struct SchemaFile {
 impl Serialize for SchemaFile {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct as _;
-        let fields = if self.constraints.is_empty() { 3 } else { 4 };
+        let fields =
+            3 + usize::from(!self.constraints.is_empty()) + usize::from(!self.constants.is_empty());
         let mut out = serializer.serialize_struct("Schema", fields)?;
         out.serialize_field("format", &self.format)?;
         out.serialize_field("root", &self.root)?;
         out.serialize_field("types", &self.types)?;
         if !self.constraints.is_empty() {
             out.serialize_field("constraints", &self.constraints)?;
+        }
+        if !self.constants.is_empty() {
+            out.serialize_field("constants", &self.constants)?;
         }
         out.end()
     }
@@ -159,6 +167,17 @@ pub struct ConstraintDef {
     /// is, unless it is marked open (`SPEC.md` 10.12).
     #[serde(default, skip_serializing_if = "is_false")]
     pub sealed: bool,
+}
+
+/// A constant the program gives (`SPEC.md` 6.1.4), under its name.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename = "")]
+pub struct ConstantDef {
+    /// Its type.
+    pub ty: TypeExpr,
+    /// What it is, which editors show.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub doc: String,
 }
 
 /// What a root type is to a data-mode document (`SPEC.md` 4.1).
@@ -512,6 +531,41 @@ pub enum TypeExpr {
 }
 
 impl SchemaFile {
+    /// Declares a constant the program gives (`SPEC.md` 6.1.4), of type
+    /// `T`: data reads it as `$name`, it must be given, and it must fit `T`.
+    /// The types `T` uses join the schema's.
+    ///
+    /// ```
+    /// use std::collections::BTreeMap;
+    ///
+    /// let schema = crol::schema::build::<BTreeMap<String, u16>>().with_constant::<u32>("foo_count");
+    /// assert!(schema.constants.contains_key("foo_count"));
+    /// ```
+    pub fn with_constant<T: Schema + ?Sized>(self, name: &str) -> Self {
+        self.with_documented_constant::<T>(name, "")
+    }
+
+    /// [`with_constant`](Self::with_constant), with a doc that editors show
+    /// where the data uses it.
+    pub fn with_documented_constant<T: Schema + ?Sized>(mut self, name: &str, doc: &str) -> Self {
+        let mut registry = Registry {
+            types: std::mem::take(&mut self.types),
+            in_progress: HashSet::new(),
+            constraints: std::mem::take(&mut self.constraints),
+        };
+        let ty = T::describe(&mut registry);
+        self.types = registry.types;
+        self.constraints = registry.constraints;
+        self.constants.insert(
+            name.to_owned(),
+            ConstantDef {
+                ty,
+                doc: doc.to_owned(),
+            },
+        );
+        self
+    }
+
     /// The type definition at `path`.
     pub fn get(&self, path: &str) -> Option<&TypeDef> {
         self.types.get(path)
@@ -811,15 +865,19 @@ pub fn build<T: Schema + ?Sized>() -> SchemaFile {
         root,
         types: registry.types,
         constraints: registry.constraints,
+        constants: BTreeMap::new(),
     }
 }
 
 /// Writes the schema of `T` to `path`, for an application's own
 /// `--export-schema`.
 pub fn write<T: Schema + ?Sized>(path: impl AsRef<Path>) -> Result<(), Error> {
-    let path = path.as_ref();
+    write_text(&build::<T>(), path.as_ref())
+}
+
+fn write_text(schema: &SchemaFile, path: &Path) -> Result<(), Error> {
     Mode::Value.check_path(path)?;
-    let text = build::<T>().to_text()?;
+    let text = schema.to_text()?;
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)
             .map_err(|e| Error::new(format!("cannot create {}: {e}", parent.display())))?;
@@ -834,14 +892,42 @@ pub fn write<T: Schema + ?Sized>(path: impl AsRef<Path>) -> Result<(), Error> {
 /// never silently out of date in CI. A relative path is from the crate's
 /// directory when run by `cargo test`.
 pub fn check_file<T: Schema + ?Sized>(path: impl AsRef<Path>) -> Result<(), Error> {
-    let mut path = path.as_ref().to_path_buf();
+    build::<T>().check_file(path)
+}
+
+impl SchemaFile {
+    /// [`check_file`] for a schema built further, as with
+    /// [`with_constant`](Self::with_constant): fails if the file at `path`
+    /// is not this schema, and writes it instead when `CROL_UPDATE_SCHEMA=1`
+    /// is set or the file does not exist.
+    ///
+    /// ```no_run
+    /// # use std::collections::BTreeMap;
+    /// crol::schema::build::<BTreeMap<String, u16>>()
+    ///     .with_constant::<u32>("foo_count")
+    ///     .check_file("crol/schema.crol")
+    ///     .unwrap();
+    /// ```
+    pub fn check_file(&self, path: impl AsRef<Path>) -> Result<(), Error> {
+        check_text(self, path.as_ref())
+    }
+
+    /// Writes the schema to `path`, for an application's own
+    /// `--export-schema`.
+    pub fn write(&self, path: impl AsRef<Path>) -> Result<(), Error> {
+        write_text(self, path.as_ref())
+    }
+}
+
+fn check_text(schema: &SchemaFile, path: &Path) -> Result<(), Error> {
+    let mut path = path.to_path_buf();
     if path.is_relative()
         && let Ok(dir) = std::env::var("CARGO_MANIFEST_DIR")
     {
         path = PathBuf::from(dir).join(path);
     }
     Mode::Value.check_path(&path)?;
-    let expected = build::<T>().to_text()?;
+    let expected = schema.to_text()?;
     let update = std::env::var("CROL_UPDATE_SCHEMA").is_ok_and(|v| v == "1");
     match std::fs::read_to_string(&path) {
         Ok(actual) if actual == expected => Ok(()),
@@ -849,7 +935,7 @@ pub fn check_file<T: Schema + ?Sized>(path: impl AsRef<Path>) -> Result<(), Erro
             "{} is not the schema of the types; run the test with CROL_UPDATE_SCHEMA=1 to update it",
             path.display()
         ))),
-        _ => write::<T>(&path),
+        _ => write_text(schema, &path),
     }
 }
 
@@ -1409,6 +1495,7 @@ impl Schema for SchemaFile {
         registry.add(SCHEMA_PATH, |registry| {
             let types = string_map(registry.describe::<TypeDef>());
             let constraints = string_map(registry.describe::<ConstraintDef>());
+            let constants = string_map(registry.describe::<ConstantDef>());
             let mut definition = struct_def(
                 "Schema",
                 "A schema file: the Rust types data loads into, as tools see them. It is generated from those types, so change them rather than this file.",
@@ -1442,6 +1529,14 @@ impl Schema for SchemaFile {
                         field(
                             constraints,
                             "The constraints the program defines, by name (`SPEC.md` 10.12).",
+                            recorded_default(&BTreeMap::<String, String>::new()),
+                        ),
+                    ),
+                    (
+                        "constants",
+                        field(
+                            constants,
+                            "The constants the program gives, by name (`SPEC.md` 6.1.4): each must be given, and fit its type.",
                             recorded_default(&BTreeMap::<String, String>::new()),
                         ),
                     ),
@@ -1766,6 +1861,30 @@ impl Schema for Field {
                             TypeExpr::Bool,
                             "`#[crol(sealed)]`: only the layer that defines a value can set this field (`SPEC.md` 10.13).",
                             recorded_default(&false),
+                        ),
+                    ),
+                ],
+                None,
+            )
+        })
+    }
+}
+
+impl Schema for ConstantDef {
+    fn describe(registry: &mut Registry) -> TypeRef {
+        registry.add("crol::schema::ConstantDef", |registry| {
+            let expr = registry.describe::<TypeExpr>();
+            struct_def(
+                "",
+                "A constant the program gives (`SPEC.md` 6.1.4), under its name.",
+                vec![
+                    ("ty", field(expr, "Its type.", FieldDefault::Required)),
+                    (
+                        "doc",
+                        field(
+                            TypeExpr::String,
+                            "What it is, which editors show.",
+                            recorded_default(&String::new()),
                         ),
                     ),
                 ],

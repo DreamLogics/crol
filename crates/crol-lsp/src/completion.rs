@@ -295,6 +295,9 @@ fn items_at(
     if lead.ends_with('@') {
         return completer.ids();
     }
+    if lead.ends_with('$') {
+        return completer.constants();
+    }
     if lead.ends_with('&') {
         return completer.reference_starts();
     }
@@ -487,6 +490,38 @@ fn describe(value: &Value) -> Option<String> {
 }
 
 impl Completer<'_> {
+    /// After `$`: the constants the schema declares and those the project
+    /// gives stand-in values, with the type and doc of each (`SPEC.md`
+    /// 6.1.4).
+    fn constants(&self) -> Vec<CompletionItem> {
+        let schema = self.snapshot.schema_for(self.file).map(|s| s.file);
+        let stand_ins = self.snapshot.constants_for(self.file);
+        let declared = schema.into_iter().flat_map(|s| s.constants.keys());
+        let mut names: Vec<&str> = declared.map(String::as_str).collect();
+        names.extend(
+            stand_ins
+                .names()
+                .filter(|n| !names.contains(n))
+                .collect::<Vec<_>>(),
+        );
+        names
+            .into_iter()
+            .map(|name| {
+                let def = schema.and_then(|s| Some((s, s.constants.get(name)?)));
+                let detail = match (def, stand_ins.get(name)) {
+                    (Some((schema, def)), _) => Some(schema::rust_type(schema, &def.ty)),
+                    (None, Some(value)) => describe(value),
+                    (None, None) => None,
+                };
+                let doc = crate::constants::details(name, schema, stand_ins).join("\n\n");
+                documented(
+                    item(name.to_owned(), CompletionItemKind::CONSTANT, detail),
+                    &doc,
+                )
+            })
+            .collect()
+    }
+
     fn evaluation(&self) -> &crol_eval::Evaluation {
         features::evaluation_for(self.snapshot, self.file)
     }
